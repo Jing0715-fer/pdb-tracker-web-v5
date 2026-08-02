@@ -813,3 +813,69 @@ Issues remaining:
 8. **[P2]** Add WeeklyInsightsCard to snapshot comparison view
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-30
+Agent: main
+Task: QA testing, fix Literature SearchStatusBanner filtered paper count (P1)
+
+Work Log:
+- Read worklog to understand project state (cron-review-29 complete, WeeklyInsightsCard added)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested WeeklyInsightsCard — renders correctly with all 6 metrics
+  * Tested structure selection — works with Compare button
+  * Tested all 4 modes — all functional
+  * 0 console errors
+
+- FEATURE/FIX 1 (P1): Compute filtered paper count for Literature SearchStatusBanner
+  - Root cause: Literature SearchStatusBanner showed `resultCount={litPapers.length}` and
+    `totalCount={litPapers.length}` — both were the total count, so the banner always showed
+    "X of X papers" even when filters reduced the visible papers
+  - Fix: Extracted the inline filter logic from LiteratureDateSidebar into a shared
+    `filteredLitPapers` useMemo at the component level
+    * Computes filtered papers based on: litSourceFilter, litReadingListFilter,
+      litTagFilter, litIfFilter, litSelectedDate
+    * Uses the same filter logic that was previously inline in the sidebar's filteredPapers prop
+  - Updated Literature SearchStatusBanner:
+    * `resultCount={filteredLitPapers.length}` (was `litPapers.length`)
+    * `totalCount={litPapers.length}` (unchanged — still the total)
+  - Updated LiteratureDateSidebar to use the shared `filteredLitPapers`:
+    * Replaced the 40-line inline IIFE with `filteredPapers={filteredLitPapers}`
+    * Eliminates duplicate filter logic (DRY principle)
+    * Both the sidebar and the banner now use the same computed value
+
+Verification:
+- ESLint: 0 errors, 0 warnings on pdb-tracker.tsx
+- E2E test: Literature mode with IF ≥ 20 filter shows banner:
+  "Filtered IF ≥ 20 7 of 8 papers Clear all"
+  (was showing "8 of 8 papers" before the fix, now correctly shows "7 of 8")
+- E2E test: Clear all button resets the filter
+- E2E test: 0 console errors
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Fixed Literature SearchStatusBanner: now shows filtered paper count (7 of 8) instead of total (8 of 8)
+- Refactored: extracted inline filter logic into shared useMemo (DRY)
+- Both sidebar and banner now use the same filteredLitPapers value
+- ESLint: 0 errors, 0 warnings
+- E2E: Banner shows correct filtered count, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- Transient HMR fetch errors during page reload (resolves after stable state)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+2. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+3. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+4. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+5. **[P2]** Chart export functionality (PNG/SVG/PDF)
+6. **[P2]** Lazy-load Literature mode components to reduce compile time
+7. **[P2]** Add WeeklyInsightsCard to snapshot comparison view
+8. **[P3]** pdb2pqr/APBS advanced visualization
+9. **[P3]** User authentication (NextAuth.js)
+10. **[P3]** Export comparison results as PDF/report

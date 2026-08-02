@@ -1884,6 +1884,38 @@ export default function PdbTracker() {
 
   const litHasActiveFilters = litSelectedDate !== null || litSourceFilter !== 'all' || !!litReadingListFilter || !!litTagFilter || litIfFilter !== 'all';
 
+  // Compute filtered lit papers count (for SearchStatusBanner result count)
+  const filteredLitPapers = useMemo(() => {
+    let filtered = litPapers;
+    if (litSourceFilter === 'daily') {
+      filtered = filtered.filter(p => p.source === '结构生物学文献日报');
+    }
+    if (litReadingListFilter) {
+      const list = readingListState.lists.find(l => l.id === litReadingListFilter);
+      if (list) {
+        filtered = filtered.filter(p => list.paperPmids.includes(p.pmid));
+      }
+    }
+    if (litTagFilter) {
+      const papersWithTag = new Set(paperTagsState.getPapersWithTag(litTagFilter));
+      filtered = filtered.filter(p => papersWithTag.has(p.pmid));
+    }
+    if (litIfFilter !== 'all') {
+      const minIf = parseInt(litIfFilter, 10);
+      filtered = filtered.filter(p => p.IF != null && p.IF >= minIf);
+    }
+    if (litSelectedDate) {
+      filtered = filtered.filter(p => {
+        if (!p.pubdate) return false;
+        if (litSelectedDate.length === 4 || litSelectedDate.length === 7) {
+          return p.pubdate.startsWith(litSelectedDate);
+        }
+        return p.pubdate === litSelectedDate;
+      });
+    }
+    return filtered;
+  }, [litPapers, litSourceFilter, litReadingListFilter, litTagFilter, litIfFilter, litSelectedDate, readingListState, paperTagsState]);
+
   // ─── Command Palette Search Navigation Handlers ────────────────────────────
 
   const handleCommandSelectPdbEntry = useCallback((entry: { pdbId: string; weekId: string | null }) => {
@@ -2428,51 +2460,7 @@ export default function PdbTracker() {
       <div className="flex-1 overflow-y-auto sidebar-scroll">
         <LiteratureDateSidebar
           allPapers={litPapers}
-          filteredPapers={(() => {
-            let filtered: typeof litPapers = litPapers;
-
-            // Source filter (日报)
-            if (litSourceFilter === 'daily') {
-              filtered = filtered.filter(p => p.source === '结构生物学文献日报');
-            }
-
-            // Reading list filter
-            if (litReadingListFilter) {
-              const list = readingListState.lists.find(l => l.id === litReadingListFilter);
-              if (list) {
-                filtered = filtered.filter(p => list.paperPmids.includes(p.pmid));
-              }
-            }
-
-            // Tag filter
-            if (litTagFilter) {
-              const papersWithTag = new Set(paperTagsState.getPapersWithTag(litTagFilter));
-              filtered = filtered.filter(p => papersWithTag.has(p.pmid));
-            }
-
-
-            // IF filter
-            if (litIfFilter !== 'all') {
-              const minIf = parseInt(litIfFilter, 10);
-              filtered = filtered.filter(p => p.IF != null && p.IF >= minIf);
-            }
-
-            // Date filter (show filtered count for selected date range)
-            if (litSelectedDate) {
-              filtered = filtered.filter(p => {
-                if (!p.pubdate) return false;
-                if (litSelectedDate.length === 4) {
-                  return p.pubdate.startsWith(litSelectedDate);
-                } else if (litSelectedDate.length === 7) {
-                  return p.pubdate.startsWith(litSelectedDate);
-                } else {
-                  return p.pubdate === litSelectedDate;
-                }
-              });
-            }
-
-            return filtered;
-          })()}
+          filteredPapers={filteredLitPapers}
           onClearFilter={litSourceFilter !== 'all' || litReadingListFilter || litTagFilter || litSelectedDate || litIfFilter !== 'all' ? () => { setLitSourceFilter('all'); setLitReadingListFilter(null); setLitTagFilter(null); handleLitClearDateFilter(); setLitIfFilter('all'); } : undefined}
           selectedDate={litSelectedDate}
           onSelectDate={(date) => { handleLitSelectDate(date); if (mobile) setMobileMenuOpen(false); }}
@@ -4965,7 +4953,7 @@ export default function PdbTracker() {
             <SearchStatusBanner
               searchQuery=""
               activeFilter={litSourceFilter !== 'all' ? litSourceFilter : litIfFilter}
-              resultCount={litPapers.length}
+              resultCount={filteredLitPapers.length}
               totalCount={litPapers.length}
               onClearSearch={() => {}}
               onClearFilter={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
