@@ -2,9 +2,10 @@
 
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { X, Columns2, ExternalLink, FlaskConical } from 'lucide-react';
+import { X, Columns2, ExternalLink, FlaskConical, FileDown } from 'lucide-react';
 import type { Evaluation } from '@/lib/pdb-types';
 import { useI18n } from '@/lib/i18n';
+import { exportComparisonReport } from '@/lib/export-report';
 
 /**
  * EvalMultiCompare
@@ -129,7 +130,7 @@ export function EvalMultiCompare({ evaluations, onClose }: EvalMultiCompareProps
         {/* Comparison Table */}
         <div className="flex-1 overflow-auto custom-scrollbar p-4">
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table data-compare-table className="w-full border-collapse">
               <thead>
                 <tr>
                   <th className="text-left text-[10px] font-semibold text-claude-text-muted uppercase tracking-wider px-2 py-2 sticky left-0 bg-claude-surface dark:bg-[#242220] z-10">
@@ -185,12 +186,26 @@ export function EvalMultiCompare({ evaluations, onClose }: EvalMultiCompareProps
           <span className="text-[10px] text-claude-text-muted">
             {locale === 'zh' ? '绿色高亮 = 最佳值' : 'Green highlight = best value'}
           </span>
-          <button
-            onClick={onClose}
-            className="text-[10px] text-claude-text-muted hover:text-claude-text transition-colors"
-          >
-            {locale === 'zh' ? '关闭' : 'Close'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const tableEl = document.querySelector('[data-compare-table]') as HTMLElement;
+                if (tableEl) {
+                  exportComparisonReport('Multi-Target Comparison', tableEl.outerHTML);
+                }
+              }}
+              className="inline-flex items-center gap-1 text-[10px] text-claude-text-muted hover:text-claude-accent transition-colors"
+            >
+              <FileDown className="h-3 w-3" />
+              {locale === 'zh' ? '导出报告' : 'Export Report'}
+            </button>
+            <button
+              onClick={onClose}
+              className="text-[10px] text-claude-text-muted hover:text-claude-text transition-colors"
+            >
+              {locale === 'zh' ? '关闭' : 'Close'}
+            </button>
+          </div>
         </div>
       </motion.div>
     </motion.div>

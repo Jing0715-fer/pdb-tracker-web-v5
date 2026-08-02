@@ -307,6 +307,10 @@ const SnapshotComparison = dynamic(() => import('@/components/snapshot-compariso
   ssr: false,
   loading: () => null,
 });
+const SavedQueriesDropdown = dynamic(() => import('@/components/saved-queries-dropdown').then(m => ({ default: m.SavedQueriesDropdown })), {
+  ssr: false,
+  loading: () => null,
+});
 const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
@@ -4681,6 +4685,18 @@ export default function PdbTracker() {
               </kbd>
             )}
           </div>
+
+          {/* Saved Queries Dropdown — next to search */}
+          <SavedQueriesDropdown
+            currentQuery={searchQuery}
+            currentMode={mode}
+            currentFilter={mode === 'weekly' ? activeFilter : mode === 'evaluation' ? evalFilter : 'all'}
+            onApplyQuery={(query, filter) => {
+              setSearchQuery(query);
+              if (mode === 'weekly') setActiveFilter(filter);
+              else if (mode === 'evaluation') setEvalFilter(filter);
+            }}
+          />
 
           {/* Mobile search button (visible < md) */}
           <Tooltip>

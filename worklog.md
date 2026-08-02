@@ -1883,3 +1883,101 @@ Stage Summary:
 6. **[P3]** Performance: add bundle analyzer, optimize recharts imports
 7. **[P3]** Add advanced search (faceted search, saved queries)
 8. **[P3]** Add custom dashboard layouts (drag-and-drop widgets)
+
+---
+Task ID: cron-review-42
+Agent: main
+Task: Implement 5 features (export report, lit chart export, perf, saved queries, custom dashboard)
+
+Work Log:
+- Read worklog to understand project state (cron-review-41, 6 features implemented)
+- Verified dev server running on port 3000
+
+- FEATURE 1: Add Export Report to EvalMultiCompare and PaperMultiCompare
+  - Updated eval-multi-compare.tsx:
+    * Imported exportComparisonReport and FileDown icon
+    * Added data-compare-table attribute to table
+    * Added "Export Report" button to footer (opens print-friendly HTML report)
+  - Updated paper-multi-compare.tsx:
+    * Same changes — imported exportComparisonReport and FileDown
+    * Added data-compare-table attribute
+    * Added "Export Report" button to footer
+
+- FEATURE 2: Add ChartExportButton to Literature charts
+  - Updated src/components/literature/LiteratureStatsChart.tsx:
+    * Imported ChartExportButton
+    * Added export button to "Impact Factor Distribution" header (chartName: "lit-if-distribution")
+    * Added export button to "Method Distribution" header (chartName: "lit-method-distribution")
+    * Added export button to "Publication Timeline" header (chartName: "lit-publication-timeline")
+  - All 3 Literature charts now have export buttons
+
+- FEATURE 3: Performance — bundle analyzer + optimize imports
+  - Updated next.config.ts:
+    * Added 9 more packages to optimizePackageImports:
+      @radix-ui/react-dialog, dropdown-menu, tooltip, tabs, select, popover, scroll-area,
+      zod, clsx, tailwind-merge
+    * Reduces bundle size by tree-shaking unused barrel exports
+  - Created scripts/analyze-bundle.sh:
+    * Bundle analysis script using webpack-bundle-analyzer
+    * Shows top 20 chunks by size after build
+
+- FEATURE 4: Advanced search (saved queries)
+  - Created src/hooks/use-saved-queries.ts:
+    * Manages saved search queries in localStorage (pdb-saved-queries)
+    * Stores: id, name, query text, mode, filter, timestamp
+    * Max 20 queries, auto-persists
+    * API: { queries, saveQuery, deleteQuery, clearAll }
+  - Created src/components/saved-queries-dropdown.tsx:
+    * Dropdown button showing saved queries count
+    * "Save current search" button (appears when search is active)
+    * Save form with name input
+    * Saved queries list with apply/delete buttons
+    * "Clear all" button
+    * Glass morphism dropdown, animated entrance
+    * EN/ZH i18n
+  - Integrated into pdb-tracker.tsx:
+    * SavedQueriesDropdown next to search input in header
+    * Passes: currentQuery, currentMode, currentFilter
+    * onApplyQuery sets searchQuery and activeFilter/evalFilter
+  - E2E verified: "Saved" button visible, dropdown shows empty state
+
+- FEATURE 5: Custom dashboard layout (drag-and-drop widgets)
+  - Created src/components/custom-dashboard.tsx:
+    * Uses @dnd-kit/core + @dnd-kit/sortable (already installed)
+    * Drag-and-drop widget reordering
+    * Widget order persisted to localStorage
+    * Features:
+      - DndContext with PointerSensor + KeyboardSensor
+      - SortableContext with rectSortingStrategy
+      - SortableWidget with GripVertical drag handle
+      - Layout animation with framer-motion
+      - Merges stored order with new widgets
+    * Props: storageKey, widgets[]
+    * Each widget: { id, title, content, defaultVisible }
+  - Ready for integration into Weekly dashboard charts area
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+- E2E test: Saved Queries dropdown button visible in header
+- E2E test: Dropdown shows "No saved queries yet" empty state
+- E2E test: 0 console errors
+- Dev server: stable
+
+Stage Summary:
+- Added Export Report to EvalMultiCompare and PaperMultiCompare (print-friendly PDF)
+- Added ChartExportButton to all 3 Literature charts (IF, Method, Timeline)
+- Optimized bundle: added 9 packages to optimizePackageImports
+- Created saved queries system (hook + dropdown component)
+- Created CustomDashboard drag-and-drop widget layout component
+- ESLint: 0 errors, 0 warnings
+- E2E: Saved Queries verified, 0 console errors
+
+### Next Priority Items (for future cron review rounds):
+1. **[P2]** Integrate CustomDashboard into Weekly mode (replace fixed chart layout)
+2. **[P2]** Add faceted search filters (method, resolution range, IF range, organism)
+3. **[P3]** User authentication (NextAuth.js)
+4. **[P3]** Add real-time PDB release notifications (WebSocket)
+5. **[P3]** Add collaborative features (shared evaluations, comments)
+6. **[P3]** Add data visualization presets (saved chart configurations)
+7. **[P3]** Add keyboard navigation for all modals and dropdowns
+8. **[P3]** Add accessibility improvements (ARIA labels, screen reader support)
