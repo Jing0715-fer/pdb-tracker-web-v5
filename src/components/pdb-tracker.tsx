@@ -11,7 +11,7 @@ import {
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
-  Maximize2, Layers, Info, CheckCircle2, Trash2,
+  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -49,6 +49,8 @@ import { TrendingStructures } from '@/components/trending-structures';
 import { SnapshotComparison } from '@/components/snapshot-comparison';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
 import { StructureStatsCards } from '@/components/structure-stats-cards';
+import { LiteratureStatsCards } from '@/components/literature-stats-cards';
+import { EvalStatsCards } from '@/components/eval-stats-cards';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
@@ -3022,6 +3024,39 @@ export default function PdbTracker() {
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto preview-scroll p-4 space-y-4">
+            {/* Quick Info Bar — compact badges for paper metrics */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {paper.journal && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary max-w-[120px] truncate">
+                  <BookOpen className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{paper.journal}</span>
+                </span>
+              )}
+              {paper.IF != null && paper.IF > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#dc2626]/10 text-[#dc2626]">
+                  IF {paper.IF.toFixed(1)}
+                </span>
+              )}
+              {paper.pubdate && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted">
+                  <Calendar className="h-2.5 w-2.5" />
+                  {paper.pubdate}
+                </span>
+              )}
+              {paper.authors && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted max-w-[140px] truncate">
+                  <Users className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{paper.authors}</span>
+                </span>
+              )}
+              {paper.pdbs && paper.pdbs.length > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#2d8f8f]/10 text-[#2d8f8f]">
+                  <Box className="h-2.5 w-2.5" />
+                  {paper.pdbs.length} PDB
+                </span>
+              )}
+            </div>
+
             {/* Title */}
             <div>
               <h3 className="text-base font-bold text-claude-text leading-snug">
@@ -4190,6 +4225,44 @@ export default function PdbTracker() {
             </div>
           </div>
 
+          {/* Quick Info Bar — compact badges for eval metrics */}
+          <div className="px-4 py-2 border-b border-claude-border dark:border-[#3d3832] flex items-center gap-1.5 flex-wrap">
+            {selectedEval.proteinName && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary max-w-[160px] truncate">
+                <FlaskConical className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{selectedEval.proteinName}</span>
+              </span>
+            )}
+            {selectedEval.organism && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted max-w-[100px] truncate">
+                <Users className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{selectedEval.organism}</span>
+              </span>
+            )}
+            {selectedEval.coverage != null && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#7c5cbf]/10 text-[#7c5cbf]">
+                {selectedEval.coverage.toFixed(0)}% cov
+              </span>
+            )}
+            {(selectedEval.pdbStructures?.length ?? 0) > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#2d8f8f]/10 text-[#2d8f8f]">
+                <Box className="h-2.5 w-2.5" />
+                {selectedEval.pdbStructures?.length} PDB
+              </span>
+            )}
+            {(selectedEval.blastResults?.length ?? 0) > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#c9872e]/10 text-[#c9872e]">
+                <Zap className="h-2.5 w-2.5" />
+                {selectedEval.blastResults?.length} BLAST
+              </span>
+            )}
+            {selectedEval.geneNames && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted">
+                {selectedEval.geneNames}
+              </span>
+            )}
+          </div>
+
           {/* Tab buttons */}
           <div className="flex border-b border-claude-border dark:border-[#3d3832]">
             {evalTabNames.map(tab => {
@@ -4558,6 +4631,32 @@ export default function PdbTracker() {
                 </a>
               )}
             </div>
+
+            {/* Copy Structure Info Button */}
+            <button
+              onClick={() => {
+                const info = [
+                  `PDB ID: ${selectedEntry.pdbId}`,
+                  selectedEntry.title && `Title: ${selectedEntry.title}`,
+                  selectedEntry.method && `Method: ${selectedEntry.method}`,
+                  selectedEntry.resolution != null && `Resolution: ${selectedEntry.resolution.toFixed(2)}Å`,
+                  selectedEntry.journal && `Journal: ${selectedEntry.journal}`,
+                  selectedEntry.journalIf != null && `Impact Factor: ${selectedEntry.journalIf.toFixed(1)}`,
+                  selectedEntry.organisms && `Organism: ${selectedEntry.organisms}`,
+                  selectedEntry.releaseDate && `Release Date: ${selectedEntry.releaseDate}`,
+                  `RCSB: https://www.rcsb.org/structure/${selectedEntry.pdbId}`,
+                ].filter(Boolean).join('\n');
+                navigator.clipboard.writeText(info).then(() => {
+                  toast.success(locale === 'zh' ? '已复制' : 'Copied', { description: locale === 'zh' ? '结构信息已复制到剪贴板' : 'Structure info copied to clipboard' });
+                }).catch(() => {
+                  toast.error(locale === 'zh' ? '复制失败' : 'Copy failed');
+                });
+              }}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-all active:scale-95"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {locale === 'zh' ? '复制结构信息' : 'Copy Structure Info'}
+            </button>
 
             {/* Back to Weekly button */}
             <div className="pt-2">
@@ -5065,9 +5164,15 @@ export default function PdbTracker() {
             />
           )}
 
-          {/* Enhanced Structure Stats Cards — second style with icons + mini charts */}
+          {/* Enhanced Stats Cards — shown in all 3 modes (second style with icons + mini charts) */}
           {mode === 'weekly' && entries.length > 0 && (
             <StructureStatsCards entries={entries} />
+          )}
+          {mode === 'evaluation' && allEvaluations.length > 0 && (
+            <EvalStatsCards evaluations={allEvaluations} evalBatches={evalBatches} evalLoading={evalLoading} />
+          )}
+          {mode === 'literature' && litPapers.length > 0 && (
+            <LiteratureStatsCards papers={litPapers} stats={litStats} />
           )}
 
           {/* Enhanced Weekly Dashboard Charts */}

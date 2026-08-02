@@ -1190,3 +1190,96 @@ Issues remaining:
 8. **[P3]** User authentication (NextAuth.js)
 9. **[P3]** Fix notification bell activity feed fetch error
 10. **[P3]** Export comparison results as PDF/report
+
+---
+Task ID: cron-review-34
+Agent: main
+Task: Fix stats cards not showing in all 3 modes + add 3 new features
+
+Work Log:
+- Read worklog to understand project state (cron-review-33 complete, StructureStatsCards restored)
+- Verified dev server running on port 3000 (stable)
+
+- FIX: Stats cards not showing in Evaluation and Literature modes
+  - Root cause: StructureStatsCards (Weekly) was in the shared stats area, but
+    EvalStatsCards and LiteratureStatsCards were only inside their respective view
+    components (evaluation-view.tsx, literature-view.tsx), which rendered BELOW
+    the filter toolbar. The shared area is ABOVE the filter toolbar.
+  - User reported: "3个模块的filter下方的卡片还是没有显示出来"
+  - Fix: Created standalone EvalStatsCards component (src/components/eval-stats-cards.tsx)
+    - Extracted from evaluation-view.tsx's internal EvalStatCards function
+    - Same styling as StructureStatsCards (icons, gradients, mini visualizations)
+    - 4 cards: Eval Targets, Batches, Avg Coverage, ≥80% Coverage
+  - Added all 3 stats card components to the shared area in pdb-tracker.tsx:
+    * Weekly: StructureStatsCards (already there)
+    * Evaluation: EvalStatsCards (new, in shared area)
+    * Literature: LiteratureStatsCards (moved from literature-view.tsx to shared area)
+  - Removed duplicate rendering:
+    * Removed LiteratureStatsCards from literature-view.tsx
+    * Removed EvalStatCards render from evaluation-view.tsx (function kept for reference)
+  - Result: All 3 modes now show stats cards in the same shared area above the filter
+
+- FEATURE 1: Added "Copy Structure Info" button to structure detail panel
+  - A full-width button that copies structured info to clipboard
+  - Info includes: PDB ID, Title, Method, Resolution, Journal, IF, Organism, Release Date, RCSB URL
+  - Uses navigator.clipboard API
+  - Shows success/error toast notification
+  - Positioned after External Links section
+  - EN/ZH i18n support
+
+- FEATURE 2: Added Quick Info Bar to Evaluation detail panel
+  - Compact badges shown below the header in the eval detail panel
+  - Badges:
+    * Protein Name (FlaskConical icon, neutral bg, truncated)
+    * Organism (Users icon, neutral bg, truncated)
+    * Coverage (mono font, purple bg) — e.g., "75% cov"
+    * PDB Count (Box icon, teal bg) — e.g., "3 PDB"
+    * BLAST Count (Zap icon, amber bg) — e.g., "5 BLAST"
+    * Gene Names (mono font, neutral bg)
+  - Only shows when data exists
+  - Positioned between header and tab buttons
+
+- FEATURE 3: Added Quick Info Bar to Literature detail panel
+  - Compact badges shown at the top of the literature detail content
+  - Badges:
+    * Journal (BookOpen icon, neutral bg, truncated)
+    * Impact Factor (mono font, red bg) — e.g., "IF 64.8"
+    * Publication Date (Calendar icon, neutral bg)
+    * Authors (Users icon, neutral bg, truncated)
+    * PDB Count (Box icon, teal bg) — e.g., "2 PDB"
+  - Only shows when data exists
+  - Positioned before the Title section
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (pdb-tracker.tsx, eval-stats-cards.tsx, literature-view.tsx, evaluation-view.tsx)
+- E2E test: Weekly mode shows StructureStatsCards (Total Structures, Avg Resolution, Cryo-EM, High-IF)
+- E2E test: Evaluation mode shows EvalStatsCards (Eval Targets, Batches, Avg Coverage, ≥80% Coverage)
+- E2E test: Literature mode shows LiteratureStatsCards (Total Papers, Avg Impact, High-IF, Methods Covered)
+- E2E test: Structure detail panel shows "Copy Structure Info" button
+- E2E test: Structure detail panel shows "Related Structures" section
+- E2E test: 0 console errors
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Fixed stats cards: all 3 modes now show cards in the same shared area above the filter
+- Added 3 new features: Copy Structure Info button, Eval Quick Info Bar, Lit Quick Info Bar
+- ESLint: 0 errors, 0 warnings
+- E2E: All 3 modes show stats cards, new features verified, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- Transient "Failed to fetch activity feed" error from notification bell (non-critical)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+2. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+3. **[P2]** Extend ChartExportButton to more chart components
+4. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+5. **[P2]** Lazy-load Literature mode components to reduce compile time
+6. **[P2]** Add "Copy Citation" to Literature detail panel
+7. **[P3]** pdb2pqr/APBS advanced visualization
+8. **[P3]** User authentication (NextAuth.js)
+9. **[P3]** Fix notification bell activity feed fetch error
+10. **[P3]** Export comparison results as PDF/report
