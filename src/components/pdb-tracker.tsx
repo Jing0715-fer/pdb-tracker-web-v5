@@ -751,6 +751,7 @@ export default function PdbTracker() {
   const [compareMode, setCompareMode] = useState(false);
   const [multiCompareOpen, setMultiCompareOpen] = useState(false);
   const [multi3DOpen, setMulti3DOpen] = useState(false);
+  const [eval3DOpen, setEval3DOpen] = useState(false);
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -3201,6 +3202,21 @@ export default function PdbTracker() {
                 />
               </div>
             )}
+
+            {/* Copy Citation Button */}
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(citationText).then(() => {
+                  toast.success(locale === 'zh' ? '已复制引用' : 'Citation copied', { description: locale === 'zh' ? '引用文本已复制到剪贴板' : 'Citation text copied to clipboard' });
+                }).catch(() => {
+                  toast.error(locale === 'zh' ? '复制失败' : 'Copy failed');
+                });
+              }}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-all active:scale-95"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {locale === 'zh' ? '复制引用' : 'Copy Citation'}
+            </button>
           </div>
       </>);
 
@@ -5025,6 +5041,7 @@ export default function PdbTracker() {
           )}
           {/* Toolbar (evaluation) */}
           {mode === 'evaluation' && (
+            <>
             <EvalPageControls
               activeFilter={evalFilter}
               onFilterChange={(f) => { setEvalFilter(f); }}
@@ -5037,6 +5054,19 @@ export default function PdbTracker() {
               selectedEvalId={selectedEvalId}
               filteredEvaluations={filteredEvaluations}
             />
+            {/* 3D Preview button for evaluation PDB structures */}
+            {allEvaluations.some(e => (e.pdbStructures?.length ?? 0) > 0) && (
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+                <button
+                  onClick={() => setEval3DOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#2d8f8f] hover:bg-[#2d8f8f]/10 transition-all"
+                >
+                  <Boxes className="h-3 w-3" />
+                  {locale === 'zh' ? '3D 结构预览' : '3D Structure Preview'}
+                </button>
+              </div>
+            )}
+            </>
           )}
 
           {/* Content */}
@@ -5206,6 +5236,36 @@ export default function PdbTracker() {
             onViewEntry={(pdbId) => { setViewerModalPdbId(pdbId); setViewerModalOpen(true); setMulti3DOpen(false); }}
           />
         )}
+
+        {/* Evaluation 3D Viewer Modal — side-by-side 3D structure previews from eval PDBs */}
+        {mode === 'evaluation' && eval3DOpen && (() => {
+          const evalPdbs = allEvaluations
+            .flatMap(e => e.pdbStructures || [])
+            .slice(0, 4)
+            .map(s => ({
+              pdbId: s.pdbId,
+              method: s.method,
+              resolution: s.resolution,
+              title: s.title,
+              journal: s.journal,
+              journalIf: s.journalIf,
+              organisms: null,
+              ligands: s.ligandNames,
+              releaseDate: s.releaseDate,
+              isCryoem: 0, isXray: 0, isNmr: 0,
+              doi: null, pubmedId: null, pubmedTitle: null,
+              pubmedAuthors: null, pubmedAbstract: null, authors: null,
+              weekId: null, fetchDate: null, ifTier: null,
+            } as PdbEntry));
+          if (evalPdbs.length < 2) return null;
+          return (
+            <MultiStructure3DViewer
+              entries={evalPdbs}
+              onClose={() => setEval3DOpen(false)}
+              onViewEntry={(pdbId) => { setViewerModalPdbId(pdbId); setViewerModalOpen(true); setEval3DOpen(false); }}
+            />
+          );
+        })()}
 
         {/* Detail Panel */}
         {renderDetailPanel()}

@@ -16,6 +16,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+// Ensure /home/z/.local/bin (pdb2pqr, propka) is in PATH for child processes
+const EXTRA_PATH = '/home/z/.local/bin';
+const ENV_PATH = process.env.PATH || '';
+const FULL_PATH = ENV_PATH.includes(EXTRA_PATH) ? ENV_PATH : `${EXTRA_PATH}:${ENV_PATH}`;
+const CHILD_ENV = { ...process.env, PATH: FULL_PATH };
+
 export interface CliAdapter {
   id: string;
   label: string;
@@ -147,7 +153,7 @@ async function probeOne(adapter: CliAdapter): Promise<CliProbeResult> {
   try {
     if (adapter.category === "binary") {
       try {
-        await execFileAsync("which", [adapter.bin], { timeout: 3000 });
+        await execFileAsync("which", [adapter.bin], { timeout: 3000, env: CHILD_ENV });
       } catch {
         return { ...base, error: "binary not in PATH" };
       }
@@ -156,6 +162,7 @@ async function probeOne(adapter: CliAdapter): Promise<CliProbeResult> {
           const { stdout } = await execFileAsync(adapter.bin, adapter.probeArgs, {
             timeout: 5000,
             maxBuffer: 1024 * 64,
+            env: CHILD_ENV,
           });
           const version = stdout.trim().split("\n")[0].slice(0, 80);
           return { ...base, available: true, version };
@@ -170,7 +177,7 @@ async function probeOne(adapter: CliAdapter): Promise<CliProbeResult> {
       const { stdout } = await execFileAsync(
         adapter.bin,
         adapter.probeArgs,
-        { timeout: 5000, maxBuffer: 1024 * 64 }
+        { timeout: 5000, maxBuffer: 1024 * 64, env: CHILD_ENV }
       );
       const version = stdout.trim().split("\n")[0].slice(0, 80);
       return { ...base, available: true, version };
@@ -178,7 +185,7 @@ async function probeOne(adapter: CliAdapter): Promise<CliProbeResult> {
 
     if (adapter.category === "pymol") {
       try {
-        await execFileAsync("which", [adapter.bin], { timeout: 3000 });
+        await execFileAsync("which", [adapter.bin], { timeout: 3000, env: CHILD_ENV });
         return { ...base, available: true, version: "ok" };
       } catch {
         return { ...base, error: "pymol not in PATH" };

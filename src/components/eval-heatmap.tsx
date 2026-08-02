@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import { Grid3X3, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { ChartExportButton } from '@/components/chart-export-button';
 import type { Evaluation, EvalBatch, EvalBatchSubTarget } from '@/lib/pdb-types';
 
 // ─── Score Parsing ──────────────────────────────────────────────────────────────
@@ -211,6 +212,7 @@ export function EvalHeatmap({
         </h4>
 
         <div className="flex items-center gap-2">
+          <ChartExportButton chartName="eval-score-heatmap" />
           {/* Batch selector */}
           {batches.length > 1 && (
             <div className="flex items-center gap-1">
