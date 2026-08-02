@@ -1705,7 +1705,8 @@ export default function PdbTracker() {
         (e.uniprotId?.toLowerCase().includes(q)) ||
         (e.proteinName?.toLowerCase().includes(q)) ||
         (e.organism?.toLowerCase().includes(q)) ||
-        (e.entryName?.toLowerCase().includes(q))
+        (e.entryName?.toLowerCase().includes(q)) ||
+        (e.geneNames?.toLowerCase().includes(q))
       );
     }
     result.sort((a, b) => {
@@ -4907,6 +4908,31 @@ export default function PdbTracker() {
               onClearSearch={() => setSearchQuery('')}
               onClearFilter={() => setActiveFilter('all')}
               onClearAll={() => { setSearchQuery(''); setActiveFilter('all'); }}
+              mode="weekly"
+            />
+          )}
+          {mode === 'evaluation' && (
+            <SearchStatusBanner
+              searchQuery={searchQuery}
+              activeFilter={evalFilter}
+              resultCount={filteredEvaluations.length}
+              totalCount={allEvaluations.length}
+              onClearSearch={() => setSearchQuery('')}
+              onClearFilter={() => setEvalFilter('all')}
+              onClearAll={() => { setSearchQuery(''); setEvalFilter('all'); }}
+              mode="evaluation"
+            />
+          )}
+          {mode === 'literature' && litHasActiveFilters && (
+            <SearchStatusBanner
+              searchQuery=""
+              activeFilter={litSourceFilter !== 'all' ? litSourceFilter : litIfFilter}
+              resultCount={litPapers.length}
+              totalCount={litPapers.length}
+              onClearSearch={() => {}}
+              onClearFilter={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
+              onClearAll={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
+              mode="literature"
             />
           )}
 

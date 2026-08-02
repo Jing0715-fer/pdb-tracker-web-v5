@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, X, Filter, Database } from 'lucide-react';
+import { Search, X, Filter, Database, FlaskConical, BookOpen } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
 /**
@@ -11,12 +11,17 @@ import { useI18n } from '@/lib/i18n';
  * A compact banner that appears when a search query or filter is active,
  * showing:
  *   - The current search term (with a clear button)
- *   - The active method filter (Cryo-EM / X-ray / NMR / Bookmarks)
+ *   - The active method filter (Cryo-EM / X-ray / NMR / Bookmarks / etc.)
  *   - The result count vs. total
  *
  * This gives users clear feedback about what filters are applied and
  * a one-click way to reset them.
+ *
+ * Supports all 3 data modes: weekly (structures), evaluation (targets),
+ * literature (papers).
  */
+
+type BannerMode = 'weekly' | 'evaluation' | 'literature';
 
 interface SearchStatusBannerProps {
   searchQuery: string;
@@ -26,10 +31,12 @@ interface SearchStatusBannerProps {
   onClearSearch: () => void;
   onClearFilter: () => void;
   onClearAll: () => void;
+  mode?: BannerMode;
 }
 
 // Human-readable filter labels
 const FILTER_LABELS: Record<string, { en: string; zh: string }> = {
+  // Weekly filters
   all: { en: 'All', zh: '全部' },
   bookmarks: { en: 'Bookmarks', zh: '收藏' },
   cryoem: { en: 'Cryo-EM', zh: '冷冻电镜' },
@@ -41,7 +48,26 @@ const FILTER_LABELS: Record<string, { en: string; zh: string }> = {
   'SOLUTION NMR': { en: 'NMR', zh: '核磁共振' },
   'high-if': { en: 'High IF (≥20)', zh: '高影响因子' },
   'top-if': { en: 'Top IF (≥10)', zh: '顶级影响因子' },
+  // Evaluation filters
+  'high-coverage': { en: '≥80% Coverage', zh: '高覆盖率' },
+  'medium-coverage': { en: '≥50% Coverage', zh: '中覆盖率' },
+  'low-coverage': { en: '<50% Coverage', zh: '低覆盖率' },
+  'has-structure': { en: 'Has Structure', zh: '有结构' },
+  'has-blast': { en: 'Has Homolog', zh: '有同源' },
+  // Literature filters
+  daily: { en: 'Daily Digest', zh: '日报' },
+  '5': { en: 'IF ≥ 5', zh: 'IF ≥ 5' },
+  '10': { en: 'IF ≥ 10', zh: 'IF ≥ 10' },
+  '20': { en: 'IF ≥ 20', zh: 'IF ≥ 20' },
 };
+
+// Unit text per mode
+function getUnitText(mode: BannerMode, locale: string): string {
+  if (locale === 'zh') {
+    return mode === 'evaluation' ? '个靶点' : mode === 'literature' ? '篇论文' : '个结构';
+  }
+  return mode === 'evaluation' ? 'targets' : mode === 'literature' ? 'papers' : 'structures';
+}
 
 export function SearchStatusBanner({
   searchQuery,
@@ -51,10 +77,11 @@ export function SearchStatusBanner({
   onClearSearch,
   onClearFilter,
   onClearAll,
+  mode = 'weekly',
 }: SearchStatusBannerProps) {
   const { locale } = useI18n();
   const hasSearch = searchQuery.trim().length > 0;
-  const hasFilter = activeFilter && activeFilter !== 'all';
+  const hasFilter = activeFilter && activeFilter !== 'all' && activeFilter !== '';
   const isVisible = hasSearch || hasFilter;
 
   if (!isVisible) return null;
@@ -64,9 +91,10 @@ export function SearchStatusBanner({
     : null;
 
   const isFiltered = resultCount < totalCount;
+  const unit = getUnitText(mode, locale);
   const resultText = locale === 'zh'
-    ? `${resultCount} / ${totalCount} 个结构`
-    : `${resultCount} of ${totalCount} structures`;
+    ? `${resultCount} / ${totalCount} ${unit}`
+    : `${resultCount} of ${totalCount} ${unit}`;
 
   return (
     <AnimatePresence mode="wait">
@@ -133,7 +161,7 @@ export function SearchStatusBanner({
 
             {/* Result count */}
             <div className="flex items-center gap-1.5 ml-auto shrink-0">
-              <Database className="h-3 w-3 text-claude-text-muted" />
+              {mode === 'evaluation' ? <FlaskConical className="h-3 w-3 text-claude-text-muted" /> : mode === 'literature' ? <BookOpen className="h-3 w-3 text-claude-text-muted" /> : <Database className="h-3 w-3 text-claude-text-muted" />}
               <span className={`text-[11px] font-mono ${isFiltered ? 'text-claude-accent font-semibold' : 'text-claude-text-muted'}`}>
                 {resultText}
               </span>

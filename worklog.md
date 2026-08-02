@@ -362,3 +362,76 @@ Issues remaining:
 8. **[P2]** Lazy-load Literature mode components to reduce compile time
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-24
+Agent: main
+Task: QA testing, extend SearchStatusBanner to all modes, fix evaluation search bug
+
+Work Log:
+- Read worklog to understand project state (cron-review-23 complete, SearchStatusBanner + duplicate key fix done)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested all 4 modes (Weekly/Evaluation/Literature/Analysis) — all functional
+  * Verified previous fixes still work (SearchStatusBanner in Weekly, no duplicate key errors)
+  * Identified: SearchStatusBanner only in Weekly mode (P1 item from cron-23)
+
+- FEATURE 1: Extended SearchStatusBanner to Evaluation and Literature modes
+  - Updated search-status-banner.tsx:
+    * Added `mode` prop ('weekly' | 'evaluation' | 'literature')
+    * Added mode-specific unit text: "structures" / "targets" / "papers" (EN+ZH)
+    * Added mode-specific icons: Database / FlaskConical / BookOpen
+    * Added Evaluation filter labels: high-coverage, medium-coverage, low-coverage, has-structure, has-blast
+    * Added Literature filter labels: daily, IF thresholds (5/10/20)
+    * Fixed ESLint error: removed getModeIcon function (was creating component during render)
+      → Replaced with inline conditional rendering of icons
+  - Added Evaluation mode banner in pdb-tracker.tsx:
+    * Passes: searchQuery, evalFilter, filteredEvaluations.length, allEvaluations.length
+    * Clear buttons reset searchQuery and evalFilter
+  - Added Literature mode banner in pdb-tracker.tsx:
+    * Shows when litHasActiveFilters is true
+    * Passes: litSourceFilter or litIfFilter as activeFilter
+    * Clear buttons reset all lit filters (source, IF, date, readingList, tag)
+
+- FIX 1 (bug): Evaluation search didn't include geneNames field
+  - Root cause: filteredEvaluations search only checked uniprotId, proteinName, organism, entryName
+  * Searching "EGFR" returned 0 results even though P00533 has geneNames="EGFR"
+  - Fix: Added `e.geneNames?.toLowerCase().includes(q)` to the search filter conditions
+  - Result: Searching "EGFR" now returns 1 result (P00533 Epidermal growth factor receptor)
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (search-status-banner.tsx, pdb-tracker.tsx)
+- E2E test: Weekly banner works — "Filtered 'Cryo-EM' 5 of 5 structures Clear all"
+- E2E test: Evaluation banner works — "Filtered 'EGFR' 1 of 3 targets Clear all"
+  (geneNames fix confirmed: was "0 of 0 targets", now "1 of 3 targets")
+- E2E test: Literature banner appears when Daily filter active
+- E2E test: 0 console errors after reload (ChunkLoadError during mode switch is transient HMR)
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Extended SearchStatusBanner to all 3 data modes (Weekly/Evaluation/Literature)
+- Fixed evaluation search bug: geneNames field now included in search
+- ESLint: 0 errors, 0 warnings
+- E2E: All modes have search/filter banner, search works correctly, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- ChunkLoadError during mode switching (transient HMR issue, resolves on reload)
+- Literature banner result count shows total litPapers.length (not filtered count) — 
+  would need to compute filtered paper count from LiteratureDateSidebar logic
+
+### Next Priority Items (for future cron review rounds):
+1. **[P0]** Add error boundaries with retry buttons for failed API calls
+2. **[P1]** Compute filtered paper count for Literature SearchStatusBanner
+3. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+4. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+5. **[P1]** Dark mode polish — verify all custom CSS has dark mode variants
+6. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+7. **[P2]** Chart export functionality (PNG/SVG/PDF)
+8. **[P2]** Lazy-load Literature mode components to reduce compile time
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)
