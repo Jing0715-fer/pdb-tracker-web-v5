@@ -287,6 +287,10 @@ const WeeklyReleaseTimeline = dynamic(() => import('@/components/weekly-release-
   ssr: false,
   loading: () => null,
 });
+const BookmarkQuickAccess = dynamic(() => import('@/components/bookmark-quick-access').then(m => ({ default: m.BookmarkQuickAccess })), {
+  ssr: false,
+  loading: () => null,
+});
 const WeeklyPdbTable = dynamic(() => import('@/components/WeeklyPdbTable').then(m => ({ default: m.WeeklyPdbTable })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
@@ -4541,8 +4545,15 @@ export default function PdbTracker() {
               <h1 className="header-title text-[15px] font-extrabold leading-none tracking-tight header-text-gradient">
                 PDB Structure Tracker
                 {bookmarks.size > 0 && (
-                  <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-medium text-claude-accent align-middle">
-                    ★ {bookmarks.size}
+                  <span className="ml-1.5 inline-flex items-center align-middle">
+                    <BookmarkQuickAccess
+                      bookmarks={bookmarks}
+                      entries={entries}
+                      onViewEntry={handleRowClick}
+                      onRemoveBookmark={(pdbId) => toggleBookmark(pdbId)}
+                      onClearAll={() => updateBookmarks(new Set())}
+                      onViewAll={() => { setActiveFilter('bookmarks'); }}
+                    />
                   </span>
                 )}
               </h1>
