@@ -435,3 +435,88 @@ Issues remaining:
 8. **[P2]** Lazy-load Literature mode components to reduce compile time
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-25
+Agent: main
+Task: QA testing, add ErrorBanner, fix keyboard hints double-toggle bug
+
+Work Log:
+- Read worklog to understand project state (cron-review-24 complete, SearchStatusBanner extended to all modes)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested all 4 modes (Weekly/Evaluation/Literature/Analysis) — all functional
+  * Verified search banner works in Weekly mode ("Filtered 'Cryo-EM' 5 of 5 structures")
+  * 0 console errors after reload
+
+- FEATURE 1: Created ErrorBanner component (src/components/error-banner.tsx)
+  - A persistent, dismissible error banner that appears when API fetch fails
+  - Unlike toast notifications (auto-dismiss after 6s), this stays until user acts
+  - Features:
+    * Auto-detects database errors (amber icon + "Open Run Center" action)
+    * Generic fetch errors (red icon + "Retry" action)
+    * Animated entrance/exit (slide down + height transition)
+    * Pulsing error icon (scale animation)
+    * Retry button with loading spinner state ("Retrying…")
+    * Dismiss (X) button to close
+    * Gradient line at bottom for visual polish
+    * EN/ZH i18n support
+  - Integrated into pdb-tracker.tsx:
+    * Rendered between welcome panel and Quick Stats Panel
+    * Passes: fetchError, loading, isDbError, onRetry, onOpenRunCenter, onDismiss
+    * Uses existing handleRetryAll function for retry action
+
+- FIX 1 (bug): Keyboard hints "?" shortcut double-toggle bug
+  - Root cause: Both the global keyboard handler in pdb-tracker.tsx AND the
+    KeyboardHints component's internal "?" handler were toggling state.
+    * Global handler: toggles keyboardHintsOpen (passed as `open` prop)
+    * Component handler: toggles internalOpen
+    * Result: isOpen = externalOpen ?? internalOpen → double-toggle prevented closing
+  - Fix: Removed the KeyboardHints component's internal "?" handler
+    * The global handler in pdb-tracker.tsx now solely controls the `open` prop
+    * Component only handles Escape to close (no toggle)
+  - Result: "?" now correctly toggles open/close
+
+- FIX 2 (bug): Keyboard hints missing Analysis mode shortcut (key 4)
+  - Root cause: keyboard-hints.tsx only listed keys 1/2/3 (Weekly/Eval/Lit)
+    but the use-keyboard-shortcuts hook handles key 4 for Analysis mode
+  - Fix: Added `{ keys: ['4'], description: 'Switch to Analysis mode' }` to the
+    Navigation category in buildShortcutCategories
+  - Result: Keyboard hints now shows all 4 mode shortcuts (1/2/3/4)
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (error-banner.tsx, keyboard-hints.tsx, pdb-tracker.tsx)
+- E2E test: "?" opens keyboard hints dialog (backdrop visible)
+- E2E test: Keyboard hints shows "Switch to Analysis mode" with key 4
+- E2E test: Escape closes keyboard hints dialog
+- E2E test: Pressing "4" switches to Analysis mode
+- E2E test: 0 console errors
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Added ErrorBanner component: persistent error display with retry + dismiss
+- Fixed keyboard hints "?" double-toggle bug (now works correctly)
+- Added Analysis mode shortcut (key 4) to keyboard hints
+- ESLint: 0 errors, 0 warnings
+- E2E: All keyboard shortcuts work, error banner ready, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- ErrorBanner only shows for weekly fetchError (could extend to eval/lit errors)
+- ChunkLoadError during mode switching (transient HMR issue, resolves on reload)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P0]** Extend ErrorBanner to Evaluation and Literature mode errors
+2. **[P1]** Compute filtered paper count for Literature SearchStatusBanner
+3. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+4. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+5. **[P1]** Dark mode polish — verify all custom CSS has dark mode variants
+6. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+7. **[P2]** Chart export functionality (PNG/SVG/PDF)
+8. **[P2]** Lazy-load Literature mode components to reduce compile time
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)

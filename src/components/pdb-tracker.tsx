@@ -279,6 +279,10 @@ const SearchStatusBanner = dynamic(() => import('@/components/search-status-bann
   ssr: false,
   loading: () => null,
 });
+const ErrorBanner = dynamic(() => import('@/components/error-banner').then(m => ({ default: m.ErrorBanner })), {
+  ssr: false,
+  loading: () => null,
+});
 const WeeklyPdbTable = dynamic(() => import('@/components/WeeklyPdbTable').then(m => ({ default: m.WeeklyPdbTable })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
@@ -4884,6 +4888,16 @@ export default function PdbTracker() {
               onShowKeyboardHints={() => { setKeyboardHintsOpen(true); }}
             />
           )}
+
+          {/* Error Banner — persistent error display with retry + dismiss */}
+          <ErrorBanner
+            error={fetchError}
+            loading={loading}
+            isDbError={fetchError === dbErrorMsg}
+            onRetry={handleRetryAll}
+            onOpenRunCenter={() => { setFetchError(null); setRunCenterOpen(true); }}
+            onDismiss={() => setFetchError(null)}
+          />
 
           {/* Quick Stats Panel */}
           {!(showWelcome && !loading && entries.length === 0 && evaluations.length === 0 && litPapers.length === 0) && (

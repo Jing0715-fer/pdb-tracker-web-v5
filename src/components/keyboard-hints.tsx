@@ -25,6 +25,7 @@ const buildShortcutCategories = (locale: 'en' | 'zh'): ShortcutCategory[] => [
       { keys: ['1'], description: locale === 'zh' ? '切换到周报模式' : 'Switch to Weekly mode' },
       { keys: ['2'], description: locale === 'zh' ? '切换到评估模式' : 'Switch to Evaluation mode' },
       { keys: ['3'], description: locale === 'zh' ? '切换到文献模式' : 'Switch to Literature mode' },
+      { keys: ['4'], description: locale === 'zh' ? '切换到分析模式' : 'Switch to Analysis mode' },
       { keys: ['↑', '↓'], description: locale === 'zh' ? '在表格行间导航' : 'Navigate table rows' },
       { keys: ['Enter'], description: locale === 'zh' ? '打开高亮行详情' : 'Open highlighted row detail' },
     ],
@@ -85,19 +86,10 @@ export function KeyboardHints({ open: externalOpen, onClose }: KeyboardHintsProp
     onClose?.();
   }, [onClose]);
 
-  // Listen for "?" key to toggle
+  // Listen for Escape to close (the "?" toggle is handled by the global
+  // keyboard handler in pdb-tracker.tsx which controls the `open` prop)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-
-      if (isInput) return;
-
-      if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        setInternalOpen(prev => !prev);
-      }
-
       if (e.key === 'Escape' && isOpen) {
         close();
       }
