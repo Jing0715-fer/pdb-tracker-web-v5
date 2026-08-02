@@ -520,3 +520,72 @@ Issues remaining:
 8. **[P2]** Lazy-load Literature mode components to reduce compile time
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-26
+Agent: main
+Task: QA testing, add WeeklyReleaseTimeline component
+
+Work Log:
+- Read worklog to understand project state (cron-review-25 complete, ErrorBanner + keyboard hints fix)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested keyboard shortcuts: ? opens hints, 1/2/3/4 switch modes, Escape closes
+  * Tested all 4 modes — all functional
+  * 0 console errors
+
+- FEATURE 1: Created WeeklyReleaseTimeline component (src/components/weekly-release-timeline.tsx)
+  - A compact horizontal timeline showing PDB structure releases throughout the week
+  - Each structure represented as a colored dot positioned by release date
+  - Features:
+    * Horizontal timeline with week start/end date markers
+    * Colored dots per structure (Cryo-EM teal, X-ray purple, NMR amber)
+    * Hover tooltip with PDB ID, title, method, resolution, journal, IF
+    * Click to select/view structure (calls handleRowClick)
+    * Animated entrance (dots fade in sequentially with stagger delay)
+    * High-IF structures get larger dots with amber ring
+    * Hovered dots scale up with accent ring
+    * Method breakdown chips in header (count per method)
+    * Responsive: horizontal scroll on small screens
+    * Week start/end markers with formatted dates (locale-aware)
+  - Integrated into pdb-tracker.tsx:
+    * Dynamic import with ssr:false
+    * Rendered between SearchStatusBanner and StructureStatsCards
+    * Only visible in Weekly mode with entries
+    * Passes: entries, weekStart, weekEnd (from currentSnapshot), onSelectEntry
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (weekly-release-timeline.tsx, pdb-tracker.tsx)
+- E2E test: Timeline renders with 10 dots + "Release Timeline · 10 structures"
+- E2E test: Week start/end markers show "Jul 27" and "Aug 2"
+- E2E test: Hover tooltip shows structure details (PDB ID, method, resolution)
+- E2E test: Click on dot triggers structure detail view
+- E2E test: 0 console errors
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Added WeeklyReleaseTimeline: interactive horizontal timeline of PDB releases
+- Visual enhancement: colored dots, hover tooltips, animated entrance
+- ESLint: 0 errors, 0 warnings
+- E2E: Timeline renders correctly, hover/click work, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- ErrorBanner only shows for weekly fetchError (could extend to eval/lit errors)
+- ChunkLoadError during mode switching (transient HMR issue, resolves on reload)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P0]** Extend ErrorBanner to Evaluation and Literature mode errors
+2. **[P1]** Compute filtered paper count for Literature SearchStatusBanner
+3. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+4. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+5. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+6. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+7. **[P2]** Chart export functionality (PNG/SVG/PDF)
+8. **[P2]** Lazy-load Literature mode components to reduce compile time
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)

@@ -283,6 +283,10 @@ const ErrorBanner = dynamic(() => import('@/components/error-banner').then(m => 
   ssr: false,
   loading: () => null,
 });
+const WeeklyReleaseTimeline = dynamic(() => import('@/components/weekly-release-timeline').then(m => ({ default: m.WeeklyReleaseTimeline })), {
+  ssr: false,
+  loading: () => null,
+});
 const WeeklyPdbTable = dynamic(() => import('@/components/WeeklyPdbTable').then(m => ({ default: m.WeeklyPdbTable })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
@@ -4947,6 +4951,16 @@ export default function PdbTracker() {
               onClearFilter={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
               onClearAll={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
               mode="literature"
+            />
+          )}
+
+          {/* Weekly Release Timeline — horizontal timeline of PDB releases */}
+          {mode === 'weekly' && entries.length > 0 && (
+            <WeeklyReleaseTimeline
+              entries={entries}
+              weekStart={currentSnapshot?.weekStart || undefined}
+              weekEnd={currentSnapshot?.weekEnd || undefined}
+              onSelectEntry={handleRowClick}
             />
           )}
 
