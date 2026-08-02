@@ -7,28 +7,121 @@ import {
   Database,
   Target,
   CheckCircle2,
+  Microscope,
 } from 'lucide-react';
-import { StatCard, CircularProgress, MiniBar } from '@/components/ui/stat-card';
 import type { Evaluation, EvalBatch } from '@/lib/pdb-types';
 import { useI18n } from '@/lib/i18n';
 
 /**
  * EvalStatsCards (standalone)
  *
- * A row of stat cards for the Evaluation mode, shown in the shared stats area
- * (same position as StructureStatsCards in Weekly mode).
+ * A row of stat cards for the Evaluation mode, using the SAME style as
+ * StructureStatsCards (kpi-card-enhanced) for visual consistency.
  *
  * Cards:
- *   1. Eval Targets — with completion rate ring
- *   2. Batches — with mini bar
- *   3. Avg Coverage — with coverage ring
- *   4. ≥80% Coverage — with mini bar
+ *   1. Eval Targets — with completion percentage
+ *   2. Batches — with batch count
+ *   3. Avg Coverage — with coverage percentage
+ *   4. ≥80% Coverage — with count
  */
 
 interface EvalStatsCardsProps {
   evaluations: Evaluation[];
   evalBatches?: EvalBatch[];
   evalLoading?: boolean;
+}
+
+// Same StatCard component as StructureStatsCards for visual consistency
+function StatCard({ icon: Icon, label, value, suffix, gradient, delay, children }: {
+  icon: typeof Microscope;
+  label: string;
+  value: string | number;
+  suffix?: string;
+  gradient: string;
+  delay: number;
+  children?: React.ReactNode;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay, duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+      className="kpi-card-enhanced relative flex flex-col rounded-xl border border-claude-border/50 dark:border-[#3d3832]/50 bg-white/60 dark:bg-[#242220]/60 backdrop-blur-sm overflow-hidden"
+    >
+      {/* Header */}
+      <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-1.5">
+        <div
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${gradient} shadow-sm`}
+        >
+          <Icon className="h-3.5 w-3.5 text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[9px] font-medium text-claude-text-muted uppercase tracking-wide truncate">
+            {label}
+          </div>
+          <div className="flex items-baseline gap-0.5">
+            <span className="text-base font-bold text-claude-text tabular-nums leading-tight">{value}</span>
+            {suffix && (
+              <span className="text-[9px] font-normal text-claude-text-muted">{suffix}</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {/* Mini visualization */}
+      {children && (
+        <div className="flex-1 min-h-[48px] px-1.5 pb-1.5">
+          {children}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// Mini progress bar (same style as StructureStatsCards MiniBar)
+function MiniBar({ value, max, color }: { value: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  return (
+    <div className="w-full h-1.5 rounded-full bg-claude-border-light dark:bg-[#2b2926] overflow-hidden">
+      <motion.div
+        initial={{ width: 0 }}
+        animate={{ width: `${pct}%` }}
+        transition={{ duration: 0.5, ease: 'easeOut' }}
+        className="h-full rounded-full"
+        style={{ backgroundColor: color }}
+      />
+    </div>
+  );
+}
+
+// Circular progress (simplified, same visual style)
+function MiniRing({ value, max, color, size = 40 }: { value: number; max: number; color: string; size?: number }) {
+  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  const radius = (size - 6) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (pct / 100) * circumference;
+  return (
+    <div className="flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="transform -rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeWidth={3} className="text-claude-border-light dark:text-[#2b2926]" />
+        <motion.circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={color}
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: offset }}
+          transition={{ duration: 0.6, ease: 'easeOut' }}
+        />
+      </svg>
+      <span className="absolute text-[9px] font-bold text-claude-text tabular-nums">
+        {pct.toFixed(0)}%
+      </span>
+    </div>
+  );
 }
 
 export function EvalStatsCards({
@@ -47,7 +140,6 @@ export function EvalStatsCards({
   }, [evaluations]);
 
   const highCoverageCount = evaluations.filter(e => (e.coverage ?? 0) >= 80).length;
-  const highCoveragePct = totalEvals > 0 ? (highCoverageCount / totalEvals) * 100 : 0;
 
   const completionRate = useMemo(() => {
     if (totalEvals === 0) return 0;
@@ -63,67 +155,64 @@ export function EvalStatsCards({
   if (totalEvals === 0 && !evalLoading) return null;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 p-2 sm:p-3 [grid-auto-rows:1fr] min-w-0 stagger-list">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 p-2 sm:p-3 [grid-auto-rows:1fr] min-w-0">
+      {/* Eval Targets — completion ring */}
       <StatCard
-        title={locale === 'zh' ? '评估靶点' : 'Eval Targets'}
+        icon={FlaskConical}
+        label={locale === 'zh' ? '评估靶点' : 'Eval Targets'}
         value={totalEvals}
-        icon={<FlaskConical className="h-3.5 w-3.5 text-white" />}
-        color="bg-gradient-to-br from-[#2d8f8f] to-[#1a6b6b]"
-        glowColor="#2d8f8f"
-        subtitle={locale === 'zh' ? `${totalBatches} 个批次 · ${completionRate.toFixed(0)}% 完成` : `${totalBatches} batch${totalBatches !== 1 ? 'es' : ''} · ${completionRate.toFixed(0)}% done`}
-        loading={evalLoading}
+        gradient="from-[#2d8f8f] to-[#1a6b6b]"
         delay={0}
-        borderColor="#2d8f8f"
-        tooltip={locale === 'zh' ? `评估靶点: ${totalEvals} (${completionRate.toFixed(0)}% 完成, ${totalBatches} 个批次)` : `Eval Targets: ${totalEvals} (${completionRate.toFixed(0)}% complete, ${totalBatches} batches)`}
       >
-        <CircularProgress value={completionRate} max={100} color="#2d8f8f" size={28} />
+        <div className="flex items-center justify-center h-full">
+          <MiniRing value={completionRate} max={100} color="#2d8f8f" size={40} />
+        </div>
       </StatCard>
 
+      {/* Batches — mini bar */}
       <StatCard
-        title={locale === 'zh' ? '批量评估' : 'Batches'}
+        icon={Database}
+        label={locale === 'zh' ? '批量评估' : 'Batches'}
         value={totalBatches}
-        icon={<Database className="h-3.5 w-3.5 text-white" />}
-        color="bg-gradient-to-br from-[#c9872e] to-[#a06b1a]"
-        glowColor="#c9872e"
-        subtitle={locale === 'zh' ? `${totalEvals} 个评估 · 平均 ${(totalEvals / Math.max(totalBatches, 1)).toFixed(1)}` : `${totalEvals} evals · ${(totalEvals / Math.max(totalBatches, 1)).toFixed(1)} avg`}
-        loading={evalLoading}
-        delay={80}
-        borderColor="#c9872e"
-        tooltip={locale === 'zh' ? `批次: ${totalBatches} (${totalEvals} 个评估, 平均 ${(totalEvals / Math.max(totalBatches, 1)).toFixed(1)} 评估/批次)` : `Batches: ${totalBatches} (${totalEvals} evaluations, avg ${(totalEvals / Math.max(totalBatches, 1)).toFixed(1)} evals/batch)`}
+        gradient="from-[#c9872e] to-[#a06b1a]"
+        delay={0.08}
       >
-        <MiniBar value={totalBatches > 0 ? Math.min((totalBatches / Math.max(totalEvals, 1)) * 100 * 3, 100) : 0} max={100} color="#c9872e" width={40} height={5} />
+        <div className="flex items-center gap-2 h-full px-1">
+          <MiniBar value={totalBatches} max={Math.max(totalEvals, 1)} color="#c9872e" />
+          <span className="text-[9px] text-claude-text-muted shrink-0">
+            {totalEvals > 0 ? (totalEvals / Math.max(totalBatches, 1)).toFixed(1) : '0'} avg
+          </span>
+        </div>
       </StatCard>
 
+      {/* Avg Coverage — coverage ring */}
       <StatCard
-        title={locale === 'zh' ? '平均覆盖率' : 'Avg Coverage'}
-        value={avgCoverage}
+        icon={Target}
+        label={locale === 'zh' ? '平均覆盖率' : 'Avg Coverage'}
+        value={avgCoverage.toFixed(0)}
         suffix="%"
-        decimals={0}
-        icon={<Target className="h-3.5 w-3.5 text-white" />}
-        color="bg-gradient-to-br from-[#7c5cbf] to-[#5a3d99]"
-        glowColor="#7c5cbf"
-        subtitle={locale === 'zh' ? `${highCoverageCount} 高 (≥80%)` : `${highCoverageCount} high (≥80%)`}
-        loading={evalLoading}
-        delay={160}
-        borderColor="#7c5cbf"
-        tooltip={locale === 'zh' ? `平均覆盖率: ${avgCoverage.toFixed(1)}% (${highCoverageCount} 高 ≥80%)` : `Avg Coverage: ${avgCoverage.toFixed(1)}% (${highCoverageCount} high ≥80%)`}
+        gradient="from-[#7c5cbf] to-[#5a3d99]"
+        delay={0.16}
       >
-        <CircularProgress value={avgCoverage} max={100} color="#7c5cbf" size={28} />
+        <div className="flex items-center justify-center h-full">
+          <MiniRing value={avgCoverage} max={100} color="#7c5cbf" size={40} />
+        </div>
       </StatCard>
 
+      {/* ≥80% Coverage — mini bar */}
       <StatCard
-        title={locale === 'zh' ? '≥80% 覆盖率' : '≥80% Coverage'}
+        icon={CheckCircle2}
+        label={locale === 'zh' ? '≥80% 覆盖率' : '≥80% Coverage'}
         value={highCoverageCount}
-        icon={<CheckCircle2 className="h-3.5 w-3.5 text-white" />}
-        color="bg-gradient-to-br from-[#16a34a] to-[#0d7a35]"
-        glowColor="#16a34a"
-        subtitle={totalEvals > 0 ? (locale === 'zh' ? `${((highCoverageCount / totalEvals) * 100).toFixed(0)}% 占比` : `${((highCoverageCount / totalEvals) * 100).toFixed(0)}% of total`) : (locale === 'zh' ? '暂无数据' : 'No data')}
-        loading={evalLoading}
-        delay={240}
-        borderColor="#16a34a"
-        tooltip={locale === 'zh' ? `高覆盖: ${highCoverageCount} 个靶点 ≥80% (${totalEvals > 0 ? ((highCoverageCount / totalEvals) * 100).toFixed(0) : 0}%)` : `High Coverage: ${highCoverageCount} targets ≥80% (${totalEvals > 0 ? ((highCoverageCount / totalEvals) * 100).toFixed(0) : 0}%)`}
+        gradient="from-[#16a34a] to-[#0d7a35]"
+        delay={0.24}
       >
-        <MiniBar value={highCoveragePct} max={100} color="#16a34a" width={40} height={5} />
+        <div className="flex items-center gap-2 h-full px-1">
+          <MiniBar value={highCoverageCount} max={Math.max(totalEvals, 1)} color="#16a34a" />
+          <span className="text-[9px] text-claude-text-muted shrink-0">
+            {totalEvals > 0 ? ((highCoverageCount / totalEvals) * 100).toFixed(0) : 0}%
+          </span>
+        </div>
       </StatCard>
     </div>
   );
