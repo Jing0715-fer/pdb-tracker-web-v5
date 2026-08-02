@@ -664,3 +664,72 @@ Issues remaining:
 8. **[P2]** Lazy-load Literature mode components to reduce compile time
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-28
+Agent: main
+Task: QA testing, add recently viewed structures tracking + command palette section
+
+Work Log:
+- Read worklog to understand project state (cron-review-27 complete, BookmarkQuickAccess added)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested command palette (Ctrl+K) — works with Quick Filters, Recent evaluations, Quick Actions
+  * Tested all 4 modes — all functional
+  * 0 console errors
+
+- FEATURE 1: Created useRecentlyViewed hook (src/hooks/use-recently-viewed.ts)
+  - Tracks recently viewed PDB structures in localStorage
+  - Stores up to 8 items with { pdbId, title, method, timestamp }
+  - Most recent first, deduplicates by pdbId
+  - Persists to localStorage key 'pdb-recently-viewed'
+  - API: { recentItems, addRecentlyViewed, removeRecentlyViewed, clearRecentlyViewed }
+
+- FEATURE 2: Added "Recently Viewed" section to Command Palette
+  - Updated command-palette.tsx:
+    * Added `recentlyViewed` and `onSelectRecentlyViewed` props
+    * New "Recently Viewed" CommandGroup section (shows up to 5 items)
+    * Each item shows: Clock icon, PDB ID (mono), method label, title, ArrowRight
+    * Positioned between Recent Searches and Quick Filters
+    * Only shows when recentlyViewed array is non-empty
+  - Updated pdb-tracker.tsx:
+    * Imported useRecentlyViewed hook
+    * Added tracking in handleRowClick (calls addRecentlyViewed on every row click)
+    * Passes recentlyViewed and onSelectRecentlyViewed to CommandPalette
+    * onSelectRecentlyViewed switches to Weekly mode and opens structure detail
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (use-recently-viewed.ts, command-palette.tsx, pdb-tracker.tsx)
+- E2E test: Clicking a table row adds it to recently viewed
+- E2E test: Command palette shows "Recently Viewed" section with 7KQR entry
+  → "Recently Viewed 7KQR Cryo-EM SARS-CoV-2 Spike Glycoprotein (Open State)"
+- E2E test: 0 console errors
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Added useRecentlyViewed hook: tracks recently viewed structures in localStorage
+- Added "Recently Viewed" section to Command Palette with up to 5 recent items
+- Each row click now records the structure for quick re-access via Ctrl+K
+- ESLint: 0 errors, 0 warnings
+- E2E: Recently viewed appears in command palette, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- ErrorBanner only shows for weekly fetchError (could extend to eval/lit errors)
+- Transient HMR fetch errors during page reload (resolves after stable state)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P0]** Extend ErrorBanner to Evaluation and Literature mode errors
+2. **[P1]** Compute filtered paper count for Literature SearchStatusBanner
+3. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+4. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+5. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+6. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+7. **[P2]** Chart export functionality (PNG/SVG/PDF)
+8. **[P2]** Lazy-load Literature mode components to reduce compile time
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)

@@ -55,6 +55,7 @@ import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
 import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts';
+import { useRecentlyViewed } from '@/hooks/use-recently-viewed';
 import { toast } from 'sonner';
 import { useAppSettings } from '@/hooks/use-app-settings';
 import { generateBibTeX, generateRIS, generateAPA, generateVancouver, generateMLA, downloadFile } from '@/lib/citation-utils';
@@ -621,6 +622,9 @@ export default function PdbTracker() {
 
   // Bookmarks with localStorage persistence
   const [bookmarks, updateBookmarks] = useLocalStorageSet('pdb-bookmarks');
+
+  // Recently viewed structures tracking (for command palette)
+  const { recentItems: recentStructures, addRecentlyViewed } = useRecentlyViewed();
 
   // Structure notes with localStorage persistence
   const [structureNotes, setStructureNotes] = useState<Record<string, string>>(() => {
@@ -1784,7 +1788,8 @@ export default function PdbTracker() {
   const handleRowClick = useCallback((entry: PdbEntry) => {
     setSelectedEntry(entry);
     setDetailPanelOpen(true);
-  }, []);
+    addRecentlyViewed({ pdbId: entry.pdbId, title: entry.title || entry.pdbId, method: entry.method });
+  }, [addRecentlyViewed]);
 
   const toggleBookmark = useCallback((pdbId: string) => {
     updateBookmarks(prev => {
@@ -5263,6 +5268,16 @@ export default function PdbTracker() {
             fetchLitPapers(query);
           }
           toast.info('Search applied', { description: `Searching for "${query}"` });
+        }}
+        recentlyViewed={recentStructures}
+        onSelectRecentlyViewed={(item) => {
+          setMode('weekly');
+          const found = entries.find(e => e.pdbId === item.pdbId);
+          if (found) {
+            handleRowClick(found);
+          } else {
+            toast.info('Structure not in current view', { description: `${item.pdbId} may be from a different week` });
+          }
         }}
       />
 

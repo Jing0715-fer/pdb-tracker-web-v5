@@ -222,6 +222,9 @@ interface CommandPaletteProps {
   onApplyQuickFilter?: (filterId: string) => void;
   // Set search query in the main view
   onSetSearchQuery?: (query: string) => void;
+  // Recently viewed structures
+  recentlyViewed?: Array<{ pdbId: string; title: string; method: string | null; timestamp: number }>;
+  onSelectRecentlyViewed?: (item: { pdbId: string; title: string; method: string | null; timestamp: number }) => void;
 }
 
 // ─── Debounce Hook ──────────────────────────────────────────────────────────────
@@ -261,6 +264,8 @@ export function CommandPalette({
   evaluations,
   onApplyQuickFilter,
   onSetSearchQuery,
+  recentlyViewed = [],
+  onSelectRecentlyViewed,
 }: CommandPaletteProps) {
   const { t, locale } = useI18n();
   const [searchValue, setSearchValue] = useState('');
@@ -592,6 +597,43 @@ export function CommandPalette({
                   )}
 
                   {recentSearches.length > 0 && (
+                    <CommandSeparator className="bg-claude-border dark:bg-[#3d3832] my-1" />
+                  )}
+
+                  {/* Recently Viewed Structures */}
+                  {recentlyViewed.length > 0 && onSelectRecentlyViewed && (
+                    <CommandGroup
+                      heading={locale === 'zh' ? '最近查看的结构' : 'Recently Viewed'}
+                      className="[&_[cmdk-group-heading]]:text-claude-text-muted [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider"
+                    >
+                      {recentlyViewed.slice(0, 5).map((item) => (
+                        <CommandItem
+                          key={`recent-${item.pdbId}`}
+                          value={`recent ${item.pdbId} ${item.title}`}
+                          onSelect={() => handleSelect(() => onSelectRecentlyViewed(item))}
+                          className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg cursor-pointer text-claude-text-secondary data-[selected=true]:bg-claude-accent/10 data-[selected=true]:text-claude-accent"
+                        >
+                          <Clock className="h-3.5 w-3.5 text-claude-text-muted shrink-0" />
+                          <div className="flex-1 min-w-0 flex items-center gap-2">
+                            <span className="font-mono text-[11px] font-semibold text-claude-text shrink-0">
+                              {item.pdbId}
+                            </span>
+                            {item.method && (
+                              <span className="text-[9px] text-claude-text-muted shrink-0">
+                                {item.method.includes('Cryo') ? 'Cryo-EM' : item.method.includes('X-ray') || item.method.includes('XRAY') ? 'X-ray' : item.method.includes('NMR') ? 'NMR' : 'Other'}
+                              </span>
+                            )}
+                            <span className="text-xs text-claude-text-secondary truncate flex-1">
+                              {item.title}
+                            </span>
+                          </div>
+                          <ArrowRight className="h-3 w-3 text-claude-text-muted shrink-0" />
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+
+                  {recentlyViewed.length > 0 && onSelectRecentlyViewed && (
                     <CommandSeparator className="bg-claude-border dark:bg-[#3d3832] my-1" />
                   )}
 
