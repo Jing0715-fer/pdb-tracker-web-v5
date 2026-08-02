@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { X, Columns2, ExternalLink, FlaskConical, FileDown } from 'lucide-react';
 import type { Evaluation } from '@/lib/pdb-types';
 import { useI18n } from '@/lib/i18n';
 import { exportComparisonReport } from '@/lib/export-report';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 
 /**
  * EvalMultiCompare
@@ -29,6 +30,8 @@ interface EvalMultiCompareProps {
 
 export function EvalMultiCompare({ evaluations, onClose }: EvalMultiCompareProps) {
   const { locale } = useI18n();
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, onClose);
 
   const bestCoverage = useMemo(() => {
     const withCov = evaluations.filter(e => e.coverage != null);
@@ -102,6 +105,7 @@ export function EvalMultiCompare({ evaluations, onClose }: EvalMultiCompareProps
       onClick={onClose}
     >
       <motion.div
+        ref={modalRef}
         initial={{ scale: 0.95 }}
         animate={{ scale: 1 }}
         exit={{ scale: 0.95 }}

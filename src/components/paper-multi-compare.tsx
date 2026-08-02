@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { X, Columns2, ExternalLink, BookOpen, FileDown } from 'lucide-react';
 import type { LitPaper } from '@/lib/pdb-types';
 import { useI18n } from '@/lib/i18n';
 import { exportComparisonReport } from '@/lib/export-report';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 
 /**
  * PaperMultiCompare
@@ -28,6 +29,8 @@ interface PaperMultiCompareProps {
 
 export function PaperMultiCompare({ papers, onClose }: PaperMultiCompareProps) {
   const { locale } = useI18n();
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, onClose);
 
   const bestIF = useMemo(() => {
     const ifs = papers.filter(p => p.IF != null && p.IF > 0).map(p => p.IF!);
@@ -82,6 +85,7 @@ export function PaperMultiCompare({ papers, onClose }: PaperMultiCompareProps) {
       onClick={onClose}
     >
       <motion.div
+        ref={modalRef}
         initial={{ scale: 0.95 }}
         animate={{ scale: 1 }}
         exit={{ scale: 0.95 }}

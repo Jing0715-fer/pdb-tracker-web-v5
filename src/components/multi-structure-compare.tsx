@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Columns2, ArrowRight, ExternalLink, FileDown } from 'lucide-react';
 import type { PdbEntry } from '@/lib/pdb-types';
 import { getMethodColor, getMethodLabel } from '@/components/pdb-helpers';
 import { useI18n } from '@/lib/i18n';
 import { exportComparisonReport } from '@/lib/export-report';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 
 /**
  * MultiStructureCompare
@@ -28,6 +29,8 @@ interface MultiStructureCompareProps {
 
 export function MultiStructureCompare({ entries, onClose }: MultiStructureCompareProps) {
   const { locale } = useI18n();
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, onClose);
   if (!entries.length) return null;
 
   // Find best values for highlighting
@@ -97,6 +100,7 @@ export function MultiStructureCompare({ entries, onClose }: MultiStructureCompar
       onClick={onClose}
     >
       <motion.div
+        ref={modalRef}
         initial={{ scale: 0.95 }}
         animate={{ scale: 1 }}
         exit={{ scale: 0.95 }}

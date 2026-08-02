@@ -20208,3 +20208,42 @@ tr.row-selected.table-row-hover-enhanced:hover td:first-child {
   padding-top: 6px;
   padding-bottom: 6px;
 }
+
+/* ─── High Contrast Mode (Accessibility) ─────────────────────────────────── */
+
+.high-contrast {
+  --claude-text: #000000;
+  --claude-text-secondary: #1a1a1a;
+  --claude-text-muted: #333333;
+  --claude-accent: #c96442;
+  --claude-border: #666666;
+  --claude-surface: #ffffff;
+  --claude-bg: #ffffff;
+}
+
+.dark.high-contrast {
+  --claude-text: #ffffff;
+  --claude-text-secondary: #f0f0f0;
+  --claude-text-muted: #cccccc;
+  --claude-accent: #ff8866;
+  --claude-border: #999999;
+  --claude-surface: #1a1a1a;
+  --claude-bg: #000000;
+}
+
+.high-contrast * {
+  border-color: var(--claude-border) !important;
+}
+
+.high-contrast button:focus-visible,
+.high-contrast a:focus-visible,
+.high-contrast input:focus-visible,
+.high-contrast [tabindex]:focus-visible {
+  outline: 3px solid var(--claude-accent) !important;
+  outline-offset: 2px !important;
+}
+
+.high-contrast .text-claude-text-muted {
+  color: var(--claude-text-muted) !important;
+  opacity: 1 !important;
+}

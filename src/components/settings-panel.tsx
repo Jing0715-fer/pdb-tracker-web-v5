@@ -264,6 +264,26 @@ export function SettingsPanel({
                     </SelectContent>
                   </Select>
                 </SettingRow>
+
+                {/* High Contrast Mode */}
+                <SettingRow
+                  label={locale === 'zh' ? '高对比度模式' : 'High Contrast Mode'}
+                  description={locale === 'zh' ? '提高文字和边框对比度，增强可读性' : 'Increase contrast for better readability'}
+                >
+                  <Switch
+                    checked={typeof window !== 'undefined' && document.documentElement.classList.contains('high-contrast')}
+                    onCheckedChange={(v) => {
+                      if (typeof window !== 'undefined') {
+                        document.documentElement.classList.toggle('high-contrast', v);
+                        try {
+                          localStorage.setItem('pdb-high-contrast', v ? 'true' : 'false');
+                        } catch {
+                          // ignore
+                        }
+                      }
+                    }}
+                  />
+                </SettingRow>
               </section>
 
               <Separator className="bg-claude-border dark:bg-[#3d3832]" />

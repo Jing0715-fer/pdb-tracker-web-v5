@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Boxes, ExternalLink, Maximize2 } from 'lucide-react';
 import type { PdbEntry } from '@/lib/pdb-types';
 import { getMethodColor, getMethodLabel } from '@/components/pdb-helpers';
 import { useI18n } from '@/lib/i18n';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 
 /**
  * MultiStructure3DViewer
@@ -30,6 +31,8 @@ interface MultiStructure3DViewerProps {
 
 export function MultiStructure3DViewer({ entries, onClose, onViewEntry }: MultiStructure3DViewerProps) {
   const { locale } = useI18n();
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, onClose);
   if (!entries.length) return null;
 
   const gridCols = entries.length === 2 ? 'grid-cols-1 sm:grid-cols-2' : entries.length === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2';
@@ -44,6 +47,7 @@ export function MultiStructure3DViewer({ entries, onClose, onViewEntry }: MultiS
       onClick={onClose}
     >
       <motion.div
+        ref={modalRef}
         initial={{ scale: 0.95 }}
         animate={{ scale: 1 }}
         exit={{ scale: 0.95 }}

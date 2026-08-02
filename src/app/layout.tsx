@@ -38,6 +38,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var hc=localStorage.getItem('pdb-high-contrast');if(hc==='true'){document.documentElement.classList.add('high-contrast');}}catch(e){}`,
+          }}
+        />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
           <I18nProvider>
             {children}

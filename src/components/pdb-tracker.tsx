@@ -11,7 +11,7 @@ import {
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
-  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2,
+  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -56,7 +56,7 @@ import { useAppSettings } from '@/hooks/use-app-settings';
 import { generateBibTeX, generateRIS, generateAPA, generateVancouver, generateMLA, downloadFile } from '@/lib/citation-utils';
 // fallback-data import removed — errors now surface as error messages, not demo data.
 import { useTour } from '@/hooks/use-tour';
-import { exportToCSV, exportToJSON, formatPdbEntryForExport, formatEvalForExport, formatLitPaperForExport } from '@/lib/export-utils';
+import { exportToCSV, exportToJSON, exportToExcel, exportToPowerPoint, formatPdbEntryForExport, formatEvalForExport, formatLitPaperForExport } from '@/lib/export-utils';
 import { useAppStore as useMolcraftStore } from '@/lib/molcraft/store';
 
 // QuickStatsPanel and WeeklyDiffCompare loaded dynamically to avoid bundle size issues
@@ -315,11 +315,16 @@ const CustomDashboard = dynamic(() => import('@/components/custom-dashboard').th
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
 });
+const ShortcutHintBar = dynamic(() => import('@/components/shortcut-hint-bar').then(m => ({ default: m.ShortcutHintBar })), {
+  ssr: false,
+  loading: () => null,
+});
 const FacetedSearch = dynamic(() => import('@/components/faceted-search').then(m => ({ default: m.FacetedSearch })), {
   ssr: false,
   loading: () => null,
 });
 import { applyFacetFilters, type FacetFilters } from '@/components/faceted-search';
+import { useChartPresets } from '@/hooks/use-chart-presets';
 const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
@@ -787,6 +792,7 @@ export default function PdbTracker() {
     ifRanges: new Set(),
     organisms: new Set(),
   });
+  const { presets: chartPresets, savePreset, deletePreset } = useChartPresets();
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -2093,15 +2099,19 @@ export default function PdbTracker() {
 
   // ─── Export Current View ──────────────────────────────────────────────────
 
-  const handleExportCurrentView = useCallback((format: 'csv' | 'json' = 'csv') => {
+  const handleExportCurrentView = useCallback((format: 'csv' | 'json' | 'excel' = 'csv') => {
     if (mode === 'weekly') {
       const data = filteredEntries.map(formatPdbEntryForExport);
       if (!data.length) { toast.info('No data to export'); return; }
+      const fname = `pdb-weekly-${selectedSnapshot || 'all'}`;
       if (format === 'json') {
-        exportToJSON(data, `pdb-weekly-${selectedSnapshot || 'all'}`);
+        exportToJSON(data, fname);
         toast.success('Export complete', { description: `${data.length} entries exported as JSON` });
+      } else if (format === 'excel') {
+        exportToExcel(data, fname);
+        toast.success('Export complete', { description: `${data.length} entries exported as Excel` });
       } else {
-        exportToCSV(data, `pdb-weekly-${selectedSnapshot || 'all'}`);
+        exportToCSV(data, fname);
         toast.success('Export complete', { description: `${data.length} entries exported as CSV` });
       }
     } else if (mode === 'evaluation') {
@@ -2110,6 +2120,9 @@ export default function PdbTracker() {
       if (format === 'json') {
         exportToJSON(data, 'evaluations');
         toast.success('Export complete', { description: `${data.length} evaluations exported as JSON` });
+      } else if (format === 'excel') {
+        exportToExcel(data, 'evaluations');
+        toast.success('Export complete', { description: `${data.length} evaluations exported as Excel` });
       } else {
         exportToCSV(data, 'evaluations');
         toast.success('Export complete', { description: `${data.length} evaluations exported as CSV` });
@@ -2120,6 +2133,9 @@ export default function PdbTracker() {
       if (format === 'json') {
         exportToJSON(data, 'literature-papers');
         toast.success('Export complete', { description: `${data.length} papers exported as JSON` });
+      } else if (format === 'excel') {
+        exportToExcel(data, 'literature-papers');
+        toast.success('Export complete', { description: `${data.length} papers exported as Excel` });
       } else {
         exportToCSV(data, 'literature-papers');
         toast.success('Export complete', { description: `${data.length} papers exported as CSV` });
@@ -4783,18 +4799,34 @@ export default function PdbTracker() {
             </Tooltip>
           )}
 
-          {/* Export Button */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm"
-                onClick={() => handleExportCurrentView('csv')}
-                className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-text active:scale-95 transition-transform duration-100"
-              >
-                <Download className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>{t.exportData}</p></TooltipContent>
-          </Tooltip>
+          {/* Export Button — with dropdown for format selection */}
+          <div className="relative group">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm"
+                  onClick={() => {
+                    const menu = document.getElementById('export-format-menu');
+                    if (menu) menu.classList.toggle('hidden');
+                  }}
+                  className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-text active:scale-95 transition-transform duration-100"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>{t.exportData}</p></TooltipContent>
+            </Tooltip>
+            <div id="export-format-menu" className="hidden absolute right-0 top-full mt-1 w-32 rounded-lg border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg overflow-hidden z-50">
+              <button onClick={() => { handleExportCurrentView('csv'); document.getElementById('export-format-menu')?.classList.add('hidden'); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors">
+                <FileText className="h-3 w-3" /> CSV
+              </button>
+              <button onClick={() => { handleExportCurrentView('json'); document.getElementById('export-format-menu')?.classList.add('hidden'); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors">
+                <FileJson className="h-3 w-3" /> JSON
+              </button>
+              <button onClick={() => { handleExportCurrentView('excel'); document.getElementById('export-format-menu')?.classList.add('hidden'); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors">
+                <FileDown className="h-3 w-3" /> Excel
+              </button>
+            </div>
+          </div>
 
           {/* Import Button */}
           <Tooltip>
@@ -5100,6 +5132,25 @@ export default function PdbTracker() {
                   · {entries.length} {locale === 'zh' ? '个结构' : 'structures'}
                 </span>
               </button>
+              {/* Chart Preset Save button */}
+              {showDashboard && (
+                <button
+                  onClick={() => {
+                    const name = prompt(locale === 'zh' ? '预设名称:' : 'Preset name:', `Preset ${chartPresets.length + 1}`);
+                    if (name) {
+                      savePreset(name, { showDashboard, showHeatmap, showTrend, showTimeline, showQualityDist, showWeekCompare });
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-all ml-auto mr-2"
+                  title={locale === 'zh' ? '保存当前布局为预设' : 'Save current layout as preset'}
+                >
+                  <Bookmark className="h-3 w-3" />
+                  <span className="hidden sm:inline">{locale === 'zh' ? '保存预设' : 'Save Preset'}</span>
+                  {chartPresets.length > 0 && (
+                    <span className="text-[9px] font-bold bg-claude-accent/20 text-claude-accent rounded-full px-1">{chartPresets.length}</span>
+                  )}
+                </button>
+              )}
               <div
                 className="overflow-hidden transition-all duration-300 ease-in-out"
                 style={{ maxHeight: showDashboard ? 1200 : 0, opacity: showDashboard ? 1 : 0 }}
@@ -5514,6 +5565,9 @@ export default function PdbTracker() {
         open={keyboardHintsOpen}
         onClose={() => setKeyboardHintsOpen(false)}
       />
+
+      {/* Shortcut Hint Bar — persistent visual shortcut hints */}
+      <ShortcutHintBar />
 
       {/* Data Import Dialog */}
       <DataImportDialog
