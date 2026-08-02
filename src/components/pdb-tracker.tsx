@@ -285,6 +285,14 @@ const QuickFilterChips = dynamic(() => import('@/components/quick-filter-chips')
   ssr: false,
   loading: () => null,
 });
+const MultiStructureCompare = dynamic(() => import('@/components/multi-structure-compare').then(m => ({ default: m.MultiStructureCompare })), {
+  ssr: false,
+  loading: () => null,
+});
+const MultiStructure3DViewer = dynamic(() => import('@/components/multi-structure-3d-viewer').then(m => ({ default: m.MultiStructure3DViewer })), {
+  ssr: false,
+  loading: () => null,
+});
 const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
@@ -741,6 +749,8 @@ export default function PdbTracker() {
   // Weekly batch selection state
   const [selectedEntryIds, setSelectedEntryIds] = useState<Set<string>>(new Set());
   const [compareMode, setCompareMode] = useState(false);
+  const [multiCompareOpen, setMultiCompareOpen] = useState(false);
+  const [multi3DOpen, setMulti3DOpen] = useState(false);
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -5165,6 +5175,10 @@ export default function PdbTracker() {
             onClearSelection={handleClearSelection}
             onBatchTag={handleBatchTag}
             canCompare={selectedEntryIds.size >= 2 && selectedEntryIds.size <= 4}
+            onMultiCompare={() => setMultiCompareOpen(true)}
+            canMultiCompare={selectedEntryIds.size >= 2}
+            onMulti3D={() => setMulti3DOpen(true)}
+            canMulti3D={selectedEntryIds.size >= 2}
           />
         )}
 
@@ -5173,6 +5187,23 @@ export default function PdbTracker() {
           <WeeklyStructureCompare
             entries={entries.filter(e => selectedEntryIds.has(e.pdbId))}
             onClose={() => setCompareMode(false)}
+          />
+        )}
+
+        {/* Multi-Structure Compare Modal — detailed side-by-side metric comparison */}
+        {mode === 'weekly' && multiCompareOpen && selectedEntryIds.size >= 2 && (
+          <MultiStructureCompare
+            entries={entries.filter(e => selectedEntryIds.has(e.pdbId))}
+            onClose={() => setMultiCompareOpen(false)}
+          />
+        )}
+
+        {/* Multi-Structure 3D Viewer Modal — side-by-side 3D structure previews */}
+        {mode === 'weekly' && multi3DOpen && selectedEntryIds.size >= 2 && (
+          <MultiStructure3DViewer
+            entries={entries.filter(e => selectedEntryIds.has(e.pdbId))}
+            onClose={() => setMulti3DOpen(false)}
+            onViewEntry={(pdbId) => { setViewerModalPdbId(pdbId); setViewerModalOpen(true); setMulti3DOpen(false); }}
           />
         )}
 
