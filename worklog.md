@@ -733,3 +733,83 @@ Issues remaining:
 8. **[P2]** Lazy-load Literature mode components to reduce compile time
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-29
+Agent: main
+Task: QA testing, add WeeklyInsightsCard component
+
+Work Log:
+- Read worklog to understand project state (cron-review-28 complete, recently viewed + command palette)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested row expansion — works correctly
+  * Tested all 4 modes — all functional
+  * 0 console errors
+  * Verified ErrorBanner already covers all 3 modes (shared fetchError state)
+    → P0 item "Extend ErrorBanner to Evaluation/Literature" was already done
+
+- FEATURE 1: Created WeeklyInsightsCard component (src/components/weekly-insights-card.tsx)
+  - A compact card showing key insights about the current week's PDB releases
+  - Displays up to 6 highlight metrics in a responsive grid:
+    * Top Journal (highest IF structure with journal name + IF + PDB ID)
+    * Best Resolution (lowest resolution with PDB ID)
+    * Top Method (most common method with count + percentage)
+    * Organisms (unique species count)
+    * Ligands (unique ligand count)
+    * Avg Resolution trend (vs previous week, with up/down/stable indicator)
+  - Each insight has:
+    * Colored icon with gradient background
+    * Value (large, bold)
+    * Label (uppercase, muted)
+    * Sublabel (mono, colored)
+    * Optional trend arrow (up/down/neutral) in corner
+  - Features:
+    * Animated entrance (stagger fade-in + slide-up)
+    * Responsive grid: 2 cols (mobile) → 3 cols (tablet) → 6 cols (desktop)
+    * Hover effect (border highlight)
+    * Color-coded by metric type (red for IF, teal for resolution, purple for method, etc.)
+    * EN/ZH i18n support
+  - Integrated into pdb-tracker.tsx:
+    * Dynamic import with ssr:false
+    * Rendered between WeeklyReleaseTimeline and StructureStatsCards
+    * Only visible in Weekly mode with entries
+    * Passes: entries, currentSnapshot, previousSnapshot (for trend comparison)
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (weekly-insights-card.tsx, pdb-tracker.tsx)
+- E2E test: Insights card renders with "Weekly Insights · 10 structures"
+- E2E test: Shows Top Journal (Cell, IF 66.8, 6XR8)
+- E2E test: Shows Best Resolution (1.50Å, 1CBS)
+- E2E test: Shows Top Method (Cryo-EM, 5, 50%)
+- E2E test: Shows Organisms (3 unique species)
+- E2E test: Shows Ligands (16 unique ligands)
+- E2E test: 0 console errors
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Added WeeklyInsightsCard: compact insights grid with 6 key metrics
+- Visual enhancement: colored icons, trend arrows, stagger animation
+- Confirmed ErrorBanner already covers all 3 modes (P0 item was already done)
+- ESLint: 0 errors, 0 warnings
+- E2E: Insights card renders correctly with all metrics, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- Transient HMR fetch errors during page reload (resolves after stable state)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Compute filtered paper count for Literature SearchStatusBanner
+2. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+3. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+4. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+5. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+6. **[P2]** Chart export functionality (PNG/SVG/PDF)
+7. **[P2]** Lazy-load Literature mode components to reduce compile time
+8. **[P2]** Add WeeklyInsightsCard to snapshot comparison view
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)

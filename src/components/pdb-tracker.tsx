@@ -292,6 +292,10 @@ const BookmarkQuickAccess = dynamic(() => import('@/components/bookmark-quick-ac
   ssr: false,
   loading: () => null,
 });
+const WeeklyInsightsCard = dynamic(() => import('@/components/weekly-insights-card').then(m => ({ default: m.WeeklyInsightsCard })), {
+  ssr: false,
+  loading: () => null,
+});
 const WeeklyPdbTable = dynamic(() => import('@/components/WeeklyPdbTable').then(m => ({ default: m.WeeklyPdbTable })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
@@ -4977,6 +4981,15 @@ export default function PdbTracker() {
               weekStart={currentSnapshot?.weekStart || undefined}
               weekEnd={currentSnapshot?.weekEnd || undefined}
               onSelectEntry={handleRowClick}
+            />
+          )}
+
+          {/* Weekly Insights Card — key highlights for the current week */}
+          {mode === 'weekly' && entries.length > 0 && (
+            <WeeklyInsightsCard
+              entries={entries}
+              currentSnapshot={currentSnapshot}
+              previousSnapshot={prevSnapshot}
             />
           )}
 
