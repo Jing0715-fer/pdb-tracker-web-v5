@@ -45,8 +45,6 @@ import { usePaperNotes } from '@/components/literature/usePaperNotes';
 import { usePaperTags } from '@/components/literature/LiteraturePaperTags';
 import { DemoDataBanner } from '@/components/demo-data-banner';
 import { QuickActions } from '@/components/quick-actions';
-import { TrendingStructures } from '@/components/trending-structures';
-import { SnapshotComparison } from '@/components/snapshot-comparison';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
@@ -294,6 +292,18 @@ const MultiStructure3DViewer = dynamic(() => import('@/components/multi-structur
   loading: () => null,
 });
 const EvalMultiCompare = dynamic(() => import('@/components/eval-multi-compare').then(m => ({ default: m.EvalMultiCompare })), {
+  ssr: false,
+  loading: () => null,
+});
+const PaperMultiCompare = dynamic(() => import('@/components/paper-multi-compare').then(m => ({ default: m.PaperMultiCompare })), {
+  ssr: false,
+  loading: () => null,
+});
+const TrendingStructures = dynamic(() => import('@/components/trending-structures').then(m => ({ default: m.TrendingStructures })), {
+  ssr: false,
+  loading: () => null,
+});
+const SnapshotComparison = dynamic(() => import('@/components/snapshot-comparison').then(m => ({ default: m.SnapshotComparison })), {
   ssr: false,
   loading: () => null,
 });
@@ -757,6 +767,7 @@ export default function PdbTracker() {
   const [multi3DOpen, setMulti3DOpen] = useState(false);
   const [eval3DOpen, setEval3DOpen] = useState(false);
   const [evalMultiCompareOpen, setEvalMultiCompareOpen] = useState(false);
+  const [paperCompareOpen, setPaperCompareOpen] = useState(false);
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -5017,6 +5028,18 @@ export default function PdbTracker() {
               mode="literature"
             />
           )}
+          {/* Compare Papers button for Literature mode */}
+          {mode === 'literature' && litPapers.length >= 2 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+              <button
+                onClick={() => setPaperCompareOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#7c5cbf] hover:bg-[#7c5cbf]/10 transition-all"
+              >
+                <Columns2 className="h-3 w-3" />
+                {locale === 'zh' ? '论文对比' : 'Compare Papers'}
+              </button>
+            </div>
+          )}
 
           {/* Stats Cards are rendered INSIDE each view component (weekly-view, evaluation-view, literature-view)
               to avoid duplication and ensure consistent placement below the filter toolbar */}
@@ -5297,6 +5320,14 @@ export default function PdbTracker() {
           <EvalMultiCompare
             evaluations={allEvaluations}
             onClose={() => setEvalMultiCompareOpen(false)}
+          />
+        )}
+
+        {/* Paper Multi-Compare Modal — side-by-side paper metric comparison */}
+        {mode === 'literature' && paperCompareOpen && litPapers.length >= 2 && (
+          <PaperMultiCompare
+            papers={litPapers.slice(0, 4)}
+            onClose={() => setPaperCompareOpen(false)}
           />
         )}
 

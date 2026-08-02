@@ -10,6 +10,7 @@ import {
 import { TrendingUp, TrendingDown, Minus, Sparkles, Target, AlertTriangle } from 'lucide-react';
 import type { WeeklySnapshot, PdbEntry } from '@/lib/pdb-types';
 import { METHOD_COLORS, getChartAxisColor, getChartTickColor, ClaudeChartTooltip } from '@/components/chart-tooltips';
+import { ChartExportButton } from '@/components/chart-export-button';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -247,6 +248,7 @@ export function WeeklyTrendAnalysis({ snapshots, entries }: WeeklyTrendAnalysisP
               Method Trend
             </h4>
             <div className="flex items-center gap-2">
+              <ChartExportButton chartName="weekly-method-trend" />
               {/* Trend direction indicators */}
               {['Cryo-EM', 'X-ray', 'NMR'].map(method => (
                 <div key={method} className="flex items-center gap-0.5">

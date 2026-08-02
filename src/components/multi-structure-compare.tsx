@@ -2,10 +2,11 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Columns2, ArrowRight, ExternalLink } from 'lucide-react';
+import { X, Columns2, ArrowRight, ExternalLink, FileDown } from 'lucide-react';
 import type { PdbEntry } from '@/lib/pdb-types';
 import { getMethodColor, getMethodLabel } from '@/components/pdb-helpers';
 import { useI18n } from '@/lib/i18n';
+import { exportComparisonReport } from '@/lib/export-report';
 
 /**
  * MultiStructureCompare
@@ -124,7 +125,7 @@ export function MultiStructureCompare({ entries, onClose }: MultiStructureCompar
         {/* Comparison Table */}
         <div className="flex-1 overflow-auto custom-scrollbar p-4">
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table data-compare-table className="w-full border-collapse">
               {/* Header row with PDB IDs */}
               <thead>
                 <tr>
@@ -192,12 +193,26 @@ export function MultiStructureCompare({ entries, onClose }: MultiStructureCompar
           <span className="text-[10px] text-claude-text-muted">
             {locale === 'zh' ? '绿色高亮 = 最佳值' : 'Green highlight = best value'}
           </span>
-          <button
-            onClick={onClose}
-            className="text-[10px] text-claude-text-muted hover:text-claude-text transition-colors"
-          >
-            {locale === 'zh' ? '关闭' : 'Close'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const tableEl = document.querySelector('[data-compare-table]') as HTMLElement;
+                if (tableEl) {
+                  exportComparisonReport('Multi-Structure Comparison', tableEl.outerHTML);
+                }
+              }}
+              className="inline-flex items-center gap-1 text-[10px] text-claude-text-muted hover:text-claude-accent transition-colors"
+            >
+              <FileDown className="h-3 w-3" />
+              {locale === 'zh' ? '导出报告' : 'Export Report'}
+            </button>
+            <button
+              onClick={onClose}
+              className="text-[10px] text-claude-text-muted hover:text-claude-text transition-colors"
+            >
+              {locale === 'zh' ? '关闭' : 'Close'}
+            </button>
+          </div>
         </div>
       </motion.div>
     </motion.div>

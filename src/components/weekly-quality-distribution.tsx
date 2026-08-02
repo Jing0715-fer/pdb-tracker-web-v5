@@ -14,6 +14,7 @@ import {
 import { BarChart3 } from 'lucide-react';
 import { computeQualityScore } from '@/lib/pdb-utils';
 import { getChartAxisColor, getChartTickColor } from '@/components/chart-tooltips';
+import { ChartExportButton } from '@/components/chart-export-button';
 import type { PdbEntry } from '@/lib/pdb-types';
 
 // ─── Quality Tier Definitions ────────────────────────────────────────────────
@@ -135,6 +136,9 @@ export function WeeklyQualityDistribution({ entries }: WeeklyQualityDistribution
 
   return (
     <div className="quality-dist-fade-in">
+      <div className="flex items-center justify-end mb-1">
+        <ChartExportButton chartName="quality-distribution" />
+      </div>
       {/* Chart */}
       <ResponsiveContainer width="100%" height={300}>
         <BarChart

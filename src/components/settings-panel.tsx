@@ -7,12 +7,13 @@ import {
   X, Sun, Moon, Monitor, Palette, SlidersHorizontal,
   Eye, Bell, Keyboard, Info, RotateCcw, ChevronRight,
   Dna, BarChart3, Microscope, FileText, Languages,
-  Database,
+  Database, Download, Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { exportSettings, importSettings } from '@/lib/settings-backup';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -500,6 +501,46 @@ export function SettingsPanel({
                   <div className="flex items-center justify-between">
                     <span className="text-claude-text-muted">{t.storage}</span>
                     <span className="font-mono text-claude-text-secondary">localStorage</span>
+                  </div>
+                </div>
+
+                {/* Backup & Restore */}
+                <div className="mt-4 space-y-2">
+                  <div className="text-[10px] font-semibold text-claude-text-muted uppercase tracking-wider">
+                    {locale === 'zh' ? '备份与恢复' : 'Backup & Restore'}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 h-8 text-[11px]"
+                      onClick={() => exportSettings()}
+                    >
+                      <Download className="h-3 w-3 mr-1.5" />
+                      {locale === 'zh' ? '导出设置' : 'Export Settings'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 h-8 text-[11px]"
+                      onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = '.json';
+                        input.onchange = (e) => {
+                          const file = (e.target as HTMLInputElement).files?.[0];
+                          if (file) {
+                            importSettings(file).then(() => {
+                              setTimeout(() => window.location.reload(), 1500);
+                            });
+                          }
+                        };
+                        input.click();
+                      }}
+                    >
+                      <Upload className="h-3 w-3 mr-1.5" />
+                      {locale === 'zh' ? '导入设置' : 'Import Settings'}
+                    </Button>
                   </div>
                 </div>
 

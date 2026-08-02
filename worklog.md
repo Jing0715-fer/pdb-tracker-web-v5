@@ -1789,3 +1789,97 @@ Stage Summary:
 6. **[P3]** Add real-time PDB release notifications (WebSocket)
 7. **[P3]** Add user settings persistence (theme, density, default mode)
 8. **[P3]** Add data backup/restore functionality
+
+---
+Task ID: cron-review-41
+Agent: main
+Task: Implement 5 features (chart export, paper compare, PDF export, perf, backup/restore)
+
+Work Log:
+- Read worklog to understand project state (cron-review-40, 5 features implemented)
+- Verified dev server running on port 3000
+
+- FEATURE 1: Add ChartExportButton to remaining charts
+  - Updated weekly-quality-distribution.tsx:
+    * Imported ChartExportButton
+    * Added export button above chart (chartName: "quality-distribution")
+  - Updated weekly-trend-analysis.tsx:
+    * Imported ChartExportButton
+    * Added export button to "Method Trend" header (chartName: "weekly-method-trend")
+
+- FEATURE 2: Extend MultiStructureCompare to Literature mode
+  - Created src/components/paper-multi-compare.tsx
+    * Side-by-side comparison panel for 2-4 literature papers
+    * Metrics: PMID, Journal, Impact Factor (highest highlighted), Publication Date,
+      PDB Count (most highlighted), Authors, Title
+    * PubMed links, animated entrance, EN/ZH i18n
+  - Added paperCompareOpen state to pdb-tracker.tsx
+  - Added "Compare Papers" button to Literature mode toolbar
+    * Shows when litPapers.length >= 2
+    * Purple hover color (#7c5cbf)
+  - E2E verified: "Multi-Paper Comparison · 4 papers" with all metrics displayed
+
+- FEATURE 3: Export comparison results as PDF/report
+  - Created src/lib/export-report.ts
+    * exportComparisonReport(title, tableHtml) function
+    * Opens new window with print-friendly HTML
+    * Auto-triggers print dialog (save as PDF)
+    * Styled with Claude theme colors, includes metadata footer
+  - Added "Export Report" button to MultiStructureCompare footer
+    * FileDown icon, exports comparison table as printable HTML
+    * Uses data-compare-table attribute to find table element
+
+- FEATURE 4: Performance optimization (code splitting)
+  - Converted TrendingStructures from static to dynamic import
+    * ssr: false, loading: () => null
+  - Converted SnapshotComparison from static to dynamic import
+    * ssr: false, loading: () => null
+  - Reduces initial bundle size and compile time
+  - Total dynamic imports in pdb-tracker.tsx: 78 (was 76)
+
+- FEATURE 5: User settings persistence
+  - Already implemented! Verified:
+    * Theme: persisted via next-themes (ThemeProvider in layout.tsx)
+    * Density: persisted via localStorage in view-density-toggle.tsx (pdb-view-density)
+    * Default mode: persisted via useAppSettings hook (localStorage: pdb-app-settings)
+  - No code changes needed — feature was already complete
+
+- FEATURE 6: Data backup/restore functionality
+  - Created src/lib/settings-backup.ts
+    * exportSettings(): exports all localStorage settings to JSON file
+    * importSettings(file): imports settings from JSON file
+    * Handles 11 setting keys: bookmarks, recently viewed, search history, density,
+      notes, notification prefs, tour completed, analysis tour, theme, app settings
+  - Added Backup & Restore section to Settings panel
+    * "Export Settings" button (Download icon)
+    * "Import Settings" button (Upload icon, file picker)
+    * Auto-reload after import
+    * EN/ZH labels
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+- E2E test: Compare Papers button found in Literature mode
+- E2E test: PaperMultiCompare modal shows "Multi-Paper Comparison · 4 papers" with metrics
+- E2E test: 0 critical console errors
+- Dev server: stable
+
+Stage Summary:
+- Added ChartExportButton to weekly-quality-distribution and weekly-trend-analysis
+- Created PaperMultiCompare for Literature mode paper comparison
+- Created export-report.ts for PDF/report export (print-friendly HTML)
+- Lazy-loaded TrendingStructures and SnapshotComparison (performance optimization)
+- Confirmed settings persistence already works (theme, density, defaultMode)
+- Created settings-backup.ts with Export/Import functionality
+- Added Backup & Restore section to Settings panel
+- ESLint: 0 errors, 0 warnings
+- E2E: Paper compare verified, 0 console errors
+
+### Next Priority Items (for future cron review rounds):
+1. **[P2]** Add Export Report to EvalMultiCompare and PaperMultiCompare
+2. **[P2]** Add ChartExportButton to Literature charts (Reading Progress, Method Distribution)
+3. **[P3]** User authentication (NextAuth.js)
+4. **[P3]** Add real-time PDB release notifications (WebSocket)
+5. **[P3]** Add collaborative features (shared evaluations, comments)
+6. **[P3]** Performance: add bundle analyzer, optimize recharts imports
+7. **[P3]** Add advanced search (faceted search, saved queries)
+8. **[P3]** Add custom dashboard layouts (drag-and-drop widgets)
