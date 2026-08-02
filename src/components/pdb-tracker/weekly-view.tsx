@@ -5,7 +5,7 @@ import React from 'react';
 import dynamic from 'next/dynamic';
 import { Calendar, TrendingUp, Activity, BarChart3, GitCompareArrows } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { WeeklyStatCards } from '@/components/weekly-stat-cards';
+import { StructureStatsCards } from '@/components/structure-stats-cards';
 import { WeeklyPdbTable } from '@/components/WeeklyPdbTable';
 import type { PdbEntry, WeeklySnapshot } from '@/lib/pdb-types';
 import type { WeeklyViewProps } from './types';
@@ -84,7 +84,7 @@ export function WeeklyView({
 
   return (
     <>
-      <WeeklyStatCards snapshot={currentSnapshot} entries={entries} loading={loading} snapshots={snapshots} />
+      {entries.length > 0 && <StructureStatsCards entries={entries} />}
 
       {/* Colored separator — same gradient as Evaluation & Literature: after overview, before action bar */}
       <div

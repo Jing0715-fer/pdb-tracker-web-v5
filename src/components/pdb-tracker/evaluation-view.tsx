@@ -1579,7 +1579,8 @@ export function EvaluationView({
   // Default: individual evaluation page with overview → separator → action bar pattern
   return (
     <div className="flex flex-col h-full">
-      {/* Overview stat cards now rendered in shared area (pdb-tracker.tsx) */}
+      {/* Overview stat cards — same pattern as Weekly & Literature */}
+      <EvalStatCards evaluations={allEvaluations} evalBatches={evalBatches} evalLoading={evalLoading} />
 
       {/* Colored separator — same gradient as Weekly & Literature: after overview, before action bar */}
       <div

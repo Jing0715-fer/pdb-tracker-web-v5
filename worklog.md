@@ -1283,3 +1283,70 @@ Issues remaining:
 8. **[P3]** User authentication (NextAuth.js)
 9. **[P3]** Fix notification bell activity feed fetch error
 10. **[P3]** Export comparison results as PDF/report
+
+---
+Task ID: cron-review-35
+Agent: main
+Task: Fix stats cards flash-disappear + duplicate issue in all 3 modes
+
+Work Log:
+- Read worklog to understand project state (cron-review-34 complete, stats cards in shared area)
+- Verified dev server running on port 3000 (stable)
+
+- ROOT CAUSE ANALYSIS:
+  1. Duplicate issue: Stats cards were rendered in TWO places:
+     - Shared area in pdb-tracker.tsx (StructureStatsCards, EvalStatsCards, LiteratureStatsCards)
+     - View components (weekly-view.tsx had WeeklyStatCards, evaluation-view.tsx had EvalStatCards)
+     This caused TWO sets of cards to appear in Weekly mode (WeeklyStatCards + StructureStatsCards)
+
+  2. Flash-disappear issue: The shared area cards used conditions like `mode === 'evaluation' && allEvaluations.length > 0`
+     When switching modes, the data fetch could momentarily reset arrays (e.g., fetchEvaluations sets
+     allEvaluations to [] on error), causing cards to flash then disappear.
+
+- FIX: Moved all stats cards to render INSIDE their respective view components only:
+  1. Removed StructureStatsCards, EvalStatsCards, LiteratureStatsCards from pdb-tracker.tsx shared area
+  2. Removed unused imports (StructureStatsCards, LiteratureStatsCards, EvalStatsCards)
+  3. Replaced WeeklyStatCards with StructureStatsCards in weekly-view.tsx (user preferred "second style")
+  4. Restored EvalStatCards render in evaluation-view.tsx (was removed in cron-34)
+  5. Restored LiteratureStatsCards render in literature-view.tsx (was removed in cron-34)
+
+  This ensures:
+  - Cards render in exactly ONE place (inside view components, below filter)
+  - No duplication between shared area and view components
+  - Cards persist because they're rendered by the view that owns the data
+  - Consistent placement across all 3 modes (below filter, inside view)
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (pdb-tracker.tsx, weekly-view.tsx, literature-view.tsx, evaluation-view.tsx)
+- E2E test: Weekly mode shows 1 group of 4 cards (Total Structures, Avg Resolution, Cryo-EM, High-IF)
+- E2E test: Evaluation mode shows 1 group of 4 cards (Eval Targets, Batches, Avg Coverage, ≥80% Coverage)
+- E2E test: Literature mode shows 1 group of 4 cards (Total Papers, Avg Impact, High-IF, Methods Covered)
+- E2E test: No duplicate card groups in any mode (groupCount: 1 in all 3 modes)
+- E2E test: Cards persist after mode switch (no flash-disappear)
+- E2E test: 0 console errors
+- Screenshots taken: cron35-weekly-cards.png, cron35-eval-cards.png, cron35-lit-cards-final.png
+
+Stage Summary:
+- Fixed duplicate issue: removed stats cards from shared area, kept only in view components
+- Fixed flash-disappear: cards now render inside view components that own the data
+- Unified card style: all 3 modes use the same "second style" (StructureStatsCards pattern)
+- ESLint: 0 errors, 0 warnings
+- E2E: All 3 modes show exactly 1 group of 4 cards, no duplicates, no flash-disappear
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- Transient dev-mode API compilation delays cause brief "No data" state (resolves after compile)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+2. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+3. **[P2]** Extend ChartExportButton to more chart components
+4. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+5. **[P2]** Lazy-load Literature mode components to reduce compile time
+6. **[P2]** Add "Copy Citation" to Literature detail panel
+7. **[P3]** pdb2pqr/APBS advanced visualization
+8. **[P3]** User authentication (NextAuth.js)
+9. **[P3]** Fix notification bell activity feed fetch error
+10. **[P3]** Export comparison results as PDF/report

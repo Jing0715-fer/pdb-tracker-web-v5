@@ -3,6 +3,7 @@
 import React, { useCallback, useMemo } from 'react';
 import { BookOpen } from 'lucide-react';
 import { LiteratureContent } from '@/components/literature/LiteratureView';
+import { LiteratureStatsCards } from '@/components/literature-stats-cards';
 import type { LitPaper, LitStats, LitReport } from '@/lib/pdb-types';
 import type { LiteratureViewProps } from './types';
 
@@ -52,6 +53,9 @@ export function LiteratureView({
 
   return (
     <>
+      {papers.length > 0 && (
+        <LiteratureStatsCards papers={papers} stats={stats} />
+      )}
       <LiteratureContent
         stats={stats}
         papers={filteredLitPapers}

@@ -48,9 +48,6 @@ import { QuickActions } from '@/components/quick-actions';
 import { TrendingStructures } from '@/components/trending-structures';
 import { SnapshotComparison } from '@/components/snapshot-comparison';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
-import { StructureStatsCards } from '@/components/structure-stats-cards';
-import { LiteratureStatsCards } from '@/components/literature-stats-cards';
-import { EvalStatsCards } from '@/components/eval-stats-cards';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
@@ -5164,16 +5161,8 @@ export default function PdbTracker() {
             />
           )}
 
-          {/* Enhanced Stats Cards — shown in all 3 modes (second style with icons + mini charts) */}
-          {mode === 'weekly' && entries.length > 0 && (
-            <StructureStatsCards entries={entries} />
-          )}
-          {mode === 'evaluation' && allEvaluations.length > 0 && (
-            <EvalStatsCards evaluations={allEvaluations} evalBatches={evalBatches} evalLoading={evalLoading} />
-          )}
-          {mode === 'literature' && litPapers.length > 0 && (
-            <LiteratureStatsCards papers={litPapers} stats={litStats} />
-          )}
+          {/* Stats Cards are rendered INSIDE each view component (weekly-view, evaluation-view, literature-view)
+              to avoid duplication and ensure consistent placement below the filter toolbar */}
 
           {/* Enhanced Weekly Dashboard Charts */}
           {mode === 'weekly' && !(showWelcome && !loading && entries.length === 0 && evaluations.length === 0 && litPapers.length === 0) && (
