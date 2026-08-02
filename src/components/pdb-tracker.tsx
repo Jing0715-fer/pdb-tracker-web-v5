@@ -11,7 +11,7 @@ import {
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
-  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap,
+  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -290,6 +290,10 @@ const MultiStructureCompare = dynamic(() => import('@/components/multi-structure
   loading: () => null,
 });
 const MultiStructure3DViewer = dynamic(() => import('@/components/multi-structure-3d-viewer').then(m => ({ default: m.MultiStructure3DViewer })), {
+  ssr: false,
+  loading: () => null,
+});
+const EvalMultiCompare = dynamic(() => import('@/components/eval-multi-compare').then(m => ({ default: m.EvalMultiCompare })), {
   ssr: false,
   loading: () => null,
 });
@@ -752,6 +756,7 @@ export default function PdbTracker() {
   const [multiCompareOpen, setMultiCompareOpen] = useState(false);
   const [multi3DOpen, setMulti3DOpen] = useState(false);
   const [eval3DOpen, setEval3DOpen] = useState(false);
+  const [evalMultiCompareOpen, setEvalMultiCompareOpen] = useState(false);
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -3203,20 +3208,61 @@ export default function PdbTracker() {
               </div>
             )}
 
-            {/* Copy Citation Button */}
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(citationText).then(() => {
-                  toast.success(locale === 'zh' ? '已复制引用' : 'Citation copied', { description: locale === 'zh' ? '引用文本已复制到剪贴板' : 'Citation text copied to clipboard' });
-                }).catch(() => {
-                  toast.error(locale === 'zh' ? '复制失败' : 'Copy failed');
-                });
-              }}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-all active:scale-95"
-            >
-              <Copy className="h-3.5 w-3.5" />
-              {locale === 'zh' ? '复制引用' : 'Copy Citation'}
-            </button>
+            {/* Citation Format Dropdown */}
+            <div className="relative group">
+              <button
+                onClick={(e) => {
+                  e.currentTarget.nextElementSibling?.classList.toggle('hidden');
+                }}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-all active:scale-95"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                {locale === 'zh' ? '复制引用' : 'Copy Citation'}
+                <ChevronDown className="h-3 w-3" />
+              </button>
+              <div className="hidden absolute bottom-full left-0 right-0 mb-1 rounded-lg border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg overflow-hidden z-50">
+                {[
+                  { label: 'APA', fn: () => generateAPA(paper) },
+                  { label: 'BibTeX', fn: () => generateBibTeX(paper) },
+                  { label: 'RIS', fn: () => generateRIS(paper) },
+                  { label: 'Vancouver', fn: () => generateVancouver(paper) },
+                  { label: 'MLA', fn: () => generateMLA(paper) },
+                  { label: locale === 'zh' ? '纯文本' : 'Plain Text', fn: () => citationText },
+                ].map(item => (
+                  <button
+                    key={item.label}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const text = item.fn();
+                      navigator.clipboard.writeText(text).then(() => {
+                        toast.success(`${item.label} ${locale === 'zh' ? '已复制' : 'copied'}`, { description: locale === 'zh' ? '引用已复制到剪贴板' : 'Citation copied to clipboard' });
+                      }).catch(() => {
+                        toast.error(locale === 'zh' ? '复制失败' : 'Copy failed');
+                      });
+                      (e.currentTarget.parentElement as HTMLElement).classList.add('hidden');
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors"
+                  >
+                    <FileText className="h-3 w-3" />
+                    {item.label}
+                  </button>
+                ))}
+                <div className="border-t border-claude-border/50 dark:border-[#3d3832]/50">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const bibtex = generateBibTeX(paper);
+                      downloadFile(bibtex, `${paper.pmid}.bib`, 'text/plain');
+                      (e.currentTarget.parentElement as HTMLElement).classList.add('hidden');
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors"
+                  >
+                    <Download className="h-3 w-3" />
+                    {locale === 'zh' ? '下载 .bib' : 'Download .bib'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
       </>);
 
@@ -5054,9 +5100,18 @@ export default function PdbTracker() {
               selectedEvalId={selectedEvalId}
               filteredEvaluations={filteredEvaluations}
             />
-            {/* 3D Preview button for evaluation PDB structures */}
-            {allEvaluations.some(e => (e.pdbStructures?.length ?? 0) > 0) && (
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+            {/* 3D Preview + Compare Targets buttons for evaluation */}
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+              {allEvaluations.length >= 2 && (
+                <button
+                  onClick={() => setEvalMultiCompareOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#7c5cbf] hover:bg-[#7c5cbf]/10 transition-all"
+                >
+                  <Columns2 className="h-3 w-3" />
+                  {locale === 'zh' ? '靶点对比' : 'Compare Targets'}
+                </button>
+              )}
+              {allEvaluations.some(e => (e.pdbStructures?.length ?? 0) > 0) && (
                 <button
                   onClick={() => setEval3DOpen(true)}
                   className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#2d8f8f] hover:bg-[#2d8f8f]/10 transition-all"
@@ -5064,8 +5119,8 @@ export default function PdbTracker() {
                   <Boxes className="h-3 w-3" />
                   {locale === 'zh' ? '3D 结构预览' : '3D Structure Preview'}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
             </>
           )}
 
@@ -5234,6 +5289,14 @@ export default function PdbTracker() {
             entries={entries.filter(e => selectedEntryIds.has(e.pdbId))}
             onClose={() => setMulti3DOpen(false)}
             onViewEntry={(pdbId) => { setViewerModalPdbId(pdbId); setViewerModalOpen(true); setMulti3DOpen(false); }}
+          />
+        )}
+
+        {/* Evaluation Multi-Compare Modal — side-by-side target metric comparison */}
+        {mode === 'evaluation' && evalMultiCompareOpen && allEvaluations.length >= 2 && (
+          <EvalMultiCompare
+            evaluations={allEvaluations}
+            onClose={() => setEvalMultiCompareOpen(false)}
           />
         )}
 

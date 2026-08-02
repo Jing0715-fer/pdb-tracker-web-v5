@@ -20,6 +20,7 @@ import { EvalHeatmap } from '@/components/eval-heatmap';
 import { EvalScoreEvolution } from '@/components/eval-score-evolution';
 import { DistributionBar, type DistributionSegment } from '@/components/ui/distribution-bar';
 import { EvalBatchProgressTracker } from '@/components/EvalBatchProgressTracker';
+import { ChartExportButton } from '@/components/chart-export-button';
 import type { Evaluation, EvalBatch, EvalBatchSubTarget } from '@/lib/pdb-types';
 import { useI18n } from '@/lib/i18n';
 
@@ -935,9 +936,12 @@ export function EvalDashboard({ evaluations, batches = [], batchSubTargets = {},
 
         {/* ── Method Distribution Mini Bar ─────────────────────────────────── */}
         <div className="space-y-1.5 sparkline-fade-in">
-          <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider">
-            Method Distribution
-          </h4>
+          <div className="flex items-center justify-between">
+            <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider">
+              Method Distribution
+            </h4>
+            <ChartExportButton chartName="eval-dashboard-method-dist" />
+          </div>
           <MethodDistributionBar evaluations={evaluations} />
         </div>
 
