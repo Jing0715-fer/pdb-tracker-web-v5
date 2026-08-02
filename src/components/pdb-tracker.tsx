@@ -9,7 +9,7 @@ import {
   ChevronRight, ChevronDown, Database, BarChart3, TrendingUp, X,
   Sparkles, Loader2, ExternalLink, Users, Link2, Copy, Check, Menu,
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
-  Microscope, ArrowUp, RefreshCw, Download, Box, Upload, ChevronLeft,
+  Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
   Maximize2, Layers, Info, CheckCircle2, Trash2,
 } from 'lucide-react';
@@ -48,6 +48,7 @@ import { QuickActions } from '@/components/quick-actions';
 import { TrendingStructures } from '@/components/trending-structures';
 import { SnapshotComparison } from '@/components/snapshot-comparison';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
+import { StructureStatsCards } from '@/components/structure-stats-cards';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
@@ -289,11 +290,11 @@ const BookmarkQuickAccess = dynamic(() => import('@/components/bookmark-quick-ac
   ssr: false,
   loading: () => null,
 });
-const WeeklyInsightsCard = dynamic(() => import('@/components/weekly-insights-card').then(m => ({ default: m.WeeklyInsightsCard })), {
+const QuickFilterChips = dynamic(() => import('@/components/quick-filter-chips').then(m => ({ default: m.QuickFilterChips })), {
   ssr: false,
   loading: () => null,
 });
-const QuickFilterChips = dynamic(() => import('@/components/quick-filter-chips').then(m => ({ default: m.QuickFilterChips })), {
+const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
 });
@@ -4290,6 +4291,38 @@ export default function PdbTracker() {
           </div>
           <div className={`flex-1 overflow-y-auto preview-scroll p-4 space-y-4 detail-scroll-container ${qualityBorderClass}`}>
 
+            {/* Quick Metadata Bar — compact badges for key metrics */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {selectedEntry.method && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary">
+                  <Microscope className="h-2.5 w-2.5" />
+                  {selectedEntry.method}
+                </span>
+              )}
+              {selectedEntry.resolution != null && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#2d8f8f]/10 text-[#2d8f8f]">
+                  {selectedEntry.resolution.toFixed(2)}Å
+                </span>
+              )}
+              {selectedEntry.journalIf != null && selectedEntry.journalIf > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-mono font-medium bg-[#dc2626]/10 text-[#dc2626]">
+                  IF {selectedEntry.journalIf.toFixed(1)}
+                </span>
+              )}
+              {selectedEntry.releaseDate && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted">
+                  <Calendar className="h-2.5 w-2.5" />
+                  {selectedEntry.releaseDate}
+                </span>
+              )}
+              {selectedEntry.organisms && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted max-w-[120px] truncate">
+                  <Users className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{selectedEntry.organisms}</span>
+                </span>
+              )}
+            </div>
+
             {/* 3D Structure Preview */}
             <div>
               <div className="flex items-center gap-1.5 mb-2">
@@ -4461,6 +4494,50 @@ export default function PdbTracker() {
                 )}
               </div>
             )}
+
+            {/* Related Structures — same organism or journal */}
+            {(() => {
+              const related = entries
+                .filter(e =>
+                  e.pdbId !== selectedEntry.pdbId &&
+                  ((e.organisms && e.organisms === selectedEntry.organisms) ||
+                   (e.journal && e.journal === selectedEntry.journal))
+                )
+                .slice(0, 4);
+              if (related.length === 0) return null;
+              return (
+                <div className="pt-2 border-t border-claude-border dark:border-[#3d3832]">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Boxes className="h-3 w-3 text-claude-text-muted" />
+                    <span className="text-[10px] font-medium text-claude-text-muted uppercase tracking-wider">
+                      {locale === 'zh' ? '相关结构' : 'Related Structures'}
+                    </span>
+                    <span className="text-[9px] text-claude-text-muted/60 ml-auto">{related.length}</span>
+                  </div>
+                  <div className="space-y-1">
+                    {related.map(r => (
+                      <button
+                        key={r.pdbId}
+                        onClick={() => { setSelectedEntry(r); }}
+                        className="w-full flex items-center gap-2 p-1.5 rounded-md hover:bg-claude-border-light dark:hover:bg-[#2b2926] transition-colors text-left group"
+                      >
+                        <span className="font-mono text-[10px] font-semibold text-claude-accent shrink-0 group-hover:underline">
+                          {r.pdbId}
+                        </span>
+                        <span className="text-[10px] text-claude-text-secondary truncate flex-1">
+                          {r.title || 'Untitled'}
+                        </span>
+                        {r.resolution != null && (
+                          <span className="text-[9px] text-claude-text-muted shrink-0 font-mono">
+                            {r.resolution.toFixed(1)}Å
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* External Links */}
             <div className="pt-2 border-t border-claude-border dark:border-[#3d3832] space-y-2">
@@ -4988,13 +5065,9 @@ export default function PdbTracker() {
             />
           )}
 
-          {/* Weekly Insights Card — key highlights for the current week */}
+          {/* Enhanced Structure Stats Cards — second style with icons + mini charts */}
           {mode === 'weekly' && entries.length > 0 && (
-            <WeeklyInsightsCard
-              entries={entries}
-              currentSnapshot={currentSnapshot}
-              previousSnapshot={prevSnapshot}
-            />
+            <StructureStatsCards entries={entries} />
           )}
 
           {/* Enhanced Weekly Dashboard Charts */}
@@ -5029,14 +5102,21 @@ export default function PdbTracker() {
             </div>
           )}
 
-          {/* Quick Filter Chips — preset filter buttons for common queries */}
+          {/* Quick Filter Chips + View Density Toggle */}
           {mode === 'weekly' && entries.length > 0 && (
-            <QuickFilterChips
-              activeFilter={activeFilter}
-              onFilterChange={(f) => { setActiveFilter(f); setCurrentPage(1); }}
-              onClearAll={() => { setActiveFilter('all'); setCurrentPage(1); }}
-              bookmarksCount={bookmarks.size}
-            />
+            <div className="flex items-center gap-2 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+              <div className="flex-1 min-w-0">
+                <QuickFilterChips
+                  activeFilter={activeFilter}
+                  onFilterChange={(f) => { setActiveFilter(f); setCurrentPage(1); }}
+                  onClearAll={() => { setActiveFilter('all'); setCurrentPage(1); }}
+                  bookmarksCount={bookmarks.size}
+                />
+              </div>
+              <div className="shrink-0 pr-2">
+                <ViewDensityToggle />
+              </div>
+            </div>
           )}
 
           {/* Toolbar (weekly only) */}

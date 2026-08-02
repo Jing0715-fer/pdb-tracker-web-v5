@@ -20183,3 +20183,28 @@ tr.row-selected.table-row-hover-enhanced:hover td:first-child {
 .dark .activity-timeline-item::before {
   border-color: var(--claude-surface, #242220);
 }
+
+/* ─── View Density Toggle ───────────────────────────────────────────────── */
+
+.density-compact table tbody tr {
+  padding: 0;
+}
+
+.density-compact table tbody tr td {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  font-size: 10px;
+}
+
+.density-compact table tbody tr td .text-xs {
+  font-size: 10px;
+}
+
+.density-compact table tbody tr td .text-\[11px\] {
+  font-size: 9px;
+}
+
+.density-comfortable table tbody tr td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}

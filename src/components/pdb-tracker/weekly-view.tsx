@@ -209,7 +209,7 @@ export function WeeklyView({
       )}
 
       {/* Data Table */}
-      <div className="flex-1 overflow-auto border-t border-claude-border dark:border-[#3d3832]">
+      <div data-table-container className="flex-1 overflow-auto border-t border-claude-border dark:border-[#3d3832]">
         <WeeklyPdbTable
           entries={paginatedEntries}
           loading={loading}
