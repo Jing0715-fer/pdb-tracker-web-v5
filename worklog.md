@@ -1350,3 +1350,78 @@ Issues remaining:
 8. **[P3]** User authentication (NextAuth.js)
 9. **[P3]** Fix notification bell activity feed fetch error
 10. **[P3]** Export comparison results as PDF/report
+
+---
+Task ID: cron-review-36
+Agent: main
+Task: Fix eval/lit card flash-disappear + duplicate + unify styles + remove timeline
+
+Work Log:
+- Read worklog to understand project state (cron-review-35, cards moved to view components)
+- Verified dev server running on port 3000
+
+- ROOT CAUSE ANALYSIS (3 issues):
+  1. Literature duplicate: TWO different stats card components were rendering:
+     - LiteratureStatsCards (from literature-view.tsx) — kpi-card-enhanced style (4 cards)
+     - LiteratureStatCards (from LiteratureContent/LiteratureView.tsx line 470) — different style (5 cards)
+     This caused 2 groups of cards with different styles
+
+  2. Evaluation flash-disappear: EvalStatCards (internal function in evaluation-view.tsx)
+     used a different StatCard component (from @/components/ui/stat-card) with different
+     CSS classes (gradient-border-wrap, not kpi-card-enhanced)
+
+  3. Style inconsistency: Weekly used kpi-card-enhanced (StructureStatsCards),
+     Evaluation used gradient-border-wrap (StatCard from ui/stat-card),
+     Literature used kpi-card-enhanced (LiteratureStatsCards)
+
+- FIX 1: Removed duplicate LiteratureStatCards from LiteratureContent
+  - Deleted LiteratureStatCards render from src/components/literature/LiteratureView.tsx (line 470)
+  - Removed unused import of LiteratureStatCards
+  - Result: Only 1 group of Literature cards (from literature-view.tsx)
+
+- FIX 2: Rewrote EvalStatsCards to use kpi-card-enhanced style
+  - Rewrote src/components/eval-stats-cards.tsx to use the same StatCard component
+    as StructureStatsCards (kpi-card-enhanced class)
+  - Added MiniBar and MiniRing components (same visual style as StructureStatsCards)
+  - 4 cards: Eval Targets (with ring), Batches (with bar), Avg Coverage (with ring), ≥80% Coverage (with bar)
+  - All use kpi-card-enhanced class for visual consistency with Weekly
+
+- FIX 3: Updated evaluation-view.tsx to use standalone EvalStatsCards
+  - Changed from internal EvalStatCards function to imported EvalStatsCards
+  - Added import: import { EvalStatsCards } from '@/components/eval-stats-cards'
+
+- FIX 4: Removed WeeklyReleaseTimeline from Weekly mode
+  - Removed WeeklyReleaseTimeline render from pdb-tracker.tsx
+  - Removed WeeklyReleaseTimeline dynamic import
+
+- FIX 5: Removed dead code
+  - Removed unused renderWeeklyContent function (was never called)
+  - Removed unused WeeklyStatCards dynamic import
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+- E2E test: Weekly mode — 4 kpi-card-enhanced cards, NO Release Timeline
+- E2E test: Evaluation mode — 4 kpi-card-enhanced cards (same style as Weekly)
+- E2E test: Literature mode — 4 kpi-card-enhanced cards (same style as Weekly)
+- E2E test: No duplicate card groups in any mode (groupCount: 1 in all 3 modes)
+- E2E test: Cards persist after mode switch (no flash-disappear) — verified at 5s and 10s
+- E2E test: 0 console errors
+- Screenshots: cron36-weekly-final.png, cron36-eval-final.png, cron36-lit-final.png
+
+Stage Summary:
+- Fixed Literature duplicate: removed second LiteratureStatCards from LiteratureContent
+- Fixed Evaluation style: rewrote EvalStatsCards to use kpi-card-enhanced (same as Weekly)
+- Unified all 3 modes to use kpi-card-enhanced style (visual consistency)
+- Removed WeeklyReleaseTimeline per user request
+- Removed dead code (renderWeeklyContent, unused WeeklyStatCards import)
+- ESLint: 0 errors, 0 warnings
+- E2E: All 3 modes show 1 group of 4 cards, same style, no flash-disappear
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+2. **[P2]** Extend ChartExportButton to more chart components
+3. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+4. **[P2]** Lazy-load Literature mode components to reduce compile time
+5. **[P3]** pdb2pqr/APBS advanced visualization
+6. **[P3]** User authentication (NextAuth.js)
+7. **[P3]** Export comparison results as PDF/report

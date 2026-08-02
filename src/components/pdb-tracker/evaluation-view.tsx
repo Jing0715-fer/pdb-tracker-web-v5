@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { StatCard, CircularProgress, MiniBar } from '@/components/ui/stat-card';
+import { EvalStatsCards } from '@/components/eval-stats-cards';
 import { LazyMarkdown } from '@/components/lazy-markdown';
 import type { Evaluation, EvalBatch, EvalBatchSubTarget, EvalPdbStructure, EvalRow } from '@/lib/pdb-types';
 import type { EvaluationViewProps } from './types';
@@ -1579,8 +1580,8 @@ export function EvaluationView({
   // Default: individual evaluation page with overview → separator → action bar pattern
   return (
     <div className="flex flex-col h-full">
-      {/* Overview stat cards — same pattern as Weekly & Literature */}
-      <EvalStatCards evaluations={allEvaluations} evalBatches={evalBatches} evalLoading={evalLoading} />
+      {/* Overview stat cards — uses standalone EvalStatsCards (same style as Weekly StructureStatsCards) */}
+      <EvalStatsCards evaluations={allEvaluations} evalBatches={evalBatches} evalLoading={evalLoading} />
 
       {/* Colored separator — same gradient as Weekly & Literature: after overview, before action bar */}
       <div

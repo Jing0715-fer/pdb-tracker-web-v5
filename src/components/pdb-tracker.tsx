@@ -265,10 +265,6 @@ const StructureAnalysisView = dynamic(() => import('@/components/structure-analy
   ),
 });
 
-const WeeklyStatCards = dynamic(() => import('@/components/weekly-stat-cards').then(m => ({ default: m.WeeklyStatCards })), {
-  ssr: false,
-  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
-});
 const SearchDropdownEnhanced = dynamic(() => import('@/components/search-dropdown-enhanced').then(m => ({ default: m.SearchDropdownEnhanced })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-7 w-full max-w-xs" />,
@@ -278,10 +274,6 @@ const SearchStatusBanner = dynamic(() => import('@/components/search-status-bann
   loading: () => null,
 });
 const ErrorBanner = dynamic(() => import('@/components/error-banner').then(m => ({ default: m.ErrorBanner })), {
-  ssr: false,
-  loading: () => null,
-});
-const WeeklyReleaseTimeline = dynamic(() => import('@/components/weekly-release-timeline').then(m => ({ default: m.WeeklyReleaseTimeline })), {
   ssr: false,
   loading: () => null,
 });
@@ -2493,207 +2485,10 @@ export default function PdbTracker() {
     </aside>
   );
 
-  // ─── Render: Weekly Content ──────────────────────────────────────────────
+  // ─── Render: Weekly Content removed (dead code — views rendered via dynamic imports) ───
 
-  const renderWeeklyContent = () => (
-    <>
-      <WeeklyStatCards snapshot={currentSnapshot} entries={entries} loading={loading} snapshots={snapshots} />
+  // renderWeeklyContent was here but never called — removed to avoid confusion
 
-      {/* Structure of the Week */}
-      {!loading && entries.length > 0 && (() => {
-        const topEntry = entries
-          .filter(e => e.journalIf != null && e.journalIf > 0)
-          .sort((a, b) => (b.journalIf ?? 0) - (a.journalIf ?? 0))[0];
-        if (!topEntry) return null;
-        const methodLabel = getMethodLabel(topEntry.method || '');
-        const methodClass = methodLabel === 'Cryo-EM' ? 'sotw-method-cryoem' : methodLabel === 'X-ray' ? 'sotw-method-xray' : methodLabel === 'NMR' ? 'sotw-method-nmr' : 'sotw-method-other';
-        const methodColor = methodLabel === 'Cryo-EM' ? '#2d8f8f' : methodLabel === 'X-ray' ? '#7c5cbf' : methodLabel === 'NMR' ? '#c9872e' : '#6b7280';
-        const resChipClass = topEntry.resolution != null && topEntry.resolution < 2 ? 'resolution-chip resolution-chip-high' : topEntry.resolution != null && topEntry.resolution < 3 ? 'resolution-chip resolution-chip-mid' : topEntry.resolution != null ? 'resolution-chip resolution-chip-low' : '';
-        return (
-          <div className="px-2 sm:px-3">
-            <div className={`sotw-card ${methodClass} p-4 sm:p-5`}>
-              <div className="relative z-10 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-5">
-                {/* Left: Badge + PDB ID */}
-                <div className="flex flex-col items-start gap-2 shrink-0">
-                  <span className="sotw-badge relative">
-                    <Trophy className="h-3 w-3" />
-                    Structure of the Week
-                  </span>
-                  <a
-                    href={`https://www.rcsb.org/structure/${topEntry.pdbId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-mono text-lg sm:text-xl font-extrabold hover:underline"
-                    style={{ color: methodColor }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {topEntry.pdbId}
-                  </a>
-                  <div className="flex items-center gap-2">
-                    <span className={`method-badge method-badge-pill inline-flex items-center justify-center min-w-[62px] px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${getMethodColor(topEntry.method || '').bg} ${getMethodColor(topEntry.method || '').text} ${getMethodColor(topEntry.method || '').border}`}>
-                      {methodLabel}
-                    </span>
-                    {topEntry.resolution != null && (
-                      <span className={resChipClass}>
-                        {topEntry.resolution.toFixed(2)}Å
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Middle: Title + Journal */}
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm sm:text-base font-semibold text-claude-text line-clamp-2 leading-snug">
-                    {topEntry.title || 'Untitled Structure'}
-                  </h3>
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                    {topEntry.journal && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/60 dark:bg-black/20 text-[11px] font-semibold text-claude-text-secondary border border-claude-border/30 dark:border-[#3d3832]/30">
-                        <BookOpen className="h-3 w-3 mr-1 opacity-50" />
-                        {topEntry.journal}
-                      </span>
-                    )}
-                    {topEntry.journalIf != null && (
-                      <span className={`if-badge-enhanced ${topEntry.ifTier === 'top' ? 'if-badge-enhanced-top' : topEntry.ifTier === 'high' ? 'if-badge-enhanced-high' : topEntry.ifTier === 'mid' ? 'if-badge-enhanced-mid' : 'if-badge-enhanced-low'}`}>
-                        IF {topEntry.journalIf.toFixed(1)}
-                      </span>
-                    )}
-                    {topEntry.organisms && (
-                      <span className="text-[10px] text-claude-text-muted line-clamp-1">
-                        {topEntry.organisms.split('|')[0]?.trim()}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Right: Action */}
-                <div className="shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 px-3 text-[11px] text-claude-accent hover:bg-claude-accent/10 border border-claude-accent/20 hover:border-claude-accent/40"
-                    onClick={() => handleRowClick(topEntry)}
-                  >
-                    <Eye className="h-3.5 w-3.5 mr-1" />
-                    View Detail
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Heatmap + Trend toggle */}
-      <div className="px-4 pt-2 flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowHeatmap(!showHeatmap)}
-          className={`h-7 px-2.5 text-[11px] ${showHeatmap ? 'bg-claude-accent/10 text-claude-accent' : 'text-claude-text-muted'}`}
-        >
-          <Calendar className="h-3 w-3 mr-1" />
-          {showHeatmap ? 'Hide Heatmap' : 'Heatmap'}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowTrend(!showTrend)}
-          className={`h-7 px-2.5 text-[11px] ${showTrend ? 'bg-claude-accent/10 text-claude-accent' : 'text-claude-text-muted'}`}
-        >
-          <TrendingUp className="h-3 w-3 mr-1" />
-          {showTrend ? 'Hide Trends' : 'Trend Analysis'}
-        </Button>
-      </div>
-
-      {/* Trend Analysis */}
-      {showTrend && (
-        <div className="animate-in fade-in duration-300">
-          <WeeklyTrendAnalysis snapshots={snapshots} entries={entries} />
-        </div>
-      )}
-
-      {/* Heatmap Calendar */}
-      {showHeatmap && (
-        <div className="animate-in fade-in duration-300">
-          <WeeklyHeatmap selectedSnapshot={selectedSnapshot} onDateSelect={setWeeklyDateFilter} currentDateFilter={weeklyDateFilter} />
-        </div>
-      )}
-
-      {/* Data Table */}
-      <div className="flex-1 overflow-auto border-t border-claude-border dark:border-[#3d3832]">
-        <WeeklyPdbTable
-          entries={paginatedEntries}
-          loading={loading}
-          sortField={sortField}
-          sortDir={sortDir}
-          onSort={handleSort}
-          onRowClick={handleRowClick}
-          bookmarks={bookmarks}
-          onToggleBookmark={toggleBookmark}
-          selectedEntryIds={selectedEntryIds}
-          onSelectEntries={setSelectedEntryIds}
-          highlightedRowId={highlightedRowId}
-          onHighlightRow={setHighlightedRowId}
-          onRetry={handleRetryAll}
-          fetchError={!!fetchError}
-        />
-      </div>
-
-      {/* Pagination */}
-      <div className="flex-shrink-0">
-        <div className="flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3 border-t border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] text-claude-text-muted">
-              Showing <span className="font-mono font-medium text-claude-text-secondary">{((currentPage - 1) * pageSize) + 1}</span>–<span className="font-mono font-medium text-claude-text-secondary">{Math.min(currentPage * pageSize, filteredEntries.length)}</span> of <span className="font-mono font-medium text-claude-text-secondary">{filteredEntries.length}</span>
-              {/* When the DB has more rows than we loaded, show "已加载 X / 共 Y 条"
-                  + a "加载更多" button so the user can fetch the next batch
-                  instead of being silently capped. */}
-              {entriesHasMore && entriesTotal > filteredEntries.length && (
-                <>
-                  <span className="text-claude-text-muted/60 ml-1">·</span>
-                  <span className="text-amber-600 dark:text-amber-400 ml-1">
-                    共 {entriesTotal} 条 · 已加载 {entries.length} 条
-                  </span>
-                  <button
-                    onClick={loadMoreEntries}
-                    disabled={loadingMore}
-                    className="ml-1.5 px-2 h-5 rounded text-[10px] font-semibold bg-claude-accent/10 text-claude-accent hover:bg-claude-accent/20 transition-colors disabled:opacity-50"
-                  >
-                    {loadingMore ? '加载中…' : '加载更多 →'}
-                  </button>
-                </>
-              )}
-            </span>
-            <select
-              value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-              className="h-6 px-1.5 text-[10px] font-medium rounded border border-claude-border dark:border-[#3d3832] bg-white dark:bg-[#1a1917] text-claude-text-secondary"
-            >
-              {[10, 25, 50, 100].map(s => <option key={s} value={s}>{s}/page</option>)}
-            </select>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)} className="h-7 px-2 text-[11px]">Prev</Button>
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              let page: number;
-              if (totalPages <= 5) page = i + 1;
-              else if (currentPage <= 3) page = i + 1;
-              else if (currentPage >= totalPages - 2) page = totalPages - 4 + i;
-              else page = currentPage - 2 + i;
-              return (
-                <Button key={page} variant={currentPage === page ? 'default' : 'ghost'} size="sm"
-                  onClick={() => setCurrentPage(page)}
-                  className={`h-7 w-7 p-0 text-[11px] ${currentPage === page ? 'bg-claude-accent text-white shadow-sm' : ''}`}
-                >{page}</Button>
-              );
-            })}
-            <Button variant="ghost" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)} className="h-7 px-2 text-[11px]">Next</Button>
-          </div>
-        </div>
-      </div>
-    </>
-  );
 
   // ─── Render: Evaluation Content ──────────────────────────────────────────
 
@@ -5148,16 +4943,6 @@ export default function PdbTracker() {
               onClearFilter={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
               onClearAll={() => { setLitSourceFilter('all'); setLitIfFilter('all'); setLitSelectedDate(null); setLitReadingListFilter(null); setLitTagFilter(null); }}
               mode="literature"
-            />
-          )}
-
-          {/* Weekly Release Timeline — horizontal timeline of PDB releases */}
-          {mode === 'weekly' && entries.length > 0 && (
-            <WeeklyReleaseTimeline
-              entries={entries}
-              weekStart={currentSnapshot?.weekStart || undefined}
-              weekEnd={currentSnapshot?.weekEnd || undefined}
-              onSelectEntry={handleRowClick}
             />
           )}
 

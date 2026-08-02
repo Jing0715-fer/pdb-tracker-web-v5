@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BookOpen, GitCompare } from 'lucide-react';
 import type { LitPaper, LitReport, LitStats } from '@/lib/pdb-types';
-import { LiteratureStatCards } from './LiteratureStatCards';
+
 import { LiteratureToolbar, LiteratureToolbarMain, LiteratureToolbarChips, type ViewMode, type SortField, type DateFilter, type IfFilter } from './LiteratureToolbar';
 import { LiteraturePaperList } from './LiteraturePaperList';
 import { LiteratureDateSidebar } from './LiteratureDateSidebar';
@@ -465,30 +465,7 @@ export function LiteratureContent({
         )}
       </div>
 
-      {/* Stat cards */}
-      <div className="p-2 sm:p-3 flex-shrink-0">
-      <LiteratureStatCards
-        stats={stats}
-        isLoading={isLoading && !stats}
-        papers={papers}
-        readingProgress={readingProgressHook ? (() => {
-          const total = totalPapersCount ?? papers.length ?? 1;
-          const progressMap = readingProgressHook.progressMap;
-          let unreadCount = 0;
-          let readingCount = 0;
-          let readCount = 0;
-          for (const paper of papers) {
-            const p = progressMap[paper.pmid] ?? 0;
-            if (p >= 100) readCount++;
-            else if (p > 0) readingCount++;
-            else unreadCount++;
-          }
-          const papersWithProgress = readingCount + readCount;
-          const progressPercentage = total > 0 ? Math.round((papersWithProgress / total) * 100) : 0;
-          return { totalPapers: total, unreadCount, readingCount, readCount, progressPercentage };
-        })() : undefined}
-      />
-      </div>
+      {/* Stat cards — now rendered by LiteratureView (literature-view.tsx) to avoid duplication */}
 
       {/* Reading Progress Dashboard — below stat cards, above separator */}
       {readingProgressHook && (
