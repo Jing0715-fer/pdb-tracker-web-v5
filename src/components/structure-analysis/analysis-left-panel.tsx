@@ -1,0 +1,1225 @@
+"use client";
+
+/**
+ * Structure Analysis left panel — two tabs:
+ *  1. Structures: PyMOL-style loaded-structure list with inline controls
+ *  2. Analysis: 24-chart catalog grouped into 6 categories with search
+ *
+ * Ported from Molcraft's unified-left-panel.tsx, restyled with
+ * pdb-tracker-web-v4's Claude/terracotta theme.
+ */
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Layers,
+  Activity,
+  Eye,
+  EyeOff,
+  X,
+  ChevronRight,
+  Search,
+  Palette,
+  Zap,
+  Ruler,
+  LayoutDashboard,
+  GitCompare,
+  BarChart3,
+  Spline,
+  AlignLeft,
+  Grid3x3,
+  Link2,
+  Sigma,
+  Droplets,
+  Atom,
+  Network,
+  Target,
+  Fingerprint,
+  Boxes,
+  Pill,
+  FlaskConical,
+  SunMedium,
+  CircleDashed,
+  ShieldCheck,
+  Loader2,
+  Trash2,
+  Star,
+  Clock,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  useAppStore,
+  selectActiveStructure,
+  type LoadedStructure,
+} from "@/lib/molcraft/store";
+import { executeCommand } from "@/lib/molcraft/commands";
+import type { LlmCommand, ResidueRef } from "@/lib/molcraft/command-schema";
+import { useRunCommand } from "./use-run-command";
+import { SequenceViewer } from "./sequence-viewer";
+import { StructureInfoPanel } from "./structure-info-panel";
+import { StructureAlignmentPanel } from "./structure-alignment-panel";
+import { PresetManager } from "./preset-manager";
+
+// Lazy-loaded chart components
+import { RamachandranPlot } from "@/components/charts/ramachandran-plot";
+import { BfactorChart } from "@/components/charts/bfactor-chart";
+import { InteractionNetwork } from "@/components/charts/interaction-network";
+import { SequenceAlignment } from "@/components/charts/sequence-alignment";
+import { RmsdMatrix } from "@/components/charts/rmsd-matrix";
+import { SasaChart } from "@/components/charts/sasa-chart";
+import { DisulfideChart } from "@/components/charts/disulfide-chart";
+import { SecondaryStructureChart } from "@/components/charts/secondary-structure-chart";
+import { AromaticStackingChart } from "@/components/charts/aromatic-stacking-chart";
+import { WaterBridgesChart } from "@/components/charts/water-bridges-chart";
+import { MetalCoordinationChart } from "@/components/charts/metal-coordination-chart";
+import { StructureValidationChart } from "@/components/charts/structure-validation-chart";
+import { BindingPocketChart } from "@/components/charts/binding-pocket-chart";
+import { OligomerAnalysisChart } from "@/components/charts/oligomer-analysis-chart";
+import { LigandInteractionsChart } from "@/components/charts/ligand-interactions-chart";
+import { ElectrostaticChart } from "@/components/charts/electrostatic-chart";
+import { ContactMapChart } from "@/components/charts/contact-map-chart";
+import { SurfaceResiduesChart } from "@/components/charts/surface-residues-chart";
+import { StructureOverviewDashboard } from "@/components/charts/structure-overview-dashboard";
+import { StructureComparisonDashboard } from "@/components/charts/structure-comparison-dashboard";
+import { DruggabilityChart } from "@/components/charts/druggability-chart";
+import { ApbsSurfaceChart } from "@/components/charts/apbs-surface-chart";
+import { ScreeningChart } from "@/components/charts/screening-chart";
+import { PocketDetectionChart } from "@/components/charts/pocket-detection-chart";
+
+type TabId = "structures" | "measure" | "analysis";
+
+// Chart ID to label mapping (for preset display)
+const ALL_CHART_LABELS: Record<string, string> = {
+  overview: "Overview Dashboard",
+  comparison: "Structure Comparison",
+  rama: "Ramachandran",
+  bfactor: "B-factor",
+  ss: "Secondary Structure",
+  seqalign: "Sequence Alignment",
+  rmsd: "RMSD Matrix",
+  disulfide: "Disulfide Bonds",
+  aromatic: "Aromatic Stacking",
+  water: "Water Bridges",
+  metal: "Metal Coordination",
+  contactmap: "Contact Map",
+  interaction: "Interaction Network",
+  pocket: "Binding Pocket",
+  ligand: "Ligand Interactions",
+  oligomer: "Oligomer Analysis",
+  druggability: "Druggability",
+  apbs_surface: "APBS Electrostatic",
+  screening: "Virtual Screening",
+  detect_pockets: "Multi-Pocket Detection",
+  sasa: "SASA",
+  surface: "Surface Residues",
+  electrostatic: "Electrostatic",
+  validation: "Structure Validation",
+};
+
+export function AnalysisLeftPanel() {
+  const [tab, setTab] = useState<TabId>("structures");
+  const structures = useAppStore((s) => s.structures);
+  const activeStructureId = useAppStore((s) => s.activeStructureId);
+
+  return (
+    <div className="flex h-full flex-col bg-claude-surface">
+      {/* Active structure banner */}
+      {structures.length > 0 && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-claude-border bg-claude-accent-light/50 px-3 py-1.5">
+          <Activity className="h-3 w-3 text-claude-accent" />
+          <span className="text-[10px] font-medium uppercase tracking-wide text-claude-text-secondary">
+            Active
+          </span>
+          <Badge variant="secondary" className="ml-auto font-mono text-[10px]">
+            {activeStructureId
+              ? structures.find((s) => s.id === activeStructureId)?.label ?? "—"
+              : structures[0]?.label ?? "—"}
+          </Badge>
+        </div>
+      )}
+
+      {/* Tab row */}
+      <div className="sa-tab-row shrink-0">
+        <button
+          className={`sa-tab-btn ${tab === "structures" ? "sa-tab-active" : ""}`}
+          onClick={() => setTab("structures")}
+        >
+          <Layers className="h-3 w-3" />
+          Structures
+          {structures.length > 0 && (
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px]">
+              {structures.length}
+            </Badge>
+          )}
+        </button>
+        <button
+          className={`sa-tab-btn ${tab === "measure" ? "sa-tab-active" : ""}`}
+          onClick={() => setTab("measure")}
+        >
+          <Ruler className="h-3 w-3" />
+          Measure
+        </button>
+        <button
+          className={`sa-tab-btn ${tab === "analysis" ? "sa-tab-active" : ""}`}
+          onClick={() => setTab("analysis")}
+        >
+          <Activity className="h-3 w-3" />
+          Analysis
+        </button>
+      </div>
+
+      <ScrollArea className="sa-scroll flex-1 min-h-0">
+        {tab === "structures" && <StructuresTab />}
+        {tab === "measure" && <MeasureTab />}
+        {tab === "analysis" && <AnalysisTab />}
+      </ScrollArea>
+    </div>
+  );
+}
+
+// ============================================================
+// Structures Tab
+// ============================================================
+function StructuresTab() {
+  const structures = useAppStore((s) => s.structures);
+  const removeStructure = useAppStore((s) => s.removeStructure);
+  const clearStructures = useAppStore((s) => s.clearStructures);
+  const activeStructureId = useAppStore((s) => s.activeStructureId);
+  const setActiveStructure = useAppStore((s) => s.setActiveStructure);
+  const updateStructureStyle = useAppStore((s) => s.updateStructureStyle);
+  const viewer = useAppStore((s) => s.viewer);
+  const toast = useAppStore((s) => s.toast);
+  const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [aligning, setAligning] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (activeStructureId) setOpenId(activeStructureId);
+  }, [activeStructureId]);
+
+  const toggleVisibility = async (id: string) => {
+    if (!viewer) return;
+    try {
+      const plugin = viewer.plugin;
+      const structs = plugin.managers.structure.hierarchy.current.structures;
+      const idx = structures.findIndex((s) => s.id === id);
+      if (idx < 0 || idx >= structs.length) return;
+      plugin.managers.structure.hierarchy.toggleVisibility([structs[idx]]);
+      setHiddenSet((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    } catch (err) {
+      toast(`Toggle failed: ${err}`, "error");
+    }
+  };
+
+  const closeStructure = async (id: string) => {
+    if (!viewer) return;
+    try {
+      const plugin = viewer.plugin;
+      const structs = plugin.managers.structure.hierarchy.current.structures;
+      const idx = structures.findIndex((s) => s.id === id);
+      if (idx >= 0 && idx < structs.length) {
+        plugin.managers.structure.hierarchy.remove(structs[idx]);
+      }
+      removeStructure(id);
+      toast(`Removed ${id}`, "info");
+    } catch (err) {
+      toast(`Remove failed: ${err}`, "error");
+    }
+  };
+
+  if (structures.length === 0) {
+    return (
+      <div className="sa-empty-state p-4">
+        <Layers className="h-8 w-8 text-claude-text-muted" />
+        <p className="text-xs">No structures loaded</p>
+        <p className="text-[10px] text-claude-text-muted">
+          Use the toolbar above to load a PDB / AlphaFold / EMDB ID or upload a
+          file.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5 p-2">
+      {structures.map((s, i) => {
+        const isActive = activeStructureId === s.id || (!activeStructureId && i === 0);
+        const isOpen = openId === s.id;
+        const isHidden = hiddenSet.has(s.id);
+        return (
+          <div key={s.id}>
+            <div
+              className={`sa-struct-item ${isActive ? "sa-struct-active" : ""}`}
+              onClick={() => {
+                setActiveStructure(s.id);
+                setOpenId(isOpen ? null : s.id);
+              }}
+            >
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: s.color ?? "#c96442" }}
+              />
+              <span className="flex-1 truncate font-mono text-[11px] font-medium">
+                {s.label}
+              </span>
+              {s.metadata?.method && (
+                <Badge variant="outline" className="px-1 py-0 text-[8px]">
+                  {s.metadata.method}
+                </Badge>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleVisibility(s.id);
+                }}
+                className="text-claude-text-muted hover:text-claude-text"
+                title={isHidden ? "Show" : "Hide"}
+              >
+                {isHidden ? (
+                  <EyeOff className="h-3 w-3" />
+                ) : (
+                  <Eye className="h-3 w-3" />
+                )}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeStructure(s.id);
+                }}
+                className="text-claude-text-muted hover:text-destructive"
+                title="Remove"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+
+            {/* Inline expanded controls */}
+            {isOpen && (
+              <div className="mt-1 space-y-2 rounded-md border border-claude-border bg-claude-bg p-2">
+                {s.metadata && (
+                  <div className="grid grid-cols-2 gap-1 text-[9px]">
+                    {s.metadata.title && (
+                      <div className="col-span-2 truncate text-claude-text-secondary">
+                        <span className="font-medium">Title:</span>{" "}
+                        {s.metadata.title}
+                      </div>
+                    )}
+                    {s.metadata.chains && (
+                      <div className="text-claude-text-secondary">
+                        <span className="font-medium">Chains:</span>{" "}
+                        {s.metadata.chains.join(", ")}
+                      </div>
+                    )}
+                    {s.metadata.numResidues != null && (
+                      <div className="text-claude-text-secondary">
+                        <span className="font-medium">Residues:</span>{" "}
+                        {s.metadata.numResidues}
+                      </div>
+                    )}
+                    {s.metadata.numAtoms != null && (
+                      <div className="text-claude-text-secondary">
+                        <span className="font-medium">Atoms:</span>{" "}
+                        {s.metadata.numAtoms}
+                      </div>
+                    )}
+                    {s.metadata.resolution != null && (
+                      <div className="text-claude-text-secondary">
+                        <span className="font-medium">Res:</span>{" "}
+                        {s.metadata.resolution} Å
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Representation */}
+                <div>
+                  <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+                    Representation
+                  </Label>
+                  <Select
+                    value={s.style?.representation ?? "cartoon"}
+                    onValueChange={(v) =>
+                      updateStructureStyle(s.id, {
+                        representation: v as LoadedStructure["style"] extends infer T
+                          ? T extends { representation: infer R }
+                            ? R
+                            : never
+                          : never,
+                      })
+                    }
+                  >
+                    <SelectTrigger className="h-7 text-[10px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {["cartoon", "stick", "line", "sphere", "surface"].map(
+                        (r) => (
+                          <SelectItem key={r} value={r} className="text-[10px]">
+                            {r}
+                          </SelectItem>
+                        )
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {/* Color scheme */}
+                <div>
+                  <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+                    Color scheme
+                  </Label>
+                  <Select
+                    value={s.style?.colorScheme ?? "spectrum"}
+                    onValueChange={(v) =>
+                      updateStructureStyle(s.id, {
+                        colorScheme: v as LoadedStructure["style"] extends infer T
+                          ? T extends { colorScheme: infer R }
+                            ? R
+                            : never
+                          : never,
+                      })
+                    }
+                  >
+                    <SelectTrigger className="h-7 text-[10px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[
+                        "chain",
+                        "element",
+                        "secondary",
+                        "single",
+                        "spectrum",
+                        "bfactor",
+                        "residue",
+                        "charge",
+                      ].map((c) => (
+                        <SelectItem key={c} value={c} className="text-[10px]">
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {s.alignRmsd != null && (
+                  <div className="rounded bg-claude-accent-light px-1.5 py-1 text-[9px] text-claude-accent">
+                    Aligned: RMSD {s.alignRmsd.toFixed(2)} Å
+                    {s.alignTmScore != null &&
+                      ` · TM ${s.alignTmScore.toFixed(3)}`}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {structures.length > 1 && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="mt-2 h-7 w-full text-[10px] text-claude-text-muted hover:text-destructive"
+          onClick={() => clearStructures()}
+        >
+          <Trash2 className="h-3 w-3" />
+          Clear all
+        </Button>
+      )}
+
+      {/* Sequence viewer — shown when a structure with PDB text is loaded */}
+      {structures.length > 0 && (
+        <div className="mt-3 border-t border-claude-border pt-2">
+          <SequenceViewer />
+        </div>
+      )}
+
+      {/* Structure info panel — full RCSB metadata */}
+      {structures.length > 0 && (
+        <div className="mt-3 border-t border-claude-border pt-2">
+          <StructureInfoPanel />
+        </div>
+      )}
+
+      {/* Structure alignment panel — shown when 2+ structures loaded */}
+      <div className="mt-3 border-t border-claude-border pt-2">
+        <StructureAlignmentPanel />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Measure Tab
+// ============================================================
+function MeasureTab() {
+  const { run, busy } = useRunCommand();
+  const [a, setA] = useState<ResidueRef>({ chain: "A", resno: 30, atom: "CA" });
+  const [b, setB] = useState<ResidueRef>({ chain: "A", resno: 50, atom: "CA" });
+  const [labelTarget, setLabelTarget] = useState<ResidueRef>({
+    chain: "A",
+    resno: 30,
+  });
+  const measurements = useAppStore((s) => s.measurements);
+  const removeMeasurement = useAppStore((s) => s.removeMeasurement);
+  const clearMeasurements = useAppStore((s) => s.clearMeasurements);
+
+  return (
+    <div className="space-y-2 p-2">
+      <ResidueInput label="Atom A" value={a} onChange={setA} />
+      <ResidueInput label="Atom B" value={b} onChange={setB} />
+      <Button
+        size="sm"
+        className="h-7 w-full text-[11px]"
+        disabled={busy}
+        onClick={() => run({ type: "measure_distance", a, b })}
+      >
+        Measure Distance
+      </Button>
+      <div className="my-1 h-px bg-claude-border" />
+      <ResidueInput label="Label target" value={labelTarget} onChange={setLabelTarget} />
+      <Button
+        size="sm"
+        variant="secondary"
+        className="h-7 w-full text-[11px]"
+        disabled={busy}
+        onClick={() => run({ type: "label_residue", target: labelTarget })}
+      >
+        Add Label
+      </Button>
+
+      {/* Measurement history */}
+      {measurements.length > 0 && (
+        <div className="mt-2 rounded-md border border-claude-border bg-claude-bg p-1.5">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+              History ({measurements.length})
+            </span>
+            <button
+              onClick={clearMeasurements}
+              className="text-[9px] text-claude-text-muted hover:text-destructive"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="space-y-0.5 max-h-32 overflow-y-auto sa-scroll">
+            {measurements.map((m) => (
+              <div
+                key={m.id}
+                className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] hover:bg-claude-accent-light/50 group"
+              >
+                <span className="font-mono text-claude-text">{m.label}</span>
+                <span className="ml-auto font-mono text-claude-accent">{m.detail}</span>
+                <button
+                  onClick={() => removeMeasurement(m.id)}
+                  className="text-claude-text-muted opacity-0 group-hover:opacity-100 hover:text-destructive"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {measurements.length === 0 && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 w-full text-[10px] text-claude-text-muted"
+          disabled
+        >
+          No measurements yet
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function ResidueInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: ResidueRef;
+  onChange: (v: ResidueRef) => void;
+}) {
+  return (
+    <div className="rounded-md border border-claude-border p-1.5">
+      <div className="mb-1 text-[10px] font-medium text-claude-text-secondary">
+        {label}
+      </div>
+      <div className="grid grid-cols-3 gap-1">
+        <Input
+          value={value.chain ?? ""}
+          onChange={(e) =>
+            onChange({ ...value, chain: e.target.value || undefined })
+          }
+          placeholder="A"
+          className="h-7 text-xs"
+        />
+        <Input
+          type="number"
+          value={value.resno ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              resno: e.target.value ? Number(e.target.value) : undefined,
+            })
+          }
+          placeholder="145"
+          className="h-7 text-xs"
+        />
+        <Input
+          value={value.atom ?? ""}
+          onChange={(e) =>
+            onChange({ ...value, atom: e.target.value || undefined })
+          }
+          placeholder="CA"
+          className="h-7 text-xs"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Analysis Tab
+// ============================================================
+function AnalysisTab() {
+  return (
+    <div className="space-y-2 p-2">
+      <ActiveStructureSelector />
+      <InteractionVizCard />
+      <div data-tour="analysis-charts">
+        <AnalysisChartsGrid />
+      </div>
+    </div>
+  );
+}
+
+function ActiveStructureSelector() {
+  const structures = useAppStore((s) => s.structures);
+  const activeStructureId = useAppStore((s) => s.activeStructureId);
+  const setActiveStructure = useAppStore((s) => s.setActiveStructure);
+
+  if (structures.length === 0) return null;
+  if (structures.length === 1) {
+    return (
+      <div className="rounded-md border border-claude-border bg-claude-bg p-1.5 text-[10px]">
+        <span className="text-claude-text-secondary">Target: </span>
+        <span className="font-mono font-semibold">{structures[0].label}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-md border border-claude-border bg-claude-bg p-1.5">
+      <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+        Analysis target
+      </Label>
+      <div className="flex flex-wrap gap-1">
+        {structures.map((s, i) => {
+          const isActive =
+            activeStructureId === s.id || (!activeStructureId && i === 0);
+          return (
+            <button
+              key={s.id}
+              onClick={() => setActiveStructure(s.id)}
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] transition ${
+                isActive
+                  ? "bg-claude-accent text-white"
+                  : "bg-claude-surface hover:bg-claude-accent-light"
+              }`}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: s.color ?? "#c96442" }}
+              />
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function InteractionVizCard() {
+  const { run, busy } = useRunCommand();
+  const [target, setTarget] = useState<ResidueRef>({ chain: "A", resno: 145 });
+  const [radius, setRadius] = useState(8);
+
+  return (
+    <div className="rounded-lg border border-claude-border bg-claude-surface p-2">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-claude-text">
+        <Zap className="h-3.5 w-3.5 text-claude-accent" />
+        3D Interaction Viz
+      </div>
+      <div className="space-y-1.5">
+        <ResidueInput label="Center residue" value={target} onChange={setTarget} />
+        <div>
+          <div className="flex justify-between">
+            <Label className="text-[10px] text-claude-text-secondary">
+              Radius (Å)
+            </Label>
+            <span className="font-mono text-[10px] text-claude-text">
+              {radius.toFixed(1)}
+            </span>
+          </div>
+          <Slider
+            value={[radius]}
+            min={3}
+            max={20}
+            step={0.5}
+            onValueChange={(v) => setRadius(v[0])}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-1">
+          <Button
+            size="sm"
+            className="h-7 text-[10px]"
+            disabled={busy}
+            onClick={() => run({ type: "show_interactions", target, radius })}
+          >
+            Show
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-7 text-[10px]"
+            onClick={() => run({ type: "clear_interactions" })}
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalysisChartsGrid() {
+  const [openChart, setOpenChart] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const favoriteCharts = useAppStore((s) => s.favoriteCharts);
+  const toggleFavoriteChart = useAppStore((s) => s.toggleFavoriteChart);
+  const recentCharts = useAppStore((s) => s.recentCharts);
+  const addRecentChart = useAppStore((s) => s.addRecentChart);
+
+  const handleChartClick = (chartId: string) => {
+    setOpenChart(openChart === chartId ? null : chartId);
+    if (openChart !== chartId) {
+      addRecentChart(chartId);
+    }
+  };
+
+  const categories: Array<{
+    title: string;
+    color: string;
+    accentColor: string;
+    charts: Array<{ id: string; label: string; desc: string; icon: React.ReactNode }>;
+  }> = [
+    {
+      title: "Overview",
+      color: "text-claude-accent",
+      accentColor: "#c96442",
+      charts: [
+        {
+          id: "overview",
+          label: "Overview Dashboard",
+          desc: "8 analyses in one screen: quality, secondary structure, SASA, etc.",
+          icon: <LayoutDashboard className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "comparison",
+          label: "Structure Comparison",
+          desc: "Compare 2-4 structures across 13 metrics side-by-side",
+          icon: <GitCompare className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+    {
+      title: "Geometry",
+      color: "text-teal-600",
+      accentColor: "#2d8f8f",
+      charts: [
+        {
+          id: "rama",
+          label: "Ramachandran",
+          desc: "φ/ψ dihedral distribution, conformation validity",
+          icon: <Activity className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "bfactor",
+          label: "B-factor",
+          desc: "Atomic thermal motion / model confidence",
+          icon: <BarChart3 className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "ss",
+          label: "Secondary Structure",
+          desc: "α-helix / β-sheet / turn / coil ratio",
+          icon: <Spline className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "seqalign",
+          label: "Sequence Alignment",
+          desc: "Needleman-Wunsch pairwise alignment",
+          icon: <AlignLeft className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "rmsd",
+          label: "RMSD Matrix",
+          desc: "Multi-PDB CA Kabsch superposition RMSD",
+          icon: <Grid3x3 className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+    {
+      title: "Interactions",
+      color: "text-sky-600",
+      accentColor: "#0ea5e9",
+      charts: [
+        {
+          id: "disulfide",
+          label: "Disulfide Bonds",
+          desc: "CYS-CYS SG-SG < 2.5Å covalent links",
+          icon: <Link2 className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "aromatic",
+          label: "Aromatic Stacking",
+          desc: "π-π stacking + cation-π (PHE/TYR/TRP/HIS)",
+          icon: <Sigma className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "water",
+          label: "Water Bridges",
+          desc: "Protein-water-protein H-bond networks",
+          icon: <Droplets className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "metal",
+          label: "Metal Coordination",
+          desc: "Zn/Mg/Ca/Fe coordination geometry",
+          icon: <Atom className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "contactmap",
+          label: "Contact Map",
+          desc: "Inter-chain CA-CA distance heatmap",
+          icon: <Grid3x3 className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "interaction",
+          label: "Interaction Network",
+          desc: "H-bond / salt-bridge / hydrophobic force-directed graph",
+          icon: <Network className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+    {
+      title: "Ligand & Assembly",
+      color: "text-amber-600",
+      accentColor: "#c9872e",
+      charts: [
+        {
+          id: "pocket",
+          label: "Binding Pocket",
+          desc: "Ligand-surrounding residues + volume + classification",
+          icon: <Target className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "ligand",
+          label: "Ligand Fingerprint",
+          desc: "Atomic-level contact fingerprint",
+          icon: <Fingerprint className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "oligomer",
+          label: "Oligomer Analysis",
+          desc: "Oligomer type + interfaces + symmetry",
+          icon: <Boxes className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+    {
+      title: "Drug Discovery",
+      color: "text-pink-600",
+      accentColor: "#7c5cbf",
+      charts: [
+        {
+          id: "druggability",
+          label: "Druggability",
+          desc: "Pocket score + hydrophobic/polar/charge + 3D highlight",
+          icon: <Pill className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "apbs_surface",
+          label: "APBS Electrostatic",
+          desc: "pdb2pqr charge + Debye-Hückel potential + 3D coloring",
+          icon: <Zap className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "screening",
+          label: "Virtual Screening",
+          desc: "Fragment library scoring + ΔG prediction + Ki ranking",
+          icon: <FlaskConical className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "detect_pockets",
+          label: "Multi-Pocket Detection",
+          desc: "Grid-based surface cavity detection + druggability",
+          icon: <Target className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+    {
+      title: "Quality",
+      color: "text-violet-600",
+      accentColor: "#8b5cf6",
+      charts: [
+        {
+          id: "sasa",
+          label: "SASA",
+          desc: "Solvent accessible surface area (freesasa)",
+          icon: <CircleDashed className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "surface",
+          label: "Surface Residues",
+          desc: "Surface-exposed vs buried classification",
+          icon: <SunMedium className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "electrostatic",
+          label: "Electrostatic",
+          desc: "Per-residue net charge + Coulomb interaction energy",
+          icon: <Zap className="h-3.5 w-3.5" />,
+        },
+        {
+          id: "validation",
+          label: "Structure Validation",
+          desc: "Clashes / Ramachandran outliers / missing sidechains",
+          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+        },
+      ],
+    },
+  ];
+
+  const totalCharts = categories.reduce(
+    (sum, cat) => sum + cat.charts.length,
+    0
+  );
+
+  // Flat list of all charts for favorites/recent lookups
+  const allCharts = categories.flatMap((cat) => cat.charts);
+
+  const toggleCollapse = (title: string) => {
+    setCollapsedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(title)) next.delete(title);
+      else next.add(title);
+      return next;
+    });
+  };
+
+  const filteredCategories = searchQuery.trim()
+    ? categories
+        .map((cat) => ({
+          ...cat,
+          charts: cat.charts.filter(
+            (c) =>
+              c.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              c.id.toLowerCase().includes(searchQuery.toLowerCase())
+          ),
+        }))
+        .filter((cat) => cat.charts.length > 0)
+    : activeFilter
+    ? categories.filter((cat) => cat.title === activeFilter)
+    : categories;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Label className="text-[9px] text-claude-text-secondary shrink-0">
+          Charts
+        </Label>
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-1.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-claude-text-muted" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search charts…"
+            className="h-6 pl-6 text-[10px]"
+          />
+        </div>
+        <Badge variant="outline" className="shrink-0 text-[9px]">
+          {totalCharts}
+        </Badge>
+      </div>
+
+      {/* Category filter chips (hidden during search) */}
+      {!searchQuery && (
+        <div className="flex flex-wrap gap-1">
+          <button
+            onClick={() => setActiveFilter(null)}
+            className={`sa-filter-chip ${activeFilter === null ? "sa-filter-active" : ""}`}
+          >
+            All
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[7px]">
+              {totalCharts}
+            </Badge>
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat.title}
+              onClick={() => setActiveFilter(activeFilter === cat.title ? null : cat.title)}
+              className={`sa-filter-chip ${activeFilter === cat.title ? "sa-filter-active" : ""}`}
+              style={activeFilter === cat.title ? { borderColor: cat.accentColor, color: cat.accentColor } : {}}
+            >
+              {cat.title}
+              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[7px]">
+                {cat.charts.length}
+              </Badge>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {filteredCategories.length === 0 && searchQuery && (
+        <div className="rounded-md border border-dashed border-claude-border p-3 text-center text-[10px] text-claude-text-muted">
+          No matching charts
+        </div>
+      )}
+
+      {/* Favorites section (hidden during search) */}
+      {!searchQuery && favoriteCharts.length > 0 && (
+        <div>
+          <div className="sa-cat-header w-full text-claude-accent">
+            <Star className="h-3 w-3 fill-claude-accent" />
+            Favorites
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px] font-normal">
+              {favoriteCharts.length}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {favoriteCharts.map((favId) => {
+              const chart = allCharts.find((c) => c.id === favId);
+              if (!chart) return null;
+              return (
+                <button
+                  key={favId}
+                  onClick={() => handleChartClick(favId)}
+                  className={`sa-chart-tile ${openChart === favId ? "sa-chart-active" : ""}`}
+                  style={{ padding: "0.25rem 0.5rem" }}
+                >
+                  <span className="sa-chart-tile-icon">{chart.icon}</span>
+                  {chart.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Recently used section (hidden during search) */}
+      {!searchQuery && recentCharts.length > 0 && (
+        <div>
+          <div className="sa-cat-header w-full text-claude-text-secondary">
+            <Clock className="h-3 w-3" />
+            Recent
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px] font-normal">
+              {recentCharts.length}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {recentCharts.map((recId) => {
+              const chart = allCharts.find((c) => c.id === recId);
+              if (!chart) return null;
+              return (
+                <button
+                  key={recId}
+                  onClick={() => handleChartClick(recId)}
+                  className={`sa-chart-tile ${openChart === recId ? "sa-chart-active" : ""}`}
+                  style={{ padding: "0.25rem 0.5rem" }}
+                >
+                  <span className="sa-chart-tile-icon">{chart.icon}</span>
+                  {chart.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {filteredCategories.map((cat) => {
+        const isCollapsed = collapsedCats.has(cat.title) && !searchQuery;
+        return (
+          <div key={cat.title}>
+            <button
+              onClick={() => toggleCollapse(cat.title)}
+              className={`sa-cat-header w-full ${cat.color} ${
+                searchQuery ? "cursor-default" : "hover:opacity-80"
+              }`}
+            >
+              {cat.title}
+              <Badge
+                variant="outline"
+                className="ml-0.5 px-1 py-0 text-[8px] font-normal"
+              >
+                {cat.charts.length}
+              </Badge>
+              {!searchQuery && (
+                <ChevronRight
+                  className={`ml-auto h-3 w-3 transition-transform ${
+                    isCollapsed ? "" : "rotate-90"
+                  }`}
+                />
+              )}
+            </button>
+            {!isCollapsed && (
+              <div className="grid grid-cols-2 gap-1">
+                {cat.charts.map((c) => {
+                  const isFav = favoriteCharts.includes(c.id);
+                  return (
+                  <TooltipProvider key={c.id} delayDuration={300}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => handleChartClick(c.id)}
+                          data-category={cat.title.toLowerCase()}
+                          className={`sa-chart-tile ${
+                            openChart === c.id ? "sa-chart-active" : ""
+                          } ${isFav ? "sa-chart-fav" : ""}`}
+                        >
+                          <span
+                            className="sa-chart-tile-accent"
+                            style={{ backgroundColor: cat.accentColor }}
+                          />
+                          <span className="sa-chart-tile-icon">{c.icon}</span>
+                          {c.label}
+                          <span
+                            className="sa-chart-fav-star"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleFavoriteChart(c.id);
+                            }}
+                            title={isFav ? "Remove from favorites" : "Add to favorites"}
+                          >
+                            <Star className={`h-2.5 w-2.5 ${isFav ? "fill-claude-accent text-claude-accent" : "text-claude-text-muted"}`} />
+                          </span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        className="max-w-[200px] text-[10px]"
+                      >
+                        <div className="font-medium">{c.label}</div>
+                        <div className="text-claude-text-secondary">{c.desc}</div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <AnimatePresence mode="wait">
+        {openChart && (
+          <motion.div
+            key={openChart}
+            className="mt-2"
+            initial={{ opacity: 0, height: 0, y: -8 }}
+            animate={{ opacity: 1, height: "auto", y: 0 }}
+            exit={{ opacity: 0, height: 0, y: -8 }}
+            transition={{ duration: 0.25, ease: "easeOut" }}
+            style={{ overflow: "hidden" }}
+          >
+            <ChartLoader
+              chartId={openChart}
+              onClose={() => setOpenChart(null)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function ChartLoader({
+  chartId,
+  onClose,
+}: {
+  chartId: string;
+  onClose: () => void;
+}) {
+  const chartLabel = ALL_CHART_LABELS[chartId] ?? chartId;
+  return (
+    <div className="sa-chart-card relative">
+      <button
+        onClick={onClose}
+        className="absolute right-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded text-claude-text-muted hover:bg-claude-accent-light hover:text-claude-text"
+      >
+        <X className="h-3 w-3" />
+      </button>
+      {chartId === "overview" && <StructureOverviewDashboard />}
+      {chartId === "comparison" && <StructureComparisonDashboard />}
+      {chartId === "rama" && <RamachandranPlot />}
+      {chartId === "bfactor" && <BfactorChart />}
+      {chartId === "ss" && <SecondaryStructureChart />}
+      {chartId === "sasa" && <SasaChart />}
+      {chartId === "disulfide" && <DisulfideChart />}
+      {chartId === "aromatic" && <AromaticStackingChart />}
+      {chartId === "water" && <WaterBridgesChart />}
+      {chartId === "metal" && <MetalCoordinationChart />}
+      {chartId === "validation" && <StructureValidationChart />}
+      {chartId === "pocket" && <BindingPocketChart />}
+      {chartId === "ligand" && <LigandInteractionsChart />}
+      {chartId === "oligomer" && <OligomerAnalysisChart />}
+      {chartId === "electrostatic" && <ElectrostaticChart />}
+      {chartId === "contactmap" && <ContactMapChart />}
+      {chartId === "surface" && <SurfaceResiduesChart />}
+      {chartId === "interaction" && <InteractionNetwork />}
+      {chartId === "seqalign" && <SequenceAlignment />}
+      {chartId === "rmsd" && <RmsdMatrix />}
+      {chartId === "druggability" && <DruggabilityChart />}
+      {chartId === "apbs_surface" && <ApbsSurfaceChart />}
+      {chartId === "screening" && <ScreeningChart />}
+      {chartId === "detect_pockets" && <PocketDetectionChart />}
+      {/* Preset manager — save/load chart parameter combinations */}
+      <div className="border-t border-claude-border p-1.5">
+        <PresetManager
+          chartId={chartId}
+          chartLabel={chartLabel}
+          currentParams={{}}
+          onApplyPreset={() => {}}
+        />
+      </div>
+    </div>
+  );
+}

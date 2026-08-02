@@ -1,0 +1,284 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model PdbStructure {
+  pdbId         String   @id
+  method        String?
+  releaseDate   String?
+  resolution    Float?
+  title         String?
+  doi           String?
+  journal       String?
+  journalIf     Float?
+  authors       String?
+  organisms     String?
+  ligands       String?
+  weekId        String?
+  pubmedId      String?
+  fetchDate     String?
+  createdAt     DateTime @default(now())
+
+  chains        PdbChain[]
+  entities      PdbEntity[]
+}
+
+model PdbChain {
+  id                Int     @id @default(autoincrement())
+  pdbId             String
+  asymId            String?
+  uniprotAccession  String?
+  geneName          String?
+  organismName      String?
+  sequence          String?
+  pdb               PdbStructure @relation(fields: [pdbId], references: [pdbId])
+}
+
+model PdbEntity {
+  id             Int     @id @default(autoincrement())
+  pdbId          String
+  entityId       Int?
+  moleculeType   String?
+  description    String?
+  pdb            PdbStructure @relation(fields: [pdbId], references: [pdbId])
+}
+
+model WeeklySnapshot {
+  weekId           String   @id
+  weekStart        String?
+  weekEnd          String?
+  totalStructures  Int      @default(0)
+  cryoemCount      Int      @default(0)
+  xrayCount        Int      @default(0)
+  nmrCount         Int      @default(0)
+  otherCount       Int      @default(0)
+  avgResolution    Float?
+  topJournals      String?
+  ifDist           String?
+  createdAt        DateTime @default(now())
+}
+
+model WeeklyReport {
+  id          Int      @id @default(autoincrement())
+  weekId      String?
+  reportType  String?
+  title       String?
+  content     String?
+  filename    String?
+  createdAt   DateTime @default(now())
+}
+
+model Evaluation {
+  uniprotId      String   @id
+  entryName      String?
+  proteinName    String?
+  geneNames      String?
+  organism       String?
+  sequenceLength Int?
+  coverage       Float?
+  scores         String?
+  report         String?
+  /// Full provenance record (JSON) — data sources queried, LLM calls made,
+  /// citations extracted from the report + their verification status.
+  /// Inspired by Claude Science's "every result reproducible and traced".
+  /// Nullable for legacy rows created before this field existed.
+  provenance     String?
+  batchId        String?
+  maxPdbUsed     Int?
+  blastWasSkipped Boolean?
+  pdbCountAtEval Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  pdbStructures  EvaluationPdbStructure[]
+  blastResults   EvaluationBlastResult[]
+  reports        EvaluationReport[]
+}
+
+model EvaluationPdbStructure {
+  id             Int      @id @default(autoincrement())
+  uniprotId      String
+  pdbId          String
+  method         String?
+  resolution     Float?
+  title          String?
+  depositionDate String?
+  releaseDate    String?
+  ligand         String?
+  ligandNames    String?
+  journal        String?
+  journalIf      Float?
+  doi            String?
+  pubmedId       String?
+  organism       String?
+  authors        String?
+  isCryoem       Boolean  @default(false)
+  isXray         Boolean  @default(false)
+  isNmr          Boolean  @default(false)
+  ifTier         String?
+  chainId        String?
+  unpStart       Int?
+  unpEnd         Int?
+
+  evaluation     Evaluation @relation(fields: [uniprotId], references: [uniprotId])
+}
+
+model EvaluationBlastResult {
+  id              Int      @id @default(autoincrement())
+  uniprotId       String
+  pdbId           String
+  uniprotRef      String?
+  description     String?
+  identity        Float?
+  evalue          String?
+  queryCoverage   Float?
+  targetCoverage  Float?
+  method          String?
+  resolution      Float?
+  releaseDate     String?
+  source          String?
+  taxonomyId      String?
+  journal         String?
+  journalIf       Float?
+  ifTier          String?
+  ligand          String?
+  title           String?
+  pubmedId        String?
+  pubmedTitle     String?
+  pubmedAuthors   String?
+  pubmedAbstract  String?
+  /// True if this BLAST hit has identity ≥ the paralog threshold (95%) —
+  /// i.e. it is likely the same protein / a very close homolog and can be
+  /// treated as a direct structural reference, not a structural
+  /// homolog derived from fold similarity.
+  isParalog       Boolean  @default(false)
+
+  evaluation      Evaluation @relation(fields: [uniprotId], references: [uniprotId])
+}
+
+model EvaluationBatch {
+  batchId              String   @id @default(cuid())
+  title                String?
+  combinedReport       String?
+  commonPdbIds         String?
+  crossReportOk        Boolean?
+  crossReportProvider  String?
+  crossReportModel     String?
+  crossReportDurationMs Int?
+  crossReportChars     Int?
+  targetCount          Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model EvaluationReport {
+  id          Int      @id @default(autoincrement())
+  uniprotId   String
+  title       String?
+  content     String?
+  createdAt   DateTime @default(now())
+
+  evaluation  Evaluation @relation(fields: [uniprotId], references: [uniprotId])
+}
+
+model PubMedArticle {
+  pubmedId  String   @id
+  title     String?
+  authors   String?
+  journal   String?
+  pubYear   String?
+  pubMonth  String?
+  pubDay    String?
+  abstract  String?
+  doi       String?
+  createdAt DateTime @default(now())
+}
+
+model Ligand {
+  code        String   @id
+  name        String?
+  formula     String?
+  weight      String?
+  type        String?
+  description String?
+  imageUrl    String?
+}
+
+/// Skills 面板运行记录（持久化）— 每次触发①②③模块都写一条
+model SkillRunRecord {
+  id          String   @id @default(cuid())
+  module      String   // 'literature' | 'eval' | 'weekly'
+  status      String   // 'success' | 'error'
+  summary     String
+  details     String?  // JSON 摘要（counts/scores 等）
+  provider    String?
+  model       String?
+  llmOk       Boolean? // LLM 是否真实成功（非 fallback）
+  llmFallback Boolean? @default(false)
+  llmError    String?  // LLM 失败原因
+  durationMs  Int?
+  resultJson  String?  // 完整 result payload (JSON string)
+  log         String?  // 完整 SSE log (NDJSON: 1 event per line)
+  createdAt   DateTime @default(now())
+
+  @@index([module])
+  @@index([createdAt])
+}
+
+/// 模块① 文献每日摘要（持久化）— 每次 LLM 生成的摘要落库
+model LiteratureDigest {
+  id           String   @id @default(cuid())
+  date         String   // YYYY-MM-DD
+  paperCount   Int
+  methodStats  String?  // JSON
+  digest       String   // LLM 生成的 Markdown 摘要
+  llmOk        Boolean
+  llmProvider  String?
+  llmModel     String?
+  llmDurationMs Int?
+  filePath     String?
+  createdAt    DateTime @default(now())
+
+  @@unique([date])
+  @@index([createdAt])
+}
+
+/// 模块② 评估 LLM 报告（持久化）
+model SkillEvaluationReport {
+  id            String   @id @default(cuid())
+  uniprotId     String
+  proteinName   String?
+  overallScore  Int
+  directPdbCount Int
+  coverage      Int
+  report        String   // LLM 生成的 Markdown 报告
+  llmOk         Boolean
+  llmProvider   String?
+  llmModel      String?
+  llmDurationMs Int?
+  filePath      String?
+  createdAt     DateTime @default(now())
+
+  @@index([uniprotId])
+  @@index([createdAt])
+}
+
+/// 模块③ 周报（持久化）
+model WeeklyReportRun {
+  id           String   @id @default(cuid())
+  weekId       String
+  cycles       Int
+  reportTypes  String
+  providers    String?
+  filesWritten String?
+  durationMs   Int?
+  cyclesJson   String?  // 完整 cycles 数组 JSON
+  createdAt    DateTime @default(now())
+
+  @@index([weekId])
+}
