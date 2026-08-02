@@ -311,6 +311,15 @@ const SavedQueriesDropdown = dynamic(() => import('@/components/saved-queries-dr
   ssr: false,
   loading: () => null,
 });
+const CustomDashboard = dynamic(() => import('@/components/custom-dashboard').then(m => ({ default: m.CustomDashboard })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
+});
+const FacetedSearch = dynamic(() => import('@/components/faceted-search').then(m => ({ default: m.FacetedSearch })), {
+  ssr: false,
+  loading: () => null,
+});
+import { applyFacetFilters, type FacetFilters } from '@/components/faceted-search';
 const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
@@ -772,6 +781,12 @@ export default function PdbTracker() {
   const [eval3DOpen, setEval3DOpen] = useState(false);
   const [evalMultiCompareOpen, setEvalMultiCompareOpen] = useState(false);
   const [paperCompareOpen, setPaperCompareOpen] = useState(false);
+  const [facetFilters, setFacetFilters] = useState<FacetFilters>({
+    methods: new Set(),
+    resolutionRanges: new Set(),
+    ifRanges: new Set(),
+    organisms: new Set(),
+  });
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1714,6 +1729,12 @@ export default function PdbTracker() {
     else if (activeFilter === 'bookmarks') result = result.filter(e => bookmarks.has(e.pdbId));
     if (weeklyDateFilter) result = result.filter(e => e.releaseDate === weeklyDateFilter);
 
+    // Apply faceted filters
+    const hasFacetFilters = facetFilters.methods.size > 0 || facetFilters.resolutionRanges.size > 0 || facetFilters.ifRanges.size > 0 || facetFilters.organisms.size > 0;
+    if (hasFacetFilters) {
+      result = applyFacetFilters(result, facetFilters);
+    }
+
     result.sort((a, b) => {
       const aVal = (a as any)[sortField];
       const bVal = (b as any)[sortField];
@@ -1734,7 +1755,7 @@ export default function PdbTracker() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return result;
-  }, [entries, sortField, sortDir, activeFilter, weeklyDateFilter, bookmarks]);
+  }, [entries, sortField, sortDir, activeFilter, weeklyDateFilter, bookmarks, facetFilters]);
 
   const filteredEvaluations = useMemo(() => {
     let result = [...allEvaluations];
@@ -4572,8 +4593,13 @@ export default function PdbTracker() {
       {/* Demo data banner — shows when DB is empty, offers one-click seeding */}
       <DemoDataBanner />
 
+      {/* Skip to content link for screen readers */}
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[999] focus:px-4 focus:py-2 focus:bg-claude-accent focus:text-white focus:rounded-md focus:text-xs">
+        {locale === 'zh' ? '跳到主要内容' : 'Skip to main content'}
+      </a>
+
       {/* ─── Header ──────────────────────────────────────────────────────── */}
-      <header className="header-gradient-border relative z-10 flex-shrink-0 min-w-0 header-enhanced-bg">
+      <header role="banner" aria-label="PDB Structure Tracker header" className="header-gradient-border relative z-10 flex-shrink-0 min-w-0 header-enhanced-bg">
         <HeaderParticles />
         <div className="relative z-10 px-4 py-2.5 flex items-center gap-4 min-w-0">
           <div className="flex items-center gap-2.5 flex-shrink-0">
@@ -5084,15 +5110,20 @@ export default function PdbTracker() {
                     and skip rendering the Radar polygon (path.recharts-polygon). */}
                 {showDashboard && (
                   <div className="space-y-3">
-                    <QualityScoreDashboard entries={entries} locale={locale} />
-                    <WeeklyDashboardCharts entries={entries} snapshots={snapshots} />
+                    <CustomDashboard
+                      storageKey="weekly-dashboard-widgets"
+                      widgets={[
+                        { id: 'quality-score', title: locale === 'zh' ? '质量评分' : 'Quality Score', content: <QualityScoreDashboard entries={entries} locale={locale} /> },
+                        { id: 'method-distribution', title: locale === 'zh' ? '方法分布' : 'Method Distribution', content: <WeeklyDashboardCharts entries={entries} snapshots={snapshots} /> },
+                      ]}
+                    />
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* Quick Filter Chips + View Density Toggle */}
+          {/* Quick Filter Chips + Faceted Search + View Density Toggle */}
           {mode === 'weekly' && entries.length > 0 && (
             <div className="flex items-center gap-2 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
               <div className="flex-1 min-w-0">
@@ -5103,7 +5134,12 @@ export default function PdbTracker() {
                   bookmarksCount={bookmarks.size}
                 />
               </div>
-              <div className="shrink-0 pr-2">
+              <div className="shrink-0 flex items-center gap-1 pr-2">
+                <FacetedSearch
+                  entries={entries}
+                  filters={facetFilters}
+                  onFiltersChange={setFacetFilters}
+                />
                 <ViewDensityToggle />
               </div>
             </div>
@@ -5166,6 +5202,9 @@ export default function PdbTracker() {
           {/* Content */}
           <div
             key={mode}
+            id="main-content"
+            role="main"
+            aria-label={`${mode} mode content`}
             className="flex-1 flex flex-col min-h-0 overflow-hidden relative mode-content-transition"
           >
               {mode === 'weekly' && (
