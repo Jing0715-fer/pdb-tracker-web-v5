@@ -63,17 +63,20 @@ export function TrendingStructures({
       .sort((a, b) => (b.journalIf ?? 0) - (a.journalIf ?? 0));
     if (sortedByIf.length > 0) {
       const top = sortedByIf[0];
-      items.push({
-        pdbId: top.pdbId,
-        title: top.title || top.pdbId,
-        method: top.method,
-        resolution: top.resolution,
-        journalIf: top.journalIf,
-        journal: top.journal,
-        reason: `Top IF: ${top.journalIf?.toFixed(1)}`,
-        reasonIcon: Award,
-        accentColor: '#dc2626',
-      });
+      // Avoid duplicate — skip if already added by another category
+      if (!items.find((i) => i.pdbId === top.pdbId)) {
+        items.push({
+          pdbId: top.pdbId,
+          title: top.title || top.pdbId,
+          method: top.method,
+          resolution: top.resolution,
+          journalIf: top.journalIf,
+          journal: top.journal,
+          reason: `Top IF: ${top.journalIf?.toFixed(1)}`,
+          reasonIcon: Award,
+          accentColor: '#dc2626',
+        });
+      }
     }
 
     // 2. Best Resolution
@@ -82,17 +85,20 @@ export function TrendingStructures({
       .sort((a, b) => (a.resolution ?? 999) - (b.resolution ?? 999));
     if (sortedByRes.length > 0) {
       const top = sortedByRes[0];
-      items.push({
-        pdbId: top.pdbId,
-        title: top.title || top.pdbId,
-        method: top.method,
-        resolution: top.resolution,
-        journalIf: top.journalIf,
-        journal: top.journal,
-        reason: `Best resolution: ${top.resolution?.toFixed(2)}Å`,
-        reasonIcon: Microscope,
-        accentColor: '#2d8f8f',
-      });
+      // Avoid duplicate — skip if already added by another category
+      if (!items.find((i) => i.pdbId === top.pdbId)) {
+        items.push({
+          pdbId: top.pdbId,
+          title: top.title || top.pdbId,
+          method: top.method,
+          resolution: top.resolution,
+          journalIf: top.journalIf,
+          journal: top.journal,
+          reason: `Best resolution: ${top.resolution?.toFixed(2)}Å`,
+          reasonIcon: Microscope,
+          accentColor: '#2d8f8f',
+        });
+      }
     }
 
     // 3. Latest Cryo-EM (trending method)

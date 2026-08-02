@@ -275,3 +275,90 @@ Issues remaining:
 8. **[P2]** API response caching (client-side SWR for frequently accessed data)
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-23
+Agent: main
+Task: QA testing, fix duplicate React key bug, add SearchStatusBanner feature
+
+Work Log:
+- Read worklog to understand project state (cron-review-22 complete, loading shimmer + search dropdown done)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable, auto-restart wrapper active)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested all 4 modes (Weekly/Evaluation/Literature/Analysis) — all functional
+  * Verified search functionality (kinase → 1 result, Cryo-EM → 5 results)
+  * Verified empty state shows EnhancedEmptyState when no results
+  * Verified Quick Stats loading shimmer works (cron-22 fix confirmed)
+
+- IDENTIFIED BUG: Duplicate React key warning "Encountered two children with the same key 2VII"
+  * Root cause: TrendingStructures component (src/components/trending-structures.tsx)
+    Section 1 (Highest IF) and Section 2 (Best Resolution) both push entries WITHOUT
+    duplicate checking. When a structure has both highest IF AND best resolution,
+    it gets added twice → duplicate key error.
+  * Sections 3 (Cryo-EM) and 4 (Bookmarks) already had `if (!items.find(...))` guards
+  * Structure 2VII (Insulin receptor tyrosine kinase, IF=66.8, resolution=1.8Å) was
+    both highest IF and best resolution → added twice
+
+- FIX 1 (bug): Added duplicate checking to all TrendingStructures categories
+  - Section 1 (Highest IF): Added `if (!items.find((i) => i.pdbId === top.pdbId))` guard
+  - Section 2 (Best Resolution): Added `if (!items.find((i) => i.pdbId === top.pdbId))` guard
+  - Sections 3 & 4 already had guards (no change needed)
+  - Result: No more duplicate key warnings
+
+- FEATURE 1: Created SearchStatusBanner component (src/components/search-status-banner.tsx)
+  - A compact banner that appears when search query or filter is active
+  - Shows:
+    * Pulsing "Filtered" indicator dot (animated)
+    * Search term chip (with quote marks + clear button)
+    * Filter chip (method/bookmarks/high-IF, with clear button)
+    * Result count "X of Y structures" (highlighted when filtered)
+    * "Clear all" button (resets search + filter)
+  - Animated entrance/exit (height + opacity transition)
+  - Uses Claude theme colors (accent for search, teal for filters)
+  - Supports EN/ZH i18n
+  - Filter label mapping for all filter types (all/bookmarks/cryoem/xray/nmr/high-if/top-if)
+
+- INTEGRATION: Added SearchStatusBanner to Weekly mode in pdb-tracker.tsx
+  - Dynamic import with ssr:false
+  - Rendered between QuickStatsPanel and StructureStatsCards
+  - Passes: searchQuery, activeFilter, resultCount (filteredEntries.length),
+    totalCount (entries.length), onClearSearch, onClearFilter, onClearAll
+  - Only visible in Weekly mode (mode === 'weekly')
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (search-status-banner.tsx, trending-structures.tsx, pdb-tracker.tsx)
+- E2E test: Duplicate key error GONE (was appearing 5+ times, now 0)
+- E2E test: SearchStatusBanner appears when searching "Cryo-EM"
+  → Shows "Filtered 'Cryo-EM' 5 of 5 structures Clear all"
+- E2E test: Banner appears when filtering by Cryo-EM method
+  → Shows "Filtered Cryo-EM 5 of 5 structures Clear all"
+- E2E test: "Clear all" button works (clears search + filter, restores table to 11 rows)
+- E2E test: Clear search (X) and clear filter (X) buttons work independently
+- E2E test: 0 console errors after all interactions
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Fixed duplicate React key bug in TrendingStructures (2VII was added twice)
+- Added SearchStatusBanner feature: active filter indicator with result count + clear buttons
+- ESLint: 0 errors, 0 warnings
+- E2E: All 4 modes functional, search/filter banner working, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- SearchStatusBanner only in Weekly mode (could extend to Evaluation/Literature in future)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P0]** Add error boundaries with retry buttons for failed API calls
+2. **[P1]** Extend SearchStatusBanner to Evaluation and Literature modes
+3. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+4. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+5. **[P1]** Dark mode polish — verify all custom CSS has dark mode variants
+6. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+7. **[P2]** Chart export functionality (PNG/SVG/PDF)
+8. **[P2]** Lazy-load Literature mode components to reduce compile time
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)

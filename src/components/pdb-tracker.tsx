@@ -275,6 +275,10 @@ const SearchDropdownEnhanced = dynamic(() => import('@/components/search-dropdow
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-7 w-full max-w-xs" />,
 });
+const SearchStatusBanner = dynamic(() => import('@/components/search-status-banner').then(m => ({ default: m.SearchStatusBanner })), {
+  ssr: false,
+  loading: () => null,
+});
 const WeeklyPdbTable = dynamic(() => import('@/components/WeeklyPdbTable').then(m => ({ default: m.WeeklyPdbTable })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
@@ -4891,6 +4895,19 @@ export default function PdbTracker() {
             currentSnapshot={currentSnapshot}
             loading={mode === 'weekly' ? loading : mode === 'evaluation' ? evalLoading : litLoading}
           />
+          )}
+
+          {/* Search Status Banner — shows active search/filter with result count */}
+          {mode === 'weekly' && (
+            <SearchStatusBanner
+              searchQuery={searchQuery}
+              activeFilter={activeFilter}
+              resultCount={filteredEntries.length}
+              totalCount={entries.length}
+              onClearSearch={() => setSearchQuery('')}
+              onClearFilter={() => setActiveFilter('all')}
+              onClearAll={() => { setSearchQuery(''); setActiveFilter('all'); }}
+            />
           )}
 
           {/* Enhanced Structure Stats Cards — visible in Weekly mode with data */}
