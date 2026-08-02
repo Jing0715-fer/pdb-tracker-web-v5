@@ -966,3 +966,119 @@ Issues remaining:
 8. **[P3]** pdb2pqr/APBS advanced visualization
 9. **[P3]** User authentication (NextAuth.js)
 10. **[P3]** Export comparison results as PDF/report
+
+---
+Task ID: cron-review-32
+Agent: main
+Task: Fix stats cards consistency, add 3 new features, push to GitHub
+
+Work Log:
+- Read worklog to understand project state (cron-review-31 complete, chart export added)
+- Verified dev server running on port 3000 (stable)
+
+- FIX 1: Unified Weekly stats cards (removed duplicates)
+  - Problem: Weekly mode had 3 different stats card styles with overlapping content:
+    * WeeklyStatCards (Total Structures, Avg Resolution, Method donut) — in weekly-view.tsx
+    * StructureStatsCards (Total Structures, Avg Resolution, CryoEM Count, High-IF, Organisms, Ligands) — in pdb-tracker.tsx
+    * DashboardSummaryWidget (Method Distribution, Resolution Distribution, Weekly Trend, Top Journal) — in pdb-tracker.tsx
+  - Duplicate content: "Total Structures", "Avg Resolution", "Method Distribution", "Top Journal" appeared in multiple components
+  - Fix: Removed StructureStatsCards and DashboardSummaryWidget from pdb-tracker.tsx
+    * Kept WeeklyStatCards (snapshot-level stats) in weekly-view.tsx
+    * Kept QuickStatsPanel (collapsible detailed stats)
+    * Kept WeeklyInsightsCard (unique insights: Top Journal, Best Resolution, Top Method)
+    * Kept WeeklyReleaseTimeline (unique timeline visualization)
+    * Kept WeeklyDashboardCharts (detailed charts, now non-duplicated)
+  - Removed unused imports: StructureStatsCards, LiteratureStatsCards, DashboardSummaryWidget
+
+- FIX 2: Literature stats cards not showing
+  - Problem: LiteratureStatsCards was rendered in pdb-tracker.tsx but in the wrong location
+    (outside the LiteratureView component, so it appeared in a non-visible area)
+  - Fix: Moved LiteratureStatsCards into literature-view.tsx
+    * Added import and rendered before LiteratureContent
+    * Wrapped in fragment with papers.length > 0 condition
+  - Result: Literature mode now shows Total Papers, Avg Impact Factor, High-IF, Methods Covered
+
+- FIX 3: Evaluation stats cards verification
+  - Confirmed EvalStatCards already exists in evaluation-view.tsx (line 59, rendered line 1583)
+  - Shows: Total Targets, Avg Coverage, With Structures, With Homologs, Druggability scores
+  - Working correctly — no changes needed
+
+- FEATURE 1: Mode tab count badges
+  - Added count badges to all mode tabs in the header
+  * Weekly tab shows structure count (e.g., "Weekly 10")
+  * Evaluation tab shows target count (e.g., "Evaluation 3")
+  * Literature tab shows paper count (e.g., "Literature 8")
+  * Analysis tab has no badge (no countable items)
+  - Badge styling: 
+    * Active mode: bg-claude-accent/20 text-claude-accent
+    * Inactive mode: bg-claude-border-light text-claude-text-muted
+    * Rounded-full, 16px height, 9px font, bold
+  - Only shows when count > 0
+
+- FEATURE 2: J/K keyboard navigation for table rows (Vim-style)
+  - Updated use-keyboard-shortcuts.ts:
+    * J key now navigates down (same as ArrowDown)
+    * K key now navigates up (same as ArrowUp)
+    * Works alongside existing Arrow Up/Down keys
+  - Updated keyboard-hints.tsx:
+    * Added "J/K — Vim-style row nav (down/up)" to the Navigation section
+  - Result: Users can now navigate table rows with J/K keys (Vim-style) or Arrow keys
+
+- FEATURE 3: QuickFilterChips component
+  - Created src/components/quick-filter-chips.tsx
+  - A row of preset filter chips shown above the structure table in Weekly mode
+  - Chips:
+    * High IF ≥20 (red, Award icon) — filters to high-impact structures
+    * Cryo-EM (teal, Microscope icon) — filters to Cryo-EM method
+    * Top IF ≥10 (orange, Flame icon) — filters to top-impact structures
+    * Bookmarks (amber, Star icon) — filters to bookmarked structures (with count badge)
+    * Clear button (appears when a filter is active)
+  - Features:
+    * Animated entrance (stagger fade-in + scale)
+    * Active chip highlighted with solid color background
+    * Clicking active chip clears it (toggle behavior)
+    * Bookmarks chip shows count badge
+    * Clear button with Zap icon
+    * EN/ZH i18n support
+    * Horizontal scroll on small screens
+  - Integrated into pdb-tracker.tsx:
+    * Rendered between Weekly Dashboard Charts and WeeklyPageControls
+    * Passes: activeFilter, onFilterChange, onClearAll, bookmarksCount
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (pdb-tracker.tsx, literature-view.tsx, quick-filter-chips.tsx, use-keyboard-shortcuts.ts, keyboard-hints.tsx)
+- E2E test: Weekly mode shows unified stats (no duplicates)
+  → "Total Structures", "Avg Resolution", "Top Journal", "Quick Stats", "Release Timeline", "Weekly Insights", "Dashboard Charts"
+  → No more "Cryo-EM Count", "High-IF", "Unique Organisms", "Ligand Diversity" duplicates
+- E2E test: Evaluation mode shows stats cards (Total, Avg Coverage, With Structures, With Homologs, Druggability)
+- E2E test: Literature mode shows stats cards (Total Papers, Avg Impact, High-IF, Methods Covered)
+- E2E test: Mode tab badges show counts (Weekly:10, Evaluation:3, Literature:8)
+- E2E test: Quick filter chips work — "High IF ≥20" shows "Filtered High IF (≥20) 9 of 10 structures"
+- E2E test: J key navigates down (row 1 → row 2), K key navigates up (row 2 → row 1)
+- E2E test: 0 console errors (except transient "Failed to fetch activity feed" from notification bell)
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Fixed stats cards: unified Weekly (removed 2 duplicate components), fixed Literature (moved into view), verified Evaluation
+- Added 3 new features: mode tab count badges, J/K keyboard navigation, QuickFilterChips
+- ESLint: 0 errors, 0 warnings
+- E2E: All features verified, 0 critical console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- Transient "Failed to fetch activity feed" error from notification bell (non-critical)
+- Transient HMR fetch errors during page reload (resolves after stable state)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+2. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+3. **[P2]** Extend ChartExportButton to more chart components
+4. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+5. **[P2]** Lazy-load Literature mode components to reduce compile time
+6. **[P2]** Add WeeklyInsightsCard to snapshot comparison view
+7. **[P3]** pdb2pqr/APBS advanced visualization
+8. **[P3]** User authentication (NextAuth.js)
+9. **[P3]** Export comparison results as PDF/report
+10. **[P3]** Add notification bell fix for activity feed fetch error

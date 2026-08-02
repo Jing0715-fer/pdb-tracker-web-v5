@@ -45,12 +45,9 @@ import { usePaperNotes } from '@/components/literature/usePaperNotes';
 import { usePaperTags } from '@/components/literature/LiteraturePaperTags';
 import { DemoDataBanner } from '@/components/demo-data-banner';
 import { QuickActions } from '@/components/quick-actions';
-import { StructureStatsCards } from '@/components/structure-stats-cards';
-import { LiteratureStatsCards } from '@/components/literature-stats-cards';
 import { TrendingStructures } from '@/components/trending-structures';
 import { SnapshotComparison } from '@/components/snapshot-comparison';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
-import { DashboardSummaryWidget } from '@/components/dashboard-summary-widget';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
@@ -293,6 +290,10 @@ const BookmarkQuickAccess = dynamic(() => import('@/components/bookmark-quick-ac
   loading: () => null,
 });
 const WeeklyInsightsCard = dynamic(() => import('@/components/weekly-insights-card').then(m => ({ default: m.WeeklyInsightsCard })), {
+  ssr: false,
+  loading: () => null,
+});
+const QuickFilterChips = dynamic(() => import('@/components/quick-filter-chips').then(m => ({ default: m.QuickFilterChips })), {
   ssr: false,
   loading: () => null,
 });
@@ -4572,7 +4573,12 @@ export default function PdbTracker() {
                 transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
               }}
             />
-            {MODE_TABS.map(tab => (
+            {MODE_TABS.map(tab => {
+              const count = tab.mode === 'weekly' ? entries.length
+                : tab.mode === 'evaluation' ? allEvaluations.length
+                : tab.mode === 'literature' ? litPapers.length
+                : 0;
+              return (
               <button
                 key={tab.mode}
                 ref={el => { modeTabRefs.current[tab.mode] = el; }}
@@ -4586,8 +4592,18 @@ export default function PdbTracker() {
               >
                 <span className="hidden sm:inline">{tab.mode === 'weekly' ? t.modeWeeklyFull : tab.mode === 'evaluation' ? t.modeEvaluationFull : tab.mode === 'analysis' ? (t.modeAnalysisFull ?? 'Analysis') : t.modeLiteratureFull}</span>
                 <span className="sm:hidden text-[11px]">{tab.mode === 'weekly' ? t.modeWeeklyShort : tab.mode === 'evaluation' ? t.modeEvaluationShort : tab.mode === 'analysis' ? (t.modeAnalysisShort ?? 'Analysis') : t.modeLiteratureShort}</span>
+                {count > 0 && tab.mode !== 'analysis' && (
+                  <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[9px] font-bold transition-colors ${
+                    mode === tab.mode
+                      ? 'bg-claude-accent/20 text-claude-accent'
+                      : 'bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted'
+                  }`}>
+                    {count}
+                  </span>
+                )}
               </button>
-            ))}
+              );
+            })}
           </div>
 
           <div className="flex-1" />
@@ -4981,21 +4997,6 @@ export default function PdbTracker() {
             />
           )}
 
-          {/* Enhanced Structure Stats Cards — visible in Weekly mode with data */}
-          {mode === 'weekly' && entries.length > 0 && (
-            <StructureStatsCards entries={entries} />
-          )}
-
-          {/* Dashboard Summary Widget — mini charts for method/resolution/trend/journals */}
-          {mode === 'weekly' && entries.length > 0 && snapshots.length > 0 && (
-            <DashboardSummaryWidget entries={entries} snapshots={snapshots} />
-          )}
-
-          {/* Enhanced Literature Stats Cards — visible in Literature mode with data */}
-          {mode === 'literature' && litPapers.length > 0 && (
-            <LiteratureStatsCards papers={litPapers} stats={litStats} />
-          )}
-
           {/* Enhanced Weekly Dashboard Charts */}
           {mode === 'weekly' && !(showWelcome && !loading && entries.length === 0 && evaluations.length === 0 && litPapers.length === 0) && (
             <div className="border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
@@ -5026,6 +5027,16 @@ export default function PdbTracker() {
                 )}
               </div>
             </div>
+          )}
+
+          {/* Quick Filter Chips — preset filter buttons for common queries */}
+          {mode === 'weekly' && entries.length > 0 && (
+            <QuickFilterChips
+              activeFilter={activeFilter}
+              onFilterChange={(f) => { setActiveFilter(f); setCurrentPage(1); }}
+              onClearAll={() => { setActiveFilter('all'); setCurrentPage(1); }}
+              bookmarksCount={bookmarks.size}
+            />
           )}
 
           {/* Toolbar (weekly only) */}

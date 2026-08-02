@@ -87,13 +87,13 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      // Arrow Up/Down for row navigation
-      if (e.key === 'ArrowUp') {
+      // Arrow Up/Down for row navigation (also J/K for Vim-style)
+      if (e.key === 'ArrowUp' || e.key === 'k' || e.key === 'K') {
         e.preventDefault();
         onNavigateRow?.('up');
         return;
       }
-      if (e.key === 'ArrowDown') {
+      if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'J') {
         e.preventDefault();
         onNavigateRow?.('down');
         return;

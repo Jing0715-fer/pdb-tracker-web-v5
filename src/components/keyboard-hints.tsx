@@ -27,6 +27,7 @@ const buildShortcutCategories = (locale: 'en' | 'zh'): ShortcutCategory[] => [
       { keys: ['3'], description: locale === 'zh' ? '切换到文献模式' : 'Switch to Literature mode' },
       { keys: ['4'], description: locale === 'zh' ? '切换到分析模式' : 'Switch to Analysis mode' },
       { keys: ['↑', '↓'], description: locale === 'zh' ? '在表格行间导航' : 'Navigate table rows' },
+      { keys: ['J', 'K'], description: locale === 'zh' ? 'Vim 风格行导航 (下/上)' : 'Vim-style row nav (down/up)' },
       { keys: ['Enter'], description: locale === 'zh' ? '打开高亮行详情' : 'Open highlighted row detail' },
     ],
   },
