@@ -44,6 +44,7 @@ interface SearchDropdownEnhancedProps {
   recentSearchesKey?: string;
   maxRecent?: number;
   className?: string;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
 const TRENDING_BY_MODE: Record<string, string[]> = {
@@ -62,6 +63,7 @@ export function SearchDropdownEnhanced({
   recentSearchesKey = 'pdb-recent-searches-header',
   maxRecent = 5,
   className,
+  inputRef: externalInputRef,
 }: SearchDropdownEnhancedProps) {
   const [focused, setFocused] = useState(false);
   // Load recent searches from localStorage (lazy init to avoid setState in effect)
@@ -81,7 +83,8 @@ export function SearchDropdownEnhanced({
     return [];
   });
   const [activeIndex, setActiveIndex] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const internalInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = externalInputRef || internalInputRef;
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Add to recent searches on submit
@@ -192,7 +195,7 @@ export function SearchDropdownEnhanced({
           onFocus={() => setFocused(true)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="h-8 w-full pl-8 pr-7 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-surface/50 dark:bg-[#242220]/50 text-xs text-claude-text placeholder:text-claude-text-muted focus:outline-none focus:ring-1 focus:ring-claude-accent/30 focus:border-claude-accent/30 transition-all"
+          className="h-7 w-full pl-8 pr-8 rounded-md border border-claude-border dark:border-[#3d3832] bg-claude-bg dark:bg-[#1a1917] text-xs text-claude-text placeholder:text-claude-text-muted focus:outline-none focus:ring-1 focus:ring-claude-accent/30 focus:border-claude-accent/30 transition-all input-focus-glow"
         />
         {value && (
           <button

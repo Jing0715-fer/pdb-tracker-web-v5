@@ -14,6 +14,19 @@ interface QuickStatsPanelProps {
   papers?: LitPaper[];
   snapshots?: WeeklySnapshot[];
   currentSnapshot?: WeeklySnapshot | null;
+  loading?: boolean;
+}
+
+// ─── Loading Shimmer for the collapsed badge ────────────────────────────────
+
+function BadgeShimmer() {
+  return (
+    <span className="ml-1 inline-flex items-center gap-1">
+      <span className="inline-block h-2.5 w-6 rounded-sm skeleton-shimmer bg-claude-border/40 dark:bg-[#3d3832]/40" />
+      <span className="text-[10px] text-claude-text-muted/60">·</span>
+      <span className="inline-block h-2.5 w-10 rounded-sm skeleton-shimmer bg-claude-border/40 dark:bg-[#3d3832]/40" />
+    </span>
+  );
 }
 
 // ─── SVG Pie Chart Slice ──────────────────────────────────────────────────────
@@ -150,7 +163,7 @@ function ResolutionDistribution({ entries }: { entries: PdbEntry[] }) {
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 
-export function QuickStatsPanel({ mode, entries = [], evaluations = [], papers = [], snapshots = [], currentSnapshot }: QuickStatsPanelProps) {
+export function QuickStatsPanel({ mode, entries = [], evaluations = [], papers = [], snapshots = [], currentSnapshot, loading = false }: QuickStatsPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const { t, locale } = useI18n();
 
@@ -240,18 +253,21 @@ export function QuickStatsPanel({ mode, entries = [], evaluations = [], papers =
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <BarChart3 className="h-3 w-3" />
         {t.quickStats}
-        {mode === 'weekly' && weeklyStats && (
+        {mode === 'weekly' && loading && <BadgeShimmer />}
+        {mode === 'weekly' && weeklyStats && !loading && (
           <span className="ml-1 text-[10px] text-claude-text-muted">
             · {weeklyStats.total} {locale === 'zh' ? '个结构' : 'structures'}
             {weeklyStats.avgRes != null && ` · avg ${weeklyStats.avgRes.toFixed(2)}Å`}
           </span>
         )}
-        {mode === 'evaluation' && evalStats && (
+        {mode === 'evaluation' && loading && <BadgeShimmer />}
+        {mode === 'evaluation' && evalStats && !loading && (
           <span className="ml-1 text-[10px] text-claude-text-muted">
             · {evalStats.total} {locale === 'zh' ? '个靶点' : 'targets'} · {locale === 'zh' ? '平均' : 'avg'} {evalStats.avgCov.toFixed(0)}% {locale === 'zh' ? '覆盖率' : 'coverage'}
           </span>
         )}
-        {mode === 'literature' && litStats && (
+        {mode === 'literature' && loading && <BadgeShimmer />}
+        {mode === 'literature' && litStats && !loading && (
           <span className="ml-1 text-[10px] text-claude-text-muted">
             · {litStats.total} {locale === 'zh' ? '篇论文' : 'papers'}
             {litStats.avgIf != null && (locale === 'zh' ? ` · 平均 IF ${litStats.avgIf.toFixed(1)}` : ` · avg IF ${litStats.avgIf.toFixed(1)}`)}
@@ -263,7 +279,21 @@ export function QuickStatsPanel({ mode, entries = [], evaluations = [], papers =
         style={{ maxHeight: expanded ? 400 : 0, opacity: expanded ? 1 : 0 }}
       >
         <div className="px-4 pb-3">
-          {mode === 'weekly' && weeklyStats && (
+          {loading && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="p-3 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-border-light/20 dark:bg-[#1a1917]/20">
+                  <div className="h-2.5 w-20 rounded-sm skeleton-shimmer bg-claude-border/40 dark:bg-[#3d3832]/40 mb-3" />
+                  <div className="space-y-2">
+                    <div className="h-3 w-full rounded-sm skeleton-shimmer bg-claude-border/30 dark:bg-[#3d3832]/30" />
+                    <div className="h-3 w-3/4 rounded-sm skeleton-shimmer bg-claude-border/30 dark:bg-[#3d3832]/30" />
+                    <div className="h-3 w-5/6 rounded-sm skeleton-shimmer bg-claude-border/30 dark:bg-[#3d3832]/30" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!loading && mode === 'weekly' && weeklyStats && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Method Distribution Pie */}
               <div className="p-3 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-border-light/20 dark:bg-[#1a1917]/20">
@@ -282,7 +312,7 @@ export function QuickStatsPanel({ mode, entries = [], evaluations = [], papers =
               </div>
             </div>
           )}
-          {mode === 'evaluation' && evalStats && (
+          {!loading && mode === 'evaluation' && evalStats && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Coverage Overview */}
               <div className="p-3 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-border-light/20 dark:bg-[#1a1917]/20">
@@ -325,7 +355,7 @@ export function QuickStatsPanel({ mode, entries = [], evaluations = [], papers =
               </div>
             </div>
           )}
-          {mode === 'literature' && litStats && (
+          {!loading && mode === 'literature' && litStats && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Method Distribution Pie */}
               <div className="p-3 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-border-light/20 dark:bg-[#1a1917]/20">

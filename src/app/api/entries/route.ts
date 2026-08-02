@@ -64,7 +64,9 @@ export async function GET(request: NextRequest) {
         p.title LIKE ${'%' + escapedQ + '%'} OR
         p.journal LIKE ${'%' + escapedQ + '%'} OR
         p.organisms LIKE ${'%' + escapedQ + '%'} OR
-        p.ligands LIKE ${'%' + upperQ + '%'}
+        p.ligands LIKE ${'%' + upperQ + '%'} OR
+        p.method LIKE ${'%' + escapedQ + '%'} OR
+        p.authors LIKE ${'%' + escapedQ + '%'}
       )`);
     }
 

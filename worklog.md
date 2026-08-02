@@ -191,3 +191,87 @@ Issues remaining:
 8. **[P2]** Lazy-load Literature mode components
 9. **[P3]** pdb2pqr/APBS advanced visualization
 10. **[P3]** User authentication (NextAuth.js)
+
+---
+Task ID: cron-review-22
+Agent: main
+Task: QA testing, fix P0 loading state bug, integrate SearchDropdownEnhanced
+
+Work Log:
+- Read worklog to understand project state (fresh-clone-2 complete, keyboard shortcuts fixed)
+- Set up detailed todo list for this round
+- Started dev server (already running on port 3000, stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested all 4 modes (Weekly/Evaluation/Literature/Analysis) — all functional
+  * Checked console errors — NONE (clean console)
+  * Verified API endpoints return data (entries:30, snapshots:3, evaluations:3, literature:8)
+
+- IDENTIFIED BUG (P0): Quick Stats badge flashes "0 targets · avg 0% coverage" before data loads
+  * Root cause: QuickStatsPanel receives empty arrays during loading, shows "0 targets"
+  * Reproduced: Click Evaluation → immediately see "Quick Stats · 0 targets · avg 0% coverage" → after ~3s updates to "3 targets · avg 75% coverage"
+
+- FIX 1 (P0): QuickStatsPanel loading state with shimmer skeletons
+  - Added `loading` prop to QuickStatsPanelProps interface
+  - Created `BadgeShimmer` component — shows animated shimmer blocks instead of "0 targets"
+  - Updated collapsed badge: shows BadgeShimmer when loading, real stats when !loading
+  - Updated expanded panel: shows 3-column skeleton grid (shimmer blocks) when loading
+  - All three modes (weekly/evaluation/literature) now show shimmer during load
+  - Updated pdb-tracker.tsx to pass mode-aware loading state:
+    `loading={mode === 'weekly' ? loading : mode === 'evaluation' ? evalLoading : litLoading}`
+  - Uses existing `skeleton-shimmer` CSS class (already defined in globals.css)
+
+- FIX 2 (P1): Integrated SearchDropdownEnhanced into header
+  - Added dynamic import of SearchDropdownEnhanced in pdb-tracker.tsx
+  - Replaced the basic <Input> search box with <SearchDropdownEnhanced>
+  - Features now active in header:
+    * Recent searches (persisted to localStorage, up to 5 items, with Clear button)
+    * Trending searches (curated per mode):
+      - Weekly: Cryo-EM, SARS-CoV-2, hemoglobin, kinase, < 2.0Å
+      - Evaluation: EGFR, P00533, kinase, receptor, antibody
+      - Literature: Cryo-EM, X-ray crystallography, AlphaFold, GPCR, membrane protein
+      - Analysis: 1CBS, 6LU7, 4HHB, hemoglobin, insulin
+    * Keyboard navigation (Arrow Up/Down, Enter, Escape)
+    * "Press Enter to search" hint when typing
+    * Animated dropdown entrance (glass morphism)
+  - Added `inputRef` prop to SearchDropdownEnhanced so external ref (searchInputRef) works
+  - Updated input styling to match header (h-7, rounded-md, input-focus-glow)
+  - Preserved ⌘K keyboard hint (shown only when no query)
+
+- FIX 3 (bug): Extended entries API search to include method and authors fields
+  - Root cause: Searching "Cryo-EM" returned 0 results because API only searched pdbId, title, journal, organisms, ligands
+  - Added `p.method LIKE` and `p.authors LIKE` to the search conditions
+  - Now searching "Cryo-EM" returns 13 results (all Cryo-EM structures)
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all 4 modified files
+  (quick-stats-panel.tsx, search-dropdown-enhanced.tsx, pdb-tracker.tsx, entries/route.ts)
+- E2E test: Loading shimmer appears in Evaluation mode (verified hasShimmer:true during load, false after)
+- E2E test: Search dropdown shows "Trending" suggestions on focus (5 items)
+- E2E test: Clicking trending "Cryo-EM" fills input and filters table (6 rows shown)
+- E2E test: All 4 modes switch correctly, 0 console errors after reload
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Fixed P0 bug: Quick Stats no longer flashes "0 targets" — shows shimmer skeleton during load
+- Integrated P1 feature: SearchDropdownEnhanced with recent + trending searches now in header
+- Fixed search bug: API now searches method + authors fields (Cryo-EM returns 13 results)
+- ESLint: 0 errors, 0 warnings
+- E2E: All 4 modes functional, loading states correct, search working, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- ChunkLoadError appears during HMR (transient, resolves on reload — normal dev behavior)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P0]** Add error boundaries with retry buttons for failed API calls
+2. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+3. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+4. **[P1]** Dark mode polish — verify all custom CSS has dark mode variants
+5. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+6. **[P2]** Chart export functionality (PNG/SVG/PDF)
+7. **[P2]** Lazy-load Literature mode components to reduce compile time
+8. **[P2]** API response caching (client-side SWR for frequently accessed data)
+9. **[P3]** pdb2pqr/APBS advanced visualization
+10. **[P3]** User authentication (NextAuth.js)

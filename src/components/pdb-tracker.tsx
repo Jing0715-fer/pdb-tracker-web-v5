@@ -271,6 +271,10 @@ const WeeklyStatCards = dynamic(() => import('@/components/weekly-stat-cards').t
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
 });
+const SearchDropdownEnhanced = dynamic(() => import('@/components/search-dropdown-enhanced').then(m => ({ default: m.SearchDropdownEnhanced })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-7 w-full max-w-xs" />,
+});
 const WeeklyPdbTable = dynamic(() => import('@/components/WeeklyPdbTable').then(m => ({ default: m.WeeklyPdbTable })), {
   ssr: false,
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
@@ -4567,30 +4571,27 @@ export default function PdbTracker() {
 
           <div className="flex-1" />
 
-          {/* Search (desktop) */}
+          {/* Search (desktop) — enhanced with recent + trending dropdown */}
           <div ref={searchWrapRef} className="relative max-w-xs w-full hidden md:block">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-claude-text-muted" />
-            <Input
-              ref={searchInputRef}
-              type="text"
+            <SearchDropdownEnhanced
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSubmit={(v) => { setSearchQuery(v); }}
               placeholder={
                 mode === 'evaluation' ? t.searchEvaluations :
                 mode === 'literature' ? 'Search literature…' :
                 t.searchStructures
               }
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="h-7 pl-8 pr-8 text-xs bg-claude-bg dark:bg-[#1a1917] border-claude-border dark:border-[#3d3832] input-focus-glow"
+              mode={mode}
+              inputRef={searchInputRef}
+              recentSearchesKey="pdb-recent-searches-header"
             />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-claude-text-muted hover:text-claude-text">
-                <X className="h-3 w-3" />
-              </button>
+            {/* Keyboard shortcut hint — only when no query */}
+            {!searchQuery && (
+              <kbd className="absolute right-2 top-1/2 -translate-y-1/2 hidden lg:inline-flex items-center gap-0.5 text-[9px] text-claude-text-muted bg-claude-border-light dark:bg-[#2b2926] px-1 py-0 rounded border border-claude-border dark:border-[#3d3832] pointer-events-none z-10">
+                ⌘K
+              </kbd>
             )}
-            {/* Keyboard shortcut hint */}
-            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 hidden lg:inline-flex items-center gap-0.5 text-[9px] text-claude-text-muted bg-claude-border-light dark:bg-[#2b2926] px-1 py-0 rounded border border-claude-border dark:border-[#3d3832] pointer-events-none">
-              {!searchQuery && '⌘K'}
-            </kbd>
           </div>
 
           {/* Mobile search button (visible < md) */}
@@ -4888,6 +4889,7 @@ export default function PdbTracker() {
             papers={litPapers}
             snapshots={snapshots}
             currentSnapshot={currentSnapshot}
+            loading={mode === 'weekly' ? loading : mode === 'evaluation' ? evalLoading : litLoading}
           />
           )}
 
