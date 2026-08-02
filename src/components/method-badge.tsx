@@ -98,9 +98,9 @@ export function MethodBadge({
   const Icon = config.icon;
 
   const sizeClasses = {
-    sm: { badge: 'h-5 px-1.5 text-[9px] gap-0.5', icon: 'h-2.5 w-2.5' },
-    md: { badge: 'h-6 px-2 text-[10px] gap-1', icon: 'h-3 w-3' },
-    lg: { badge: 'h-7 px-2.5 text-[11px] gap-1', icon: 'h-3.5 w-3.5' },
+    sm: { badge: 'h-5 px-1.5 text-[9px] gap-0.5 whitespace-nowrap leading-none', icon: 'h-2.5 w-2.5 shrink-0' },
+    md: { badge: 'h-6 px-2 text-[10px] gap-1 whitespace-nowrap leading-none', icon: 'h-3 w-3 shrink-0' },
+    lg: { badge: 'h-7 px-2.5 text-[11px] gap-1 whitespace-nowrap leading-none', icon: 'h-3.5 w-3.5 shrink-0' },
   };
 
   return (
@@ -108,7 +108,7 @@ export function MethodBadge({
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       className={cn(
-        'inline-flex items-center rounded-md font-semibold text-white shadow-sm',
+        'inline-flex items-center justify-center rounded-md font-semibold text-white shadow-sm overflow-hidden',
         `bg-gradient-to-br ${config.gradient}`,
         sizeClasses[size].badge,
         className
@@ -119,7 +119,7 @@ export function MethodBadge({
       title={config.label}
     >
       {showIcon && <Icon className={sizeClasses[size].icon} />}
-      {showLabel && <span>{config.label}</span>}
+      {showLabel && <span className="truncate">{config.label}</span>}
     </motion.span>
   );
 }
