@@ -1,7 +1,7 @@
 'use client';
 import { useI18n } from '@/lib/i18n';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -11,6 +11,7 @@ import {
 import { useTheme } from 'next-themes';
 import type { PdbEntry, WeeklySnapshot } from '@/lib/pdb-types';
 import { getChartAxisColor, getChartTickColor, ClaudeChartTooltip, ClaudeTrendTooltip, ClaudeResTooltip } from '@/components/chart-tooltips';
+import { ChartExportButton } from '@/components/chart-export-button';
 
 // ─── Color Constants ──────────────────────────────────────────────────────────
 
@@ -625,24 +626,33 @@ export function WeeklyDashboardCharts({ entries, snapshots }: WeeklyDashboardCha
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
       {/* {locale === 'zh' ? '方法分布' : 'Method Distribution'} */}
       <div className="p-4 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-surface dark:bg-[#242220]">
-        <div className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider mb-3">
-          {locale === 'zh' ? '方法分布' : 'Method Distribution'}
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider">
+            {locale === 'zh' ? '方法分布' : 'Method Distribution'}
+          </span>
+          <ChartExportButton chartName="method-distribution" />
         </div>
         <MethodDistributionChart entries={entries} />
       </div>
 
       {/* Resolution Histogram */}
       <div className="p-4 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-surface dark:bg-[#242220]">
-        <div className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider mb-3">
-          {locale === 'zh' ? '分辨率分布' : 'Resolution Distribution'}
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider">
+            {locale === 'zh' ? '分辨率分布' : 'Resolution Distribution'}
+          </span>
+          <ChartExportButton chartName="resolution-distribution" />
         </div>
         <ResolutionHistogramChart entries={entries} />
       </div>
 
       {/* {locale === 'zh' ? '周趋势' : 'Weekly Trend'} */}
       <div className="p-4 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-surface dark:bg-[#242220]">
-        <div className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider mb-3">
-          {locale === 'zh' ? '周趋势' : 'Weekly Trend'}
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider">
+            {locale === 'zh' ? '周趋势' : 'Weekly Trend'}
+          </span>
+          <ChartExportButton chartName="weekly-trend" />
         </div>
         <WeeklyTrendChart snapshots={snapshots} />
         {/* Legend */}
@@ -664,8 +674,11 @@ export function WeeklyDashboardCharts({ entries, snapshots }: WeeklyDashboardCha
 
       {/* Journal Impact */}
       <div className="p-4 rounded-lg border border-claude-border/50 dark:border-[#3d3832]/50 bg-claude-surface dark:bg-[#242220]">
-        <div className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider mb-3">
-          {locale === 'zh' ? '高影响因子期刊' : 'Top Journals by Impact Factor'}
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[11px] font-semibold text-claude-text-muted uppercase tracking-wider">
+            {locale === 'zh' ? '高影响因子期刊' : 'Top Journals by Impact Factor'}
+          </span>
+          <ChartExportButton chartName="top-journals-if" />
         </div>
         <JournalImpactChart entries={entries} />
         {/* IF Tier Legend */}

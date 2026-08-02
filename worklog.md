@@ -879,3 +879,90 @@ Issues remaining:
 8. **[P3]** pdb2pqr/APBS advanced visualization
 9. **[P3]** User authentication (NextAuth.js)
 10. **[P3]** Export comparison results as PDF/report
+
+---
+Task ID: cron-review-31
+Agent: main
+Task: QA testing, add chart export functionality (PNG/SVG) — P2
+
+Work Log:
+- Read worklog to understand project state (cron-review-30 complete, Literature banner fixed)
+- Set up detailed todo list for this round
+- Verified dev server running on port 3000 (stable)
+- Performed QA testing with agent-browser:
+  * Opened page, skipped onboarding tour
+  * Tested WeeklyInsightsCard — renders correctly
+  * Tested Release Timeline — renders correctly
+  * Tested all 4 modes — all functional
+  * 0 console errors (after stable state)
+
+- FEATURE 1: Created useChartExport hook (src/hooks/use-chart-export.ts)
+  - A hook that provides functions to export chart containers as PNG or SVG
+  - Works by finding SVG elements within a container ref and serializing them
+  - Supported formats:
+    * SVG: Serializes the SVG element to a .svg file (vector, editable)
+    * PNG: Rasterizes the SVG to a canvas at 2x resolution, then exports as .png
+  - Features:
+    * Handles XML namespace injection for proper SVG serialization
+    * White background for PNG (for dark mode charts)
+    * Filename sanitization (removes special characters)
+    * Scale parameter for PNG resolution (default 2x)
+    * Uses XMLSerializer and Blob download
+  - API: { exportToSVG(container, chartName), exportToPNG(container, chartName, scale) }
+
+- FEATURE 2: Created ChartExportButton component (src/components/chart-export-button.tsx)
+  - A button that, when clicked, shows a dropdown with export options:
+    * Export as PNG (2x resolution) — with FileImage icon
+    * Export as SVG (vector) — with FileCode icon
+  - Features:
+    * Animated dropdown entrance (fade + slide + scale)
+    * Glass morphism dropdown styling
+    * Auto-finds closest .recharts-wrapper ancestor if no containerRef provided
+    * Exporting state with "Exporting…" text
+    * Disabled state during export
+    * Outside click to close
+    * EN/ZH i18n support
+  - Props: containerRef, chartName, className, autoFind
+
+- INTEGRATION: Added ChartExportButton to all 4 dashboard charts
+  - Updated weekly-dashboard-charts.tsx:
+    * Imported ChartExportButton
+    * Added export button to Method Distribution chart header
+    * Added export button to Resolution Distribution chart header
+    * Added export button to Weekly Trend chart header
+    * Added export button to Top Journals by Impact Factor chart header
+  - Each chart card header now has a flex layout: title on left, export button on right
+
+Verification:
+- ESLint: 0 errors, 0 warnings on all modified files
+  (use-chart-export.ts, chart-export-button.tsx, weekly-dashboard-charts.tsx)
+- E2E test: 6 Download icons present after dashboard expanded (4 charts + 2 others)
+- E2E test: Clicking export button shows dropdown with "PNG 2x SVG vector"
+- E2E test: Both PNG and SVG export options available
+- E2E test: 0 console errors (after stable state)
+- Dev server: stable, recompiled successfully
+
+Stage Summary:
+- Added chart export functionality: PNG (2x) and SVG (vector) for all dashboard charts
+- Created reusable useChartExport hook and ChartExportButton component
+- All 4 weekly dashboard charts now have export buttons
+- ESLint: 0 errors, 0 warnings
+- E2E: Export dropdown works with both options, 0 console errors
+
+Issues remaining:
+- Dev server OOM in 4GB sandbox during heavy compile (mitigated with auto-restart wrapper)
+- Molstar 3D viewer blank in dev mode (IgnorePlugin, works in production)
+- Transient HMR fetch errors during page reload (resolves after stable state)
+- ChartExportButton only on dashboard charts (could extend to other chart components)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P1]** Mobile responsive Analysis mode (3-pane → tabbed layout on small screens)
+2. **[P1]** Integrate StructureTableRowExpansion into WeeklyPdbTable
+3. **[P1]** Add WeeklyReleaseTimeline to snapshot comparison view
+4. **[P2]** Extend ChartExportButton to more chart components (QuickStats, Insights, etc.)
+5. **[P2]** Multi-structure comparison (side-by-side 3D viewer)
+6. **[P2]** Lazy-load Literature mode components to reduce compile time
+7. **[P2]** Add WeeklyInsightsCard to snapshot comparison view
+8. **[P3]** pdb2pqr/APBS advanced visualization
+9. **[P3]** User authentication (NextAuth.js)
+10. **[P3]** Export comparison results as PDF/report
