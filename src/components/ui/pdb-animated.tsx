@@ -104,7 +104,8 @@ export function HeaderParticles() {
       size: p.s, duration: p.d, delay: p.dl, left: p.l, top: p.t,
       minOpacity: p.mo, maxOpacity: p.xo,
       dx1: p.dx1, dy1: p.dy1, dx2: p.dx2, dy2: p.dy2, dx3: p.dx3, dy3: p.dy3,
-      color: i % 3 === 0 ? 'rgba(201,100,66,0.15)' : i % 3 === 1 ? 'rgba(155,149,144,0.12)' : 'rgba(201,100,66,0.1)',
+      color: i % 3 === 0 ? 'var(--claude-accent, rgba(201,100,66,0.15))' : i % 3 === 1 ? 'var(--claude-text-muted, rgba(155,149,144,0.12))' : 'var(--claude-accent, rgba(201,100,66,0.1))',
+      opacity: i % 3 === 0 ? 0.15 : i % 3 === 1 ? 0.12 : 0.1,
       key: `hp-${i}`
     }));
   }, []);

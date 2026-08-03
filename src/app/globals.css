@@ -1896,36 +1896,36 @@ button:active:not(:disabled) {
 .header-enhanced-bg {
   background: linear-gradient(
     135deg,
-    #ffffff 0%,
-    #fdf8f4 25%,
-    #ffffff 50%,
-    #f4f9f9 75%,
-    #ffffff 100%
+    var(--claude-surface, #ffffff) 0%,
+    color-mix(in srgb, var(--claude-accent, #c96442) 6%, var(--claude-surface, #ffffff)) 25%,
+    var(--claude-surface, #ffffff) 50%,
+    color-mix(in srgb, var(--claude-accent, #c96442) 4%, var(--claude-surface, #ffffff)) 75%,
+    var(--claude-surface, #ffffff) 100%
   );
 }
 
 .dark .header-enhanced-bg {
   background: linear-gradient(
     135deg,
-    #242220 0%,
-    #2a2522 25%,
-    #242220 50%,
-    #222a2a 75%,
-    #242220 100%
+    var(--claude-surface, #242220) 0%,
+    color-mix(in srgb, var(--claude-accent, #d4784f) 10%, var(--claude-surface, #242220)) 25%,
+    var(--claude-surface, #242220) 50%,
+    color-mix(in srgb, var(--claude-accent, #d4784f) 8%, var(--claude-surface, #242220)) 75%,
+    var(--claude-surface, #242220) 100%
   );
 }
 
 /* ─── Header Title Text Gradient ────────────────────────────────────────── */
 
 .header-text-gradient {
-  background: linear-gradient(135deg, #c96442 0%, #d4784f 40%, #c9872e 100%);
+  background: linear-gradient(135deg, var(--claude-accent, #c96442) 0%, var(--claude-accent-hover, #d4784f) 40%, var(--claude-nmr, #c9872e) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .dark .header-text-gradient {
-  background: linear-gradient(135deg, #d4784f 0%, #e08a62 40%, #d9a24e 100%);
+  background: linear-gradient(135deg, var(--claude-accent, #d4784f) 0%, var(--claude-accent-hover, #e08a62) 40%, var(--claude-nmr, #d9a24e) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

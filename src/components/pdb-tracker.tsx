@@ -4682,7 +4682,7 @@ export default function PdbTracker() {
               </TooltipTrigger>
               <TooltipContent side="bottom"><p>{t.menu}</p></TooltipContent>
             </Tooltip>
-            <div className="header-icon-wrap h-8 w-8 rounded-lg bg-gradient-to-br from-claude-accent via-[#d4784f] to-[#c9872e] flex items-center justify-center shadow-md shadow-claude-accent/25 ring-1 ring-claude-accent/20">
+            <div className="header-icon-wrap h-8 w-8 rounded-lg flex items-center justify-center shadow-md ring-1" style={{ background: 'linear-gradient(135deg, var(--claude-accent), var(--claude-accent-hover))', boxShadow: '0 2px 8px color-mix(in srgb, var(--claude-accent) 25%, transparent)', borderColor: 'color-mix(in srgb, var(--claude-accent) 20%, transparent)' }}>
               <Atom className="h-4.5 w-4.5 text-white header-icon-spin" />
             </div>
             <div className="hidden sm:block">
