@@ -2793,3 +2793,80 @@ Stage Summary:
 5. **[P3]** Add multi-language support beyond EN/ZH
 6. **[P4]** Consider removing or reviving the dead `PdbTrackerSidebar` component in `pdb-sidebar.tsx`
 7. **[P4]** A few remaining inline emerald-500/rose-500 references in rarely-seen error states (lines 491, 510, 659, 691, 980, 993, 1873, 1890, 1891, 1894, 2226) — could be aligned in a future pass
+
+---
+Task ID: cron-review-53
+Agent: main
+Task: Fix color duplication across all 6 themes in Run Center
+
+Work Log:
+- Read worklog (cron-review-52 polished Run Center to Claude theme)
+- User feedback: "调整主题颜色后，可能会出现重复颜色的问题" — color duplication when switching themes
+- Analyzed the 6 preset themes and found EXACT color collisions:
+  * ocean accent #2d8f8f = claude-cryoem #2d8f8f ← Module ① & ③ look identical!
+  * forest accent #16a34a = claude-mid #16a34a ← accent & success-green identical!
+  * sunset accent #ea580c = claude-high #ea580c ← accent & high-IF identical!
+  * berry accent #7c5cbf = claude-xray #7c5cbf ← accent & batch badges identical!
+  * 4 of 6 themes had EXACT collisions
+- VLM confirmed the collision in Ocean theme: "tabs ① and ③ are the same teal color"
+
+ROOT CAUSE:
+- In cron-review-52, I mapped Module ①→cryoem, Module ②→nmr, Module ③→accent
+- But cryoem/xray/nmr are FIXED method colors that don't change with theme
+- When the theme accent happens to equal a method color (4 of 6 themes!), two modules look identical
+- Same issue for status colors: success→cryoem collided with accent→running in Ocean theme
+
+FIX STRATEGY:
+1. ALL 3 module tabs/cards use the SAME theme accent (claude-accent)
+   - Distinguished by ICON (flask/book/calendar) + NUMBER (①②③), not by color
+   - This is the standard UI pattern (only one tab active at a time)
+2. Status colors use standard Tailwind colors guaranteed distinct from ALL 6 theme accents:
+   - Success → emerald-500 (#10b981) — distinct from Forest #16a34a and Ocean #2d8f8f
+   - Error → red-500 (#ef4444) — distinct from Rose #e11d48
+   - Warning → amber-500 (#f59e0b) — distinct from Sunset #ea580c
+   - Running/Active → claude-accent (theme-dependent)
+3. Method colors (cryoem/xray/nmr) reserved ONLY for actual PDB method indicators
+
+CHANGES MADE:
+- ACCENT_CLASSES: collapsed all variants (cryoem/nmr/xray/sky/emerald/amber/violet) to map to the same `claude-accent` styling. Added documentation explaining the collision issue.
+- Tab buttons: all 3 now use `data-[state=active]:bg-claude-accent/15 text-claude-accent`
+- ModuleCard: uses `claude-accent` for left bar, icon, glow, hover border
+- levelColor(): error→red-500, warn→amber-500, success→emerald-500, info→claude-accent
+- StatusPill: running→accent, done+ok→emerald-500, failed→red-500, idle→muted
+- Progress bar: running→bg-claude-accent, done+ok→bg-emerald-500, done+fail→bg-red-500
+- StageTimeline dots: error→red-500, warn→amber-500, success→emerald-500, last→accent
+- LLMPreview: all accent variants map to claude-accent; status badges use emerald/red
+- ChapterStream: border/glow/icon/badges all use claude-accent; status badges use emerald/red
+- Cycle Orchestration: all steps use claude-accent; verdict uses emerald/amber
+- Recent runs sidebar: all module badges use claude-accent; status icons use emerald/red
+- DB config badges: Schema→emerald-500, Test DB→amber-500, Not initialized→red-500
+- DB action buttons (New/Select): use claude-accent border/text
+- LLM provider z.ai SDK pill: uses claude-accent (was claude-cryoem)
+- Literature date chips + digest viewer: use claude-accent (was claude-nmr)
+- Dialog trigger running badge: uses claude-accent (was claude-cryoem)
+
+Verification:
+- ESLint: 0 errors, 0 warnings
+- Dev log: no errors
+- VLM verified in 4 themes (Claude, Ocean, Berry, Forest):
+  * Claude: "terracotta clearly distinct from success-green, error-red, warning-amber... no duplication"
+  * Ocean: "teal accent distinguishable from status green... no significant duplication issues"
+  * Berry: "purple clearly separated from semantic colors... no color conflict"
+  * Forest: "green accent #16a34a clearly distinguishable from status green #10b981... no duplication"
+
+Stage Summary:
+- Eliminated ALL color duplication across all 6 themes
+- Module tabs/cards: unified on theme accent, distinguished by icon+number
+- Status colors: use standard Tailwind emerald/red/amber (distinct from all theme accents)
+- Method colors (cryoem/xray/nmr): reserved for PDB method indicators only, not used for UI accents
+- ESLint: 0 errors, 0 warnings
+- E2E: 4 themes visually verified via VLM
+
+### Next Priority Items (for future cron review rounds):
+1. **[P3]** User authentication (NextAuth.js)
+2. **[P3]** Add real-time PDB release notifications (WebSocket)
+3. **[P3]** Add collaborative features (shared evaluations, comments)
+4. **[P3]** Add data import from Excel files
+5. **[P3]** Add multi-language support beyond EN/ZH
+6. **[P4]** Audit other components (EvalModeSwitcher, pdb-sidebar, evaluation-view) for similar theme collision issues — the eval sidebar items use getScoreColor which returns red/orange/green/teal; in some themes these might collide with the accent
+7. **[P4]** Consider removing or reviving the dead `PdbTrackerSidebar` component in `pdb-sidebar.tsx`

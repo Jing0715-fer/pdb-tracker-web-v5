@@ -167,10 +167,15 @@ function persistCfg(c: LlmUserConfig) { try { localStorage.setItem(STORAGE_KEY, 
 /* ──────────────────────────────────────────────────────────────────────── */
 
 function levelColor(level?: string) {
+  // Use standard Tailwind colors for status — guaranteed distinct from ALL 6 theme accents.
+  // Theme accents: claude(#c96442), ocean(#2d8f8f), forest(#16a34a), sunset(#ea580c), berry(#7c5cbf), rose(#e11d48)
+  // emerald-500(#10b981) ≠ forest(#16a34a) and ≠ ocean(#2d8f8f) — distinct hue/brightness
+  // red-500(#ef4444) ≠ rose(#e11d48) — different red shade
+  // amber-500(#f59e0b) ≠ sunset(#ea580c) — yellow-orange vs red-orange
   switch (level) {
-    case 'error': return 'text-claude-top';
-    case 'warn': return 'text-claude-nmr';
-    case 'success': return 'text-claude-cryoem';
+    case 'error': return 'text-red-500 dark:text-red-400';
+    case 'warn': return 'text-amber-500 dark:text-amber-400';
+    case 'success': return 'text-emerald-500 dark:text-emerald-400';
     default: return 'text-claude-accent';
   }
 }
@@ -178,18 +183,18 @@ function levelColor(level?: string) {
 function StatusPill({ running, done, ok }: { running: boolean; done: boolean; ok: boolean }) {
   if (running) {
     return (
-      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-claude-cryoem-bg text-claude-cryoem border-claude-cryoem/40">
+      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-claude-accent/10 text-claude-accent border-claude-accent/30">
         <Loader2 className="h-2.5 w-2.5 animate-spin" /> streaming
       </Badge>
     );
   }
   if (done) {
     return ok ? (
-      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-claude-cryoem-bg text-claude-cryoem border-claude-cryoem/40">
+      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
         <CheckCircle2 className="h-3 w-3" /> done
       </Badge>
     ) : (
-      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-claude-top-bg text-claude-top border-claude-top/40">
+      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30">
         <XCircle className="h-3 w-3" /> failed
       </Badge>
     );
@@ -263,7 +268,7 @@ function StreamFeed({
           <button
             type="button"
             onClick={() => setAutoScroll(a => !a)}
-            className={`text-xs font-medium px-2 h-5 gap-1 rounded-md border transition-colors inline-flex items-center ${autoScroll ? 'border-claude-cryoem/40 text-claude-cryoem bg-claude-cryoem-bg' : 'border-claude-border/60 dark:border-[#3d3832]/60 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] bg-claude-border-light/40 dark:bg-[#2b2926]/40'}`}
+            className={`text-xs font-medium px-2 h-5 gap-1 rounded-md border transition-colors inline-flex items-center ${autoScroll ? 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' : 'border-claude-border/60 dark:border-[#3d3832]/60 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] bg-claude-border-light/40 dark:bg-[#2b2926]/40'}`}
             title={autoScroll ? 'Auto-scrolling, click to pause' : 'Paused, click to resume'}
           >
             {autoScroll ? 'auto' : 'paused'}
@@ -280,7 +285,7 @@ function StreamFeed({
               {lastProgress < 100 ? 'processing' : 'complete'} · {lastProgress}%
             </span>
             {done && (
-              <span className={`text-xs font-mono font-semibold tabular-nums ${ok ? 'text-claude-cryoem' : 'text-claude-top'}`}>
+              <span className={`text-xs font-mono font-semibold tabular-nums ${ok ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
                 {ok ? '✓' : '✗'} {(elapsed / 1000).toFixed(1)}s
               </span>
             )}
@@ -288,7 +293,7 @@ function StreamFeed({
           <div className="relative h-1.5 rounded-full bg-claude-border-light dark:bg-[#3d3832] overflow-hidden">
             <motion.div
               className={`absolute inset-y-0 left-0 rounded-full ${
-                done ? (ok ? 'bg-claude-cryoem' : 'bg-claude-top') : 'bg-gradient-to-r from-claude-accent to-claude-cryoem'
+                done ? (ok ? 'bg-emerald-500' : 'bg-red-500') : 'bg-claude-accent'
               }`}
               initial={{ width: 0 }}
               animate={{ width: `${lastProgress}%` }}
@@ -356,7 +361,7 @@ function StageTimeline({ events }: { events: StreamEvent[] }) {
         {order.map((stage, i) => {
           const info = stageMap.get(stage)!;
           const isLast = i === order.length - 1;
-          const dotColor = info.level === 'error' ? 'bg-claude-top' : info.level === 'warn' ? 'bg-claude-nmr' : info.level === 'success' ? 'bg-claude-cryoem' : isLast ? 'bg-claude-accent' : 'bg-claude-text-muted/40';
+          const dotColor = info.level === 'error' ? 'bg-red-500' : info.level === 'warn' ? 'bg-amber-500' : info.level === 'success' ? 'bg-emerald-500' : isLast ? 'bg-claude-accent' : 'bg-claude-text-muted/40';
           return (
             <div key={stage} className="flex items-center shrink-0">
               <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-claude-surface/80 dark:bg-[#242220]/80 border border-claude-border/40 dark:border-[#3d3832]/40">
@@ -410,23 +415,26 @@ function LLMPreview({
   // Failure case: no content but we have an error — show a failure card.
   const isFailure = ok === false || (fallback && !content);
 
-  // Claude-themed accent map (with legacy aliases for backward compat)
+  // Claude-themed accent map — ALL variants now use the theme accent to avoid
+  // color collisions across the 6 preset themes. The accent prop is kept for
+  // API backward compat but all values produce the same accent styling.
+  // Status badges (LLM Generated/Failed/Saved) use standard Tailwind colors.
   const accentMap: Record<string, { ring: string; bg: string; icon: string; badge: string }> = {
-    cryoem: { ring: 'border-claude-cryoem/40', bg: 'from-claude-cryoem/8', icon: 'text-claude-cryoem', badge: 'border-claude-cryoem/40 text-claude-cryoem bg-claude-cryoem-bg' },
-    nmr: { ring: 'border-claude-nmr/40', bg: 'from-claude-nmr/8', icon: 'text-claude-nmr', badge: 'border-claude-nmr/40 text-claude-nmr bg-claude-nmr-bg' },
-    xray: { ring: 'border-claude-xray/40', bg: 'from-claude-xray/8', icon: 'text-claude-xray', badge: 'border-claude-xray/40 text-claude-xray bg-claude-xray-bg' },
+    cryoem: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    nmr: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    xray: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
     accent: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
     // Legacy aliases
-    emerald: { ring: 'border-claude-cryoem/40', bg: 'from-claude-cryoem/8', icon: 'text-claude-cryoem', badge: 'border-claude-cryoem/40 text-claude-cryoem bg-claude-cryoem-bg' },
-    sky: { ring: 'border-claude-cryoem/40', bg: 'from-claude-cryoem/8', icon: 'text-claude-cryoem', badge: 'border-claude-cryoem/40 text-claude-cryoem bg-claude-cryoem-bg' },
-    violet: { ring: 'border-claude-xray/40', bg: 'from-claude-xray/8', icon: 'text-claude-xray', badge: 'border-claude-xray/40 text-claude-xray bg-claude-xray-bg' },
-    amber: { ring: 'border-claude-nmr/40', bg: 'from-claude-nmr/8', icon: 'text-claude-nmr', badge: 'border-claude-nmr/40 text-claude-nmr bg-claude-nmr-bg' },
+    emerald: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    sky: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    violet: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    amber: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
   };
   const a = accentMap[accent] || accentMap.cryoem;
   // Override styling for failure state.
-  const ringCls = isFailure ? 'border-claude-top/40' : a.ring;
-  const bgCls = isFailure ? 'from-claude-top/8' : a.bg;
-  const iconCls = isFailure ? 'text-claude-top' : a.icon;
+  const ringCls = isFailure ? 'border-red-500/40' : a.ring;
+  const bgCls = isFailure ? 'from-red-500/8' : a.bg;
+  const iconCls = isFailure ? 'text-red-500' : a.icon;
 
   const copy = async () => {
     if (!content) return;
@@ -458,23 +466,23 @@ function LLMPreview({
           <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{title}</span>
           {/* LLM status badge — clearly shows real success vs failure */}
           {ok === true && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <CheckCircle2 className="h-2 w-2" /> LLM Generated
             </Badge>
           )}
           {isFailure && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-top/40 bg-claude-top-bg text-claude-top">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
               <XCircle className="h-2 w-2" /> LLM Failed
             </Badge>
           )}
           {/* DB persistence badge */}
           {dbSaved === true && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-xray/40 bg-claude-xray-bg text-claude-xray">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <Database className="h-2.5 w-2.5" /> Saved
             </Badge>
           )}
           {dbSaved === false && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-top/40 bg-claude-top-bg text-claude-top">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
               <Database className="h-2.5 w-2.5" /> Save Failed
             </Badge>
           )}
@@ -890,7 +898,7 @@ function ChapterStream({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mt-3 rounded-lg border border-claude-xray/40 bg-gradient-to-br from-claude-xray/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
+      className="mt-3 rounded-lg border border-claude-accent/40 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
     >
       <div
         role="button"
@@ -902,28 +910,28 @@ function ChapterStream({
         aria-label="Collapse/Expand LLM chapter stream list"
       >
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ChevronRight className={`h-3 w-3 text-claude-xray shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+          <ChevronRight className={`h-3 w-3 text-claude-accent shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
           <span className="text-3xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">LLM Chapter Stream</span>
           {groups.length > 1 && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
               <Layers className="h-2 w-2" /> {groups.length} targets
             </Badge>
           )}
-          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-xray/40 bg-claude-xray-bg text-claude-xray">
+          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
             <Sparkles className="h-2 w-2" /> {completedCount}/{totalCount} chapters
           </Badge>
           {okCount > 0 && failCount === 0 && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               ✓ All OK
             </Badge>
           )}
           {failCount > 0 && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-top/40 bg-claude-top-bg text-claude-top">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
               ✗ {failCount} failed
             </Badge>
           )}
           {running && completedCount < totalCount && (
-            <span className="text-3xs text-claude-xray flex items-center gap-1 shrink-0">
+            <span className="text-3xs text-claude-accent flex items-center gap-1 shrink-0">
               <Loader2 className="h-2.5 w-2.5 animate-spin" />
               Generating…
             </span>
@@ -949,7 +957,7 @@ function ChapterStream({
                     {gCompleted}/{rows.length}
                   </Badge>
                   {gFail > 0 && (
-                    <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-claude-top/40 bg-claude-top-bg text-claude-top">
+                    <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
                       ✗ {gFail}
                     </Badge>
                   )}
@@ -964,9 +972,9 @@ function ChapterStream({
                       key={r.key}
                       open={isRunning}
                       className={`group rounded-md border ${
-                        isRunning ? 'border-claude-xray/40 bg-claude-xray/8' :
-                        isError ? 'border-claude-top/40 bg-claude-top/8' :
-                        'border-claude-cryoem/40 bg-claude-cryoem/8'
+                        isRunning ? 'border-claude-accent/40 bg-claude-accent/8' :
+                        isError ? 'border-red-500/30 bg-red-500/5' :
+                        'border-emerald-500/30 bg-emerald-500/5'
                       }`}
                     >
                       <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 select-none">
@@ -975,8 +983,8 @@ function ChapterStream({
                           {r.index || '?'}/{r.total || '?'}
                         </span>
                         <span className="text-sm font-medium text-claude-text/80 dark:text-[#e8e4dd]/80 truncate">{r.label || r.key}</span>
-                        {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin text-claude-xray shrink-0" />}
-                        {isError && <XCircle className="h-3 w-3 text-claude-top shrink-0" />}
+                        {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin text-claude-accent shrink-0" />}
+                        {isError && <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
                         {!isRunning && !isError && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />}
                         {r.durationMs != null && (
                           <span className="text-3xs text-muted-foreground/60 font-mono ml-auto shrink-0">
@@ -1062,9 +1070,9 @@ function CycleTimeline({
   if (!hasAnyActivity && !running) return null;
 
   return (
-    <div className="mt-3 rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-gradient-to-br from-claude-nmr/8 via-transparent to-transparent p-3">
+    <div className="mt-3 rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent p-3">
       <div className="flex items-center gap-2 mb-2.5">
-        <Layers className="h-3 w-3 text-claude-nmr" />
+        <Layers className="h-3 w-3 text-claude-accent" />
         <span className="text-xs font-semibold uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">Cycle Orchestration</span>
         <span className="text-xs text-claude-text-muted/60 dark:text-[#9b9590]/60">· {maxCycles}-step pipeline</span>
       </div>
@@ -1073,10 +1081,12 @@ function CycleTimeline({
       <div className="flex items-stretch gap-1">
         {roleStatus.map((r, i) => {
           const isLast = i === roleStatus.length - 1;
+          // All steps use the theme accent — no per-step color distinction.
+          // This avoids collisions (e.g. Ocean accent=cryoem, Berry accent=xray).
           const colorMap: Record<string, { dot: string; ring: string; bg: string; text: string }> = {
-            sky: { dot: 'bg-claude-cryoem', ring: 'border-claude-cryoem/40', bg: 'bg-claude-cryoem/8', text: 'text-claude-cryoem' },
-            amber: { dot: 'bg-claude-nmr', ring: 'border-claude-nmr/40', bg: 'bg-claude-nmr/8', text: 'text-claude-nmr' },
-            emerald: { dot: 'bg-claude-cryoem', ring: 'border-claude-cryoem/40', bg: 'bg-claude-cryoem/8', text: 'text-claude-cryoem' },
+            sky: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
+            amber: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
+            emerald: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
           };
           const c = colorMap[r.color] || colorMap.sky;
           return (
@@ -1092,7 +1102,7 @@ function CycleTimeline({
                   <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{r.label}</span>
                   {r.completed && <CheckCircle2 className={`h-3 w-3 ${c.text} shrink-0`} />}
                   {r.verdict && (
-                    <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${r.verdict === 'pass' ? 'border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem' : 'border-claude-nmr/40 bg-claude-nmr-bg text-claude-nmr'}`}>
+                    <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${r.verdict === 'pass' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
                       {r.verdict}
                     </Badge>
                   )}
@@ -1766,7 +1776,7 @@ export function SettingsRunPanel({
           <Settings2 className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">{t.runCenter}</span>
           {running.size > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-claude-cryoem text-white text-4xs font-bold px-1 shadow-sm ring-2 ring-claude-surface dark:ring-[#242220]">
+            <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-claude-accent text-white text-4xs font-bold px-1 shadow-sm ring-2 ring-claude-surface dark:ring-[#242220]">
               {running.size}
             </span>
           )}
@@ -1787,7 +1797,7 @@ export function SettingsRunPanel({
                 <Layers className="h-2.5 w-2.5" /> {locale === 'zh' ? '3 个模块' : '3 modules'}
               </Badge>
               {running.size > 0 && (
-                <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem">
+                <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
                   <Loader2 className="h-2.5 w-2.5 animate-spin" /> {running.size} {locale === 'zh' ? '运行中' : 'running'}
                 </Badge>
               )}
@@ -1916,13 +1926,13 @@ export function SettingsRunPanel({
                       className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
                         chosenProvider === 'zai'
                           ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent shadow-sm'
-                          : 'border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem hover:border-claude-cryoem/60'
+                          : 'border-claude-accent/30 bg-claude-accent/5 text-claude-accent hover:border-claude-accent/50'
                       }`}
                       title="z.ai SDK (z-ai-web-dev-sdk) — temporary LLM test option"
                     >
                       <Sparkles className="h-3 w-3" />
                       <span className="font-mono text-sm">z.ai</span>
-                      <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-claude-cryoem/15 text-claude-cryoem text-xs font-medium font-mono">SDK</span>
+                      <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-claude-accent/15 text-claude-accent text-xs font-medium font-mono">SDK</span>
                       {chosenProvider === 'zai' && <Lock className="h-2.5 w-2.5 opacity-70" />}
                     </button>
                   </TooltipTrigger>
@@ -2014,16 +2024,16 @@ export function SettingsRunPanel({
                 </code>
               )}
               {dbStatus?.isTest && (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-nmr/40 bg-claude-nmr-bg text-claude-nmr">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
                   <AlertTriangle className="h-2 w-2" /> {locale === 'zh' ? '测试库' : 'Test DB'}
                 </Badge>
               )}
               {dbStatus?.hasSchema ? (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem-bg text-claude-cryoem">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                   <CheckCircle2 className="h-2 w-2" /> {locale === 'zh' ? 'Schema' : 'Schema'} {dbStatus.tableCount}
                 </Badge>
               ) : dbStatus ? (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-top/40 bg-claude-top-bg text-claude-top">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
                   <XCircle className="h-2 w-2" /> {locale === 'zh' ? '未初始化' : 'Not initialized'}
                 </Badge>
               ) : null}
@@ -2043,7 +2053,7 @@ export function SettingsRunPanel({
                 </Badge>
               )}
               {dbPathStatus && (
-                <span className={`text-xs font-medium ml-auto shrink-0 ${dbPathStatus.startsWith('✓') ? 'text-claude-cryoem' : 'text-claude-top'}`}>
+                <span className={`text-xs font-medium ml-auto shrink-0 ${dbPathStatus.startsWith('✓') ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
                   {dbPathStatus}
                 </span>
               )}
@@ -2070,7 +2080,7 @@ export function SettingsRunPanel({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs shrink-0 px-2 border-claude-cryoem/40 text-claude-cryoem hover:bg-claude-cryoem-bg"
+                className="h-8 text-xs shrink-0 px-2 border-claude-accent/40 text-claude-accent hover:bg-claude-accent/10"
                 onClick={() => { setDbWizardMode('create'); setDbWizardOpen(true); }}
               >
                 <FilePlus2 className="h-3 w-3" /> {t.dbNew}
@@ -2078,7 +2088,7 @@ export function SettingsRunPanel({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs shrink-0 px-2 border-claude-xray/40 text-claude-xray hover:bg-claude-xray-bg"
+                className="h-8 text-xs shrink-0 px-2 border-claude-accent/40 text-claude-accent hover:bg-claude-accent/10"
                 onClick={() => { setDbWizardMode('select'); setDbWizardOpen(true); }}
               >
                 <FolderOpen className="h-3 w-3" /> {t.dbSelect}
@@ -2086,7 +2096,7 @@ export function SettingsRunPanel({
             </div>
 
             {dbStatus?.isTest && (
-              <div className="mt-1.5 rounded-md border border-claude-nmr/30 bg-claude-nmr-bg/50 px-2 py-1 text-xs text-claude-nmr leading-relaxed">
+              <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1 text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
                 <AlertTriangle className="h-3 w-3 inline mr-1" />
                 {t.dbTestWarning}
               </div>
@@ -2113,17 +2123,17 @@ export function SettingsRunPanel({
         <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto sidebar-scroll">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-2">
             <TabsList className="grid w-full grid-cols-3 h-10 bg-claude-bg/60 dark:bg-[#1a1917]/60 rounded-lg p-1 gap-1 border border-claude-border/40 dark:border-[#3d3832]/40">
-              <TabsTrigger value="evaluation" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-cryoem/15 data-[state=active]:text-claude-cryoem data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-cryoem/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
+              <TabsTrigger value="evaluation" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-accent/15 data-[state=active]:text-claude-accent data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-accent/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
                 <FlaskConical className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">① {t.tabEval}</span>
                 <span className="sm:hidden">① {t.tabEvalShort}</span>
-                {isRunning('eval') && <Loader2 className="h-3 w-3 animate-spin text-claude-cryoem" />}
+                {isRunning('eval') && <Loader2 className="h-3 w-3 animate-spin text-claude-accent" />}
               </TabsTrigger>
-              <TabsTrigger value="literature" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-nmr/15 data-[state=active]:text-claude-nmr data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-nmr/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
+              <TabsTrigger value="literature" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-accent/15 data-[state=active]:text-claude-accent data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-accent/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
                 <BookOpen className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">② {t.tabLit}</span>
                 <span className="sm:hidden">② {t.tabLitShort}</span>
-                {isRunning('lit') && <Loader2 className="h-3 w-3 animate-spin text-claude-nmr" />}
+                {isRunning('lit') && <Loader2 className="h-3 w-3 animate-spin text-claude-accent" />}
               </TabsTrigger>
               <TabsTrigger value="weekly" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-accent/15 data-[state=active]:text-claude-accent data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-accent/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
                 <CalendarClock className="h-3.5 w-3.5" />
@@ -2475,24 +2485,24 @@ export function SettingsRunPanel({
                             onClick={() => viewLitDigest(r.date)}
                             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border transition-colors ${
                               isActive
-                                ? 'border-claude-nmr/50 bg-claude-nmr-bg text-claude-nmr'
+                                ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent'
                                 : 'border-claude-border/60 dark:border-[#3d3832]/60 hover:bg-claude-border-light dark:hover:bg-[#2b2926] text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'
                             }`}
                             title={`${r.date} — ${r.paperCount} papers${r.hasLLMDigest ? ' · has LLM digest' : ''} (click to view digest)`}
                           >
                             <span className="font-mono">{r.date.slice(5)}</span>
                             <span className="opacity-60">{r.paperCount || '?'}</span>
-                            {r.hasLLMDigest && <Sparkles className="h-2.5 w-2.5 text-claude-xray" />}
+                            {r.hasLLMDigest && <Sparkles className="h-2.5 w-2.5 text-claude-accent" />}
                           </button>
                         );
                       })}
                     </div>
                     {/* Inline digest viewer — shows the fetched LLM digest for the clicked date */}
                     {litViewingDigest && (
-                      <div className="mt-2 rounded-lg border border-claude-nmr/40 bg-claude-nmr/8 overflow-hidden">
-                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-nmr/40 bg-claude-nmr-bg/60">
+                      <div className="mt-2 rounded-lg border border-claude-accent/40 bg-claude-accent/8 overflow-hidden">
+                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-accent/40 bg-claude-accent/10">
                           <div className="flex items-center gap-1.5">
-                            <FileText className="h-3.5 w-3.5 text-claude-nmr" />
+                            <FileText className="h-3.5 w-3.5 text-claude-accent" />
                             <span className="text-xs font-semibold text-claude-text dark:text-[#e8e4dd]">LLM Digest · {litViewingDigest.date}</span>
                           </div>
                           <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setLitViewingDigest(null)} title="Close">
@@ -2693,21 +2703,21 @@ export function SettingsRunPanel({
                         .filter(l => !logSearch || l.summary.toLowerCase().includes(logSearch.toLowerCase()) || (l.details || '').toLowerCase().includes(logSearch.toLowerCase()))
                         .map((l, i) => {
                           const moduleBadge = l.module === 'literature'
-                            ? { txt: '② Lit', cls: 'border-claude-nmr/40 text-claude-nmr bg-claude-nmr-bg' }
+                            ? { txt: '② Lit', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' }
                             : l.module === 'eval'
-                            ? { txt: '① Eval', cls: 'border-claude-cryoem/40 text-claude-cryoem bg-claude-cryoem-bg' }
-                            : { txt: '③ Weekly', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' };
+                            ? { txt: '① Eval', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' }
+                            : { txt: '③ Weekly', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' };
                           return (
                             <div
                               key={i}
                               className="text-xs border-l-2 pl-2.5 py-1"
                               style={{
-                                borderColor: l.status === 'success' ? 'var(--claude-cryoem)' : l.status === 'error' ? 'var(--claude-top)' : 'var(--claude-accent)',
+                                borderColor: l.status === 'success' ? '#10b981' : l.status === 'error' ? '#ef4444' : 'var(--claude-accent)',
                               }}
                             >
                               <div className="flex items-center gap-1.5">
-                                {l.status === 'success' && <CheckCircle2 className="h-2.5 w-2.5 text-claude-cryoem shrink-0" />}
-                                {l.status === 'error' && <XCircle className="h-3 w-3 text-claude-top shrink-0" />}
+                                {l.status === 'success' && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />}
+                                {l.status === 'error' && <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
                                 {l.status === 'running' && <Loader2 className="h-3 w-3 animate-spin text-claude-accent shrink-0" />}
                                 <span className="text-muted-foreground font-mono text-xs shrink-0">{l.ts.slice(11, 19)}</span>
                                 <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${moduleBadge.cls}`}>{moduleBadge.txt}</Badge>
@@ -2742,26 +2752,17 @@ export function SettingsRunPanel({
 /*  Module card wrapper with gradient accent                                 */
 /* ──────────────────────────────────────────────────────────────────────── */
 
-// Claude-themed accent tokens — aligned with the app's mode colors:
-//   cryoem (teal #2d8f8f)  → Evaluation module ①
-//   nmr    (amber #c9872e)  → Literature module ②
-//   accent (terracotta #c96442) → Weekly module ③
-//   xray   (purple #7c5cbf) → batch / cross-target accent
+// Claude-themed accent tokens.
+// IMPORTANT: All module cards/tabs now use the SAME theme accent (`claude-accent`)
+// to avoid color collisions when the user switches themes. The 6 preset themes
+// map their accent to: claude(#c96442), ocean(#2d8f8f=claude-cryoem!),
+// forest(#16a34a=claude-mid!), sunset(#ea580c=claude-high!), berry(#7c5cbf=claude-xray!),
+// rose(#e11d48≈claude-top). So if we used cryoem/xray/nmr for different modules,
+// 4 of 6 themes would produce exact color duplicates.
+// Modules are distinguished by ICON + NUMBER (①②③), not by color.
+// Status colors (success/error/warn) use standard Tailwind colors that are
+// guaranteed distinct from ALL 6 theme accents.
 const ACCENT_CLASSES: Record<string, { ring: string; chip: string; icon: string; glow: string; shadow: string }> = {
-  cryoem: {
-    ring: 'before:from-claude-cryoem/70',
-    chip: 'bg-claude-cryoem-bg text-claude-cryoem border-claude-cryoem/30',
-    icon: 'bg-gradient-to-br from-claude-cryoem/20 to-claude-cryoem/5 text-claude-cryoem',
-    glow: 'from-claude-cryoem/8',
-    shadow: 'claude-card-shadow',
-  },
-  nmr: {
-    ring: 'before:from-claude-nmr/70',
-    chip: 'bg-claude-nmr-bg text-claude-nmr border-claude-nmr/30',
-    icon: 'bg-gradient-to-br from-claude-nmr/20 to-claude-nmr/5 text-claude-nmr',
-    glow: 'from-claude-nmr/8',
-    shadow: 'claude-card-shadow',
-  },
   accent: {
     ring: 'before:from-claude-accent/70',
     chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
@@ -2769,33 +2770,54 @@ const ACCENT_CLASSES: Record<string, { ring: string; chip: string; icon: string;
     glow: 'from-claude-accent/8',
     shadow: 'claude-card-shadow',
   },
-  xray: {
-    ring: 'before:from-claude-xray/70',
-    chip: 'bg-claude-xray-bg text-claude-xray border-claude-xray/30',
-    icon: 'bg-gradient-to-br from-claude-xray/20 to-claude-xray/5 text-claude-xray',
-    glow: 'from-claude-xray/8',
+  // Legacy aliases — ALL map to accent now (no per-module color distinction)
+  cryoem: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
     shadow: 'claude-card-shadow',
   },
-  // Legacy aliases (map old names → claude equivalents for backward compat)
+  nmr: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
+  xray: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
   sky: {
-    ring: 'before:from-claude-cryoem/70',
-    chip: 'bg-claude-cryoem-bg text-claude-cryoem border-claude-cryoem/30',
-    icon: 'bg-gradient-to-br from-claude-cryoem/20 to-claude-cryoem/5 text-claude-cryoem',
-    glow: 'from-claude-cryoem/8',
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
     shadow: 'claude-card-shadow',
   },
   emerald: {
-    ring: 'before:from-claude-cryoem/70',
-    chip: 'bg-claude-cryoem-bg text-claude-cryoem border-claude-cryoem/30',
-    icon: 'bg-gradient-to-br from-claude-cryoem/20 to-claude-cryoem/5 text-claude-cryoem',
-    glow: 'from-claude-cryoem/8',
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
     shadow: 'claude-card-shadow',
   },
   amber: {
-    ring: 'before:from-claude-nmr/70',
-    chip: 'bg-claude-nmr-bg text-claude-nmr border-claude-nmr/30',
-    icon: 'bg-gradient-to-br from-claude-nmr/20 to-claude-nmr/5 text-claude-nmr',
-    glow: 'from-claude-nmr/8',
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
+  violet: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
     shadow: 'claude-card-shadow',
   },
 };
