@@ -1,0 +1,1226 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Structure Analysis left panel — two tabs:
+     5→ *  1. Structures: PyMOL-style loaded-structure list with inline controls
+     6→ *  2. Analysis: 24-chart catalog grouped into 6 categories with search
+     7→ *
+     8→ * Ported from Molcraft's unified-left-panel.tsx, restyled with
+     9→ * pdb-tracker-web-v4's Claude/terracotta theme.
+    10→ */
+    11→import { useState, useEffect } from "react";
+    12→import { motion, AnimatePresence } from "framer-motion";
+    13→import {
+    14→  Layers,
+    15→  Activity,
+    16→  Eye,
+    17→  EyeOff,
+    18→  X,
+    19→  ChevronRight,
+    20→  Search,
+    21→  Palette,
+    22→  Zap,
+    23→  Ruler,
+    24→  LayoutDashboard,
+    25→  GitCompare,
+    26→  BarChart3,
+    27→  Spline,
+    28→  AlignLeft,
+    29→  Grid3x3,
+    30→  Link2,
+    31→  Sigma,
+    32→  Droplets,
+    33→  Atom,
+    34→  Network,
+    35→  Target,
+    36→  Fingerprint,
+    37→  Boxes,
+    38→  Pill,
+    39→  FlaskConical,
+    40→  SunMedium,
+    41→  CircleDashed,
+    42→  ShieldCheck,
+    43→  Loader2,
+    44→  Trash2,
+    45→  Star,
+    46→  Clock,
+    47→} from "lucide-react";
+    48→import { Button } from "@/components/ui/button";
+    49→import { Input } from "@/components/ui/input";
+    50→import { Label } from "@/components/ui/label";
+    51→import { Slider } from "@/components/ui/slider";
+    52→import { Badge } from "@/components/ui/badge";
+    53→import { ScrollArea } from "@/components/ui/scroll-area";
+    54→import {
+    55→  Select,
+    56→  SelectContent,
+    57→  SelectItem,
+    58→  SelectTrigger,
+    59→  SelectValue,
+    60→} from "@/components/ui/select";
+    61→import {
+    62→  Tooltip,
+    63→  TooltipContent,
+    64→  TooltipProvider,
+    65→  TooltipTrigger,
+    66→} from "@/components/ui/tooltip";
+    67→import {
+    68→  useAppStore,
+    69→  selectActiveStructure,
+    70→  type LoadedStructure,
+    71→} from "@/lib/molcraft/store";
+    72→import { executeCommand } from "@/lib/molcraft/commands";
+    73→import type { LlmCommand, ResidueRef } from "@/lib/molcraft/command-schema";
+    74→import { useRunCommand } from "./use-run-command";
+    75→import { SequenceViewer } from "./sequence-viewer";
+    76→import { StructureInfoPanel } from "./structure-info-panel";
+    77→import { StructureAlignmentPanel } from "./structure-alignment-panel";
+    78→import { PresetManager } from "./preset-manager";
+    79→
+    80→// Lazy-loaded chart components
+    81→import { RamachandranPlot } from "@/components/charts/ramachandran-plot";
+    82→import { BfactorChart } from "@/components/charts/bfactor-chart";
+    83→import { InteractionNetwork } from "@/components/charts/interaction-network";
+    84→import { SequenceAlignment } from "@/components/charts/sequence-alignment";
+    85→import { RmsdMatrix } from "@/components/charts/rmsd-matrix";
+    86→import { SasaChart } from "@/components/charts/sasa-chart";
+    87→import { DisulfideChart } from "@/components/charts/disulfide-chart";
+    88→import { SecondaryStructureChart } from "@/components/charts/secondary-structure-chart";
+    89→import { AromaticStackingChart } from "@/components/charts/aromatic-stacking-chart";
+    90→import { WaterBridgesChart } from "@/components/charts/water-bridges-chart";
+    91→import { MetalCoordinationChart } from "@/components/charts/metal-coordination-chart";
+    92→import { StructureValidationChart } from "@/components/charts/structure-validation-chart";
+    93→import { BindingPocketChart } from "@/components/charts/binding-pocket-chart";
+    94→import { OligomerAnalysisChart } from "@/components/charts/oligomer-analysis-chart";
+    95→import { LigandInteractionsChart } from "@/components/charts/ligand-interactions-chart";
+    96→import { ElectrostaticChart } from "@/components/charts/electrostatic-chart";
+    97→import { ContactMapChart } from "@/components/charts/contact-map-chart";
+    98→import { SurfaceResiduesChart } from "@/components/charts/surface-residues-chart";
+    99→import { StructureOverviewDashboard } from "@/components/charts/structure-overview-dashboard";
+   100→import { StructureComparisonDashboard } from "@/components/charts/structure-comparison-dashboard";
+   101→import { DruggabilityChart } from "@/components/charts/druggability-chart";
+   102→import { ApbsSurfaceChart } from "@/components/charts/apbs-surface-chart";
+   103→import { ScreeningChart } from "@/components/charts/screening-chart";
+   104→import { PocketDetectionChart } from "@/components/charts/pocket-detection-chart";
+   105→
+   106→type TabId = "structures" | "measure" | "analysis";
+   107→
+   108→// Chart ID to label mapping (for preset display)
+   109→const ALL_CHART_LABELS: Record<string, string> = {
+   110→  overview: "Overview Dashboard",
+   111→  comparison: "Structure Comparison",
+   112→  rama: "Ramachandran",
+   113→  bfactor: "B-factor",
+   114→  ss: "Secondary Structure",
+   115→  seqalign: "Sequence Alignment",
+   116→  rmsd: "RMSD Matrix",
+   117→  disulfide: "Disulfide Bonds",
+   118→  aromatic: "Aromatic Stacking",
+   119→  water: "Water Bridges",
+   120→  metal: "Metal Coordination",
+   121→  contactmap: "Contact Map",
+   122→  interaction: "Interaction Network",
+   123→  pocket: "Binding Pocket",
+   124→  ligand: "Ligand Interactions",
+   125→  oligomer: "Oligomer Analysis",
+   126→  druggability: "Druggability",
+   127→  apbs_surface: "APBS Electrostatic",
+   128→  screening: "Virtual Screening",
+   129→  detect_pockets: "Multi-Pocket Detection",
+   130→  sasa: "SASA",
+   131→  surface: "Surface Residues",
+   132→  electrostatic: "Electrostatic",
+   133→  validation: "Structure Validation",
+   134→};
+   135→
+   136→export function AnalysisLeftPanel() {
+   137→  const [tab, setTab] = useState<TabId>("structures");
+   138→  const structures = useAppStore((s) => s.structures);
+   139→  const activeStructureId = useAppStore((s) => s.activeStructureId);
+   140→
+   141→  return (
+   142→    <div className="flex h-full flex-col bg-claude-surface">
+   143→      {/* Active structure banner */}
+   144→      {structures.length > 0 && (
+   145→        <div className="flex shrink-0 items-center gap-2 border-b border-claude-border bg-claude-accent-light/50 px-3 py-1.5">
+   146→          <Activity className="h-3 w-3 text-claude-accent" />
+   147→          <span className="text-[10px] font-medium uppercase tracking-wide text-claude-text-secondary">
+   148→            Active
+   149→          </span>
+   150→          <Badge variant="secondary" className="ml-auto font-mono text-[10px]">
+   151→            {activeStructureId
+   152→              ? structures.find((s) => s.id === activeStructureId)?.label ?? "—"
+   153→              : structures[0]?.label ?? "—"}
+   154→          </Badge>
+   155→        </div>
+   156→      )}
+   157→
+   158→      {/* Tab row */}
+   159→      <div className="sa-tab-row shrink-0">
+   160→        <button
+   161→          className={`sa-tab-btn ${tab === "structures" ? "sa-tab-active" : ""}`}
+   162→          onClick={() => setTab("structures")}
+   163→        >
+   164→          <Layers className="h-3 w-3" />
+   165→          Structures
+   166→          {structures.length > 0 && (
+   167→            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px]">
+   168→              {structures.length}
+   169→            </Badge>
+   170→          )}
+   171→        </button>
+   172→        <button
+   173→          className={`sa-tab-btn ${tab === "measure" ? "sa-tab-active" : ""}`}
+   174→          onClick={() => setTab("measure")}
+   175→        >
+   176→          <Ruler className="h-3 w-3" />
+   177→          Measure
+   178→        </button>
+   179→        <button
+   180→          className={`sa-tab-btn ${tab === "analysis" ? "sa-tab-active" : ""}`}
+   181→          onClick={() => setTab("analysis")}
+   182→        >
+   183→          <Activity className="h-3 w-3" />
+   184→          Analysis
+   185→        </button>
+   186→      </div>
+   187→
+   188→      <ScrollArea className="sa-scroll flex-1 min-h-0">
+   189→        {tab === "structures" && <StructuresTab />}
+   190→        {tab === "measure" && <MeasureTab />}
+   191→        {tab === "analysis" && <AnalysisTab />}
+   192→      </ScrollArea>
+   193→    </div>
+   194→  );
+   195→}
+   196→
+   197→// ============================================================
+   198→// Structures Tab
+   199→// ============================================================
+   200→function StructuresTab() {
+   201→  const structures = useAppStore((s) => s.structures);
+   202→  const removeStructure = useAppStore((s) => s.removeStructure);
+   203→  const clearStructures = useAppStore((s) => s.clearStructures);
+   204→  const activeStructureId = useAppStore((s) => s.activeStructureId);
+   205→  const setActiveStructure = useAppStore((s) => s.setActiveStructure);
+   206→  const updateStructureStyle = useAppStore((s) => s.updateStructureStyle);
+   207→  const viewer = useAppStore((s) => s.viewer);
+   208→  const toast = useAppStore((s) => s.toast);
+   209→  const [hiddenSet, setHiddenSet] = useState<Set<string>>(new Set());
+   210→  const [openId, setOpenId] = useState<string | null>(null);
+   211→  const [aligning, setAligning] = useState(false);
+   212→
+   213→  useEffect(() => {
+   214→    // eslint-disable-next-line react-hooks/set-state-in-effect
+   215→    if (activeStructureId) setOpenId(activeStructureId);
+   216→  }, [activeStructureId]);
+   217→
+   218→  const toggleVisibility = async (id: string) => {
+   219→    if (!viewer) return;
+   220→    try {
+   221→      const plugin = viewer.plugin;
+   222→      const structs = plugin.managers.structure.hierarchy.current.structures;
+   223→      const idx = structures.findIndex((s) => s.id === id);
+   224→      if (idx < 0 || idx >= structs.length) return;
+   225→      plugin.managers.structure.hierarchy.toggleVisibility([structs[idx]]);
+   226→      setHiddenSet((prev) => {
+   227→        const next = new Set(prev);
+   228→        if (next.has(id)) next.delete(id);
+   229→        else next.add(id);
+   230→        return next;
+   231→      });
+   232→    } catch (err) {
+   233→      toast(`Toggle failed: ${err}`, "error");
+   234→    }
+   235→  };
+   236→
+   237→  const closeStructure = async (id: string) => {
+   238→    if (!viewer) return;
+   239→    try {
+   240→      const plugin = viewer.plugin;
+   241→      const structs = plugin.managers.structure.hierarchy.current.structures;
+   242→      const idx = structures.findIndex((s) => s.id === id);
+   243→      if (idx >= 0 && idx < structs.length) {
+   244→        plugin.managers.structure.hierarchy.remove(structs[idx]);
+   245→      }
+   246→      removeStructure(id);
+   247→      toast(`Removed ${id}`, "info");
+   248→    } catch (err) {
+   249→      toast(`Remove failed: ${err}`, "error");
+   250→    }
+   251→  };
+   252→
+   253→  if (structures.length === 0) {
+   254→    return (
+   255→      <div className="sa-empty-state p-4">
+   256→        <Layers className="h-8 w-8 text-claude-text-muted" />
+   257→        <p className="text-xs">No structures loaded</p>
+   258→        <p className="text-[10px] text-claude-text-muted">
+   259→          Use the toolbar above to load a PDB / AlphaFold / EMDB ID or upload a
+   260→          file.
+   261→        </p>
+   262→      </div>
+   263→    );
+   264→  }
+   265→
+   266→  return (
+   267→    <div className="space-y-1.5 p-2">
+   268→      {structures.map((s, i) => {
+   269→        const isActive = activeStructureId === s.id || (!activeStructureId && i === 0);
+   270→        const isOpen = openId === s.id;
+   271→        const isHidden = hiddenSet.has(s.id);
+   272→        return (
+   273→          <div key={s.id}>
+   274→            <div
+   275→              className={`sa-struct-item ${isActive ? "sa-struct-active" : ""}`}
+   276→              onClick={() => {
+   277→                setActiveStructure(s.id);
+   278→                setOpenId(isOpen ? null : s.id);
+   279→              }}
+   280→            >
+   281→              <span
+   282→                className="h-2 w-2 shrink-0 rounded-full"
+   283→                style={{ backgroundColor: s.color ?? "#c96442" }}
+   284→              />
+   285→              <span className="flex-1 truncate font-mono text-[11px] font-medium">
+   286→                {s.label}
+   287→              </span>
+   288→              {s.metadata?.method && (
+   289→                <Badge variant="outline" className="px-1 py-0 text-[8px]">
+   290→                  {s.metadata.method}
+   291→                </Badge>
+   292→              )}
+   293→              <button
+   294→                onClick={(e) => {
+   295→                  e.stopPropagation();
+   296→                  toggleVisibility(s.id);
+   297→                }}
+   298→                className="text-claude-text-muted hover:text-claude-text"
+   299→                title={isHidden ? "Show" : "Hide"}
+   300→              >
+   301→                {isHidden ? (
+   302→                  <EyeOff className="h-3 w-3" />
+   303→                ) : (
+   304→                  <Eye className="h-3 w-3" />
+   305→                )}
+   306→              </button>
+   307→              <button
+   308→                onClick={(e) => {
+   309→                  e.stopPropagation();
+   310→                  closeStructure(s.id);
+   311→                }}
+   312→                className="text-claude-text-muted hover:text-destructive"
+   313→                title="Remove"
+   314→              >
+   315→                <X className="h-3 w-3" />
+   316→              </button>
+   317→            </div>
+   318→
+   319→            {/* Inline expanded controls */}
+   320→            {isOpen && (
+   321→              <div className="mt-1 space-y-2 rounded-md border border-claude-border bg-claude-bg p-2">
+   322→                {s.metadata && (
+   323→                  <div className="grid grid-cols-2 gap-1 text-[9px]">
+   324→                    {s.metadata.title && (
+   325→                      <div className="col-span-2 truncate text-claude-text-secondary">
+   326→                        <span className="font-medium">Title:</span>{" "}
+   327→                        {s.metadata.title}
+   328→                      </div>
+   329→                    )}
+   330→                    {s.metadata.chains && (
+   331→                      <div className="text-claude-text-secondary">
+   332→                        <span className="font-medium">Chains:</span>{" "}
+   333→                        {s.metadata.chains.join(", ")}
+   334→                      </div>
+   335→                    )}
+   336→                    {s.metadata.numResidues != null && (
+   337→                      <div className="text-claude-text-secondary">
+   338→                        <span className="font-medium">Residues:</span>{" "}
+   339→                        {s.metadata.numResidues}
+   340→                      </div>
+   341→                    )}
+   342→                    {s.metadata.numAtoms != null && (
+   343→                      <div className="text-claude-text-secondary">
+   344→                        <span className="font-medium">Atoms:</span>{" "}
+   345→                        {s.metadata.numAtoms}
+   346→                      </div>
+   347→                    )}
+   348→                    {s.metadata.resolution != null && (
+   349→                      <div className="text-claude-text-secondary">
+   350→                        <span className="font-medium">Res:</span>{" "}
+   351→                        {s.metadata.resolution} Å
+   352→                      </div>
+   353→                    )}
+   354→                  </div>
+   355→                )}
+   356→                {/* Representation */}
+   357→                <div>
+   358→                  <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+   359→                    Representation
+   360→                  </Label>
+   361→                  <Select
+   362→                    value={s.style?.representation ?? "cartoon"}
+   363→                    onValueChange={(v) =>
+   364→                      updateStructureStyle(s.id, {
+   365→                        representation: v as LoadedStructure["style"] extends infer T
+   366→                          ? T extends { representation: infer R }
+   367→                            ? R
+   368→                            : never
+   369→                          : never,
+   370→                      })
+   371→                    }
+   372→                  >
+   373→                    <SelectTrigger className="h-7 text-[10px]">
+   374→                      <SelectValue />
+   375→                    </SelectTrigger>
+   376→                    <SelectContent>
+   377→                      {["cartoon", "stick", "line", "sphere", "surface"].map(
+   378→                        (r) => (
+   379→                          <SelectItem key={r} value={r} className="text-[10px]">
+   380→                            {r}
+   381→                          </SelectItem>
+   382→                        )
+   383→                      )}
+   384→                    </SelectContent>
+   385→                  </Select>
+   386→                </div>
+   387→                {/* Color scheme */}
+   388→                <div>
+   389→                  <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+   390→                    Color scheme
+   391→                  </Label>
+   392→                  <Select
+   393→                    value={s.style?.colorScheme ?? "spectrum"}
+   394→                    onValueChange={(v) =>
+   395→                      updateStructureStyle(s.id, {
+   396→                        colorScheme: v as LoadedStructure["style"] extends infer T
+   397→                          ? T extends { colorScheme: infer R }
+   398→                            ? R
+   399→                            : never
+   400→                          : never,
+   401→                      })
+   402→                    }
+   403→                  >
+   404→                    <SelectTrigger className="h-7 text-[10px]">
+   405→                      <SelectValue />
+   406→                    </SelectTrigger>
+   407→                    <SelectContent>
+   408→                      {[
+   409→                        "chain",
+   410→                        "element",
+   411→                        "secondary",
+   412→                        "single",
+   413→                        "spectrum",
+   414→                        "bfactor",
+   415→                        "residue",
+   416→                        "charge",
+   417→                      ].map((c) => (
+   418→                        <SelectItem key={c} value={c} className="text-[10px]">
+   419→                          {c}
+   420→                        </SelectItem>
+   421→                      ))}
+   422→                    </SelectContent>
+   423→                  </Select>
+   424→                </div>
+   425→                {s.alignRmsd != null && (
+   426→                  <div className="rounded bg-claude-accent-light px-1.5 py-1 text-[9px] text-claude-accent">
+   427→                    Aligned: RMSD {s.alignRmsd.toFixed(2)} Å
+   428→                    {s.alignTmScore != null &&
+   429→                      ` · TM ${s.alignTmScore.toFixed(3)}`}
+   430→                  </div>
+   431→                )}
+   432→              </div>
+   433→            )}
+   434→          </div>
+   435→        );
+   436→      })}
+   437→
+   438→      {structures.length > 1 && (
+   439→        <Button
+   440→          size="sm"
+   441→          variant="ghost"
+   442→          className="mt-2 h-7 w-full text-[10px] text-claude-text-muted hover:text-destructive"
+   443→          onClick={() => clearStructures()}
+   444→        >
+   445→          <Trash2 className="h-3 w-3" />
+   446→          Clear all
+   447→        </Button>
+   448→      )}
+   449→
+   450→      {/* Sequence viewer — shown when a structure with PDB text is loaded */}
+   451→      {structures.length > 0 && (
+   452→        <div className="mt-3 border-t border-claude-border pt-2">
+   453→          <SequenceViewer />
+   454→        </div>
+   455→      )}
+   456→
+   457→      {/* Structure info panel — full RCSB metadata */}
+   458→      {structures.length > 0 && (
+   459→        <div className="mt-3 border-t border-claude-border pt-2">
+   460→          <StructureInfoPanel />
+   461→        </div>
+   462→      )}
+   463→
+   464→      {/* Structure alignment panel — shown when 2+ structures loaded */}
+   465→      <div className="mt-3 border-t border-claude-border pt-2">
+   466→        <StructureAlignmentPanel />
+   467→      </div>
+   468→    </div>
+   469→  );
+   470→}
+   471→
+   472→// ============================================================
+   473→// Measure Tab
+   474→// ============================================================
+   475→function MeasureTab() {
+   476→  const { run, busy } = useRunCommand();
+   477→  const [a, setA] = useState<ResidueRef>({ chain: "A", resno: 30, atom: "CA" });
+   478→  const [b, setB] = useState<ResidueRef>({ chain: "A", resno: 50, atom: "CA" });
+   479→  const [labelTarget, setLabelTarget] = useState<ResidueRef>({
+   480→    chain: "A",
+   481→    resno: 30,
+   482→  });
+   483→  const measurements = useAppStore((s) => s.measurements);
+   484→  const removeMeasurement = useAppStore((s) => s.removeMeasurement);
+   485→  const clearMeasurements = useAppStore((s) => s.clearMeasurements);
+   486→
+   487→  return (
+   488→    <div className="space-y-2 p-2">
+   489→      <ResidueInput label="Atom A" value={a} onChange={setA} />
+   490→      <ResidueInput label="Atom B" value={b} onChange={setB} />
+   491→      <Button
+   492→        size="sm"
+   493→        className="h-7 w-full text-[11px]"
+   494→        disabled={busy}
+   495→        onClick={() => run({ type: "measure_distance", a, b })}
+   496→      >
+   497→        Measure Distance
+   498→      </Button>
+   499→      <div className="my-1 h-px bg-claude-border" />
+   500→      <ResidueInput label="Label target" value={labelTarget} onChange={setLabelTarget} />
+   501→      <Button
+   502→        size="sm"
+   503→        variant="secondary"
+   504→        className="h-7 w-full text-[11px]"
+   505→        disabled={busy}
+   506→        onClick={() => run({ type: "label_residue", target: labelTarget })}
+   507→      >
+   508→        Add Label
+   509→      </Button>
+   510→
+   511→      {/* Measurement history */}
+   512→      {measurements.length > 0 && (
+   513→        <div className="mt-2 rounded-md border border-claude-border bg-claude-bg p-1.5">
+   514→          <div className="mb-1 flex items-center justify-between">
+   515→            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+   516→              History ({measurements.length})
+   517→            </span>
+   518→            <button
+   519→              onClick={clearMeasurements}
+   520→              className="text-[9px] text-claude-text-muted hover:text-destructive"
+   521→            >
+   522→              Clear
+   523→            </button>
+   524→          </div>
+   525→          <div className="space-y-0.5 max-h-32 overflow-y-auto sa-scroll">
+   526→            {measurements.map((m) => (
+   527→              <div
+   528→                key={m.id}
+   529→                className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] hover:bg-claude-accent-light/50 group"
+   530→              >
+   531→                <span className="font-mono text-claude-text">{m.label}</span>
+   532→                <span className="ml-auto font-mono text-claude-accent">{m.detail}</span>
+   533→                <button
+   534→                  onClick={() => removeMeasurement(m.id)}
+   535→                  className="text-claude-text-muted opacity-0 group-hover:opacity-100 hover:text-destructive"
+   536→                >
+   537→                  <X className="h-2.5 w-2.5" />
+   538→                </button>
+   539→              </div>
+   540→            ))}
+   541→          </div>
+   542→        </div>
+   543→      )}
+   544→
+   545→      {measurements.length === 0 && (
+   546→        <Button
+   547→          size="sm"
+   548→          variant="ghost"
+   549→          className="h-7 w-full text-[10px] text-claude-text-muted"
+   550→          disabled
+   551→        >
+   552→          No measurements yet
+   553→        </Button>
+   554→      )}
+   555→    </div>
+   556→  );
+   557→}
+   558→
+   559→function ResidueInput({
+   560→  label,
+   561→  value,
+   562→  onChange,
+   563→}: {
+   564→  label: string;
+   565→  value: ResidueRef;
+   566→  onChange: (v: ResidueRef) => void;
+   567→}) {
+   568→  return (
+   569→    <div className="rounded-md border border-claude-border p-1.5">
+   570→      <div className="mb-1 text-[10px] font-medium text-claude-text-secondary">
+   571→        {label}
+   572→      </div>
+   573→      <div className="grid grid-cols-3 gap-1">
+   574→        <Input
+   575→          value={value.chain ?? ""}
+   576→          onChange={(e) =>
+   577→            onChange({ ...value, chain: e.target.value || undefined })
+   578→          }
+   579→          placeholder="A"
+   580→          className="h-7 text-xs"
+   581→        />
+   582→        <Input
+   583→          type="number"
+   584→          value={value.resno ?? ""}
+   585→          onChange={(e) =>
+   586→            onChange({
+   587→              ...value,
+   588→              resno: e.target.value ? Number(e.target.value) : undefined,
+   589→            })
+   590→          }
+   591→          placeholder="145"
+   592→          className="h-7 text-xs"
+   593→        />
+   594→        <Input
+   595→          value={value.atom ?? ""}
+   596→          onChange={(e) =>
+   597→            onChange({ ...value, atom: e.target.value || undefined })
+   598→          }
+   599→          placeholder="CA"
+   600→          className="h-7 text-xs"
+   601→        />
+   602→      </div>
+   603→    </div>
+   604→  );
+   605→}
+   606→
+   607→// ============================================================
+   608→// Analysis Tab
+   609→// ============================================================
+   610→function AnalysisTab() {
+   611→  return (
+   612→    <div className="space-y-2 p-2">
+   613→      <ActiveStructureSelector />
+   614→      <InteractionVizCard />
+   615→      <div data-tour="analysis-charts">
+   616→        <AnalysisChartsGrid />
+   617→      </div>
+   618→    </div>
+   619→  );
+   620→}
+   621→
+   622→function ActiveStructureSelector() {
+   623→  const structures = useAppStore((s) => s.structures);
+   624→  const activeStructureId = useAppStore((s) => s.activeStructureId);
+   625→  const setActiveStructure = useAppStore((s) => s.setActiveStructure);
+   626→
+   627→  if (structures.length === 0) return null;
+   628→  if (structures.length === 1) {
+   629→    return (
+   630→      <div className="rounded-md border border-claude-border bg-claude-bg p-1.5 text-[10px]">
+   631→        <span className="text-claude-text-secondary">Target: </span>
+   632→        <span className="font-mono font-semibold">{structures[0].label}</span>
+   633→      </div>
+   634→    );
+   635→  }
+   636→  return (
+   637→    <div className="rounded-md border border-claude-border bg-claude-bg p-1.5">
+   638→      <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+   639→        Analysis target
+   640→      </Label>
+   641→      <div className="flex flex-wrap gap-1">
+   642→        {structures.map((s, i) => {
+   643→          const isActive =
+   644→            activeStructureId === s.id || (!activeStructureId && i === 0);
+   645→          return (
+   646→            <button
+   647→              key={s.id}
+   648→              onClick={() => setActiveStructure(s.id)}
+   649→              className={`flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] transition ${
+   650→                isActive
+   651→                  ? "bg-claude-accent text-white"
+   652→                  : "bg-claude-surface hover:bg-claude-accent-light"
+   653→              }`}
+   654→            >
+   655→              <span
+   656→                className="h-1.5 w-1.5 rounded-full"
+   657→                style={{ backgroundColor: s.color ?? "#c96442" }}
+   658→              />
+   659→              {s.label}
+   660→            </button>
+   661→          );
+   662→        })}
+   663→      </div>
+   664→    </div>
+   665→  );
+   666→}
+   667→
+   668→function InteractionVizCard() {
+   669→  const { run, busy } = useRunCommand();
+   670→  const [target, setTarget] = useState<ResidueRef>({ chain: "A", resno: 145 });
+   671→  const [radius, setRadius] = useState(8);
+   672→
+   673→  return (
+   674→    <div className="rounded-lg border border-claude-border bg-claude-surface p-2">
+   675→      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-claude-text">
+   676→        <Zap className="h-3.5 w-3.5 text-claude-accent" />
+   677→        3D Interaction Viz
+   678→      </div>
+   679→      <div className="space-y-1.5">
+   680→        <ResidueInput label="Center residue" value={target} onChange={setTarget} />
+   681→        <div>
+   682→          <div className="flex justify-between">
+   683→            <Label className="text-[10px] text-claude-text-secondary">
+   684→              Radius (Å)
+   685→            </Label>
+   686→            <span className="font-mono text-[10px] text-claude-text">
+   687→              {radius.toFixed(1)}
+   688→            </span>
+   689→          </div>
+   690→          <Slider
+   691→            value={[radius]}
+   692→            min={3}
+   693→            max={20}
+   694→            step={0.5}
+   695→            onValueChange={(v) => setRadius(v[0])}
+   696→          />
+   697→        </div>
+   698→        <div className="grid grid-cols-2 gap-1">
+   699→          <Button
+   700→            size="sm"
+   701→            className="h-7 text-[10px]"
+   702→            disabled={busy}
+   703→            onClick={() => run({ type: "show_interactions", target, radius })}
+   704→          >
+   705→            Show
+   706→          </Button>
+   707→          <Button
+   708→            size="sm"
+   709→            variant="destructive"
+   710→            className="h-7 text-[10px]"
+   711→            onClick={() => run({ type: "clear_interactions" })}
+   712→          >
+   713→            Clear
+   714→          </Button>
+   715→        </div>
+   716→      </div>
+   717→    </div>
+   718→  );
+   719→}
+   720→
+   721→function AnalysisChartsGrid() {
+   722→  const [openChart, setOpenChart] = useState<string | null>(null);
+   723→  const [searchQuery, setSearchQuery] = useState("");
+   724→  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+   725→  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+   726→  const favoriteCharts = useAppStore((s) => s.favoriteCharts);
+   727→  const toggleFavoriteChart = useAppStore((s) => s.toggleFavoriteChart);
+   728→  const recentCharts = useAppStore((s) => s.recentCharts);
+   729→  const addRecentChart = useAppStore((s) => s.addRecentChart);
+   730→
+   731→  const handleChartClick = (chartId: string) => {
+   732→    setOpenChart(openChart === chartId ? null : chartId);
+   733→    if (openChart !== chartId) {
+   734→      addRecentChart(chartId);
+   735→    }
+   736→  };
+   737→
+   738→  const categories: Array<{
+   739→    title: string;
+   740→    color: string;
+   741→    accentColor: string;
+   742→    charts: Array<{ id: string; label: string; desc: string; icon: React.ReactNode }>;
+   743→  }> = [
+   744→    {
+   745→      title: "Overview",
+   746→      color: "text-claude-accent",
+   747→      accentColor: "#c96442",
+   748→      charts: [
+   749→        {
+   750→          id: "overview",
+   751→          label: "Overview Dashboard",
+   752→          desc: "8 analyses in one screen: quality, secondary structure, SASA, etc.",
+   753→          icon: <LayoutDashboard className="h-3.5 w-3.5" />,
+   754→        },
+   755→        {
+   756→          id: "comparison",
+   757→          label: "Structure Comparison",
+   758→          desc: "Compare 2-4 structures across 13 metrics side-by-side",
+   759→          icon: <GitCompare className="h-3.5 w-3.5" />,
+   760→        },
+   761→      ],
+   762→    },
+   763→    {
+   764→      title: "Geometry",
+   765→      color: "text-teal-600",
+   766→      accentColor: "#2d8f8f",
+   767→      charts: [
+   768→        {
+   769→          id: "rama",
+   770→          label: "Ramachandran",
+   771→          desc: "φ/ψ dihedral distribution, conformation validity",
+   772→          icon: <Activity className="h-3.5 w-3.5" />,
+   773→        },
+   774→        {
+   775→          id: "bfactor",
+   776→          label: "B-factor",
+   777→          desc: "Atomic thermal motion / model confidence",
+   778→          icon: <BarChart3 className="h-3.5 w-3.5" />,
+   779→        },
+   780→        {
+   781→          id: "ss",
+   782→          label: "Secondary Structure",
+   783→          desc: "α-helix / β-sheet / turn / coil ratio",
+   784→          icon: <Spline className="h-3.5 w-3.5" />,
+   785→        },
+   786→        {
+   787→          id: "seqalign",
+   788→          label: "Sequence Alignment",
+   789→          desc: "Needleman-Wunsch pairwise alignment",
+   790→          icon: <AlignLeft className="h-3.5 w-3.5" />,
+   791→        },
+   792→        {
+   793→          id: "rmsd",
+   794→          label: "RMSD Matrix",
+   795→          desc: "Multi-PDB CA Kabsch superposition RMSD",
+   796→          icon: <Grid3x3 className="h-3.5 w-3.5" />,
+   797→        },
+   798→      ],
+   799→    },
+   800→    {
+   801→      title: "Interactions",
+   802→      color: "text-sky-600",
+   803→      accentColor: "#0ea5e9",
+   804→      charts: [
+   805→        {
+   806→          id: "disulfide",
+   807→          label: "Disulfide Bonds",
+   808→          desc: "CYS-CYS SG-SG < 2.5Å covalent links",
+   809→          icon: <Link2 className="h-3.5 w-3.5" />,
+   810→        },
+   811→        {
+   812→          id: "aromatic",
+   813→          label: "Aromatic Stacking",
+   814→          desc: "π-π stacking + cation-π (PHE/TYR/TRP/HIS)",
+   815→          icon: <Sigma className="h-3.5 w-3.5" />,
+   816→        },
+   817→        {
+   818→          id: "water",
+   819→          label: "Water Bridges",
+   820→          desc: "Protein-water-protein H-bond networks",
+   821→          icon: <Droplets className="h-3.5 w-3.5" />,
+   822→        },
+   823→        {
+   824→          id: "metal",
+   825→          label: "Metal Coordination",
+   826→          desc: "Zn/Mg/Ca/Fe coordination geometry",
+   827→          icon: <Atom className="h-3.5 w-3.5" />,
+   828→        },
+   829→        {
+   830→          id: "contactmap",
+   831→          label: "Contact Map",
+   832→          desc: "Inter-chain CA-CA distance heatmap",
+   833→          icon: <Grid3x3 className="h-3.5 w-3.5" />,
+   834→        },
+   835→        {
+   836→          id: "interaction",
+   837→          label: "Interaction Network",
+   838→          desc: "H-bond / salt-bridge / hydrophobic force-directed graph",
+   839→          icon: <Network className="h-3.5 w-3.5" />,
+   840→        },
+   841→      ],
+   842→    },
+   843→    {
+   844→      title: "Ligand & Assembly",
+   845→      color: "text-amber-600",
+   846→      accentColor: "#c9872e",
+   847→      charts: [
+   848→        {
+   849→          id: "pocket",
+   850→          label: "Binding Pocket",
+   851→          desc: "Ligand-surrounding residues + volume + classification",
+   852→          icon: <Target className="h-3.5 w-3.5" />,
+   853→        },
+   854→        {
+   855→          id: "ligand",
+   856→          label: "Ligand Fingerprint",
+   857→          desc: "Atomic-level contact fingerprint",
+   858→          icon: <Fingerprint className="h-3.5 w-3.5" />,
+   859→        },
+   860→        {
+   861→          id: "oligomer",
+   862→          label: "Oligomer Analysis",
+   863→          desc: "Oligomer type + interfaces + symmetry",
+   864→          icon: <Boxes className="h-3.5 w-3.5" />,
+   865→        },
+   866→      ],
+   867→    },
+   868→    {
+   869→      title: "Drug Discovery",
+   870→      color: "text-pink-600",
+   871→      accentColor: "#7c5cbf",
+   872→      charts: [
+   873→        {
+   874→          id: "druggability",
+   875→          label: "Druggability",
+   876→          desc: "Pocket score + hydrophobic/polar/charge + 3D highlight",
+   877→          icon: <Pill className="h-3.5 w-3.5" />,
+   878→        },
+   879→        {
+   880→          id: "apbs_surface",
+   881→          label: "APBS Electrostatic",
+   882→          desc: "pdb2pqr charge + Debye-Hückel potential + 3D coloring",
+   883→          icon: <Zap className="h-3.5 w-3.5" />,
+   884→        },
+   885→        {
+   886→          id: "screening",
+   887→          label: "Virtual Screening",
+   888→          desc: "Fragment library scoring + ΔG prediction + Ki ranking",
+   889→          icon: <FlaskConical className="h-3.5 w-3.5" />,
+   890→        },
+   891→        {
+   892→          id: "detect_pockets",
+   893→          label: "Multi-Pocket Detection",
+   894→          desc: "Grid-based surface cavity detection + druggability",
+   895→          icon: <Target className="h-3.5 w-3.5" />,
+   896→        },
+   897→      ],
+   898→    },
+   899→    {
+   900→      title: "Quality",
+   901→      color: "text-violet-600",
+   902→      accentColor: "#8b5cf6",
+   903→      charts: [
+   904→        {
+   905→          id: "sasa",
+   906→          label: "SASA",
+   907→          desc: "Solvent accessible surface area (freesasa)",
+   908→          icon: <CircleDashed className="h-3.5 w-3.5" />,
+   909→        },
+   910→        {
+   911→          id: "surface",
+   912→          label: "Surface Residues",
+   913→          desc: "Surface-exposed vs buried classification",
+   914→          icon: <SunMedium className="h-3.5 w-3.5" />,
+   915→        },
+   916→        {
+   917→          id: "electrostatic",
+   918→          label: "Electrostatic",
+   919→          desc: "Per-residue net charge + Coulomb interaction energy",
+   920→          icon: <Zap className="h-3.5 w-3.5" />,
+   921→        },
+   922→        {
+   923→          id: "validation",
+   924→          label: "Structure Validation",
+   925→          desc: "Clashes / Ramachandran outliers / missing sidechains",
+   926→          icon: <ShieldCheck className="h-3.5 w-3.5" />,
+   927→        },
+   928→      ],
+   929→    },
+   930→  ];
+   931→
+   932→  const totalCharts = categories.reduce(
+   933→    (sum, cat) => sum + cat.charts.length,
+   934→    0
+   935→  );
+   936→
+   937→  // Flat list of all charts for favorites/recent lookups
+   938→  const allCharts = categories.flatMap((cat) => cat.charts);
+   939→
+   940→  const toggleCollapse = (title: string) => {
+   941→    setCollapsedCats((prev) => {
+   942→      const next = new Set(prev);
+   943→      if (next.has(title)) next.delete(title);
+   944→      else next.add(title);
+   945→      return next;
+   946→    });
+   947→  };
+   948→
+   949→  const filteredCategories = searchQuery.trim()
+   950→    ? categories
+   951→        .map((cat) => ({
+   952→          ...cat,
+   953→          charts: cat.charts.filter(
+   954→            (c) =>
+   955→              c.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+   956→              c.id.toLowerCase().includes(searchQuery.toLowerCase())
+   957→          ),
+   958→        }))
+   959→        .filter((cat) => cat.charts.length > 0)
+   960→    : activeFilter
+   961→    ? categories.filter((cat) => cat.title === activeFilter)
+   962→    : categories;
+   963→
+   964→  return (
+   965→    <div className="space-y-2">
+   966→      <div className="flex items-center gap-2">
+   967→        <Label className="text-[9px] text-claude-text-secondary shrink-0">
+   968→          Charts
+   969→        </Label>
+   970→        <div className="relative flex-1">
+   971→          <Search className="pointer-events-none absolute left-1.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-claude-text-muted" />
+   972→          <Input
+   973→            value={searchQuery}
+   974→            onChange={(e) => setSearchQuery(e.target.value)}
+   975→            placeholder="Search charts…"
+   976→            className="h-6 pl-6 text-[10px]"
+   977→          />
+   978→        </div>
+   979→        <Badge variant="outline" className="shrink-0 text-[9px]">
+   980→          {totalCharts}
+   981→        </Badge>
+   982→      </div>
+   983→
+   984→      {/* Category filter chips (hidden during search) */}
+   985→      {!searchQuery && (
+   986→        <div className="flex flex-wrap gap-1">
+   987→          <button
+   988→            onClick={() => setActiveFilter(null)}
+   989→            className={`sa-filter-chip ${activeFilter === null ? "sa-filter-active" : ""}`}
+   990→          >
+   991→            All
+   992→            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[7px]">
+   993→              {totalCharts}
+   994→            </Badge>
+   995→          </button>
+   996→          {categories.map((cat) => (
+   997→            <button
+   998→              key={cat.title}
+   999→              onClick={() => setActiveFilter(activeFilter === cat.title ? null : cat.title)}
+  1000→              className={`sa-filter-chip ${activeFilter === cat.title ? "sa-filter-active" : ""}`}
+  1001→              style={activeFilter === cat.title ? { borderColor: cat.accentColor, color: cat.accentColor } : {}}
+  1002→            >
+  1003→              {cat.title}
+  1004→              <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[7px]">
+  1005→                {cat.charts.length}
+  1006→              </Badge>
+  1007→            </button>
+  1008→          ))}
+  1009→        </div>
+  1010→      )}
+  1011→
+  1012→      {filteredCategories.length === 0 && searchQuery && (
+  1013→        <div className="rounded-md border border-dashed border-claude-border p-3 text-center text-[10px] text-claude-text-muted">
+  1014→          No matching charts
+  1015→        </div>
+  1016→      )}
+  1017→
+  1018→      {/* Favorites section (hidden during search) */}
+  1019→      {!searchQuery && favoriteCharts.length > 0 && (
+  1020→        <div>
+  1021→          <div className="sa-cat-header w-full text-claude-accent">
+  1022→            <Star className="h-3 w-3 fill-claude-accent" />
+  1023→            Favorites
+  1024→            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px] font-normal">
+  1025→              {favoriteCharts.length}
+  1026→            </Badge>
+  1027→          </div>
+  1028→          <div className="flex flex-wrap gap-1">
+  1029→            {favoriteCharts.map((favId) => {
+  1030→              const chart = allCharts.find((c) => c.id === favId);
+  1031→              if (!chart) return null;
+  1032→              return (
+  1033→                <button
+  1034→                  key={favId}
+  1035→                  onClick={() => handleChartClick(favId)}
+  1036→                  className={`sa-chart-tile ${openChart === favId ? "sa-chart-active" : ""}`}
+  1037→                  style={{ padding: "0.25rem 0.5rem" }}
+  1038→                >
+  1039→                  <span className="sa-chart-tile-icon">{chart.icon}</span>
+  1040→                  {chart.label}
+  1041→                </button>
+  1042→              );
+  1043→            })}
+  1044→          </div>
+  1045→        </div>
+  1046→      )}
+  1047→
+  1048→      {/* Recently used section (hidden during search) */}
+  1049→      {!searchQuery && recentCharts.length > 0 && (
+  1050→        <div>
+  1051→          <div className="sa-cat-header w-full text-claude-text-secondary">
+  1052→            <Clock className="h-3 w-3" />
+  1053→            Recent
+  1054→            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px] font-normal">
+  1055→              {recentCharts.length}
+  1056→            </Badge>
+  1057→          </div>
+  1058→          <div className="flex flex-wrap gap-1">
+  1059→            {recentCharts.map((recId) => {
+  1060→              const chart = allCharts.find((c) => c.id === recId);
+  1061→              if (!chart) return null;
+  1062→              return (
+  1063→                <button
+  1064→                  key={recId}
+  1065→                  onClick={() => handleChartClick(recId)}
+  1066→                  className={`sa-chart-tile ${openChart === recId ? "sa-chart-active" : ""}`}
+  1067→                  style={{ padding: "0.25rem 0.5rem" }}
+  1068→                >
+  1069→                  <span className="sa-chart-tile-icon">{chart.icon}</span>
+  1070→                  {chart.label}
+  1071→                </button>
+  1072→              );
+  1073→            })}
+  1074→          </div>
+  1075→        </div>
+  1076→      )}
+  1077→
+  1078→      {filteredCategories.map((cat) => {
+  1079→        const isCollapsed = collapsedCats.has(cat.title) && !searchQuery;
+  1080→        return (
+  1081→          <div key={cat.title}>
+  1082→            <button
+  1083→              onClick={() => toggleCollapse(cat.title)}
+  1084→              className={`sa-cat-header w-full ${cat.color} ${
+  1085→                searchQuery ? "cursor-default" : "hover:opacity-80"
+  1086→              }`}
+  1087→            >
+  1088→              {cat.title}
+  1089→              <Badge
+  1090→                variant="outline"
+  1091→                className="ml-0.5 px-1 py-0 text-[8px] font-normal"
+  1092→              >
+  1093→                {cat.charts.length}
+  1094→              </Badge>
+  1095→              {!searchQuery && (
+  1096→                <ChevronRight
+  1097→                  className={`ml-auto h-3 w-3 transition-transform ${
+  1098→                    isCollapsed ? "" : "rotate-90"
+  1099→                  }`}
+  1100→                />
+  1101→              )}
+  1102→            </button>
+  1103→            {!isCollapsed && (
+  1104→              <div className="grid grid-cols-2 gap-1">
+  1105→                {cat.charts.map((c) => {
+  1106→                  const isFav = favoriteCharts.includes(c.id);
+  1107→                  return (
+  1108→                  <TooltipProvider key={c.id} delayDuration={300}>
+  1109→                    <Tooltip>
+  1110→                      <TooltipTrigger asChild>
+  1111→                        <button
+  1112→                          onClick={() => handleChartClick(c.id)}
+  1113→                          data-category={cat.title.toLowerCase()}
+  1114→                          className={`sa-chart-tile ${
+  1115→                            openChart === c.id ? "sa-chart-active" : ""
+  1116→                          } ${isFav ? "sa-chart-fav" : ""}`}
+  1117→                        >
+  1118→                          <span
+  1119→                            className="sa-chart-tile-accent"
+  1120→                            style={{ backgroundColor: cat.accentColor }}
+  1121→                          />
+  1122→                          <span className="sa-chart-tile-icon">{c.icon}</span>
+  1123→                          {c.label}
+  1124→                          <span
+  1125→                            className="sa-chart-fav-star"
+  1126→                            onClick={(e) => {
+  1127→                              e.stopPropagation();
+  1128→                              toggleFavoriteChart(c.id);
+  1129→                            }}
+  1130→                            title={isFav ? "Remove from favorites" : "Add to favorites"}
+  1131→                          >
+  1132→                            <Star className={`h-2.5 w-2.5 ${isFav ? "fill-claude-accent text-claude-accent" : "text-claude-text-muted"}`} />
+  1133→                          </span>
+  1134→                        </button>
+  1135→                      </TooltipTrigger>
+  1136→                      <TooltipContent
+  1137→                        side="top"
+  1138→                        className="max-w-[200px] text-[10px]"
+  1139→                      >
+  1140→                        <div className="font-medium">{c.label}</div>
+  1141→                        <div className="text-claude-text-secondary">{c.desc}</div>
+  1142→                      </TooltipContent>
+  1143→                    </Tooltip>
+  1144→                  </TooltipProvider>
+  1145→                  );
+  1146→                })}
+  1147→              </div>
+  1148→            )}
+  1149→          </div>
+  1150→        );
+  1151→      })}
+  1152→      <AnimatePresence mode="wait">
+  1153→        {openChart && (
+  1154→          <motion.div
+  1155→            key={openChart}
+  1156→            className="mt-2"
+  1157→            initial={{ opacity: 0, height: 0, y: -8 }}
+  1158→            animate={{ opacity: 1, height: "auto", y: 0 }}
+  1159→            exit={{ opacity: 0, height: 0, y: -8 }}
+  1160→            transition={{ duration: 0.25, ease: "easeOut" }}
+  1161→            style={{ overflow: "hidden" }}
+  1162→          >
+  1163→            <ChartLoader
+  1164→              chartId={openChart}
+  1165→              onClose={() => setOpenChart(null)}
+  1166→            />
+  1167→          </motion.div>
+  1168→        )}
+  1169→      </AnimatePresence>
+  1170→    </div>
+  1171→  );
+  1172→}
+  1173→
+  1174→function ChartLoader({
+  1175→  chartId,
+  1176→  onClose,
+  1177→}: {
+  1178→  chartId: string;
+  1179→  onClose: () => void;
+  1180→}) {
+  1181→  const chartLabel = ALL_CHART_LABELS[chartId] ?? chartId;
+  1182→  return (
+  1183→    <div className="sa-chart-card relative">
+  1184→      <button
+  1185→        onClick={onClose}
+  1186→        className="absolute right-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded text-claude-text-muted hover:bg-claude-accent-light hover:text-claude-text"
+  1187→      >
+  1188→        <X className="h-3 w-3" />
+  1189→      </button>
+  1190→      {chartId === "overview" && <StructureOverviewDashboard />}
+  1191→      {chartId === "comparison" && <StructureComparisonDashboard />}
+  1192→      {chartId === "rama" && <RamachandranPlot />}
+  1193→      {chartId === "bfactor" && <BfactorChart />}
+  1194→      {chartId === "ss" && <SecondaryStructureChart />}
+  1195→      {chartId === "sasa" && <SasaChart />}
+  1196→      {chartId === "disulfide" && <DisulfideChart />}
+  1197→      {chartId === "aromatic" && <AromaticStackingChart />}
+  1198→      {chartId === "water" && <WaterBridgesChart />}
+  1199→      {chartId === "metal" && <MetalCoordinationChart />}
+  1200→      {chartId === "validation" && <StructureValidationChart />}
+  1201→      {chartId === "pocket" && <BindingPocketChart />}
+  1202→      {chartId === "ligand" && <LigandInteractionsChart />}
+  1203→      {chartId === "oligomer" && <OligomerAnalysisChart />}
+  1204→      {chartId === "electrostatic" && <ElectrostaticChart />}
+  1205→      {chartId === "contactmap" && <ContactMapChart />}
+  1206→      {chartId === "surface" && <SurfaceResiduesChart />}
+  1207→      {chartId === "interaction" && <InteractionNetwork />}
+  1208→      {chartId === "seqalign" && <SequenceAlignment />}
+  1209→      {chartId === "rmsd" && <RmsdMatrix />}
+  1210→      {chartId === "druggability" && <DruggabilityChart />}
+  1211→      {chartId === "apbs_surface" && <ApbsSurfaceChart />}
+  1212→      {chartId === "screening" && <ScreeningChart />}
+  1213→      {chartId === "detect_pockets" && <PocketDetectionChart />}
+  1214→      {/* Preset manager — save/load chart parameter combinations */}
+  1215→      <div className="border-t border-claude-border p-1.5">
+  1216→        <PresetManager
+  1217→          chartId={chartId}
+  1218→          chartLabel={chartLabel}
+  1219→          currentParams={{}}
+  1220→          onApplyPreset={() => {}}
+  1221→        />
+  1222→      </div>
+  1223→    </div>
+  1224→  );
+  1225→}
+  1226→

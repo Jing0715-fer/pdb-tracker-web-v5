@@ -282,6 +282,28 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ── 3b. Sample PDB Structures for Evaluations ────────────────────
+    const evalPdbStructures = [
+      // EGFR (P00533) — 3 structures
+      { uniprotId: 'P00533', pdbId: '1M17', method: 'X-ray', resolution: 2.6, title: 'EGFR kinase domain with erlotinib', journal: 'Biochemistry', journalIf: 3.0, depositionDate: '2002-01-15', releaseDate: '2002-06-01', ligand: '416', ligandNames: 'Erlotinib' },
+      { uniprotId: 'P00533', pdbId: '2ITZ', method: 'X-ray', resolution: 2.4, title: 'EGFR kinase domain with gefitinib', journal: 'Biochemistry', journalIf: 3.0, depositionDate: '2007-03-01', releaseDate: '2007-09-01', ligand: '184', ligandNames: 'Gefitinib' },
+      { uniprotId: 'P00533', pdbId: '6S9B', method: 'Cryo-EM', resolution: 3.2, title: 'Full-length EGFR in active dimer', journal: 'Nature', journalIf: 64.8, depositionDate: '2019-07-01', releaseDate: '2019-12-01', ligand: null, ligandNames: null },
+      // PSME1 (P07766) — 2 structures
+      { uniprotId: 'P07766', pdbId: '1J6Q', method: 'X-ray', resolution: 2.1, title: 'Proteasome activator PA28 alpha', journal: 'Journal of Molecular Biology', journalIf: 3.5, depositionDate: '2001-10-01', releaseDate: '2002-04-01', ligand: null, ligandNames: null },
+      { uniprotId: 'P07766', pdbId: '3UKW', method: 'Cryo-EM', resolution: 3.5, title: '20S proteasome with PA28 activator', journal: 'Nature', journalIf: 64.8, depositionDate: '2012-01-01', releaseDate: '2012-06-01', ligand: null, ligandNames: null },
+      // DGKZ (Q9Y6K9) — 1 structure
+      { uniprotId: 'Q9Y6K9', pdbId: '5D9Y', method: 'X-ray', resolution: 2.4, title: 'DGKZ C1 domain', journal: 'Structure', journalIf: 4.5, depositionDate: '2015-08-01', releaseDate: '2016-02-01', ligand: null, ligandNames: null },
+    ];
+
+    for (const pdb of evalPdbStructures) {
+      const existing = await db.evaluationPdbStructure.findFirst({
+        where: { uniprotId: pdb.uniprotId, pdbId: pdb.pdbId },
+      });
+      if (!existing) {
+        await db.evaluationPdbStructure.create({ data: pdb });
+      }
+    }
+
     // ── 4. Sample PubMed Articles (Literature) ────────────────────────
     // Schema: pubmedId, title, authors, journal, pubYear, pubMonth, pubDay, abstract, doi
     const sampleArticles = [

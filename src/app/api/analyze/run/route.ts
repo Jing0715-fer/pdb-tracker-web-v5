@@ -182,10 +182,12 @@ export async function POST(req: NextRequest) {
 
     // Run it.
     try {
+      // Ensure pdb2pqr and other local binaries are in PATH
+      const childEnv = { ...process.env, PATH: `/home/z/.local/bin:${process.env.PATH || ''}` };
       const { stdout, stderr } = await execFileAsync(
         "python3",
         [scriptPath],
-        { timeout: 45_000, maxBuffer: 10 * 1024 * 1024 }
+        { timeout: 45_000, maxBuffer: 10 * 1024 * 1024, env: childEnv }
       );
 
       // Try to parse stdout as JSON; recipes print pretty-printed JSON.

@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import { useTheme } from 'next-themes';
 import type { Evaluation } from '@/lib/pdb-types';
+import { ChartExportButton } from '@/components/chart-export-button';
 
 // ─── Metric Computation ──────────────────────────────────────────────────────
 
@@ -213,9 +214,12 @@ export function EvalScoreRadarChart({ evaluation }: EvalScoreRadarChartProps) {
 
   return (
     <div className="eval-radar-fade-in space-y-2">
-      <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider">
-        Evaluation Metrics
-      </h4>
+      <div className="flex items-center justify-between">
+        <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider">
+          Evaluation Metrics
+        </h4>
+        <ChartExportButton chartName="eval-score-radar" />
+      </div>
       <div className="chart-container chart-inner-shadow rounded-lg p-3 bg-claude-surface dark:bg-[#242220] border border-claude-border-light dark:border-[#2b2926]">
         <ResponsiveContainer width="100%" height={300}>
           <RadarChart cx="50%" cy="50%" outerRadius="70%" data={data}>

@@ -1,11 +1,24 @@
 'use client';
 
 import React, { useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { BookOpen } from 'lucide-react';
-import { LiteratureContent } from '@/components/literature/LiteratureView';
 import { LiteratureStatsCards } from '@/components/literature-stats-cards';
 import type { LitPaper, LitStats, LitReport } from '@/lib/pdb-types';
 import type { LiteratureViewProps } from './types';
+
+// Lazy-load LiteratureContent (heavy component with many sub-components)
+const LiteratureContent = dynamic(() => import('@/components/literature/LiteratureView').then(m => ({ default: m.LiteratureContent })), {
+  ssr: false,
+  loading: () => (
+    <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex flex-col items-center gap-2 text-claude-text-muted">
+        <BookOpen className="h-6 w-6 animate-pulse" />
+        <span className="text-xs">Loading Literature...</span>
+      </div>
+    </div>
+  ),
+});
 
 export function LiteratureView({
   stats,

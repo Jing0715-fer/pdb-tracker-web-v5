@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import type { LitStats } from '@/lib/pdb-types';
 import { METHOD_COLORS, IF_TIER_COLORS, ClaudeChartTooltip, getChartAxisColor, getChartTickColor } from '@/components/chart-tooltips';
+import { ChartExportButton } from '@/components/chart-export-button';
 import { useTheme } from 'next-themes';
 
 interface LiteratureStatsChartProps {
@@ -60,7 +61,10 @@ export function LiteratureStatsChart({ stats }: LiteratureStatsChartProps) {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {/* IF Distribution Bar Chart */}
       <div className="rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] p-4">
-        <h4 className="text-xs font-semibold text-claude-text mb-3">Impact Factor Distribution</h4>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-xs font-semibold text-claude-text">Impact Factor Distribution</h4>
+          <ChartExportButton chartName="lit-if-distribution" />
+        </div>
         <div className="h-[200px] chart-container">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart key="lit-if-bar" data={ifData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
@@ -89,7 +93,10 @@ export function LiteratureStatsChart({ stats }: LiteratureStatsChartProps) {
 
       {/* Method Distribution Donut */}
       <div className="rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] p-4">
-        <h4 className="text-xs font-semibold text-claude-text mb-3">Method Distribution</h4>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-xs font-semibold text-claude-text">Method Distribution</h4>
+          <ChartExportButton chartName="lit-method-distribution" />
+        </div>
         <div className="h-[200px] chart-container flex items-center">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart key="lit-method-donut">
@@ -125,7 +132,10 @@ export function LiteratureStatsChart({ stats }: LiteratureStatsChartProps) {
 
       {/* Publication Timeline Area Chart */}
       <div className="rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] p-4 md:col-span-2">
-        <h4 className="text-xs font-semibold text-claude-text mb-3">Publication Timeline</h4>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-xs font-semibold text-claude-text">Publication Timeline</h4>
+          <ChartExportButton chartName="lit-publication-timeline" />
+        </div>
         <div className="h-[160px] chart-container">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart key="lit-timeline-area" data={timelineData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>

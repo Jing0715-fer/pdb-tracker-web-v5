@@ -243,14 +243,14 @@
   font-weight: 700;
   margin-bottom: 0.75rem;
   margin-top: 1.5rem;
-  color: #c96442;
-  border-bottom: 2px solid #c96442;
+  color: var(--claude-accent, #c96442);
+  border-bottom: 2px solid var(--claude-accent, #c96442);
   padding-bottom: 0.5rem;
 }
 
 .dark .markdown-content h1 {
-  color: #d4784f;
-  border-bottom-color: #d4784f;
+  color: var(--claude-accent, #d4784f);
+  border-bottom-color: var(--claude-accent, #d4784f);
 }
 
 .markdown-content h2 {
@@ -259,13 +259,13 @@
   margin-bottom: 0.5rem;
   margin-top: 1.25rem;
   color: #8b4a2e;
-  border-left: 3px solid #c96442;
+  border-left: 3px solid var(--claude-accent, #c96442);
   padding-left: 0.5rem;
 }
 
 .dark .markdown-content h2 {
   color: #b86840;
-  border-left-color: #d4784f;
+  border-left-color: var(--claude-accent, #d4784f);
 }
 .markdown-content h3 {
   font-size: 1rem;
@@ -332,7 +332,7 @@
 }
 
 .markdown-content blockquote {
-  border-left: 3px solid #c96442;
+  border-left: 3px solid var(--claude-accent, #c96442);
   padding-left: 1rem;
   margin: 0.75rem 0;
   color: #6b6560;
@@ -340,7 +340,7 @@
 }
 
 .dark .markdown-content blockquote {
-  border-left-color: #d4784f;
+  border-left-color: var(--claude-accent, #d4784f);
   color: #6b6560;
 }
 
@@ -1884,11 +1884,11 @@ button:active:not(:disabled) {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, #e8e4dd 20%, #c96442 50%, #e8e4dd 80%, transparent);
+  background: linear-gradient(90deg, transparent, var(--claude-border, #e8e4dd) 20%, var(--claude-accent, #c96442) 50%, var(--claude-border, #e8e4dd) 80%, transparent);
 }
 
 .dark .header-gradient-border::after {
-  background: linear-gradient(90deg, transparent, #3d3832 20%, #d4784f 50%, #3d3832 80%, transparent);
+  background: linear-gradient(90deg, transparent, var(--claude-border, #3d3832) 20%, var(--claude-accent, #d4784f) 50%, var(--claude-border, #3d3832) 80%, transparent);
 }
 
 /* ─── Enhanced Header Background ────────────────────────────────────────── */
@@ -1896,36 +1896,36 @@ button:active:not(:disabled) {
 .header-enhanced-bg {
   background: linear-gradient(
     135deg,
-    #ffffff 0%,
-    #fdf8f4 25%,
-    #ffffff 50%,
-    #f4f9f9 75%,
-    #ffffff 100%
+    var(--claude-surface, #ffffff) 0%,
+    color-mix(in srgb, var(--claude-accent, #c96442) 6%, var(--claude-surface, #ffffff)) 25%,
+    var(--claude-surface, #ffffff) 50%,
+    color-mix(in srgb, var(--claude-accent, #c96442) 4%, var(--claude-surface, #ffffff)) 75%,
+    var(--claude-surface, #ffffff) 100%
   );
 }
 
 .dark .header-enhanced-bg {
   background: linear-gradient(
     135deg,
-    #242220 0%,
-    #2a2522 25%,
-    #242220 50%,
-    #222a2a 75%,
-    #242220 100%
+    var(--claude-surface, #242220) 0%,
+    color-mix(in srgb, var(--claude-accent, #d4784f) 10%, var(--claude-surface, #242220)) 25%,
+    var(--claude-surface, #242220) 50%,
+    color-mix(in srgb, var(--claude-accent, #d4784f) 8%, var(--claude-surface, #242220)) 75%,
+    var(--claude-surface, #242220) 100%
   );
 }
 
 /* ─── Header Title Text Gradient ────────────────────────────────────────── */
 
 .header-text-gradient {
-  background: linear-gradient(135deg, #c96442 0%, #d4784f 40%, #c9872e 100%);
+  background: linear-gradient(135deg, var(--claude-accent, #c96442) 0%, var(--claude-accent-hover, #d4784f) 40%, var(--claude-nmr, #c9872e) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .dark .header-text-gradient {
-  background: linear-gradient(135deg, #d4784f 0%, #e08a62 40%, #d9a24e 100%);
+  background: linear-gradient(135deg, var(--claude-accent, #d4784f) 0%, var(--claude-accent-hover, #e08a62) 40%, var(--claude-nmr, #d9a24e) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -13788,10 +13788,15 @@ button, a, input, select, [role="button"] {
 }
 
 /* ─── Visual Polish: Staggered List Animation ─────────────────────────────── */
+/* Only animate on initial mount, not on re-renders from dynamic import resolution */
 
 .stagger-list > * {
-  opacity: 0;
   animation: staggerFadeIn 0.3s ease-out forwards;
+}
+
+/* First render: start invisible, animate to visible */
+.stagger-list:not(.stagger-done) > * {
+  opacity: 0;
 }
 
 .stagger-list > *:nth-child(1) { animation-delay: 0ms; }
@@ -20207,4 +20212,43 @@ tr.row-selected.table-row-hover-enhanced:hover td:first-child {
 .density-comfortable table tbody tr td {
   padding-top: 6px;
   padding-bottom: 6px;
+}
+
+/* ─── High Contrast Mode (Accessibility) ─────────────────────────────────── */
+
+.high-contrast {
+  --claude-text: #000000;
+  --claude-text-secondary: #1a1a1a;
+  --claude-text-muted: #333333;
+  --claude-accent: #c96442;
+  --claude-border: #666666;
+  --claude-surface: #ffffff;
+  --claude-bg: #ffffff;
+}
+
+.dark.high-contrast {
+  --claude-text: #ffffff;
+  --claude-text-secondary: #f0f0f0;
+  --claude-text-muted: #cccccc;
+  --claude-accent: #ff8866;
+  --claude-border: #999999;
+  --claude-surface: #1a1a1a;
+  --claude-bg: #000000;
+}
+
+.high-contrast * {
+  border-color: var(--claude-border) !important;
+}
+
+.high-contrast button:focus-visible,
+.high-contrast a:focus-visible,
+.high-contrast input:focus-visible,
+.high-contrast [tabindex]:focus-visible {
+  outline: 3px solid var(--claude-accent) !important;
+  outline-offset: 2px !important;
+}
+
+.high-contrast .text-claude-text-muted {
+  color: var(--claude-text-muted) !important;
+  opacity: 1 !important;
 }

@@ -20,6 +20,7 @@ import {
   Activity,
 } from 'lucide-react';
 import type { PdbEntry, WeeklySnapshot } from '@/lib/pdb-types';
+import { ChartExportButton } from '@/components/chart-export-button';
 
 /**
  * DashboardSummaryWidget
@@ -249,9 +250,10 @@ export function DashboardSummaryWidget({ entries, snapshots }: DashboardSummaryW
               <div className={`flex h-5 w-5 items-center justify-center rounded bg-gradient-to-br ${widget.gradient}`}>
                 <Icon className="h-2.5 w-2.5 text-white" />
               </div>
-              <span className="text-[8px] font-bold uppercase tracking-wider text-claude-text-muted">
+              <span className="text-[8px] font-bold uppercase tracking-wider text-claude-text-muted flex-1">
                 {widget.label}
               </span>
+              <ChartExportButton chartName={`summary-${widget.label.toLowerCase().replace(/\s+/g, '-')}`} />
             </div>
             {/* Content */}
             <div className="w-full flex-1 min-h-[50px]">

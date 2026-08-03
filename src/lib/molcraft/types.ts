@@ -260,6 +260,21 @@ export interface MolstarPlugin {
   dataTransaction(fn: () => Promise<void>): Promise<void>;
   clear(): Promise<void>;
   dispose(): void;
+  events?: {
+    interactivity?: {
+      click?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
+      hover?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
+    };
+  };
+  behaviors?: {
+    interaction?: {
+      click?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
+      hover?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
+    };
+    structure?: {
+      selection?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
+    };
+  };
   canvas3d?: {
     props: {
       trackball: {
@@ -267,11 +282,13 @@ export interface MolstarPlugin {
       };
       [k: string]: unknown;
     };
-  };
-  events?: {
-    interactivity?: {
-      click?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
-      hover?: { subscribe(cb: (v: unknown) => void): { unsubscribe(): void } };
+    interaction?: {
+      props: {
+        clickCenterFocus?: { isDisabled?: boolean };
+        clickFocus?: { isDisabled?: boolean };
+        [k: string]: unknown;
+      };
+      setProps(props: Record<string, unknown>): void;
     };
   };
 }

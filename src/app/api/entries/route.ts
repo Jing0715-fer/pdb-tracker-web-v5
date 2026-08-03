@@ -26,6 +26,25 @@ function toCamelCase(obj: any): any {
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
+
+    // Check if the database has been initialized. If the schema doesn't
+    // exist yet (first run, DB not configured), return an empty result
+    // instead of a 500 error. This lets the frontend show the DB setup
+    // wizard gracefully without surfacing a confusing API error.
+    try {
+      // Lightweight probe — if the table doesn't exist, this throws.
+      await db.$queryRaw`SELECT 1 FROM PdbStructure LIMIT 1`;
+    } catch {
+      return NextResponse.json({
+        total: 0,
+        limit: 0,
+        offset: 0,
+        hasMore: false,
+        entries: [],
+        dbNotReady: true,
+      });
+    }
+
     const week = searchParams.get('week');
     const method = searchParams.get('method');
     const q = searchParams.get('q');

@@ -8,6 +8,7 @@ import { Star, ArrowRightLeft, ChevronDown } from 'lucide-react';
 import { ScoreBar } from '@/components/quality-components';
 import { AnimatedNumber } from '@/components/ui/pdb-animated';
 import { getScoreColor } from '@/components/pdb-helpers';
+import { ChartExportButton } from '@/components/chart-export-button';
 import type { Evaluation } from '@/lib/pdb-types';
 
 // ─── Score Parsing ──────────────────────────────────────────────────────────────
@@ -323,10 +324,13 @@ export function EvalComparison({ evaluations }: EvalComparisonProps) {
         {/* Score Comparison Bars */}
         {allScoreKeys.length > 0 && (
           <div className="space-y-3">
-            <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider flex items-center gap-1.5">
-              Score Comparison
-              <span className="text-[9px] font-normal text-claude-text-muted">(★ = better)</span>
-            </h4>
+            <div className="flex items-center justify-between">
+              <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider flex items-center gap-1.5">
+                Score Comparison
+                <span className="text-[9px] font-normal text-claude-text-muted">(★ = better)</span>
+              </h4>
+              <ChartExportButton chartName="eval-score-comparison" />
+            </div>
             <div className="space-y-3">
               {allScoreKeys.map(key => (
                 <ComparisonScoreBar

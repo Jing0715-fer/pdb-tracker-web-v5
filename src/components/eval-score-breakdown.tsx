@@ -13,6 +13,7 @@ import {
 import { useTheme } from 'next-themes';
 import { Shield, Database, Dna, CheckCircle2, Award, BarChart3 } from 'lucide-react';
 import type { Evaluation } from '@/lib/pdb-types';
+import { ChartExportButton } from '@/components/chart-export-button';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -567,9 +568,12 @@ export function EvalScoreBreakdown({
 
         {/* Score Radar */}
         <div className="eval-breakdown-radar-container rounded-lg p-4 border border-claude-border-light dark:border-[#2b2926] bg-white dark:bg-[#242220] flex flex-col">
-          <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider mb-2">
-            Score Radar
-          </h4>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider">
+              Score Radar
+            </h4>
+            <ChartExportButton chartName="eval-score-radar" />
+          </div>
           {/* min-h + height raised from 180→240 so axis labels (which extend
               below the chart) are not clipped. outerRadius reduced to 65% to
               keep the polygon inside the larger canvas with room for labels. */}

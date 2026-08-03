@@ -19,6 +19,8 @@ export interface EnhancedFooterProps {
   cacheDataSource?: CacheDataSource;
   /** Whether a background refresh is in progress */
   isCacheRefreshing?: boolean;
+  /** Optional children (e.g., WebVitalsIndicator) */
+  children?: React.ReactNode;
 }
 
 // ─── Utility: Relative Time ────────────────────────────────────────────────────
@@ -81,6 +83,7 @@ export function EnhancedFooter({
   isRefreshing,
   cacheDataSource,
   isCacheRefreshing,
+  children,
 }: EnhancedFooterProps) {
   const { t, locale } = useI18n();
   // Live relative time update every 30s
@@ -165,6 +168,8 @@ export function EnhancedFooter({
 
           {/* Right section */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Web Vitals indicator (dev mode only) */}
+            {children}
             {/* Entry count */}
             {totalEntries > 0 && (
               <span className="hidden md:inline">

@@ -20,7 +20,8 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["molstar"],
   // Next.js 16 dev mode blocks cross-origin HMR by default. The preview
   // panel and Playwright headless chromium see 127.0.0.1:3000 as cross-origin.
-  allowedDevOrigins: ['127.0.0.1', 'localhost', '.space-z.ai'],
+  // Include both the bare domain and the preview-chat subdomain pattern.
+  allowedDevOrigins: ['127.0.0.1', 'localhost', '.space-z.ai', 'preview-chat-*.space-z.ai'],
   // Optimize barrel imports for heavy libraries so the bundler only resolves
   // the actually-used symbols instead of the entire barrel graph. This is
   // the single biggest dev-mode memory win for apps that pull from large
@@ -33,6 +34,16 @@ const nextConfig: NextConfig = {
       '@radix-ui/react-icons',
       'date-fns',
       'react-markdown',
+      '@radix-ui/react-dialog',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-tooltip',
+      '@radix-ui/react-tabs',
+      '@radix-ui/react-select',
+      '@radix-ui/react-popover',
+      '@radix-ui/react-scroll-area',
+      'zod',
+      'clsx',
+      'tailwind-merge',
     ],
   },
   // Webpack config — used when `next dev --webpack` or `next build` is run.
@@ -64,6 +75,10 @@ const nextConfig: NextConfig = {
     config.infrastructureLogging = Object.assign(config.infrastructureLogging || {}, {
       level: 'warn',
     });
+
+    // Note: ChunkLoadError retry is handled in layout.tsx via a <script> tag
+    // that patches __webpack_require__.e at runtime. This is more reliable
+    // than the webpack entry approach (which had issues with data: URLs).
 
     if (dev) {
       const root = resolve(__dirname_val);

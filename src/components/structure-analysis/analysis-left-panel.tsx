@@ -44,6 +44,9 @@ import {
   Trash2,
   Star,
   Clock,
+  MousePointerClick,
+  CornerDownLeft,
+  Triangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -483,20 +486,104 @@ function MeasureTab() {
   const measurements = useAppStore((s) => s.measurements);
   const removeMeasurement = useAppStore((s) => s.removeMeasurement);
   const clearMeasurements = useAppStore((s) => s.clearMeasurements);
+  const measureMode = useAppStore((s) => s.measureMode);
+  const setMeasureMode = useAppStore((s) => s.setMeasureMode);
+  const viewer = useAppStore((s) => s.viewer);
+  const toast = useAppStore((s) => s.toast);
+
+  const isPicking = measureMode !== "off";
+
+  // Clear all measurements (both store + Molstar measurement manager)
+  const handleClearAll = () => {
+    clearMeasurements();
+    if (viewer) {
+      try {
+        viewer.plugin.managers.structure.measurement.clear();
+      } catch {
+        // ignore
+      }
+    }
+    toast("Measurements cleared", "info");
+  };
 
   return (
     <div className="space-y-2 p-2">
-      <ResidueInput label="Atom A" value={a} onChange={setA} />
-      <ResidueInput label="Atom B" value={b} onChange={setB} />
-      <Button
-        size="sm"
-        className="h-7 w-full text-[11px]"
-        disabled={busy}
-        onClick={() => run({ type: "measure_distance", a, b })}
-      >
-        Measure Distance
-      </Button>
+      {/* ── Click-to-Pick Mode (Molcraft-style) ── */}
+      <div className="rounded-md border border-claude-border bg-claude-bg/50 p-2 space-y-1.5">
+        <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+          <MousePointerClick className="h-3 w-3" />
+          Click-to-Pick Mode
+        </div>
+        <p className="text-[9px] text-claude-text-muted leading-relaxed">
+          Enable a mode below, then click atoms in the 3D viewer to measure.
+        </p>
+        <div className="grid grid-cols-2 gap-1">
+          <Button
+            size="sm"
+            variant={measureMode === "distance" ? "default" : "outline"}
+            className={`h-7 text-[10px] gap-1 ${
+              measureMode === "distance"
+                ? "bg-claude-accent text-white border-claude-accent"
+                : ""
+            }`}
+            disabled={!viewer}
+            onClick={() =>
+              setMeasureMode(measureMode === "distance" ? "off" : "distance")
+            }
+          >
+            <Ruler className="h-3 w-3" />
+            Distance
+          </Button>
+          <Button
+            size="sm"
+            variant={measureMode === "angle" ? "default" : "outline"}
+            className={`h-7 text-[10px] gap-1 ${
+              measureMode === "angle"
+                ? "bg-claude-accent text-white border-claude-accent"
+                : ""
+            }`}
+            disabled={!viewer}
+            onClick={() => setMeasureMode(measureMode === "angle" ? "off" : "angle")}
+          >
+            <Triangle className="h-3 w-3" />
+            Angle
+          </Button>
+        </div>
+        {isPicking && (
+          <div className="flex items-center gap-1 text-[9px] text-claude-accent animate-pulse">
+            <CornerDownLeft className="h-2.5 w-2.5" />
+            Click {measureMode === "distance" ? "2 atoms" : "3 atoms"} in the viewer…
+            <button
+              onClick={() => setMeasureMode("off")}
+              className="ml-auto text-claude-text-muted hover:text-destructive"
+            >
+              cancel
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="my-1 h-px bg-claude-border" />
+
+      {/* ── Manual residue input ── */}
+      <div className="rounded-md border border-claude-border p-2 space-y-1">
+        <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+          Manual Distance
+        </div>
+        <ResidueInput label="Atom A" value={a} onChange={setA} />
+        <ResidueInput label="Atom B" value={b} onChange={setB} />
+        <Button
+          size="sm"
+          className="h-7 w-full text-[11px]"
+          disabled={busy}
+          onClick={() => run({ type: "measure_distance", a, b })}
+        >
+          Measure Distance
+        </Button>
+      </div>
+
+      <div className="my-1 h-px bg-claude-border" />
+
       <ResidueInput label="Label target" value={labelTarget} onChange={setLabelTarget} />
       <Button
         size="sm"
@@ -516,7 +603,7 @@ function MeasureTab() {
               History ({measurements.length})
             </span>
             <button
-              onClick={clearMeasurements}
+              onClick={handleClearAll}
               className="text-[9px] text-claude-text-muted hover:text-destructive"
             >
               Clear

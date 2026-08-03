@@ -7,12 +7,14 @@ import {
   X, Sun, Moon, Monitor, Palette, SlidersHorizontal,
   Eye, Bell, Keyboard, Info, RotateCcw, ChevronRight,
   Dna, BarChart3, Microscope, FileText, Languages,
-  Database,
+  Database, Download, Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { exportSettings, importSettings } from '@/lib/settings-backup';
+import { useColorTheme } from '@/hooks/use-color-theme';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -94,6 +96,31 @@ function SettingRow({
         )}
       </div>
       <div className="flex-shrink-0">{children}</div>
+    </div>
+  );
+}
+
+// ─── Color Theme Picker ──────────────────────────────────────────────────────
+
+function ColorThemePicker() {
+  const { locale } = useI18n();
+  const { themeId, changeTheme, themes } = useColorTheme();
+  return (
+    <div className="flex items-center gap-1.5">
+      {themes.map(theme => (
+        <button
+          key={theme.id}
+          onClick={() => changeTheme(theme.id)}
+          className={`w-6 h-6 rounded-full border-2 transition-all ${
+            themeId === theme.id
+              ? 'border-claude-text scale-110 shadow-sm'
+              : 'border-transparent hover:scale-105'
+          }`}
+          style={{ backgroundColor: theme.accent }}
+          title={locale === 'zh' ? theme.nameZh : theme.name}
+          aria-label={locale === 'zh' ? theme.nameZh : theme.name}
+        />
+      ))}
     </div>
   );
 }
@@ -262,6 +289,34 @@ export function SettingsPanel({
                       <SelectItem value="flat">{t.cardStyleFlat}</SelectItem>
                     </SelectContent>
                   </Select>
+                </SettingRow>
+
+                {/* High Contrast Mode */}
+                <SettingRow
+                  label={locale === 'zh' ? '高对比度模式' : 'High Contrast Mode'}
+                  description={locale === 'zh' ? '提高文字和边框对比度，增强可读性' : 'Increase contrast for better readability'}
+                >
+                  <Switch
+                    checked={typeof window !== 'undefined' && document.documentElement.classList.contains('high-contrast')}
+                    onCheckedChange={(v) => {
+                      if (typeof window !== 'undefined') {
+                        document.documentElement.classList.toggle('high-contrast', v);
+                        try {
+                          localStorage.setItem('pdb-high-contrast', v ? 'true' : 'false');
+                        } catch {
+                          // ignore
+                        }
+                      }
+                    }}
+                  />
+                </SettingRow>
+
+                {/* Color Theme Picker */}
+                <SettingRow
+                  label={locale === 'zh' ? '强调色主题' : 'Accent Color Theme'}
+                  description={locale === 'zh' ? '自定义应用强调色' : 'Customize the app accent color'}
+                >
+                  <ColorThemePicker />
                 </SettingRow>
               </section>
 
@@ -500,6 +555,46 @@ export function SettingsPanel({
                   <div className="flex items-center justify-between">
                     <span className="text-claude-text-muted">{t.storage}</span>
                     <span className="font-mono text-claude-text-secondary">localStorage</span>
+                  </div>
+                </div>
+
+                {/* Backup & Restore */}
+                <div className="mt-4 space-y-2">
+                  <div className="text-[10px] font-semibold text-claude-text-muted uppercase tracking-wider">
+                    {locale === 'zh' ? '备份与恢复' : 'Backup & Restore'}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 h-8 text-[11px]"
+                      onClick={() => exportSettings()}
+                    >
+                      <Download className="h-3 w-3 mr-1.5" />
+                      {locale === 'zh' ? '导出设置' : 'Export Settings'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 h-8 text-[11px]"
+                      onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = '.json';
+                        input.onchange = (e) => {
+                          const file = (e.target as HTMLInputElement).files?.[0];
+                          if (file) {
+                            importSettings(file).then(() => {
+                              setTimeout(() => window.location.reload(), 1500);
+                            });
+                          }
+                        };
+                        input.click();
+                      }}
+                    >
+                      <Upload className="h-3 w-3 mr-1.5" />
+                      {locale === 'zh' ? '导入设置' : 'Import Settings'}
+                    </Button>
                   </div>
                 </div>
 

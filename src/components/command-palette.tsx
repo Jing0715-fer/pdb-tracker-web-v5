@@ -34,6 +34,7 @@ import {
 import type { PdbEntry, Evaluation, LitPaper } from '@/lib/pdb-types';
 import { getMethodLabel } from '@/components/pdb-helpers';
 import { useI18n } from '@/lib/i18n';
+import { useFocusTrap } from '@/hooks/use-focus-trap';
 
 // ─── Search Result Types ──────────────────────────────────────────────────────
 
@@ -269,6 +270,8 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const { t, locale } = useI18n();
   const [searchValue, setSearchValue] = useState('');
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, () => onOpenChange(false), open);
   const [searchResults, setSearchResults] = useState<SearchResults>({ entries: [], evaluations: [], papers: [] });
   // Track the query that produced the current results, to derive loading state
   const [searchedQuery, setSearchedQuery] = useState('');
@@ -528,7 +531,7 @@ export function CommandPalette({
 
       {/* Command Palette Panel */}
       <div className="fixed inset-x-0 top-0 z-50 flex justify-center pt-[15vh]">
-        <div className="w-full max-w-lg command-palette-panel">
+        <div ref={panelRef} className="w-full max-w-lg command-palette-panel">
           <Command
             className="rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-2xl shadow-black/20 dark:shadow-black/40"
             loop

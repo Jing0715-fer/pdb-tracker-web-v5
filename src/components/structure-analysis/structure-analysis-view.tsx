@@ -27,6 +27,7 @@ import { useAnalysisKeyboardShortcuts } from "./use-analysis-keyboard-shortcuts"
 import { DragDropOverlay } from "./drag-drop-overlay";
 import { ShortcutHelpDialog } from "./shortcut-help-dialog";
 import { AnalysisTour } from "./analysis-tour";
+import { useAtomPicking } from "./use-atom-picking";
 import { MolstarViewer } from "@/components/molcraft-molstar/molstar-viewer";
 import {
   useAppStore,
@@ -46,6 +47,21 @@ interface StructureInfo {
   molecularWeight: number | null;
   chainCount: number;
   ligands: Array<{ compId: string; name: string }>;
+  polymers?: Array<{
+    entityId: string;
+    chains: string[];
+    authChains: string[];
+    sequenceLength: number;
+    description: string;
+    organism: string;
+    entityType: string;
+  }>;
+  nonpolymers?: Array<{
+    entityId: string;
+    compId: string;
+    name: string;
+    formulaWeight: number | null;
+  }>;
 }
 
 export function StructureAnalysisView() {
@@ -60,6 +76,9 @@ export function StructureAnalysisView() {
 
   // Enable keyboard shortcuts when the viewer is ready
   useAnalysisKeyboardShortcuts(ready);
+
+  // Enable click-to-pick atom selection (Molcraft-style distance/angle measurement)
+  useAtomPicking();
 
   // Listen for shortcut help toggle event (triggered by "?" key)
   useEffect(() => {
@@ -154,6 +173,8 @@ export function StructureAnalysisView() {
           molecularWeight: data.entry?.molecularWeight ?? null,
           chainCount: data.polymers?.length ?? 0,
           ligands: data.nonpolymers ?? [],
+          polymers: data.polymers ?? [],
+          nonpolymers: data.nonpolymers ?? [],
         });
       })
       .catch(() => {});
@@ -182,7 +203,7 @@ export function StructureAnalysisView() {
   }, []);
 
   const viewerBlock = (
-    <div className={`sa-viewer relative h-full w-full ${viewerBgDark ? "dark-viewer" : ""}`}>
+    <div className={`sa-viewer absolute inset-0 ${viewerBgDark ? "dark-viewer" : ""}`}>
       <div className="sa-viewer-backdrop" />
       <MolstarViewer className="absolute inset-0" />
       <ViewerOverlay
@@ -211,21 +232,21 @@ export function StructureAnalysisView() {
         <div className="hidden lg:flex flex-1 min-h-0">
           <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
             {/* Left: structures + analysis */}
-            <ResizablePanel defaultSize={22} minSize={16} maxSize={38}>
-              <div data-tour="left-panel" className="h-full">
+            <ResizablePanel defaultSize={22} minSize={8} maxSize={38}>
+              <div data-tour="left-panel" className="h-full min-w-0 overflow-hidden">
                 <AnalysisLeftPanel />
               </div>
             </ResizablePanel>
             <ResizableHandle withHandle />
             {/* Center: viewer */}
-            <ResizablePanel defaultSize={54} minSize={30}>
-              {viewerBlock}
+            <ResizablePanel defaultSize={54} minSize={8}>
+              <div className="relative h-full min-w-0 overflow-hidden">{viewerBlock}</div>
             </ResizablePanel>
             <ResizableHandle withHandle />
             {/* Right: reports + history */}
-            <ResizablePanel defaultSize={24} minSize={18} maxSize={40}>
-              <div data-tour="right-panel" className="h-full">
-                <AnalysisRightPanel />
+            <ResizablePanel defaultSize={24} minSize={8} maxSize={40}>
+              <div data-tour="right-panel" className="h-full min-w-0 overflow-hidden">
+                <AnalysisRightPanel structureInfo={structureInfo} />
               </div>
             </ResizablePanel>
           </ResizablePanelGroup>
@@ -236,7 +257,7 @@ export function StructureAnalysisView() {
           <MobilePanelSwitcher
             viewerBlock={viewerBlock}
             leftPanel={<AnalysisLeftPanel />}
-            rightPanel={<AnalysisRightPanel />}
+            rightPanel={<AnalysisRightPanel structureInfo={structureInfo} />}
           />
         </div>
 

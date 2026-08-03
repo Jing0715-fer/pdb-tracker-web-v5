@@ -167,35 +167,40 @@ function persistCfg(c: LlmUserConfig) { try { localStorage.setItem(STORAGE_KEY, 
 /* ──────────────────────────────────────────────────────────────────────── */
 
 function levelColor(level?: string) {
+  // Use standard Tailwind colors for status — guaranteed distinct from ALL 6 theme accents.
+  // Theme accents: claude(#c96442), ocean(#2d8f8f), forest(#16a34a), sunset(#ea580c), berry(#7c5cbf), rose(#e11d48)
+  // emerald-500(#10b981) ≠ forest(#16a34a) and ≠ ocean(#2d8f8f) — distinct hue/brightness
+  // red-500(#ef4444) ≠ rose(#e11d48) — different red shade
+  // amber-500(#f59e0b) ≠ sunset(#ea580c) — yellow-orange vs red-orange
   switch (level) {
-    case 'error': return 'text-rose-500';
-    case 'warn': return 'text-amber-500';
-    case 'success': return 'text-emerald-500';
-    default: return 'text-sky-500';
+    case 'error': return 'text-red-500 dark:text-red-400';
+    case 'warn': return 'text-amber-500 dark:text-amber-400';
+    case 'success': return 'text-emerald-500 dark:text-emerald-400';
+    default: return 'text-claude-accent';
   }
 }
 
 function StatusPill({ running, done, ok }: { running: boolean; done: boolean; ok: boolean }) {
   if (running) {
     return (
-      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-sky-500/10 text-sky-600 dark:text-sky-300 border-sky-500/30">
+      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-claude-accent/10 text-claude-accent border-claude-accent/30">
         <Loader2 className="h-2.5 w-2.5 animate-spin" /> streaming
       </Badge>
     );
   }
   if (done) {
     return ok ? (
-      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border-emerald-500/30">
+      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
         <CheckCircle2 className="h-3 w-3" /> done
       </Badge>
     ) : (
-      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-rose-500/10 text-rose-600 dark:text-rose-300 border-rose-500/30">
+      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30">
         <XCircle className="h-3 w-3" /> failed
       </Badge>
     );
   }
   return (
-    <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-muted/40 text-muted-foreground border-border">
+    <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590] border-claude-border/60 dark:border-[#3d3832]/60">
       <Activity className="h-3 w-3" /> idle
     </Badge>
   );
@@ -239,22 +244,22 @@ function StreamFeed({
 
   if (events.length === 0) {
     return (
-      <div className="mt-3 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-4 text-center">
-        <Terminal className="mx-auto h-4 w-4 text-muted-foreground/60" />
-        <p className="mt-1.5 text-sm text-muted-foreground">{emptyHint}</p>
+      <div className="mt-3 rounded-lg border border-dashed border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-3 py-4 text-center">
+        <Terminal className="mx-auto h-4 w-4 text-claude-text-muted/60 dark:text-[#9b9590]/60" />
+        <p className="mt-1.5 text-sm text-claude-text-muted dark:text-[#9b9590]">{emptyHint}</p>
       </div>
     );
   }
 
   return (
-    <div className="mt-3 rounded-lg border border-border/60 bg-muted/20 overflow-hidden">
+    <div className="mt-3 rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-bg/40 dark:bg-[#1a1917]/40 overflow-hidden">
       {/* header */}
-      <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/60 bg-muted/40">
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-surface/60 dark:bg-[#242220]/60">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Live Progress</span>
-          <span className="text-xs text-muted-foreground/70">({events.length} events)</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">Live Progress</span>
+          <span className="text-xs text-claude-text-muted/70 dark:text-[#9b9590]/70">({events.length} events)</span>
           {running && startTime && (
-            <span className="text-xs font-mono text-sky-600 dark:text-sky-300 tabular-nums flex items-center gap-0.5">
+            <span className="text-xs font-mono text-claude-cryoem tabular-nums flex items-center gap-0.5">
               <Clock className="h-2.5 w-2.5" />{(elapsed / 1000).toFixed(1)}s
             </span>
           )}
@@ -263,7 +268,7 @@ function StreamFeed({
           <button
             type="button"
             onClick={() => setAutoScroll(a => !a)}
-            className={`text-xs font-medium px-2 h-5 gap-1 rounded-md border transition-colors inline-flex items-center ${autoScroll ? 'border-sky-500/30 text-sky-600 dark:text-sky-300 bg-sky-500/10' : 'border-border/60 text-muted-foreground hover:text-foreground bg-muted/40'}`}
+            className={`text-xs font-medium px-2 h-5 gap-1 rounded-md border transition-colors inline-flex items-center ${autoScroll ? 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' : 'border-claude-border/60 dark:border-[#3d3832]/60 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] bg-claude-border-light/40 dark:bg-[#2b2926]/40'}`}
             title={autoScroll ? 'Auto-scrolling, click to pause' : 'Paused, click to resume'}
           >
             {autoScroll ? 'auto' : 'paused'}
@@ -276,19 +281,19 @@ function StreamFeed({
       {typeof lastProgress === 'number' && (
         <div className="px-3 pt-2.5 pb-1.5">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-3xs font-mono text-muted-foreground tabular-nums">
+            <span className="text-3xs font-mono text-claude-text-muted dark:text-[#9b9590] tabular-nums">
               {lastProgress < 100 ? 'processing' : 'complete'} · {lastProgress}%
             </span>
             {done && (
-              <span className={`text-xs font-mono font-semibold tabular-nums ${ok ? 'text-emerald-500' : 'text-rose-500'}`}>
+              <span className={`text-xs font-mono font-semibold tabular-nums ${ok ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
                 {ok ? '✓' : '✗'} {(elapsed / 1000).toFixed(1)}s
               </span>
             )}
           </div>
-          <div className="relative h-1.5 rounded-full bg-muted overflow-hidden">
+          <div className="relative h-1.5 rounded-full bg-claude-border-light dark:bg-[#3d3832] overflow-hidden">
             <motion.div
               className={`absolute inset-y-0 left-0 rounded-full ${
-                done ? (ok ? 'bg-emerald-500' : 'bg-rose-500') : 'bg-gradient-to-r from-sky-500 to-sky-400'
+                done ? (ok ? 'bg-emerald-500' : 'bg-red-500') : 'bg-claude-accent'
               }`}
               initial={{ width: 0 }}
               animate={{ width: `${lastProgress}%` }}
@@ -312,13 +317,13 @@ function StreamFeed({
           if (!txt) return null;
           return (
             <div key={i} className="text-xs font-mono flex gap-2 leading-relaxed">
-              <span className="text-muted-foreground/60 shrink-0 tabular-nums">
+              <span className="text-claude-text-muted/60 dark:text-[#9b9590]/60 shrink-0 tabular-nums">
                 {new Date(e.ts).toLocaleTimeString('en-GB', { hour12: false })}
               </span>
               <span className={`shrink-0 font-semibold ${levelColor(e.level)}`}>
                 {e.stage || e.level || 'info'}
               </span>
-              <span className="flex-1 text-foreground/80 truncate" title={txt}>{txt}</span>
+              <span className="flex-1 text-claude-text/80 dark:text-[#e8e4dd]/80 truncate" title={txt}>{txt}</span>
             </div>
           );
         })}
@@ -351,17 +356,17 @@ function StageTimeline({ events }: { events: StreamEvent[] }) {
   if (order.length === 0) return null;
 
   return (
-    <div className="px-3 pb-2 pt-1 border-b border-border/40">
+    <div className="px-3 pb-2 pt-1 border-b border-claude-border/40 dark:border-[#3d3832]/40">
       <div className="flex items-center gap-1 overflow-x-auto pb-1 thin-scroll">
         {order.map((stage, i) => {
           const info = stageMap.get(stage)!;
           const isLast = i === order.length - 1;
-          const dotColor = info.level === 'error' ? 'bg-rose-500' : info.level === 'warn' ? 'bg-amber-500' : info.level === 'success' ? 'bg-emerald-500' : isLast ? 'bg-sky-500' : 'bg-muted-foreground/40';
+          const dotColor = info.level === 'error' ? 'bg-red-500' : info.level === 'warn' ? 'bg-amber-500' : info.level === 'success' ? 'bg-emerald-500' : isLast ? 'bg-claude-accent' : 'bg-claude-text-muted/40';
           return (
             <div key={stage} className="flex items-center shrink-0">
-              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-background/60 border border-border/40">
+              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-claude-surface/80 dark:bg-[#242220]/80 border border-claude-border/40 dark:border-[#3d3832]/40">
                 <span className={`h-1.5 w-1.5 rounded-full ${dotColor} ${isLast && !info.level ? 'animate-pulse' : ''}`} />
-                <span className="text-3xs font-mono text-muted-foreground whitespace-nowrap">{stage}</span>
+                <span className="text-3xs font-mono text-claude-text-muted dark:text-[#9b9590] whitespace-nowrap">{stage}</span>
                 {info.count > 1 && <span className="text-3xs text-muted-foreground/50">×{info.count}</span>}
               </div>
               {!isLast && <span className="text-muted-foreground/30 mx-0.5">→</span>}
@@ -389,7 +394,7 @@ function LLMPreview({
   ok,
   dbSaved,
   chars,
-  accent = 'emerald',
+  accent = 'cryoem',
 }: {
   content?: string;
   title: string;
@@ -401,7 +406,7 @@ function LLMPreview({
   ok?: boolean;
   dbSaved?: boolean;
   chars?: number;
-  accent?: 'emerald' | 'sky' | 'violet' | 'amber';
+  accent?: 'cryoem' | 'nmr' | 'xray' | 'accent' | 'emerald' | 'sky' | 'violet' | 'amber';
 }) {
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -410,17 +415,26 @@ function LLMPreview({
   // Failure case: no content but we have an error — show a failure card.
   const isFailure = ok === false || (fallback && !content);
 
-  const accentMap = {
-    emerald: { ring: 'border-emerald-500/30', bg: 'from-emerald-500/5', icon: 'text-emerald-500', badge: 'border-emerald-500/30 text-emerald-600 dark:text-emerald-300 bg-emerald-500/10' },
-    sky: { ring: 'border-sky-500/30', bg: 'from-sky-500/5', icon: 'text-sky-500', badge: 'border-sky-500/30 text-sky-600 dark:text-sky-300 bg-sky-500/10' },
-    violet: { ring: 'border-violet-500/30', bg: 'from-violet-500/5', icon: 'text-violet-500', badge: 'border-violet-500/30 text-violet-600 dark:text-violet-300 bg-violet-500/10' },
-    amber: { ring: 'border-amber-500/30', bg: 'from-amber-500/5', icon: 'text-amber-500', badge: 'border-amber-500/30 text-amber-600 dark:text-amber-300 bg-amber-500/10' },
+  // Claude-themed accent map — ALL variants now use the theme accent to avoid
+  // color collisions across the 6 preset themes. The accent prop is kept for
+  // API backward compat but all values produce the same accent styling.
+  // Status badges (LLM Generated/Failed/Saved) use standard Tailwind colors.
+  const accentMap: Record<string, { ring: string; bg: string; icon: string; badge: string }> = {
+    cryoem: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    nmr: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    xray: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    accent: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    // Legacy aliases
+    emerald: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    sky: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    violet: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+    amber: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
   };
-  const a = accentMap[accent];
+  const a = accentMap[accent] || accentMap.cryoem;
   // Override styling for failure state.
-  const ringCls = isFailure ? 'border-rose-500/40' : a.ring;
-  const bgCls = isFailure ? 'from-rose-500/5' : a.bg;
-  const iconCls = isFailure ? 'text-rose-500' : a.icon;
+  const ringCls = isFailure ? 'border-red-500/40' : a.ring;
+  const bgCls = isFailure ? 'from-red-500/8' : a.bg;
+  const iconCls = isFailure ? 'text-red-500' : a.icon;
 
   const copy = async () => {
     if (!content) return;
@@ -435,10 +449,10 @@ function LLMPreview({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`mt-3 rounded-lg border ${ringCls} bg-gradient-to-br ${bgCls} via-transparent to-transparent overflow-hidden`}
+      className={`mt-3 rounded-lg border ${ringCls} bg-gradient-to-br ${bgCls} via-transparent to-transparent overflow-hidden claude-card-shadow`}
     >
       {/* header */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/40 bg-background/40">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60">
         <button
           type="button"
           onClick={() => setExpanded(e => !e)}
@@ -449,26 +463,26 @@ function LLMPreview({
           ) : (
             <FileText className={`h-3.5 w-3.5 ${iconCls} shrink-0`} />
           )}
-          <span className="text-xs font-semibold truncate">{title}</span>
+          <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{title}</span>
           {/* LLM status badge — clearly shows real success vs failure */}
           {ok === true && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <CheckCircle2 className="h-2 w-2" /> LLM Generated
             </Badge>
           )}
           {isFailure && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
               <XCircle className="h-2 w-2" /> LLM Failed
             </Badge>
           )}
           {/* DB persistence badge */}
           {dbSaved === true && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               <Database className="h-2.5 w-2.5" /> Saved
             </Badge>
           )}
           {dbSaved === false && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
               <Database className="h-2.5 w-2.5" /> Save Failed
             </Badge>
           )}
@@ -477,7 +491,7 @@ function LLMPreview({
               <Sparkles className="h-2 w-2" /> {provider}/{model}
             </Badge>
           )}
-          {chars != null && <span className="text-3xs text-muted-foreground/60 font-mono shrink-0">{chars} chars</span>}
+          {chars != null && <span className="text-3xs text-claude-text-muted/60 dark:text-[#9b9590]/60 font-mono shrink-0">{chars} chars</span>}
           {durationMs != null && <span className="text-3xs text-muted-foreground/60 font-mono shrink-0 hidden sm:inline">{(durationMs / 1000).toFixed(1)}s</span>}
         </button>
         <div className="flex items-center gap-1 shrink-0">
@@ -884,46 +898,46 @@ function ChapterStream({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mt-3 rounded-lg border border-violet-500/30 bg-gradient-to-br from-violet-500/5 via-transparent to-transparent overflow-hidden"
+      className="mt-3 rounded-lg border border-claude-accent/40 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
     >
       <div
         role="button"
         tabIndex={0}
         onClick={() => setCollapsed((v) => !v)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/40 bg-background/40 cursor-pointer hover:bg-background/60 transition-colors select-none"
+        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
         aria-expanded={!collapsed}
         aria-label="Collapse/Expand LLM chapter stream list"
       >
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ChevronRight className={`h-3 w-3 text-violet-500 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-          <span className="text-3xs font-semibold truncate">LLM Chapter Stream</span>
+          <ChevronRight className={`h-3 w-3 text-claude-accent shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+          <span className="text-3xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">LLM Chapter Stream</span>
           {groups.length > 1 && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
               <Layers className="h-2 w-2" /> {groups.length} targets
             </Badge>
           )}
-          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-300">
+          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
             <Sparkles className="h-2 w-2" /> {completedCount}/{totalCount} chapters
           </Badge>
           {okCount > 0 && failCount === 0 && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
               ✓ All OK
             </Badge>
           )}
           {failCount > 0 && (
-            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300">
+            <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
               ✗ {failCount} failed
             </Badge>
           )}
           {running && completedCount < totalCount && (
-            <span className="text-3xs text-violet-500 flex items-center gap-1 shrink-0">
+            <span className="text-3xs text-claude-accent flex items-center gap-1 shrink-0">
               <Loader2 className="h-2.5 w-2.5 animate-spin" />
               Generating…
             </span>
           )}
         </div>
-        <span className="text-3xs text-muted-foreground/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
+        <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
       </div>
       {!collapsed && (
       <div className="max-h-[40rem] overflow-y-auto thin-scroll p-2 space-y-2">
@@ -932,18 +946,18 @@ function ChapterStream({
           const gCompleted = rows.filter((r) => r.status !== 'running').length;
           const gFail = rows.filter((r) => r.status === 'error').length;
           return (
-            <div key={g.key} className="rounded-md border border-border/40 bg-background/30 overflow-hidden">
+            <div key={g.key} className="rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/40 dark:bg-[#242220]/40 overflow-hidden">
               {/* Sub-header for each target group (only show when there are
                   multiple groups — for single-target runs the top-level
                   header is enough). */}
               {groups.length > 1 && (
-                <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-muted/30">
-                  <span className="text-3xs font-semibold text-foreground/80 truncate">{g.title}</span>
-                  <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-border/60 bg-background/60 text-muted-foreground">
+                <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40">
+                  <span className="text-3xs font-semibold text-claude-text/80 dark:text-[#e8e4dd]/80 truncate">{g.title}</span>
+                  <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-surface/60 dark:bg-[#242220]/60 text-claude-text-muted dark:text-[#9b9590]">
                     {gCompleted}/{rows.length}
                   </Badge>
                   {gFail > 0 && (
-                    <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300">
+                    <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
                       ✗ {gFail}
                     </Badge>
                   )}
@@ -958,19 +972,19 @@ function ChapterStream({
                       key={r.key}
                       open={isRunning}
                       className={`group rounded-md border ${
-                        isRunning ? 'border-violet-500/40 bg-violet-500/5' :
-                        isError ? 'border-rose-500/30 bg-rose-500/5' :
+                        isRunning ? 'border-claude-accent/40 bg-claude-accent/8' :
+                        isError ? 'border-red-500/30 bg-red-500/5' :
                         'border-emerald-500/30 bg-emerald-500/5'
                       }`}
                     >
                       <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 select-none">
-                        <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90 text-muted-foreground shrink-0" />
-                        <span className="text-sm font-semibold text-foreground/90 shrink-0">
+                        <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90 text-claude-text-muted dark:text-[#9b9590] shrink-0" />
+                        <span className="text-sm font-semibold text-claude-text/90 dark:text-[#e8e4dd]/90 shrink-0">
                           {r.index || '?'}/{r.total || '?'}
                         </span>
-                        <span className="text-sm font-medium text-foreground/80 truncate">{r.label || r.key}</span>
-                        {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin text-violet-500 shrink-0" />}
-                        {isError && <XCircle className="h-3 w-3 text-rose-500 shrink-0" />}
+                        <span className="text-sm font-medium text-claude-text/80 dark:text-[#e8e4dd]/80 truncate">{r.label || r.key}</span>
+                        {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin text-claude-accent shrink-0" />}
+                        {isError && <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
                         {!isRunning && !isError && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />}
                         {r.durationMs != null && (
                           <span className="text-3xs text-muted-foreground/60 font-mono ml-auto shrink-0">
@@ -1056,37 +1070,39 @@ function CycleTimeline({
   if (!hasAnyActivity && !running) return null;
 
   return (
-    <div className="mt-3 rounded-lg border border-border/60 bg-gradient-to-br from-amber-500/5 via-transparent to-transparent p-3">
+    <div className="mt-3 rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent p-3">
       <div className="flex items-center gap-2 mb-2.5">
-        <Layers className="h-3 w-3 text-amber-500" />
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cycle Orchestration</span>
-        <span className="text-xs text-muted-foreground/60">· {maxCycles}-step pipeline</span>
+        <Layers className="h-3 w-3 text-claude-accent" />
+        <span className="text-xs font-semibold uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">Cycle Orchestration</span>
+        <span className="text-xs text-claude-text-muted/60 dark:text-[#9b9590]/60">· {maxCycles}-step pipeline</span>
       </div>
 
       {/* horizontal track */}
       <div className="flex items-stretch gap-1">
         {roleStatus.map((r, i) => {
           const isLast = i === roleStatus.length - 1;
+          // All steps use the theme accent — no per-step color distinction.
+          // This avoids collisions (e.g. Ocean accent=cryoem, Berry accent=xray).
           const colorMap: Record<string, { dot: string; ring: string; bg: string; text: string }> = {
-            sky: { dot: 'bg-sky-500', ring: 'border-sky-500/40', bg: 'bg-sky-500/5', text: 'text-sky-600 dark:text-sky-300' },
-            amber: { dot: 'bg-amber-500', ring: 'border-amber-500/40', bg: 'bg-amber-500/5', text: 'text-amber-600 dark:text-amber-300' },
-            emerald: { dot: 'bg-emerald-500', ring: 'border-emerald-500/40', bg: 'bg-emerald-500/5', text: 'text-emerald-600 dark:text-emerald-300' },
+            sky: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
+            amber: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
+            emerald: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
           };
-          const c = colorMap[r.color];
+          const c = colorMap[r.color] || colorMap.sky;
           return (
             <div key={r.key} className="flex items-stretch flex-1 min-w-0">
-              <div className={`flex-1 rounded-lg border ${r.completed ? c.ring : 'border-border/60'} ${r.completed ? c.bg : 'bg-background/40'} p-2 transition-all`}>
+              <div className={`flex-1 rounded-lg border ${r.completed ? c.ring : 'border-claude-border/60 dark:border-[#3d3832]/60'} ${r.completed ? c.bg : 'bg-claude-surface/40 dark:bg-[#242220]/40'} p-2 transition-all`}>
                 <div className="flex items-center gap-1.5 mb-1">
                   <span className="relative flex h-2 w-2 shrink-0">
                     {r.started && !r.completed && (
                       <span className={`absolute inline-flex h-full w-full rounded-full ${c.dot} opacity-60`} style={{ animation: 'pulse-ring 1.5s ease-out infinite' }} />
                     )}
-                    <span className={`relative inline-flex h-2 w-2 rounded-full ${r.completed ? c.dot : r.started ? c.dot : 'bg-muted-foreground/30'}`} />
+                    <span className={`relative inline-flex h-2 w-2 rounded-full ${r.completed ? c.dot : r.started ? c.dot : 'bg-claude-text-muted/30'}`} />
                   </span>
-                  <span className="text-xs font-semibold truncate">{r.label}</span>
+                  <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{r.label}</span>
                   {r.completed && <CheckCircle2 className={`h-3 w-3 ${c.text} shrink-0`} />}
                   {r.verdict && (
-                    <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${r.verdict === 'pass' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300'}`}>
+                    <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${r.verdict === 'pass' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
                       {r.verdict}
                     </Badge>
                   )}
@@ -1755,55 +1771,55 @@ export function SettingsRunPanel({
         <Button
           variant="outline"
           size="sm"
-          className="h-8 gap-1.5 text-xs font-medium border-border/60 hover:border-primary/40 hover:bg-accent/50 transition-all relative"
+          className="h-8 gap-1.5 text-xs font-medium border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] hover:border-claude-accent/40 hover:bg-claude-accent-light dark:hover:bg-[#3d2a22] hover:text-claude-accent transition-all relative"
         >
           <Settings2 className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">{t.runCenter}</span>
           {running.size > 0 && (
-            <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 text-white text-4xs font-bold px-1">
+            <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-claude-accent text-white text-4xs font-bold px-1 shadow-sm ring-2 ring-claude-surface dark:ring-[#242220]">
               {running.size}
             </span>
           )}
         </Button>
       </DialogTrigger>
 
-      <DialogContent ref={contentRef as React.Ref<HTMLDivElement>} className="max-w-6xl sm:!max-w-6xl w-[95vw] max-h-[92vh] p-0 gap-0 overflow-hidden flex flex-col">
-        {/* ── Header band (compact) ──────────────────────────────────── */}
-        <div className="relative px-6 pt-4 pb-3 border-b border-border/60 bg-gradient-to-br from-muted/40 via-background to-background flex-shrink-0">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,var(--tw-gradient-stops))] from-primary/5 via-transparent to-transparent pointer-events-none" />
+      <DialogContent ref={contentRef as React.Ref<HTMLDivElement>} className="max-w-6xl sm:!max-w-6xl w-[95vw] max-h-[92vh] p-0 gap-0 overflow-hidden flex flex-col bg-claude-surface dark:bg-[#242220] border-claude-border dark:border-[#3d3832]">
+        {/* ── Header band (compact, warm claude gradient) ──────────── */}
+        <div className="relative px-6 pt-4 pb-3 border-b border-claude-border dark:border-[#3d3832] bg-gradient-to-br from-claude-accent-light via-claude-surface to-claude-surface dark:from-[#2a1f1a] dark:via-[#242220] dark:to-[#242220] flex-shrink-0">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,var(--tw-gradient-stops))] from-claude-accent/8 via-transparent to-transparent pointer-events-none" />
           <DialogHeader className="relative">
             <DialogTitle className="flex items-center gap-2.5 text-lg">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/20">
-                <Sparkles className="h-4.5 w-4.5 text-primary" />
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 border border-claude-accent/25 shadow-sm">
+                <Sparkles className="h-4.5 w-4.5 text-claude-accent" />
               </div>
-              <span>{t.runCenter}</span>
-              <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-border/60 bg-muted/40 text-muted-foreground">
+              <span className="text-claude-text dark:text-[#e8e4dd]">{t.runCenter}</span>
+              <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590]">
                 <Layers className="h-2.5 w-2.5" /> {locale === 'zh' ? '3 个模块' : '3 modules'}
               </Badge>
               {running.size > 0 && (
-                <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300">
+                <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
                   <Loader2 className="h-2.5 w-2.5 animate-spin" /> {running.size} {locale === 'zh' ? '运行中' : 'running'}
                 </Badge>
               )}
             </DialogTitle>
-            <DialogDescription className="text-sm leading-relaxed pt-1 text-muted-foreground">
+            <DialogDescription className="text-sm leading-relaxed pt-1 text-claude-text-muted dark:text-[#9b9590]">
               {t.runCenterDesc}
             </DialogDescription>
           </DialogHeader>
         </div>
 
         {/* ── LLM provider status bar — 2-column compact layout ──────────── */}
-        <div className="px-6 py-2.5 border-b border-border/60 bg-muted/20 flex-shrink-0">
+        <div className="px-6 py-2.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-bg/40 dark:bg-[#1a1917]/40 flex-shrink-0">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
               <div className="flex items-center gap-1.5 shrink-0">
-                <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-sm font-medium text-foreground">{t.llmProvider}</span>
+                <Cpu className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590]" />
+                <span className="text-sm font-medium text-claude-text dark:text-[#e8e4dd]">{t.llmProvider}</span>
               </div>
-              <code className="px-2 py-0.5 rounded bg-background border border-border/60 font-mono text-sm text-foreground shrink-0">
+              <code className="px-2 py-0.5 rounded bg-claude-surface dark:bg-[#1a1917] border border-claude-border dark:border-[#3d3832] font-mono text-sm text-claude-text dark:text-[#e8e4dd] shrink-0">
                 {effectiveProviderId || (scanning ? (locale === 'zh' ? '扫描中…' : 'Scanning…') : (locale === 'zh' ? '未检测到' : 'Not detected'))}
               </code>
-              <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground/70">
+              <div className="hidden sm:flex items-center gap-2 text-xs text-claude-text-muted/70 dark:text-[#9b9590]/70">
                 <span>
                   {chosenProvider === AUTO_PROVIDER ? (locale === 'zh' ? 'auto · ' : 'auto · ') : (locale === 'zh' ? '🔒 已锁定 · ' : '🔒 Locked · ')}
                   <span className="font-mono">
@@ -1819,14 +1835,14 @@ export function SettingsRunPanel({
               <TooltipProvider delayDuration={300}>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={rescan} disabled={scanning}>
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 hover:bg-claude-border-light dark:hover:bg-[#2b2926]" onClick={rescan} disabled={scanning}>
                       <RefreshCw className={`h-3.5 w-3.5 ${scanning ? 'animate-spin' : ''}`} />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="top">{locale === 'zh' ? '重新扫描 CLI / SDK' : 'Re-scan CLI / SDK'}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-              <Button variant="ghost" size="sm" className="h-7 text-sm gap-1" onClick={() => setShowLlmCfg(s => !s)}>
+              <Button variant="ghost" size="sm" className="h-7 text-sm gap-1 hover:bg-claude-border-light dark:hover:bg-[#2b2926]" onClick={() => setShowLlmCfg(s => !s)}>
                 <ChevronDown className={`h-3 w-3 transition-transform ${showLlmCfg ? 'rotate-180' : ''}`} />
                 {showLlmCfg ? (locale === 'zh' ? '隐藏配置' : 'Hide Config') : (locale === 'zh' ? 'LLM 配置' : 'LLM Config')}
               </Button>
@@ -1840,8 +1856,8 @@ export function SettingsRunPanel({
                 onClick={() => pickProvider(AUTO_PROVIDER)}
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all ${
                   chosenProvider === AUTO_PROVIDER
-                    ? 'border-primary/50 bg-primary/10 text-foreground font-medium shadow-sm'
-                    : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-border'
+                    ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent font-medium shadow-sm'
+                    : 'border-claude-border dark:border-[#3d3832] text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] hover:border-claude-accent/40'
                 }`}
                 title={locale === 'zh' ? '让服务器按 CLI → SDK 顺序自动选择' : 'Let server auto-select in CLI → SDK order'}
               >
@@ -1909,14 +1925,14 @@ export function SettingsRunPanel({
                       onClick={() => pickProvider('zai')}
                       className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
                         chosenProvider === 'zai'
-                          ? 'border-primary/50 bg-primary/10 text-foreground shadow-sm'
-                          : 'border-sky-500/40 bg-sky-500/5 text-sky-600 dark:text-sky-300 hover:border-sky-500/60'
+                          ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent shadow-sm'
+                          : 'border-claude-accent/30 bg-claude-accent/5 text-claude-accent hover:border-claude-accent/50'
                       }`}
                       title="z.ai SDK (z-ai-web-dev-sdk) — temporary LLM test option"
                     >
                       <Sparkles className="h-3 w-3" />
                       <span className="font-mono text-sm">z.ai</span>
-                      <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 text-xs font-medium font-mono">SDK</span>
+                      <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-claude-accent/15 text-claude-accent text-xs font-medium font-mono">SDK</span>
                       {chosenProvider === 'zai' && <Lock className="h-2.5 w-2.5 opacity-70" />}
                     </button>
                   </TooltipTrigger>
@@ -1997,47 +2013,47 @@ export function SettingsRunPanel({
           </AnimatePresence>
 
           {/* ── Database config (always visible) ──────────────────────── */}
-          <div className="mt-3 border-t border-border/40 pt-2">
+          <div className="mt-3 border-t border-claude-border/40 dark:border-[#3d3832]/40 pt-2">
             {/* Title + active path + schema badges + loaded status — single dense line */}
             <div className="flex items-center gap-1.5 flex-wrap mb-3">
-              <Database className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <span className="text-sm font-medium text-foreground shrink-0">{t.database}</span>
+              <Database className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590] shrink-0" />
+              <span className="text-sm font-medium text-claude-text dark:text-[#e8e4dd] shrink-0">{t.database}</span>
               {dbStatus?.activeFsPath && (
-                <code className="text-xs font-mono text-muted-foreground truncate min-w-0" title={dbStatus.activeFsPath}>
+                <code className="text-xs font-mono text-claude-text-muted dark:text-[#9b9590] truncate min-w-0" title={dbStatus.activeFsPath}>
                   {dbStatus.activeFsPath}
                 </code>
               )}
               {dbStatus?.isTest && (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
                   <AlertTriangle className="h-2 w-2" /> {locale === 'zh' ? '测试库' : 'Test DB'}
                 </Badge>
               )}
               {dbStatus?.hasSchema ? (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                   <CheckCircle2 className="h-2 w-2" /> {locale === 'zh' ? 'Schema' : 'Schema'} {dbStatus.tableCount}
                 </Badge>
               ) : dbStatus ? (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
                   <XCircle className="h-2 w-2" /> {locale === 'zh' ? '未初始化' : 'Not initialized'}
                 </Badge>
               ) : null}
               {dbStatus?.hasSchema && (dbStatus.counts?.PdbStructure || 0) > 0 && (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-border/60 bg-muted/40 text-muted-foreground">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590]">
                   PDB {dbStatus.counts?.PdbStructure}
                 </Badge>
               )}
               {dbStatus?.hasSchema && (dbStatus.counts?.Evaluation || 0) > 0 && (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-border/60 bg-muted/40 text-muted-foreground">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590]">
                   Eval {dbStatus.counts?.Evaluation}
                 </Badge>
               )}
               {dbStatus?.hasSchema && (dbStatus.counts?.PubMedArticle || 0) > 0 && (
-                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-border/60 bg-muted/40 text-muted-foreground">
+                <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590]">
                   Papers {dbStatus.counts?.PubMedArticle}
                 </Badge>
               )}
               {dbPathStatus && (
-                <span className={`text-xs font-medium ml-auto shrink-0 ${dbPathStatus.startsWith('✓') ? 'text-emerald-600' : 'text-rose-500'}`}>
+                <span className={`text-xs font-medium ml-auto shrink-0 ${dbPathStatus.startsWith('✓') ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
                   {dbPathStatus}
                 </span>
               )}
@@ -2049,12 +2065,12 @@ export function SettingsRunPanel({
                 value={dbPath}
                 onChange={e => setDbPath(e.target.value)}
                 placeholder="file:./db/custom.db"
-                className="h-8 px-2 text-xs md:text-xs font-mono flex-1 min-w-0"
+                className="h-8 px-2 text-xs md:text-xs font-mono flex-1 min-w-0 bg-claude-surface dark:bg-[#1a1917] border-claude-border dark:border-[#3d3832]"
               />
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs shrink-0 px-2"
+                className="h-8 text-xs shrink-0 px-2 border-claude-border dark:border-[#3d3832] hover:bg-claude-border-light dark:hover:bg-[#2b2926]"
                 onClick={saveDbPath}
                 disabled={dbPathSaving}
               >
@@ -2064,7 +2080,7 @@ export function SettingsRunPanel({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs shrink-0 px-2 border-emerald-500/30 text-emerald-700 hover:bg-emerald-500/10"
+                className="h-8 text-xs shrink-0 px-2 border-claude-accent/40 text-claude-accent hover:bg-claude-accent/10"
                 onClick={() => { setDbWizardMode('create'); setDbWizardOpen(true); }}
               >
                 <FilePlus2 className="h-3 w-3" /> {t.dbNew}
@@ -2072,7 +2088,7 @@ export function SettingsRunPanel({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs shrink-0 px-2 border-sky-500/30 text-sky-700 hover:bg-sky-500/10"
+                className="h-8 text-xs shrink-0 px-2 border-claude-accent/40 text-claude-accent hover:bg-claude-accent/10"
                 onClick={() => { setDbWizardMode('select'); setDbWizardOpen(true); }}
               >
                 <FolderOpen className="h-3 w-3" /> {t.dbSelect}
@@ -2080,7 +2096,7 @@ export function SettingsRunPanel({
             </div>
 
             {dbStatus?.isTest && (
-              <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+              <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1 text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
                 <AlertTriangle className="h-3 w-3 inline mr-1" />
                 {t.dbTestWarning}
               </div>
@@ -2104,26 +2120,26 @@ export function SettingsRunPanel({
         </div>
 
         {/* ── Tabbed module panels ─────────────────────────────────────── */}
-        <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto">
+        <div className="px-6 pt-3 pb-6 flex-1 min-h-0 overflow-y-auto sidebar-scroll">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-2">
-            <TabsList className="grid w-full grid-cols-3 h-10 bg-muted/50 rounded-lg p-1 gap-1">
-              <TabsTrigger value="evaluation" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-primary/15 data-[state=active]:text-primary data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-primary/30 text-muted-foreground hover:text-foreground border border-transparent transition-all">
+            <TabsList className="grid w-full grid-cols-3 h-10 bg-claude-bg/60 dark:bg-[#1a1917]/60 rounded-lg p-1 gap-1 border border-claude-border/40 dark:border-[#3d3832]/40">
+              <TabsTrigger value="evaluation" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-accent/15 data-[state=active]:text-claude-accent data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-accent/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
                 <FlaskConical className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">① {t.tabEval}</span>
                 <span className="sm:hidden">① {t.tabEvalShort}</span>
-                {isRunning('eval') && <Loader2 className="h-3 w-3 animate-spin text-sky-500" />}
+                {isRunning('eval') && <Loader2 className="h-3 w-3 animate-spin text-claude-accent" />}
               </TabsTrigger>
-              <TabsTrigger value="literature" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-primary/15 data-[state=active]:text-primary data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-primary/30 text-muted-foreground hover:text-foreground border border-transparent transition-all">
+              <TabsTrigger value="literature" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-accent/15 data-[state=active]:text-claude-accent data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-accent/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
                 <BookOpen className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">② {t.tabLit}</span>
                 <span className="sm:hidden">② {t.tabLitShort}</span>
-                {isRunning('lit') && <Loader2 className="h-3 w-3 animate-spin text-sky-500" />}
+                {isRunning('lit') && <Loader2 className="h-3 w-3 animate-spin text-claude-accent" />}
               </TabsTrigger>
-              <TabsTrigger value="weekly" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-primary/15 data-[state=active]:text-primary data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-primary/30 text-muted-foreground hover:text-foreground border border-transparent transition-all">
+              <TabsTrigger value="weekly" className="text-xs gap-1.5 rounded-md font-medium data-[state=active]:bg-claude-accent/15 data-[state=active]:text-claude-accent data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-claude-accent/30 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] border border-transparent transition-all">
                 <CalendarClock className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">③ {t.tabWeekly}</span>
                 <span className="sm:hidden">③ {t.tabWeeklyShort}</span>
-                {isRunning('weekly') && <Loader2 className="h-3 w-3 animate-spin text-sky-500" />}
+                {isRunning('weekly') && <Loader2 className="h-3 w-3 animate-spin text-claude-accent" />}
               </TabsTrigger>
             </TabsList>
 
@@ -2133,13 +2149,13 @@ export function SettingsRunPanel({
             <TabsContent value="evaluation" className="mt-0">
               <ModuleCard
                 icon={<FlaskConical className="h-4 w-4" />}
-                accent="emerald"
+                accent="cryoem"
                 index="①"
                 title={t.moduleEvalTitle}
                 endpoint="POST /api/evaluations/run"
                 description={locale === 'zh' ? 'UniProt → 元数据 + 序列 → RCSB 直接 PDB → SIFTS 覆盖度 → NCBI BLASTp 同源 → 评分 → 原子任务包含 LLM 报告生成（写入 Evaluation.report + EvaluationReport 表 + 可选 LLM-Wiki）。支持多个 UniProt ID 批量评估，含跨靶点结构与关联分析。' : 'UniProt → metadata + sequence → RCSB direct PDB → SIFTS coverage → NCBI BLASTp homology → scoring → atomic tasks include LLM report generation (writes to Evaluation.report + EvaluationReport table + optional LLM-Wiki). Supports multiple UniProt IDs for batch evaluation with cross-target structure and correlation analysis.'}
                 headerBadge={evalTargets.length > 1 ? (
-                  <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-300" title={locale === 'zh' ? '多靶点批量评估 + 关联分析' : 'Multi-target batch evaluation + correlation analysis'}>
+                  <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-xray/40 bg-claude-xray-bg text-claude-xray" title={locale === 'zh' ? '多靶点批量评估 + 关联分析' : 'Multi-target batch evaluation + correlation analysis'}>
                     <Layers className="h-2 w-2" /> {locale === 'zh' ? '批量' : 'Batch'} · {evalTargets.length} {locale === 'zh' ? '靶点' : 'targets'}
                   </Badge>
                 ) : null}
@@ -2298,7 +2314,7 @@ export function SettingsRunPanel({
                     ok={effectivePrimaryReport.ok}
                     dbSaved={evalStream.state.done ? evalStream.state.result?.dbSaved : undefined}
                     chars={effectivePrimaryReport.contentChars}
-                    accent="emerald"
+                    accent="cryoem"
                   />
                 )}
 
@@ -2330,7 +2346,7 @@ export function SettingsRunPanel({
                           ok={br.report.ok}
                           dbSaved={!!br.report.ok}
                           chars={br.report.contentChars}
-                          accent="violet"
+                          accent="xray"
                         />
                       ))}
 
@@ -2350,7 +2366,7 @@ export function SettingsRunPanel({
                     ok={evalStream.state.result.crossAnalysis.crossReport.ok}
                     dbSaved={!!evalStream.state.result.crossAnalysis.crossReport.ok}
                     chars={evalStream.state.result.crossAnalysis.crossReport.contentChars}
-                    accent="amber"
+                    accent="nmr"
                   />
                 )}
 
@@ -2372,7 +2388,7 @@ export function SettingsRunPanel({
             <TabsContent value="literature" className="mt-2">
               <ModuleCard
                 icon={<BookOpen className="h-4 w-4" />}
-                accent="sky"
+                accent="nmr"
                 index="②"
                 title={t.moduleLitTitle}
                 endpoint="POST /api/literature/daily/run"
@@ -2447,7 +2463,7 @@ export function SettingsRunPanel({
                     ok={litStream.state.result.llmOk}
                     dbSaved={litStream.state.result.dbSaved}
                     chars={litStream.state.result.digest?.length || 0}
-                    accent="sky"
+                    accent="nmr"
                   />
                 )}
 
@@ -2469,25 +2485,25 @@ export function SettingsRunPanel({
                             onClick={() => viewLitDigest(r.date)}
                             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border transition-colors ${
                               isActive
-                                ? 'border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300'
-                                : 'border-border/60 hover:bg-accent/50 text-muted-foreground hover:text-foreground'
+                                ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent'
+                                : 'border-claude-border/60 dark:border-[#3d3832]/60 hover:bg-claude-border-light dark:hover:bg-[#2b2926] text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'
                             }`}
                             title={`${r.date} — ${r.paperCount} papers${r.hasLLMDigest ? ' · has LLM digest' : ''} (click to view digest)`}
                           >
                             <span className="font-mono">{r.date.slice(5)}</span>
                             <span className="opacity-60">{r.paperCount || '?'}</span>
-                            {r.hasLLMDigest && <Sparkles className="h-2.5 w-2.5 text-purple-400" />}
+                            {r.hasLLMDigest && <Sparkles className="h-2.5 w-2.5 text-claude-accent" />}
                           </button>
                         );
                       })}
                     </div>
                     {/* Inline digest viewer — shows the fetched LLM digest for the clicked date */}
                     {litViewingDigest && (
-                      <div className="mt-2 rounded-lg border border-sky-500/30 bg-sky-500/5 overflow-hidden">
-                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-sky-500/30 bg-sky-500/10">
+                      <div className="mt-2 rounded-lg border border-claude-accent/40 bg-claude-accent/8 overflow-hidden">
+                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-accent/40 bg-claude-accent/10">
                           <div className="flex items-center gap-1.5">
-                            <FileText className="h-3.5 w-3.5 text-sky-600" />
-                            <span className="text-xs font-semibold">LLM Digest · {litViewingDigest.date}</span>
+                            <FileText className="h-3.5 w-3.5 text-claude-accent" />
+                            <span className="text-xs font-semibold text-claude-text dark:text-[#e8e4dd]">LLM Digest · {litViewingDigest.date}</span>
                           </div>
                           <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setLitViewingDigest(null)} title="Close">
                             <X className="h-3 w-3" />
@@ -2519,7 +2535,7 @@ export function SettingsRunPanel({
             <TabsContent value="weekly" className="mt-2">
               <ModuleCard
                 icon={<CalendarClock className="h-4 w-4" />}
-                accent="amber"
+                accent="accent"
                 index="③"
                 title={t.moduleWeeklyTitle}
                 endpoint="POST /api/pdb-weekly/run"
@@ -2687,22 +2703,22 @@ export function SettingsRunPanel({
                         .filter(l => !logSearch || l.summary.toLowerCase().includes(logSearch.toLowerCase()) || (l.details || '').toLowerCase().includes(logSearch.toLowerCase()))
                         .map((l, i) => {
                           const moduleBadge = l.module === 'literature'
-                            ? { txt: '① Lit', cls: 'border-sky-500/30 text-sky-600 dark:text-sky-300 bg-sky-500/10' }
+                            ? { txt: '② Lit', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' }
                             : l.module === 'eval'
-                            ? { txt: '② Eval', cls: 'border-emerald-500/30 text-emerald-600 dark:text-emerald-300 bg-emerald-500/10' }
-                            : { txt: '③ Weekly', cls: 'border-amber-500/30 text-amber-600 dark:text-amber-300 bg-amber-500/10' };
+                            ? { txt: '① Eval', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' }
+                            : { txt: '③ Weekly', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' };
                           return (
                             <div
                               key={i}
                               className="text-xs border-l-2 pl-2.5 py-1"
                               style={{
-                                borderColor: l.status === 'success' ? '#22c55e' : l.status === 'error' ? '#ef4444' : '#3b82f6',
+                                borderColor: l.status === 'success' ? '#10b981' : l.status === 'error' ? '#ef4444' : 'var(--claude-accent)',
                               }}
                             >
                               <div className="flex items-center gap-1.5">
                                 {l.status === 'success' && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />}
-                                {l.status === 'error' && <XCircle className="h-3 w-3 text-rose-500 shrink-0" />}
-                                {l.status === 'running' && <Loader2 className="h-3 w-3 animate-spin text-sky-500 shrink-0" />}
+                                {l.status === 'error' && <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
+                                {l.status === 'running' && <Loader2 className="h-3 w-3 animate-spin text-claude-accent shrink-0" />}
                                 <span className="text-muted-foreground font-mono text-xs shrink-0">{l.ts.slice(11, 19)}</span>
                                 <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${moduleBadge.cls}`}>{moduleBadge.txt}</Badge>
                                 <span className="font-medium flex-1 leading-tight">{l.summary}</span>
@@ -2736,24 +2752,73 @@ export function SettingsRunPanel({
 /*  Module card wrapper with gradient accent                                 */
 /* ──────────────────────────────────────────────────────────────────────── */
 
-const ACCENT_CLASSES: Record<string, { ring: string; chip: string; icon: string; glow: string }> = {
+// Claude-themed accent tokens.
+// IMPORTANT: All module cards/tabs now use the SAME theme accent (`claude-accent`)
+// to avoid color collisions when the user switches themes. The 6 preset themes
+// map their accent to: claude(#c96442), ocean(#2d8f8f=claude-cryoem!),
+// forest(#16a34a=claude-mid!), sunset(#ea580c=claude-high!), berry(#7c5cbf=claude-xray!),
+// rose(#e11d48≈claude-top). So if we used cryoem/xray/nmr for different modules,
+// 4 of 6 themes would produce exact color duplicates.
+// Modules are distinguished by ICON + NUMBER (①②③), not by color.
+// Status colors (success/error/warn) use standard Tailwind colors that are
+// guaranteed distinct from ALL 6 theme accents.
+const ACCENT_CLASSES: Record<string, { ring: string; chip: string; icon: string; glow: string; shadow: string }> = {
+  accent: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
+  // Legacy aliases — ALL map to accent now (no per-module color distinction)
+  cryoem: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
+  nmr: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
+  xray: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
   sky: {
-    ring: 'before:from-sky-500/60',
-    chip: 'bg-sky-500/10 text-sky-600 dark:text-sky-300 border-sky-500/30',
-    icon: 'bg-gradient-to-br from-sky-500/20 to-sky-500/5 text-sky-600 dark:text-sky-300',
-    glow: 'from-sky-500/5',
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
   },
   emerald: {
-    ring: 'before:from-emerald-500/60',
-    chip: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border-emerald-500/30',
-    icon: 'bg-gradient-to-br from-emerald-500/20 to-emerald-500/5 text-emerald-600 dark:text-emerald-300',
-    glow: 'from-emerald-500/5',
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
   },
   amber: {
-    ring: 'before:from-amber-500/60',
-    chip: 'bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/30',
-    icon: 'bg-gradient-to-br from-amber-500/20 to-amber-500/5 text-amber-600 dark:text-amber-300',
-    glow: 'from-amber-500/5',
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
+  },
+  violet: {
+    ring: 'before:from-claude-accent/70',
+    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+    glow: 'from-claude-accent/8',
+    shadow: 'claude-card-shadow',
   },
 };
 
@@ -2776,28 +2841,33 @@ function ModuleCard({
   children: React.ReactNode;
   headerBadge?: React.ReactNode;
 }) {
-  const a = ACCENT_CLASSES[accent];
+  const a = ACCENT_CLASSES[accent] || ACCENT_CLASSES.cryoem;
   return (
-    <div className={`relative rounded-xl border border-border/60 bg-card overflow-hidden before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-gradient-to-b ${a.ring} before:to-transparent`}>
-      <div className={`absolute inset-0 bg-gradient-to-br ${a.glow} via-transparent to-transparent pointer-events-none`} />
+    <div
+      className={`group relative rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] ${a.shadow} overflow-hidden transition-all duration-200 hover:border-claude-accent/30 hover:-translate-y-px before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-gradient-to-b ${a.ring} before:to-transparent`}
+    >
+      {/* Subtle accent glow in the top-right corner */}
+      <div className={`absolute inset-0 bg-gradient-to-br ${a.glow} via-transparent to-transparent pointer-events-none opacity-60`} />
+      {/* Top hairline accent bar (animates on hover) */}
+      <div className={`absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r ${a.ring.replace('before:from-', 'from-')} to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none`} />
       <div className="relative p-4">
         <div className="flex items-start gap-3 mb-3">
-          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/40 ${a.icon}`}>
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 ${a.icon} transition-transform duration-200 group-hover:scale-105`}>
             {icon}
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-semibold leading-tight">
-                <span className="text-muted-foreground/60 mr-1">{index}</span>
+              <h3 className="text-sm font-semibold leading-tight text-claude-text dark:text-[#e8e4dd]">
+                <span className="text-claude-text-muted/60 mr-1 font-mono">{index}</span>
                 {title}
               </h3>
               {headerBadge}
             </div>
-            <code className="text-xs text-muted-foreground font-mono">{endpoint}</code>
+            <code className="text-[11px] text-claude-text-muted dark:text-[#9b9590] font-mono">{endpoint}</code>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground leading-relaxed mb-3">{description}</p>
-        <Separator className="mb-3 bg-border/40" />
+        <p className="text-xs text-claude-text-secondary dark:text-[#9b9590] leading-relaxed mb-3">{description}</p>
+        <Separator className="mb-3 bg-claude-border/40 dark:bg-[#3d3832]/40" />
         {children}
       </div>
     </div>
@@ -2846,7 +2916,12 @@ function RunButton({
   const { locale } = useI18n();
   return (
     <div className="flex items-center gap-1.5">
-      <Button onClick={onClick} disabled={disabled} size="sm" className="h-8 text-xs gap-1.5 min-w-[88px]">
+      <Button
+        onClick={onClick}
+        disabled={disabled}
+        size="sm"
+        className="h-8 text-xs gap-1.5 min-w-[88px] bg-gradient-to-br from-claude-accent to-claude-accent-hover hover:from-claude-accent-hover hover:to-claude-accent text-white border-0 shadow-sm hover:shadow-md transition-all"
+      >
         {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
         {running ? (locale === 'zh' ? '运行中…' : 'Running…') : (label === 'Run' ? (locale === 'zh' ? '执行' : 'Run') : label)}
       </Button>
@@ -2855,7 +2930,7 @@ function RunButton({
           onClick={onCancel}
           variant="outline"
           size="sm"
-          className="h-8 text-xs gap-1 border-rose-300 text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400"
+          className="h-8 text-xs gap-1 border-claude-top/40 text-claude-top hover:bg-claude-top-bg dark:border-claude-top/50 dark:text-claude-top"
           title={locale === 'zh' ? '停止当前任务（后端可能需要几秒钟才能真正停止）' : 'Stop current task (backend may take a few seconds to actually stop)'}
         >
           <XCircle className="h-3.5 w-3.5" /> {locale === 'zh' ? '停止' : 'Stop'}

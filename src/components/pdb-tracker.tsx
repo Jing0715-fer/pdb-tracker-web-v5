@@ -11,7 +11,7 @@ import {
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
-  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap,
+  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -45,9 +45,8 @@ import { usePaperNotes } from '@/components/literature/usePaperNotes';
 import { usePaperTags } from '@/components/literature/LiteraturePaperTags';
 import { DemoDataBanner } from '@/components/demo-data-banner';
 import { QuickActions } from '@/components/quick-actions';
-import { TrendingStructures } from '@/components/trending-structures';
-import { SnapshotComparison } from '@/components/snapshot-comparison';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
+import { QualityRing } from '@/components/quality-components';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
@@ -58,7 +57,7 @@ import { useAppSettings } from '@/hooks/use-app-settings';
 import { generateBibTeX, generateRIS, generateAPA, generateVancouver, generateMLA, downloadFile } from '@/lib/citation-utils';
 // fallback-data import removed — errors now surface as error messages, not demo data.
 import { useTour } from '@/hooks/use-tour';
-import { exportToCSV, exportToJSON, formatPdbEntryForExport, formatEvalForExport, formatLitPaperForExport } from '@/lib/export-utils';
+import { exportToCSV, exportToJSON, exportToExcel, exportToPowerPoint, formatPdbEntryForExport, formatEvalForExport, formatLitPaperForExport } from '@/lib/export-utils';
 import { useAppStore as useMolcraftStore } from '@/lib/molcraft/store';
 
 // QuickStatsPanel and WeeklyDiffCompare loaded dynamically to avoid bundle size issues
@@ -157,10 +156,9 @@ const HeaderParticles = dynamic(() => import('@/components/ui/pdb-animated').the
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
 });
 
-const QualityRing = dynamic(() => import('@/components/quality-components').then(m => ({ default: m.QualityRing })), {
-  ssr: false,
-  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
-});
+// QualityRing: static import (was dynamic, but the file is only 48 lines —
+// code-splitting caused ChunkLoadError on dev server restarts).
+// Import is at the top of the file with other static imports.
 
 const ScrollProgress = dynamic(() => import('@/components/scroll-progress').then(m => ({ default: m.ScrollProgress })), {
   ssr: false,
@@ -285,6 +283,69 @@ const QuickFilterChips = dynamic(() => import('@/components/quick-filter-chips')
   ssr: false,
   loading: () => null,
 });
+const MultiStructureCompare = dynamic(() => import('@/components/multi-structure-compare').then(m => ({ default: m.MultiStructureCompare })), {
+  ssr: false,
+  loading: () => null,
+});
+const MultiStructure3DViewer = dynamic(() => import('@/components/multi-structure-3d-viewer').then(m => ({ default: m.MultiStructure3DViewer })), {
+  ssr: false,
+  loading: () => null,
+});
+const EvalMultiCompare = dynamic(() => import('@/components/eval-multi-compare').then(m => ({ default: m.EvalMultiCompare })), {
+  ssr: false,
+  loading: () => null,
+});
+const PaperMultiCompare = dynamic(() => import('@/components/paper-multi-compare').then(m => ({ default: m.PaperMultiCompare })), {
+  ssr: false,
+  loading: () => null,
+});
+const TrendingStructures = dynamic(() => import('@/components/trending-structures').then(m => ({ default: m.TrendingStructures })), {
+  ssr: false,
+  loading: () => <div className="p-3 space-y-2"><div className="animate-pulse bg-claude-border-light rounded h-4 w-3/4" /><div className="animate-pulse bg-claude-border-light rounded h-4 w-1/2" /><div className="animate-pulse bg-claude-border-light rounded h-4 w-2/3" /></div>,
+});
+const SnapshotComparison = dynamic(() => import('@/components/snapshot-comparison').then(m => ({ default: m.SnapshotComparison })), {
+  ssr: false,
+  loading: () => <div className="p-3 space-y-2"><div className="animate-pulse bg-claude-border-light rounded h-6 w-full" /><div className="animate-pulse bg-claude-border-light rounded h-4 w-3/4" /></div>,
+});
+const SavedQueriesDropdown = dynamic(() => import('@/components/saved-queries-dropdown').then(m => ({ default: m.SavedQueriesDropdown })), {
+  ssr: false,
+  loading: () => null,
+});
+const CustomDashboard = dynamic(() => import('@/components/custom-dashboard').then(m => ({ default: m.CustomDashboard })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
+});
+const ShortcutHintBar = dynamic(() => import('@/components/shortcut-hint-bar').then(m => ({ default: m.ShortcutHintBar })), {
+  ssr: false,
+  loading: () => null,
+});
+const ColorThemeSwatch = dynamic(() => import('@/components/color-theme-swatch').then(m => ({ default: m.ColorThemeSwatch })), {
+  ssr: false,
+  loading: () => <div className="w-7 h-7" />,
+});
+const WidgetVisibilityToggle = dynamic(() => import('@/components/widget-visibility-toggle').then(m => ({ default: m.WidgetVisibilityToggle })), {
+  ssr: false,
+  loading: () => null,
+});
+const WebVitalsIndicator = dynamic(() => import('@/hooks/use-web-vitals').then(m => ({ default: m.WebVitalsIndicator })) as Promise<{ default: React.ComponentType }>, {
+  ssr: false,
+  loading: () => null,
+});
+const ResolutionHistogramWidget = dynamic(() => import('@/components/resolution-histogram-widget').then(m => ({ default: m.ResolutionHistogramWidget })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
+});
+const JournalDistributionWidget = dynamic(() => import('@/components/journal-distribution-widget').then(m => ({ default: m.JournalDistributionWidget })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
+});
+const FacetedSearch = dynamic(() => import('@/components/faceted-search').then(m => ({ default: m.FacetedSearch })), {
+  ssr: false,
+  loading: () => null,
+});
+import { applyFacetFilters, type FacetFilters } from '@/components/faceted-search';
+import { useChartPresets } from '@/hooks/use-chart-presets';
+import { useAriaLive } from '@/hooks/use-focus-trap';
 const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
@@ -741,9 +802,48 @@ export default function PdbTracker() {
   // Weekly batch selection state
   const [selectedEntryIds, setSelectedEntryIds] = useState<Set<string>>(new Set());
   const [compareMode, setCompareMode] = useState(false);
+  const [multiCompareOpen, setMultiCompareOpen] = useState(false);
+  const [multi3DOpen, setMulti3DOpen] = useState(false);
+  const [eval3DOpen, setEval3DOpen] = useState(false);
+  const [evalMultiCompareOpen, setEvalMultiCompareOpen] = useState(false);
+  const [paperCompareOpen, setPaperCompareOpen] = useState(false);
+  const [facetFilters, setFacetFilters] = useState<FacetFilters>({
+    methods: new Set(),
+    resolutionRanges: new Set(),
+    ifRanges: new Set(),
+    organisms: new Set(),
+  });
+  const { presets: chartPresets, savePreset, deletePreset } = useChartPresets();
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const announce = useAriaLive();
+  const [visibleWidgets, setVisibleWidgets] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set(['quality-score', 'method-distribution', 'resolution-histogram', 'journal-distribution']);
+    try {
+      const stored = localStorage.getItem('pdb-visible-widgets');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch { /* ignore */ }
+    return new Set(['quality-score', 'method-distribution', 'resolution-histogram', 'journal-distribution']);
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('pdb-visible-widgets', JSON.stringify(Array.from(visibleWidgets)));
+    } catch { /* ignore */ }
+  }, [visibleWidgets]);
+
+  const toggleWidget = useCallback((id: string) => {
+    setVisibleWidgets(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Keyboard hints overlay state
   const [keyboardHintsOpen, setKeyboardHintsOpen] = useState(false);
@@ -1683,6 +1783,12 @@ export default function PdbTracker() {
     else if (activeFilter === 'bookmarks') result = result.filter(e => bookmarks.has(e.pdbId));
     if (weeklyDateFilter) result = result.filter(e => e.releaseDate === weeklyDateFilter);
 
+    // Apply faceted filters
+    const hasFacetFilters = facetFilters.methods.size > 0 || facetFilters.resolutionRanges.size > 0 || facetFilters.ifRanges.size > 0 || facetFilters.organisms.size > 0;
+    if (hasFacetFilters) {
+      result = applyFacetFilters(result, facetFilters);
+    }
+
     result.sort((a, b) => {
       const aVal = (a as any)[sortField];
       const bVal = (b as any)[sortField];
@@ -1703,7 +1809,7 @@ export default function PdbTracker() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return result;
-  }, [entries, sortField, sortDir, activeFilter, weeklyDateFilter, bookmarks]);
+  }, [entries, sortField, sortDir, activeFilter, weeklyDateFilter, bookmarks, facetFilters]);
 
   const filteredEvaluations = useMemo(() => {
     let result = [...allEvaluations];
@@ -1810,6 +1916,7 @@ export default function PdbTracker() {
     setWeeklyDateFilter(null);
     setSelectedEvalId(null);
     setSelectedEval(null);
+    announce(locale === 'zh' ? `切换到${newMode === 'weekly' ? '周报' : newMode === 'evaluation' ? '评估' : newMode === 'literature' ? '文献' : '分析'}模式` : `Switched to ${newMode} mode`);
     setSelectedEvalStructure(null);
     setSelectedBatchId(null);
     setDetailPanelOpen(false);
@@ -2041,15 +2148,19 @@ export default function PdbTracker() {
 
   // ─── Export Current View ──────────────────────────────────────────────────
 
-  const handleExportCurrentView = useCallback((format: 'csv' | 'json' = 'csv') => {
+  const handleExportCurrentView = useCallback((format: 'csv' | 'json' | 'excel' = 'csv') => {
     if (mode === 'weekly') {
       const data = filteredEntries.map(formatPdbEntryForExport);
       if (!data.length) { toast.info('No data to export'); return; }
+      const fname = `pdb-weekly-${selectedSnapshot || 'all'}`;
       if (format === 'json') {
-        exportToJSON(data, `pdb-weekly-${selectedSnapshot || 'all'}`);
+        exportToJSON(data, fname);
         toast.success('Export complete', { description: `${data.length} entries exported as JSON` });
+      } else if (format === 'excel') {
+        exportToExcel(data, fname);
+        toast.success('Export complete', { description: `${data.length} entries exported as Excel` });
       } else {
-        exportToCSV(data, `pdb-weekly-${selectedSnapshot || 'all'}`);
+        exportToCSV(data, fname);
         toast.success('Export complete', { description: `${data.length} entries exported as CSV` });
       }
     } else if (mode === 'evaluation') {
@@ -2058,6 +2169,9 @@ export default function PdbTracker() {
       if (format === 'json') {
         exportToJSON(data, 'evaluations');
         toast.success('Export complete', { description: `${data.length} evaluations exported as JSON` });
+      } else if (format === 'excel') {
+        exportToExcel(data, 'evaluations');
+        toast.success('Export complete', { description: `${data.length} evaluations exported as Excel` });
       } else {
         exportToCSV(data, 'evaluations');
         toast.success('Export complete', { description: `${data.length} evaluations exported as CSV` });
@@ -2068,6 +2182,9 @@ export default function PdbTracker() {
       if (format === 'json') {
         exportToJSON(data, 'literature-papers');
         toast.success('Export complete', { description: `${data.length} papers exported as JSON` });
+      } else if (format === 'excel') {
+        exportToExcel(data, 'literature-papers');
+        toast.success('Export complete', { description: `${data.length} papers exported as Excel` });
       } else {
         exportToCSV(data, 'literature-papers');
         toast.success('Export complete', { description: `${data.length} papers exported as CSV` });
@@ -2215,7 +2332,7 @@ export default function PdbTracker() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto sidebar-scroll py-1 stagger-list">
+      <div className="flex-1 overflow-y-auto sidebar-scroll py-1 stagger-list stagger-done">
         {snapshots.map((snap, snapIdx) => {
           const isActive = selectedSnapshot === snap.weekId;
           const isLatest = snapIdx === 0;
@@ -3191,6 +3308,62 @@ export default function PdbTracker() {
                 />
               </div>
             )}
+
+            {/* Citation Format Dropdown */}
+            <div className="relative group">
+              <button
+                onClick={(e) => {
+                  e.currentTarget.nextElementSibling?.classList.toggle('hidden');
+                }}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium bg-claude-border-light dark:bg-[#2b2926] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-all active:scale-95"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                {locale === 'zh' ? '复制引用' : 'Copy Citation'}
+                <ChevronDown className="h-3 w-3" />
+              </button>
+              <div className="hidden absolute bottom-full left-0 right-0 mb-1 rounded-lg border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg overflow-hidden z-50">
+                {[
+                  { label: 'APA', fn: () => generateAPA(paper) },
+                  { label: 'BibTeX', fn: () => generateBibTeX(paper) },
+                  { label: 'RIS', fn: () => generateRIS(paper) },
+                  { label: 'Vancouver', fn: () => generateVancouver(paper) },
+                  { label: 'MLA', fn: () => generateMLA(paper) },
+                  { label: locale === 'zh' ? '纯文本' : 'Plain Text', fn: () => citationText },
+                ].map(item => (
+                  <button
+                    key={item.label}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const text = item.fn();
+                      navigator.clipboard.writeText(text).then(() => {
+                        toast.success(`${item.label} ${locale === 'zh' ? '已复制' : 'copied'}`, { description: locale === 'zh' ? '引用已复制到剪贴板' : 'Citation copied to clipboard' });
+                      }).catch(() => {
+                        toast.error(locale === 'zh' ? '复制失败' : 'Copy failed');
+                      });
+                      (e.currentTarget.parentElement as HTMLElement).classList.add('hidden');
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors"
+                  >
+                    <FileText className="h-3 w-3" />
+                    {item.label}
+                  </button>
+                ))}
+                <div className="border-t border-claude-border/50 dark:border-[#3d3832]/50">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const bibtex = generateBibTeX(paper);
+                      downloadFile(bibtex, `${paper.pmid}.bib`, 'text/plain');
+                      (e.currentTarget.parentElement as HTMLElement).classList.add('hidden');
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors"
+                  >
+                    <Download className="h-3 w-3" />
+                    {locale === 'zh' ? '下载 .bib' : 'Download .bib'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
       </>);
 
@@ -4485,8 +4658,13 @@ export default function PdbTracker() {
       {/* Demo data banner — shows when DB is empty, offers one-click seeding */}
       <DemoDataBanner />
 
+      {/* Skip to content link for screen readers */}
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[999] focus:px-4 focus:py-2 focus:bg-claude-accent focus:text-white focus:rounded-md focus:text-xs">
+        {locale === 'zh' ? '跳到主要内容' : 'Skip to main content'}
+      </a>
+
       {/* ─── Header ──────────────────────────────────────────────────────── */}
-      <header className="header-gradient-border relative z-10 flex-shrink-0 min-w-0 header-enhanced-bg">
+      <header role="banner" aria-label="PDB Structure Tracker header" className="header-gradient-border relative z-10 flex-shrink-0 min-w-0 header-enhanced-bg">
         <HeaderParticles />
         <div className="relative z-10 px-4 py-2.5 flex items-center gap-4 min-w-0">
           <div className="flex items-center gap-2.5 flex-shrink-0">
@@ -4504,7 +4682,7 @@ export default function PdbTracker() {
               </TooltipTrigger>
               <TooltipContent side="bottom"><p>{t.menu}</p></TooltipContent>
             </Tooltip>
-            <div className="header-icon-wrap h-8 w-8 rounded-lg bg-gradient-to-br from-claude-accent via-[#d4784f] to-[#c9872e] flex items-center justify-center shadow-md shadow-claude-accent/25 ring-1 ring-claude-accent/20">
+            <div className="header-icon-wrap h-8 w-8 rounded-lg flex items-center justify-center shadow-md ring-1" style={{ background: 'linear-gradient(135deg, var(--claude-accent), var(--claude-accent-hover))', boxShadow: '0 2px 8px color-mix(in srgb, var(--claude-accent) 25%, transparent)', borderColor: 'color-mix(in srgb, var(--claude-accent) 20%, transparent)' }}>
               <Atom className="h-4.5 w-4.5 text-white header-icon-spin" />
             </div>
             <div className="hidden sm:block">
@@ -4560,21 +4738,15 @@ export default function PdbTracker() {
               >
                 <span className="hidden sm:inline">{tab.mode === 'weekly' ? t.modeWeeklyFull : tab.mode === 'evaluation' ? t.modeEvaluationFull : tab.mode === 'analysis' ? (t.modeAnalysisFull ?? 'Analysis') : t.modeLiteratureFull}</span>
                 <span className="sm:hidden text-[11px]">{tab.mode === 'weekly' ? t.modeWeeklyShort : tab.mode === 'evaluation' ? t.modeEvaluationShort : tab.mode === 'analysis' ? (t.modeAnalysisShort ?? 'Analysis') : t.modeLiteratureShort}</span>
-                {count > 0 && tab.mode !== 'analysis' && (
-                  <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[9px] font-bold transition-colors ${
-                    mode === tab.mode
-                      ? 'bg-claude-accent/20 text-claude-accent'
-                      : 'bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted'
-                  }`}>
-                    {count}
-                  </span>
-                )}
               </button>
               );
             })}
           </div>
 
           <div className="flex-1" />
+
+          {/* Color Theme Preview — quick accent color switcher */}
+          <ColorThemeSwatch />
 
           {/* Search (desktop) — enhanced with recent + trending dropdown */}
           <div ref={searchWrapRef} className="relative max-w-xs w-full hidden md:block">
@@ -4598,6 +4770,18 @@ export default function PdbTracker() {
               </kbd>
             )}
           </div>
+
+          {/* Saved Queries Dropdown — next to search */}
+          <SavedQueriesDropdown
+            currentQuery={searchQuery}
+            currentMode={mode}
+            currentFilter={mode === 'weekly' ? activeFilter : mode === 'evaluation' ? evalFilter : 'all'}
+            onApplyQuery={(query, filter) => {
+              setSearchQuery(query);
+              if (mode === 'weekly') setActiveFilter(filter);
+              else if (mode === 'evaluation') setEvalFilter(filter);
+            }}
+          />
 
           {/* Mobile search button (visible < md) */}
           <Tooltip>
@@ -4658,18 +4842,34 @@ export default function PdbTracker() {
             </Tooltip>
           )}
 
-          {/* Export Button */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm"
-                onClick={() => handleExportCurrentView('csv')}
-                className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-text active:scale-95 transition-transform duration-100"
-              >
-                <Download className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>{t.exportData}</p></TooltipContent>
-          </Tooltip>
+          {/* Export Button — with dropdown for format selection */}
+          <div className="relative group">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="sm"
+                  onClick={() => {
+                    const menu = document.getElementById('export-format-menu');
+                    if (menu) menu.classList.toggle('hidden');
+                  }}
+                  className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-text active:scale-95 transition-transform duration-100"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>{t.exportData}</p></TooltipContent>
+            </Tooltip>
+            <div id="export-format-menu" className="hidden absolute right-0 top-full mt-1 w-32 rounded-lg border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg overflow-hidden z-50">
+              <button onClick={() => { handleExportCurrentView('csv'); document.getElementById('export-format-menu')?.classList.add('hidden'); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors">
+                <FileText className="h-3 w-3" /> CSV
+              </button>
+              <button onClick={() => { handleExportCurrentView('json'); document.getElementById('export-format-menu')?.classList.add('hidden'); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors">
+                <FileJson className="h-3 w-3" /> JSON
+              </button>
+              <button onClick={() => { handleExportCurrentView('excel'); document.getElementById('export-format-menu')?.classList.add('hidden'); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors">
+                <FileDown className="h-3 w-3" /> Excel
+              </button>
+            </div>
+          </div>
 
           {/* Import Button */}
           <Tooltip>
@@ -4945,6 +5145,18 @@ export default function PdbTracker() {
               mode="literature"
             />
           )}
+          {/* Compare Papers button for Literature mode */}
+          {mode === 'literature' && litPapers.length >= 2 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+              <button
+                onClick={() => setPaperCompareOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#7c5cbf] hover:bg-[#7c5cbf]/10 transition-all"
+              >
+                <Columns2 className="h-3 w-3" />
+                {locale === 'zh' ? '论文对比' : 'Compare Papers'}
+              </button>
+            </div>
+          )}
 
           {/* Stats Cards are rendered INSIDE each view component (weekly-view, evaluation-view, literature-view)
               to avoid duplication and ensure consistent placement below the filter toolbar */}
@@ -4963,6 +5175,82 @@ export default function PdbTracker() {
                   · {entries.length} {locale === 'zh' ? '个结构' : 'structures'}
                 </span>
               </button>
+              {/* Chart Preset Save + Load + Widget Visibility buttons */}
+              {showDashboard && (
+                <div className="flex items-center gap-1 ml-auto mr-2">
+                  <WidgetVisibilityToggle
+                    widgets={[
+                      { id: 'quality-score', label: locale === 'zh' ? '质量评分' : 'Quality Score' },
+                      { id: 'method-distribution', label: locale === 'zh' ? '方法分布' : 'Method Distribution' },
+                      { id: 'resolution-histogram', label: locale === 'zh' ? '分辨率分布' : 'Resolution Histogram' },
+                      { id: 'journal-distribution', label: locale === 'zh' ? '期刊分布' : 'Journal Distribution' },
+                    ]}
+                    visibleIds={visibleWidgets}
+                    onToggle={toggleWidget}
+                  />
+                  <button
+                    onClick={() => {
+                      const name = prompt(locale === 'zh' ? '预设名称:' : 'Preset name:', `Preset ${chartPresets.length + 1}`);
+                      if (name) {
+                        savePreset(name, { showDashboard, showHeatmap, showTrend, showTimeline, showQualityDist, showWeekCompare });
+                        toast.success(locale === 'zh' ? '预设已保存' : 'Preset saved', { description: name });
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-all"
+                    title={locale === 'zh' ? '保存当前布局为预设' : 'Save current layout as preset'}
+                  >
+                    <Bookmark className="h-3 w-3" />
+                    <span className="hidden sm:inline">{locale === 'zh' ? '保存预设' : 'Save Preset'}</span>
+                  </button>
+                  {chartPresets.length > 0 && (
+                    <div className="relative">
+                      <button
+                        onClick={() => {
+                          const menu = document.getElementById('preset-load-menu');
+                          if (menu) menu.classList.toggle('hidden');
+                        }}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-all"
+                        title={locale === 'zh' ? '加载预设' : 'Load preset'}
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        <span className="text-[9px] font-bold bg-claude-accent/20 text-claude-accent rounded-full px-1">{chartPresets.length}</span>
+                      </button>
+                      <div id="preset-load-menu" className="hidden absolute right-0 top-full mt-1 w-48 rounded-lg border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg overflow-hidden z-50">
+                        <div className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-claude-text-muted border-b border-claude-border/30 dark:border-[#3d3832]/30">
+                          {locale === 'zh' ? '已保存预设' : 'Saved Presets'}
+                        </div>
+                        {chartPresets.map(preset => (
+                          <div key={preset.id} className="group flex items-center">
+                            <button
+                              onClick={() => {
+                                const s = preset.settings;
+                                if (typeof s.showDashboard === 'boolean') setShowDashboard(s.showDashboard);
+                                if (typeof s.showHeatmap === 'boolean') setShowHeatmap(s.showHeatmap);
+                                if (typeof s.showTrend === 'boolean') setShowTrend(s.showTrend);
+                                if (typeof s.showTimeline === 'boolean') setShowTimeline(s.showTimeline);
+                                if (typeof s.showQualityDist === 'boolean') setShowQualityDist(s.showQualityDist);
+                                if (typeof s.showWeekCompare === 'boolean') setShowWeekCompare(s.showWeekCompare);
+                                toast.success(locale === 'zh' ? '预设已加载' : 'Preset loaded', { description: preset.name });
+                                document.getElementById('preset-load-menu')?.classList.add('hidden');
+                              }}
+                              className="flex-1 flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors text-left"
+                            >
+                              <Bookmark className="h-2.5 w-2.5 shrink-0" />
+                              <span className="truncate">{preset.name}</span>
+                            </button>
+                            <button
+                              onClick={() => { deletePreset(preset.id); }}
+                              className="opacity-0 group-hover:opacity-100 p-1 text-claude-text-muted hover:text-red-500 transition-all shrink-0"
+                            >
+                              <Trash2 className="h-2.5 w-2.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               <div
                 className="overflow-hidden transition-all duration-300 ease-in-out"
                 style={{ maxHeight: showDashboard ? 1200 : 0, opacity: showDashboard ? 1 : 0 }}
@@ -4973,15 +5261,22 @@ export default function PdbTracker() {
                     and skip rendering the Radar polygon (path.recharts-polygon). */}
                 {showDashboard && (
                   <div className="space-y-3">
-                    <QualityScoreDashboard entries={entries} locale={locale} />
-                    <WeeklyDashboardCharts entries={entries} snapshots={snapshots} />
+                    <CustomDashboard
+                      storageKey="weekly-dashboard-widgets"
+                      widgets={[
+                        { id: 'quality-score', title: locale === 'zh' ? '质量评分' : 'Quality Score', content: <QualityScoreDashboard entries={entries} locale={locale} /> },
+                        { id: 'method-distribution', title: locale === 'zh' ? '方法分布' : 'Method Distribution', content: <WeeklyDashboardCharts entries={entries} snapshots={snapshots} /> },
+                        { id: 'resolution-histogram', title: locale === 'zh' ? '分辨率分布' : 'Resolution Histogram', content: <ResolutionHistogramWidget entries={entries} /> },
+                        { id: 'journal-distribution', title: locale === 'zh' ? '期刊分布' : 'Journal Distribution', content: <JournalDistributionWidget entries={entries} /> },
+                      ].filter(w => visibleWidgets.has(w.id))}
+                    />
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* Quick Filter Chips + View Density Toggle */}
+          {/* Quick Filter Chips + Faceted Search + View Density Toggle */}
           {mode === 'weekly' && entries.length > 0 && (
             <div className="flex items-center gap-2 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
               <div className="flex-1 min-w-0">
@@ -4992,7 +5287,12 @@ export default function PdbTracker() {
                   bookmarksCount={bookmarks.size}
                 />
               </div>
-              <div className="shrink-0 pr-2">
+              <div className="shrink-0 flex items-center gap-1 pr-2">
+                <FacetedSearch
+                  entries={entries}
+                  filters={facetFilters}
+                  onFiltersChange={setFacetFilters}
+                />
                 <ViewDensityToggle />
               </div>
             </div>
@@ -5015,6 +5315,7 @@ export default function PdbTracker() {
           )}
           {/* Toolbar (evaluation) */}
           {mode === 'evaluation' && (
+            <>
             <EvalPageControls
               activeFilter={evalFilter}
               onFilterChange={(f) => { setEvalFilter(f); }}
@@ -5027,11 +5328,36 @@ export default function PdbTracker() {
               selectedEvalId={selectedEvalId}
               filteredEvaluations={filteredEvaluations}
             />
+            {/* 3D Preview + Compare Targets buttons for evaluation */}
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]">
+              {allEvaluations.length >= 2 && (
+                <button
+                  onClick={() => setEvalMultiCompareOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#7c5cbf] hover:bg-[#7c5cbf]/10 transition-all"
+                >
+                  <Columns2 className="h-3 w-3" />
+                  {locale === 'zh' ? '靶点对比' : 'Compare Targets'}
+                </button>
+              )}
+              {allEvaluations.some(e => (e.pdbStructures?.length ?? 0) > 0) && (
+                <button
+                  onClick={() => setEval3DOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-medium text-claude-text-secondary hover:text-[#2d8f8f] hover:bg-[#2d8f8f]/10 transition-all"
+                >
+                  <Boxes className="h-3 w-3" />
+                  {locale === 'zh' ? '3D 结构预览' : '3D Structure Preview'}
+                </button>
+              )}
+            </div>
+            </>
           )}
 
           {/* Content */}
           <div
             key={mode}
+            id="main-content"
+            role="main"
+            aria-label={`${mode} mode content`}
             className="flex-1 flex flex-col min-h-0 overflow-hidden relative mode-content-transition"
           >
               {mode === 'weekly' && (
@@ -5165,6 +5491,10 @@ export default function PdbTracker() {
             onClearSelection={handleClearSelection}
             onBatchTag={handleBatchTag}
             canCompare={selectedEntryIds.size >= 2 && selectedEntryIds.size <= 4}
+            onMultiCompare={() => setMultiCompareOpen(true)}
+            canMultiCompare={selectedEntryIds.size >= 2}
+            onMulti3D={() => setMulti3DOpen(true)}
+            canMulti3D={selectedEntryIds.size >= 2}
           />
         )}
 
@@ -5175,6 +5505,69 @@ export default function PdbTracker() {
             onClose={() => setCompareMode(false)}
           />
         )}
+
+        {/* Multi-Structure Compare Modal — detailed side-by-side metric comparison */}
+        {mode === 'weekly' && multiCompareOpen && selectedEntryIds.size >= 2 && (
+          <MultiStructureCompare
+            entries={entries.filter(e => selectedEntryIds.has(e.pdbId))}
+            onClose={() => setMultiCompareOpen(false)}
+          />
+        )}
+
+        {/* Multi-Structure 3D Viewer Modal — side-by-side 3D structure previews */}
+        {mode === 'weekly' && multi3DOpen && selectedEntryIds.size >= 2 && (
+          <MultiStructure3DViewer
+            entries={entries.filter(e => selectedEntryIds.has(e.pdbId))}
+            onClose={() => setMulti3DOpen(false)}
+            onViewEntry={(pdbId) => { setViewerModalPdbId(pdbId); setViewerModalOpen(true); setMulti3DOpen(false); }}
+          />
+        )}
+
+        {/* Evaluation Multi-Compare Modal — side-by-side target metric comparison */}
+        {mode === 'evaluation' && evalMultiCompareOpen && allEvaluations.length >= 2 && (
+          <EvalMultiCompare
+            evaluations={allEvaluations}
+            onClose={() => setEvalMultiCompareOpen(false)}
+          />
+        )}
+
+        {/* Paper Multi-Compare Modal — side-by-side paper metric comparison */}
+        {mode === 'literature' && paperCompareOpen && litPapers.length >= 2 && (
+          <PaperMultiCompare
+            papers={litPapers.slice(0, 4)}
+            onClose={() => setPaperCompareOpen(false)}
+          />
+        )}
+
+        {/* Evaluation 3D Viewer Modal — side-by-side 3D structure previews from eval PDBs */}
+        {mode === 'evaluation' && eval3DOpen && (() => {
+          const evalPdbs = allEvaluations
+            .flatMap(e => e.pdbStructures || [])
+            .slice(0, 4)
+            .map(s => ({
+              pdbId: s.pdbId,
+              method: s.method,
+              resolution: s.resolution,
+              title: s.title,
+              journal: s.journal,
+              journalIf: s.journalIf,
+              organisms: null,
+              ligands: s.ligandNames,
+              releaseDate: s.releaseDate,
+              isCryoem: 0, isXray: 0, isNmr: 0,
+              doi: null, pubmedId: null, pubmedTitle: null,
+              pubmedAuthors: null, pubmedAbstract: null, authors: null,
+              weekId: null, fetchDate: null, ifTier: null,
+            } as PdbEntry));
+          if (evalPdbs.length < 2) return null;
+          return (
+            <MultiStructure3DViewer
+              entries={evalPdbs}
+              onClose={() => setEval3DOpen(false)}
+              onViewEntry={(pdbId) => { setViewerModalPdbId(pdbId); setViewerModalOpen(true); setEval3DOpen(false); }}
+            />
+          );
+        })()}
 
         {/* Detail Panel */}
         {renderDetailPanel()}
@@ -5195,7 +5588,9 @@ export default function PdbTracker() {
         usingFallbackData={usingFallbackData}
         onRefresh={handleRetryAll}
         isRefreshing={isRefreshing}
-      />
+      >
+        <WebVitalsIndicator />
+      </EnhancedFooter>
 
       {/* ─── Command Palette ──────────────────────────────────────────────── */}
       <CommandPalette
@@ -5274,6 +5669,9 @@ export default function PdbTracker() {
         open={keyboardHintsOpen}
         onClose={() => setKeyboardHintsOpen(false)}
       />
+
+      {/* Shortcut Hint Bar — persistent visual shortcut hints */}
+      <ShortcutHintBar />
 
       {/* Data Import Dialog */}
       <DataImportDialog

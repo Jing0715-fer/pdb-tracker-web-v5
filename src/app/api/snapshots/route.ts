@@ -4,6 +4,14 @@ import { safeJsonParse } from '@/lib/utils';
 
 export async function GET() {
   try {
+    // Probe: if the table doesn't exist yet (first run), return empty array
+    // instead of 500 so the frontend can show the DB setup wizard.
+    try {
+      await db.$queryRaw`SELECT 1 FROM PdbStructure LIMIT 1`;
+    } catch {
+      return NextResponse.json([]);
+    }
+
     const structureCounts = await db.$queryRaw<any[]>`
       SELECT weekId,
              CAST(COUNT(*) AS TEXT) as totalStructures,
@@ -52,6 +60,6 @@ export async function GET() {
     return NextResponse.json(result);
   } catch (error) {
     console.error('Error fetching snapshots:', error);
-    return NextResponse.json([], { status: 500 });
+    return NextResponse.json([]);
   }
 }

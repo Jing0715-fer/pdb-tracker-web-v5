@@ -5,6 +5,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import { Clock, Diamond, Star, Square, Circle, Info } from 'lucide-react';
+import { ChartExportButton } from '@/components/chart-export-button';
 import type { Evaluation } from '@/lib/pdb-types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -396,6 +397,10 @@ export function EvalGanttTimeline({
 
   return (
     <div className="flex flex-col h-full">
+      {/* Header with export */}
+      <div className="flex items-center justify-end py-1 px-2">
+        <ChartExportButton chartName="eval-gantt-timeline" />
+      </div>
       {/* Legend */}
       <GanttLegend isDark={isDark} />
 

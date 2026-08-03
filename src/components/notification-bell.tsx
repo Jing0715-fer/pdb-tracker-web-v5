@@ -179,16 +179,26 @@ export function NotificationBell() {
     DEFAULT_PREFS,
   );
 
-  // Fetch activity feed
-  const fetchActivities = useCallback(async () => {
+  // Fetch activity feed — with retry to handle dev-mode API compilation delays
+  const fetchActivities = useCallback(async (retries = 2) => {
     try {
       const res = await fetch('/api/activity?limit=20');
       if (res.ok) {
         const data = await res.json();
         setActivities(data);
+      } else if (retries > 0) {
+        // Retry after delay (API may still be compiling in dev mode)
+        setTimeout(() => { fetchActivities(retries - 1); }, 2000);
       }
     } catch (err) {
-      console.error('Failed to fetch activity feed:', err);
+      if (retries > 0) {
+        // Retry on network error (dev-mode API compilation)
+        setTimeout(() => { fetchActivities(retries - 1); }, 2000);
+      }
+      // Only log on final failure to reduce console noise
+      if (retries === 0) {
+        console.warn('Activity feed unavailable (non-critical)');
+      }
     } finally {
       setLoading(false);
     }

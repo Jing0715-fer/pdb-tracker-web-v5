@@ -111,9 +111,39 @@ export async function executeCommand(
       }
 
       // ---------- Loading ----------
-      case "load_pdb":
-        await viewer.loadPdb(cmd.id);
-        return { ok: true, detail: `Loaded PDB ${cmd.id}` };
+      case "load_pdb": {
+        // Try Molstar's built-in loadPdb (uses PDBe provider) first.
+        // If it fails (network/CORS) or doesn't actually load a structure,
+        // fall back to fetching from RCSB and loading via loadStructureFromData.
+        const structCountBefore = plugin.managers.structure.hierarchy.current.structures.length;
+        try {
+          await viewer.loadPdb(cmd.id);
+        } catch {
+          // loadPdb threw — will try fallback below
+        }
+        // Check if loadPdb actually loaded a structure
+        const structCountAfter = plugin.managers.structure.hierarchy.current.structures.length;
+        if (structCountAfter > structCountBefore) {
+          return { ok: true, detail: `Loaded PDB ${cmd.id}` };
+        }
+        // Fallback: fetch PDB text from RCSB and load via loadStructureFromData
+        try {
+          const pdbRes = await fetch(
+            `https://files.rcsb.org/download/${cmd.id.toUpperCase()}.pdb`
+          );
+          if (!pdbRes.ok) {
+            return { ok: false, detail: `PDB ${cmd.id} not found (HTTP ${pdbRes.status})` };
+          }
+          const pdbText = await pdbRes.text();
+          await viewer.loadStructureFromData(pdbText, "pdb", {
+            dataLabel: cmd.id.toUpperCase(),
+          });
+          return { ok: true, detail: `Loaded PDB ${cmd.id} (via RCSB fallback)` };
+        } catch (err2) {
+          const msg = err2 instanceof Error ? err2.message : String(err2);
+          return { ok: false, detail: `Failed to load PDB ${cmd.id}: ${msg}` };
+        }
+      }
 
       case "load_alphafold":
         await viewer.loadAlphaFoldDb(cmd.uniprotId);

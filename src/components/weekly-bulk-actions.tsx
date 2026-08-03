@@ -4,7 +4,7 @@ import { useI18n } from '@/lib/i18n';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Bookmark, BookmarkCheck, Tag, Download, GitCompareArrows, X,
-  Check, FileJson, FileText,
+  Check, FileJson, FileText, Columns2, Boxes,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,6 +27,14 @@ interface WeeklyBulkActionsProps {
   onBatchTag: (tag: string, pdbIds: string[]) => void;
   /** Whether compare is allowed (2-4 items) */
   canCompare: boolean;
+  /** Callback for detailed multi-structure comparison */
+  onMultiCompare?: () => void;
+  /** Whether multi-compare is allowed (2+ items) */
+  canMultiCompare?: boolean;
+  /** Callback for multi-structure 3D preview */
+  onMulti3D?: () => void;
+  /** Whether multi-3D is allowed (2+ items) */
+  canMulti3D?: boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -42,6 +50,10 @@ export function WeeklyBulkActions({
   onClearSelection,
   onBatchTag,
   canCompare,
+  onMultiCompare,
+  canMultiCompare,
+  onMulti3D,
+  canMulti3D,
 }: WeeklyBulkActionsProps) {
   const { locale } = useI18n();
   const [tagDialogOpen, setTagDialogOpen] = useState(false);
@@ -272,6 +284,56 @@ export function WeeklyBulkActions({
                 <p>{canCompare ? (locale === 'zh' ? '并排比较选中的结构' : 'Compare selected structures side by side') : (locale === 'zh' ? '选择 2-4 个结构进行比较' : 'Select 2-4 structures to compare')}</p>
               </TooltipContent>
             </Tooltip>
+
+            {/* Detailed Multi-Compare */}
+            {onMultiCompare && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onMultiCompare}
+                    disabled={!canMultiCompare}
+                    className={`batch-btn-stagger batch-btn-stagger-4 h-8 px-2 sm:px-3 text-[11px] gap-1.5 ${
+                      canMultiCompare
+                        ? 'text-claude-text-secondary hover:text-[#7c5cbf] hover:bg-[#7c5cbf]/10'
+                        : 'text-claude-text-muted/40 cursor-not-allowed'
+                    }`}
+                  >
+                    <Columns2 className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{locale === 'zh' ? '详细对比' : 'Details'}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>{canMultiCompare ? (locale === 'zh' ? '详细指标对比' : 'Detailed metric comparison') : (locale === 'zh' ? '选择 2+ 个结构' : 'Select 2+ structures')}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* 3D Preview */}
+            {onMulti3D && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onMulti3D}
+                    disabled={!canMulti3D}
+                    className={`batch-btn-stagger batch-btn-stagger-4 h-8 px-2 sm:px-3 text-[11px] gap-1.5 ${
+                      canMulti3D
+                        ? 'text-claude-text-secondary hover:text-[#2d8f8f] hover:bg-[#2d8f8f]/10'
+                        : 'text-claude-text-muted/40 cursor-not-allowed'
+                    }`}
+                  >
+                    <Boxes className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{locale === 'zh' ? '3D预览' : '3D'}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>{canMulti3D ? (locale === 'zh' ? '并排 3D 结构预览' : 'Side-by-side 3D structure preview') : (locale === 'zh' ? '选择 2+ 个结构' : 'Select 2+ structures')}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
 
           {/* Divider */}
