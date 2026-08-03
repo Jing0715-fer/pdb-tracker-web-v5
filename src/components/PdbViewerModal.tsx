@@ -66,7 +66,7 @@ interface PdbViewerModalProps {
 export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: PdbViewerModalProps) {
   const openTimeRef = useRef<number>(0);
   const [viewerReadyKey, setViewerReadyKey] = useState(0);
-  const [analysisPanelOpen, setAnalysisPanelOpen] = useState(true);
+  const [analysisPanelOpen, setAnalysisPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<AnalysisTab>('info');
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {
@@ -75,7 +75,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
       setViewerReadyKey(k => k + 1);
     } else {
       openTimeRef.current = 0;
-      setAnalysisPanelOpen(true);
+      setAnalysisPanelOpen(false);
       setActiveTab('info');
     }
     onOpenChange(nextOpen);
@@ -167,9 +167,12 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
               )}
             </div>
 
-            {/* Inline Analysis Panel — right side */}
+            {/* Inline Analysis Panel — right side.
+                On narrow screens (< xl), the panel is collapsible so the
+                3D viewer gets maximum space. The toggle button is in the
+                header (PanelRightClose / PanelLeft). */}
             {analysisPanelOpen && pdbId && (
-              <div className="w-[300px] lg:w-[340px] xl:w-[380px] shrink-0 border-l border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] flex flex-col min-h-0 analysis-panel">
+              <div className="w-[260px] md:w-[300px] lg:w-[340px] xl:w-[380px] shrink-0 border-l border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] flex flex-col min-h-0 analysis-panel">
                 {/* Tab bar */}
                 <div className="flex items-center border-b border-claude-border dark:border-[#3d3832] flex-shrink-0">
                   <AnalysisTabButton

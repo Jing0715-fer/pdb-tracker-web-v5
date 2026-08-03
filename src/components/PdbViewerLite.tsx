@@ -148,39 +148,40 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   }, [pdbId]);
 
   // Focus on a specific chain in the 3D viewer
-  const focusChain = useCallback((chain: string) => {
+  const focusChain = useCallback(async (chain: string) => {
     if (!viewer) return;
     try {
-      viewer.structureInteractivity({
-        expression: (Q: any) => Q.struct.generator.atomGroups({
-          'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.authAsymId(), chain]),
-        }),
-        action: ['focus'],
-      });
-      toast(`Focused chain ${chain}`, 'info');
-    } catch {
+      const res = await executeCommand(viewer, { type: 'focus_chain', chain });
+      if (res.ok) {
+        toast(`Focused chain ${chain}`, 'info');
+      } else {
+        toast(`Focus failed: ${res.detail}`, 'error');
+      }
+    } catch (err) {
       toast('Focus failed', 'error');
     }
   }, [viewer, toast]);
 
   // Focus on a specific ligand
-  const focusLigand = useCallback((compId: string) => {
+  const focusLigand = useCallback(async (compId: string) => {
     if (!viewer) return;
     try {
-      viewer.structureInteractivity({
-        expression: (Q: any) => Q.struct.generator.atomGroups({
-          'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.labelCompId(), compId]),
-        }),
-        action: ['focus'],
-      });
-      toast(`Focused ligand ${compId}`, 'info');
-    } catch {
+      const res = await executeCommand(viewer, { type: 'focus_ligand', compId });
+      if (res.ok) {
+        toast(`Focused ligand ${compId}`, 'info');
+      } else {
+        toast(`Focus failed: ${res.detail}`, 'error');
+      }
+    } catch (err) {
       toast('Focus failed', 'error');
     }
   }, [viewer, toast]);
 
-  // Toggle chain visibility
-  const toggleChainVisibility = useCallback((chain: string) => {
+  // Toggle chain visibility — uses Molstar's structureInteractivity to
+  // select/deselect a chain, then highlights it for visual feedback.
+  // The eye icon toggles the UI state; the chain is highlighted/deselected
+  // in the 3D viewer to provide visual feedback.
+  const toggleChainVisibility = useCallback(async (chain: string) => {
     const newHidden = new Set(hiddenChains);
     if (newHidden.has(chain)) {
       newHidden.delete(chain);
@@ -188,19 +189,33 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
       newHidden.add(chain);
     }
     setHiddenChains(newHidden);
+
     if (!viewer) return;
     try {
-      const action = newHidden.has(chain) ? 'deselect' : 'select';
-      viewer.structureInteractivity({
-        expression: (Q: any) => Q.struct.generator.atomGroups({
-          'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.authAsymId(), chain]),
-        }),
-        action: [action],
+      const plugin = viewer.plugin;
+      // Build expression for this chain
+      const expr = (Q: any) => Q.struct.generator.atomGroups({
+        'chain-test': Q.core.rel.eq([
+          Q.struct.atomProperty.macromolecular.auth_asym_id
+            ? Q.struct.atomProperty.macromolecular.auth_asym_id()
+            : Q.struct.atomProperty.macromolecular.label_asym_id(),
+          chain,
+        ]),
       });
+
+      if (newHidden.has(chain)) {
+        // Hidden: clear highlight on this chain
+        plugin.managers.interactivity.lociHighlights.clearHighlights();
+      } else {
+        // Visible: highlight this chain
+        viewer.structureInteractivity({ expression: expr, action: ['highlight'] });
+      }
+
+      toast(`${newHidden.has(chain) ? 'Hidden' : 'Shown'} chain ${chain}`, 'info');
     } catch {
-      // ignore
+      toast('Visibility toggle failed', 'error');
     }
-  }, [viewer, hiddenChains]);
+  }, [viewer, hiddenChains, toast]);
 
   // Toggle entity expansion
   const toggleEntity = useCallback((entityKey: string) => {
