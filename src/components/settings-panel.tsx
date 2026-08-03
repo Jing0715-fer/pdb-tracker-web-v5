@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { exportSettings, importSettings } from '@/lib/settings-backup';
+import { useColorTheme } from '@/hooks/use-color-theme';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -95,6 +96,31 @@ function SettingRow({
         )}
       </div>
       <div className="flex-shrink-0">{children}</div>
+    </div>
+  );
+}
+
+// ─── Color Theme Picker ──────────────────────────────────────────────────────
+
+function ColorThemePicker() {
+  const { locale } = useI18n();
+  const { themeId, changeTheme, themes } = useColorTheme();
+  return (
+    <div className="flex items-center gap-1.5">
+      {themes.map(theme => (
+        <button
+          key={theme.id}
+          onClick={() => changeTheme(theme.id)}
+          className={`w-6 h-6 rounded-full border-2 transition-all ${
+            themeId === theme.id
+              ? 'border-claude-text scale-110 shadow-sm'
+              : 'border-transparent hover:scale-105'
+          }`}
+          style={{ backgroundColor: theme.accent }}
+          title={locale === 'zh' ? theme.nameZh : theme.name}
+          aria-label={locale === 'zh' ? theme.nameZh : theme.name}
+        />
+      ))}
     </div>
   );
 }
@@ -283,6 +309,14 @@ export function SettingsPanel({
                       }
                     }}
                   />
+                </SettingRow>
+
+                {/* Color Theme Picker */}
+                <SettingRow
+                  label={locale === 'zh' ? '强调色主题' : 'Accent Color Theme'}
+                  description={locale === 'zh' ? '自定义应用强调色' : 'Customize the app accent color'}
+                >
+                  <ColorThemePicker />
                 </SettingRow>
               </section>
 

@@ -11,7 +11,7 @@ import {
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
-  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark,
+  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -325,6 +325,7 @@ const FacetedSearch = dynamic(() => import('@/components/faceted-search').then(m
 });
 import { applyFacetFilters, type FacetFilters } from '@/components/faceted-search';
 import { useChartPresets } from '@/hooks/use-chart-presets';
+import { useAriaLive } from '@/hooks/use-focus-trap';
 const ViewDensityToggle = dynamic(() => import('@/components/view-density-toggle').then(m => ({ default: m.ViewDensityToggle })), {
   ssr: false,
   loading: () => null,
@@ -796,6 +797,7 @@ export default function PdbTracker() {
 
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const announce = useAriaLive();
 
   // Keyboard hints overlay state
   const [keyboardHintsOpen, setKeyboardHintsOpen] = useState(false);
@@ -1868,6 +1870,7 @@ export default function PdbTracker() {
     setWeeklyDateFilter(null);
     setSelectedEvalId(null);
     setSelectedEval(null);
+    announce(locale === 'zh' ? `切换到${newMode === 'weekly' ? '周报' : newMode === 'evaluation' ? '评估' : newMode === 'literature' ? '文献' : '分析'}模式` : `Switched to ${newMode} mode`);
     setSelectedEvalStructure(null);
     setSelectedBatchId(null);
     setDetailPanelOpen(false);
@@ -5132,24 +5135,71 @@ export default function PdbTracker() {
                   · {entries.length} {locale === 'zh' ? '个结构' : 'structures'}
                 </span>
               </button>
-              {/* Chart Preset Save button */}
+              {/* Chart Preset Save + Load buttons */}
               {showDashboard && (
-                <button
-                  onClick={() => {
-                    const name = prompt(locale === 'zh' ? '预设名称:' : 'Preset name:', `Preset ${chartPresets.length + 1}`);
-                    if (name) {
-                      savePreset(name, { showDashboard, showHeatmap, showTrend, showTimeline, showQualityDist, showWeekCompare });
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-all ml-auto mr-2"
-                  title={locale === 'zh' ? '保存当前布局为预设' : 'Save current layout as preset'}
-                >
-                  <Bookmark className="h-3 w-3" />
-                  <span className="hidden sm:inline">{locale === 'zh' ? '保存预设' : 'Save Preset'}</span>
+                <div className="flex items-center gap-1 ml-auto mr-2">
+                  <button
+                    onClick={() => {
+                      const name = prompt(locale === 'zh' ? '预设名称:' : 'Preset name:', `Preset ${chartPresets.length + 1}`);
+                      if (name) {
+                        savePreset(name, { showDashboard, showHeatmap, showTrend, showTimeline, showQualityDist, showWeekCompare });
+                        toast.success(locale === 'zh' ? '预设已保存' : 'Preset saved', { description: name });
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-all"
+                    title={locale === 'zh' ? '保存当前布局为预设' : 'Save current layout as preset'}
+                  >
+                    <Bookmark className="h-3 w-3" />
+                    <span className="hidden sm:inline">{locale === 'zh' ? '保存预设' : 'Save Preset'}</span>
+                  </button>
                   {chartPresets.length > 0 && (
-                    <span className="text-[9px] font-bold bg-claude-accent/20 text-claude-accent rounded-full px-1">{chartPresets.length}</span>
+                    <div className="relative">
+                      <button
+                        onClick={() => {
+                          const menu = document.getElementById('preset-load-menu');
+                          if (menu) menu.classList.toggle('hidden');
+                        }}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-all"
+                        title={locale === 'zh' ? '加载预设' : 'Load preset'}
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        <span className="text-[9px] font-bold bg-claude-accent/20 text-claude-accent rounded-full px-1">{chartPresets.length}</span>
+                      </button>
+                      <div id="preset-load-menu" className="hidden absolute right-0 top-full mt-1 w-48 rounded-lg border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg overflow-hidden z-50">
+                        <div className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-claude-text-muted border-b border-claude-border/30 dark:border-[#3d3832]/30">
+                          {locale === 'zh' ? '已保存预设' : 'Saved Presets'}
+                        </div>
+                        {chartPresets.map(preset => (
+                          <div key={preset.id} className="group flex items-center">
+                            <button
+                              onClick={() => {
+                                const s = preset.settings;
+                                if (typeof s.showDashboard === 'boolean') setShowDashboard(s.showDashboard);
+                                if (typeof s.showHeatmap === 'boolean') setShowHeatmap(s.showHeatmap);
+                                if (typeof s.showTrend === 'boolean') setShowTrend(s.showTrend);
+                                if (typeof s.showTimeline === 'boolean') setShowTimeline(s.showTimeline);
+                                if (typeof s.showQualityDist === 'boolean') setShowQualityDist(s.showQualityDist);
+                                if (typeof s.showWeekCompare === 'boolean') setShowWeekCompare(s.showWeekCompare);
+                                toast.success(locale === 'zh' ? '预设已加载' : 'Preset loaded', { description: preset.name });
+                                document.getElementById('preset-load-menu')?.classList.add('hidden');
+                              }}
+                              className="flex-1 flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-claude-text-secondary hover:bg-claude-accent/10 hover:text-claude-accent transition-colors text-left"
+                            >
+                              <Bookmark className="h-2.5 w-2.5 shrink-0" />
+                              <span className="truncate">{preset.name}</span>
+                            </button>
+                            <button
+                              onClick={() => { deletePreset(preset.id); }}
+                              className="opacity-0 group-hover:opacity-100 p-1 text-claude-text-muted hover:text-red-500 transition-all shrink-0"
+                            >
+                              <Trash2 className="h-2.5 w-2.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                </button>
+                </div>
               )}
               <div
                 className="overflow-hidden transition-all duration-300 ease-in-out"

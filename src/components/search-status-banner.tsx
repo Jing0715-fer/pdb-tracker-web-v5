@@ -105,6 +105,9 @@ export function SearchStatusBanner({
           exit={{ opacity: 0, height: 0 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
           className="overflow-hidden border-b border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
         >
           <div className="flex items-center gap-2 px-3 sm:px-4 py-2 flex-wrap">
             {/* Active indicator dot */}

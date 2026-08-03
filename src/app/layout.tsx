@@ -40,7 +40,7 @@ export default function RootLayout({
       >
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var hc=localStorage.getItem('pdb-high-contrast');if(hc==='true'){document.documentElement.classList.add('high-contrast');}}catch(e){}`,
+            __html: `try{var hc=localStorage.getItem('pdb-high-contrast');if(hc==='true'){document.documentElement.classList.add('high-contrast');}var ct=localStorage.getItem('pdb-color-theme');if(ct){var themes={'claude':['#c96442','#d97a5a','#a04e32'],'ocean':['#2d8f8f','#3da5a5','#1f6b6b'],'forest':['#16a34a','#22c55e','#15803d'],'sunset':['#ea580c','#f97316','#c2410c'],'berry':['#7c5cbf','#9171d4','#5a3d99'],'rose':['#e11d48','#f43f5e','#be123c']};var t=themes[ct]||themes['claude'];document.documentElement.style.setProperty('--claude-accent',t[0]);document.documentElement.style.setProperty('--claude-accent-light',t[1]);document.documentElement.style.setProperty('--claude-accent-dark',t[2]);}}catch(e){}`,
           }}
         />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>

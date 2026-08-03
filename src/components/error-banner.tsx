@@ -61,6 +61,9 @@ export function ErrorBanner({
     <AnimatePresence mode="wait">
       {isVisible && (
         <motion.div
+          role="alert"
+          aria-live="assertive"
+          aria-atomic="true"
           initial={{ opacity: 0, height: 0, y: -10 }}
           animate={{ opacity: 1, height: 'auto', y: 0 }}
           exit={{ opacity: 0, height: 0, y: -10 }}
