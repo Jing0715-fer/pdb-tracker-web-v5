@@ -2618,3 +2618,68 @@ Stage Summary:
 3. **[P3]** Add collaborative features (shared evaluations, comments)
 4. **[P3]** Add data import from Excel files
 5. **[P3]** Add multi-language support beyond EN/ZH
+
+---
+Task ID: cron-review-51
+Agent: main
+Task: Beautify evaluation sidebar items to match weekly items' aesthetic
+
+Work Log:
+- Read worklog to understand prior work (cron-review-50 fixed header title/bg/particles for color theme)
+- Located the actual visible evaluation sidebar component (`EvalModeSwitcher.tsx`), not the dead `PdbTrackerSidebar` in `pdb-sidebar.tsx` (whose React component is unused — only its types are imported)
+- Verified dev server running on port 3000; seeded a demo batch + an individual eval (P04637/p53) so the sidebar is populated for visual QA
+- Beautified 3 sidebar item types in `EvalModeSwitcher.tsx` to mirror the weekly items' visual language:
+  1. **Individual Evaluation item** (P04637 etc.):
+     - Added `slide-in-left`, `sidebar-week-item`, `sidebar-item-press`, `card-hover-scale`, `week-card`/`week-card-active` classes (same as weekly items)
+     - Selected state now uses `sidebar-active-card sidebar-week-active animate-border-breathe breathe-glow-active` (matching weekly active glow)
+     - Added a 3px vertical accent bar on the left edge, colored by `getScoreColor(score)` (red→orange→green→teal)
+     - Header row: UniProt ID (bold mono) + gene-name chip + score badge with solid score-color background + white text
+     - Protein name (line-clamp-1)
+     - Footer: organism (truncated) + color-coded badges (`2 PDB` in xray color, `1 BLAST` in nmr color, or `No data` muted badge)
+  2. **Batch item** (e.g. "Demo Kinase & Receptor Batch"):
+     - Same card classes + `slide-in-left` animation
+     - 3px violet (`#7c5cbf`) vertical accent bar
+     - Layers icon (violet) + title + sub-target count badge with violet gradient bg
+     - Batch ID (mono, muted)
+     - Footer: `3 targets` violet badge + `Open` accent badge when expanded
+  3. **Batch sub-target item** (Q9Y6K9, P00533, P07766):
+     - Compact version (p-2 pl-3, rounded-[8px]) with same class stack
+     - 2px score-colored vertical accent bar
+     - UniProt ID (bold mono) + score badge (solid color)
+     - Gene/protein display name (line-clamp-1)
+     - Footer: `1 PDB` / `0 BLAST` / `No data` mini badges
+- Updated loading skeleton to match new layout (left bar skeleton + header + badges row)
+- Reverted incidental edits to dead `pdb-sidebar.tsx` code to keep diff focused
+- Added helper scripts in `scripts/` for re-seeding demo batch + scores:
+  - `seed-eval-batch.mjs` — groups the 3 demo evals into a batch
+  - `add-individual-eval.mjs` — adds p53 (P04637) as an individual eval
+  - `update-eval-scores.mjs` — assigns non-zero Overall scores so badges/bars are visible
+
+Verification:
+- ESLint: 0 errors, 0 warnings on EvalModeSwitcher.tsx + pdb-sidebar.tsx
+- Dev log: no errors or warnings after changes
+- agent-browser DOM inspection confirmed new classes (`sidebar-week-item`, `slide-in-left`, `card-hover-scale`, `animate-border-breathe`) are applied to all 5 visible items (1 individual + 1 batch + 3 sub-targets)
+- VLM visual analysis (multiple screenshots) confirmed:
+  * P04637: teal accent bar, teal "8.5" badge, "2 PDB" footer badge ✓
+  * Demo Kinase batch: purple accent bar, purple "3" badge, "3 targets" + "Open" footer badges ✓
+  * Q9Y6K9: orange "4.2" badge, "1 PDB" footer badge ✓ (red→orange for low score)
+  * P00533: teal "9.1" badge ✓ (teal for high score)
+  * Overall: "highly polished and consistent... clean card-based system... clear typography hierarchy... color coding for scores is logical... no visual bugs, misalignments, or broken elements"
+- 0 console errors during page load + interaction
+
+Stage Summary:
+- Evaluation sidebar items now match the weekly items' aesthetic: same card-hover-scale lift, slide-in-left animation, sidebar-week-item hover gradient, week-card/week-card-active border accent, sidebar-week-active glowing left bar, animate-border-breathe breathing glow when selected
+- Dynamic score-based coloring (red/orange/green/teal) on the vertical accent bar + score badge
+- Color-coded footer badges (PDB in xray color, BLAST in nmr color, No data in muted)
+- Batch items use violet accent; sub-targets inherit score-based coloring
+- Loading skeleton updated to match the new richer layout
+- ESLint: 0 errors, 0 warnings
+- E2E: All visual changes verified via agent-browser + VLM
+
+### Next Priority Items (for future cron review rounds):
+1. **[P3]** User authentication (NextAuth.js)
+2. **[P3]** Add real-time PDB release notifications (WebSocket)
+3. **[P3]** Add collaborative features (shared evaluations, comments)
+4. **[P3]** Add data import from Excel files
+5. **[P3]** Add multi-language support beyond EN/ZH
+6. **[P3]** Consider removing or reviving the dead `PdbTrackerSidebar` component in `pdb-sidebar.tsx` (only its types are imported; the React component is unused)
