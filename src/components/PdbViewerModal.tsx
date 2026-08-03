@@ -16,10 +16,12 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useI18n } from '@/lib/i18n';
 
-// PdbStructureViewer pulls in the entire molstar CSS chain + 2800+ lines of
-// 3D viewer code. Lazy-load with ssr:false.
-const PdbStructureViewer = dynamic(
-  () => import('@/components/PdbStructureViewer').then(m => ({ default: m.PdbStructureViewer })),
+// PdbViewerLite uses the prebuilt Molstar bundle (/molstar.js) via <script>
+// tag, avoiding the ESM `molstar/lib/...` imports that are blocked by
+// IgnorePlugin in dev mode (next.config.ts).
+// Uses importWithRetry to handle ChunkLoadError during dev server recompiles.
+const PdbViewerLite = dynamic(
+  () => importWithRetry(() => import('@/components/PdbViewerLite').then(m => ({ default: m.PdbViewerLite }))),
   {
     ssr: false,
     loading: () => (
@@ -143,10 +145,9 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
             {/* 3D Viewer — takes remaining space */}
             <div className="flex-1 min-w-0 relative">
               {pdbId && viewerReady ? (
-                <PdbStructureViewer
+                <PdbViewerLite
                   key={viewerReadyKey}
                   pdbId={pdbId}
-                  layout="stacked"
                   className="h-full border-0 rounded-none"
                 />
               ) : (

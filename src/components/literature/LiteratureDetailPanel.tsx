@@ -14,13 +14,11 @@ import { CitationFormatSelector } from './CitationFormatSelector';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/i18n';
 
-// PdbStructureViewer is only rendered when the user clicks "View 3D structure"
-// on a PDB entry (isViewerOpen gate). Statically importing it forces the
-// molstar CSS + 2800-line viewer + framer-motion + radix hover-card/collapsible
-// to be parsed eagerly whenever the literature detail panel chunk loads.
+// PdbViewerLite uses the prebuilt Molstar bundle (/molstar.js) via <script>
+// tag, avoiding the ESM molstar/lib/... imports blocked by IgnorePlugin.
 // Lazy-load so the heavy 3D viewer code only compiles when actually opened.
-const PdbStructureViewer = dynamic(
-  () => import('@/components/PdbStructureViewer').then(m => ({ default: m.PdbStructureViewer })),
+const PdbViewerLite = dynamic(
+  () => import('@/components/PdbViewerLite').then(m => ({ default: m.PdbViewerLite })),
   {
     ssr: false,
     loading: () => (
@@ -667,7 +665,7 @@ function DetailPanelBody({
                       </div>
                       {/* Inline 3D viewer for this PDB — CSS transition instead of framer-motion */}
                       <div className={`lit-viewer-expand ${isViewerOpen ? 'lit-viewer-expanded' : 'lit-viewer-collapsed'}`}>
-                        {isViewerOpen && <PdbStructureViewer pdbId={pdb.pdbId} />}
+                        {isViewerOpen && <PdbViewerLite pdbId={pdb.pdbId} className="h-[300px]" />}
                       </div>
                     </div>
                   );

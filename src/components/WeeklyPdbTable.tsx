@@ -259,7 +259,7 @@ function ExpandedRowDetail({ entry, onRowClick, isBookmarked, onToggleBookmark }
           <div>
             <div className="text-[10px] font-semibold text-claude-text-muted uppercase tracking-wider mb-0.5">Structure Info</div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${methodColors.bg} ${methodColors.text} ${methodColors.border}`}>
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border whitespace-nowrap ${methodColors.bg} ${methodColors.text} ${methodColors.border}`}>
                 {methodLabel}
               </span>
               {entry.resolution != null && (
