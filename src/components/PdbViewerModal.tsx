@@ -51,7 +51,7 @@ const AnalysisSummary = dynamic(
   { ssr: false }
 );
 
-type AnalysisTab = 'info' | 'analysis' | 'tools';
+type AnalysisTab = 'info' | 'entities' | 'analysis' | 'tools';
 
 interface PdbViewerModalProps {
   pdbId: string | null;
@@ -178,6 +178,12 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                     label="Info"
                   />
                   <AnalysisTabButton
+                    active={activeTab === 'entities'}
+                    onClick={() => setActiveTab('entities')}
+                    icon={<Box className="h-3 w-3" />}
+                    label="Entities"
+                  />
+                  <AnalysisTabButton
                     active={activeTab === 'analysis'}
                     onClick={() => setActiveTab('analysis')}
                     icon={<Activity className="h-3 w-3" />}
@@ -195,6 +201,9 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                 <ScrollArea className="flex-1 min-h-0 sa-scroll">
                   {activeTab === 'info' && pdbId && (
                     <StructureInfoPanel pdbIdOverride={pdbId} />
+                  )}
+                  {activeTab === 'entities' && pdbId && (
+                    <ModalEntitiesTab pdbId={pdbId} />
                   )}
                   {activeTab === 'analysis' && pdbId && (
                     <AnalysisSummary pdbId={pdbId} />
@@ -352,6 +361,225 @@ function ToolsTab({
 }
 
 // ─── Thumbnail Preview Card ──────────────────────────────────────────────────
+
+// ─── Modal Entities Tab ─────────────────────────────────────────────────────
+// Shows polymer chains + ligand entities from RCSB Data API.
+// Self-contained: fetches its own data so it works in the modal without
+// depending on the Analysis mode's store.
+
+function ModalEntitiesTab({ pdbId }: { pdbId: string }) {
+  const [data, setData] = useState<{
+    title?: string;
+    methods?: string[];
+    resolution?: number | null;
+    polymers: Array<{
+      entityId: string;
+      chains: string[];
+      authChains: string[];
+      sequenceLength: number;
+      description: string;
+      organism: string;
+      entityType: string;
+    }>;
+    nonpolymers: Array<{
+      entityId: string;
+      compId: string;
+      name: string;
+      formulaWeight: number | null;
+    }>;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedEntity, setExpandedEntity] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pdbId) return;
+    let cancelled = false;
+    // Use a microtask to avoid the set-state-in-effect lint rule
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+    });
+    fetch(`/api/analyze/metadata?id=${pdbId}&interfaces=0`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (cancelled || !d) {
+          if (!cancelled) {
+            setError('Failed to load entity data');
+            setLoading(false);
+          }
+          return;
+        }
+        if (!cancelled) {
+          setData({
+            title: d.entry?.title,
+            methods: d.entry?.methods,
+            resolution: d.entry?.resolution,
+            polymers: d.polymers ?? [],
+            nonpolymers: d.nonpolymers ?? [],
+          });
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError('Network error loading entity data');
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [pdbId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 className="h-5 w-5 animate-spin text-claude-accent" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-4 text-center text-xs text-claude-text-muted">
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  return (
+    <div className="p-2 space-y-2">
+      {/* Summary */}
+      <div className="rounded-md border border-claude-border bg-claude-bg/50 p-2">
+        <div className="flex items-center gap-1.5 mb-1">
+          <Box className="h-3 w-3 text-claude-accent" />
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+            {pdbId.toUpperCase()} Summary
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-1 text-[9px]">
+          <div className="flex items-center gap-1">
+            <span className="text-claude-text-muted">Method:</span>
+            <span className="font-mono text-claude-text">
+              {data.methods?.join(', ') || '—'}
+            </span>
+          </div>
+          {data.resolution != null && (
+            <div className="flex items-center gap-1">
+              <span className="text-claude-text-muted">Res:</span>
+              <span className="font-mono text-claude-text">{data.resolution} Å</span>
+            </div>
+          )}
+          <div className="flex items-center gap-1">
+            <span className="text-claude-text-muted">Chains:</span>
+            <span className="font-mono text-claude-text">{data.polymers.length}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-claude-text-muted">Ligands:</span>
+            <span className="font-mono text-claude-text">{data.nonpolymers.length}</span>
+          </div>
+        </div>
+        {data.title && (
+          <p className="mt-1.5 text-[9px] text-claude-text-secondary leading-relaxed line-clamp-2">
+            {data.title}
+          </p>
+        )}
+      </div>
+
+      {/* Polymer entities */}
+      {data.polymers.length > 0 && (
+        <div>
+          <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary mb-1">
+            Polymer Entities ({data.polymers.length})
+          </div>
+          <div className="space-y-1">
+            {data.polymers.map((p) => {
+              const isExpanded = expandedEntity === `poly-${p.entityId}`;
+              return (
+                <div
+                  key={`poly-${p.entityId}`}
+                  className="rounded-md border border-claude-border/60 bg-claude-surface overflow-hidden"
+                >
+                  <button
+                    onClick={() => setExpandedEntity(isExpanded ? null : `poly-${p.entityId}`)}
+                    className="w-full flex items-center gap-1.5 p-1.5 text-left hover:bg-claude-border-light/40 transition-colors"
+                  >
+                    <ChevronRight
+                      className={`h-2.5 w-2.5 text-claude-text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                    />
+                    <span className="font-mono text-[10px] font-semibold text-claude-accent">
+                      {p.chains.join(',')}
+                    </span>
+                    <span className="text-[9px] text-claude-text-muted truncate flex-1">
+                      {p.description || p.entityType}
+                    </span>
+                    <Badge variant="outline" className="text-[8px] px-1 h-4">
+                      {p.sequenceLength}aa
+                    </Badge>
+                  </button>
+                  {isExpanded && (
+                    <div className="px-2 pb-2 space-y-0.5 text-[9px] border-t border-claude-border/40">
+                      {p.description && (
+                        <div><span className="text-claude-text-muted">Desc: </span><span className="text-claude-text">{p.description}</span></div>
+                      )}
+                      {p.organism && (
+                        <div><span className="text-claude-text-muted">Organism: </span><span className="text-claude-text">{p.organism}</span></div>
+                      )}
+                      <div><span className="text-claude-text-muted">Type: </span><span className="text-claude-text">{p.entityType}</span></div>
+                      <div><span className="text-claude-text-muted">Auth: </span><span className="font-mono text-claude-text">{p.authChains.join(', ')}</span></div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Non-polymer entities (ligands) */}
+      {data.nonpolymers.length > 0 && (
+        <div>
+          <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary mb-1">
+            Ligands & Cofactors ({data.nonpolymers.length})
+          </div>
+          <div className="space-y-1">
+            {data.nonpolymers.map((np) => (
+              <div
+                key={`np-${np.entityId}`}
+                className="rounded-md border border-claude-border/60 bg-claude-surface p-1.5"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] font-mono font-bold px-1.5 h-5 bg-claude-accent-light text-claude-accent border-claude-accent/30"
+                  >
+                    {np.compId}
+                  </Badge>
+                  <span className="text-[10px] text-claude-text flex-1 truncate">
+                    {np.name}
+                  </span>
+                </div>
+                {np.formulaWeight != null && (
+                  <div className="mt-0.5 text-[9px] text-claude-text-muted">
+                    MW: {np.formulaWeight.toFixed(1)} Da
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.polymers.length === 0 && data.nonpolymers.length === 0 && (
+        <div className="p-4 text-center text-[11px] text-claude-text-muted">
+          No entity data available for this structure.
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface PdbThumbnailPreviewProps {
   pdbId: string;
