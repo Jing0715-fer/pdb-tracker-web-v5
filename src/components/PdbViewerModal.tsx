@@ -15,12 +15,14 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useI18n } from '@/lib/i18n';
+import { importWithRetry } from '@/lib/dynamic-import-retry';
 
 // PdbViewerLite uses the prebuilt Molstar bundle (/molstar.js) via <script>
 // tag, avoiding the ESM `molstar/lib/...` imports that are blocked by
 // IgnorePlugin in dev mode (next.config.ts).
+// Uses importWithRetry to handle ChunkLoadError during dev server recompiles.
 const PdbViewerLite = dynamic(
-  () => import('@/components/PdbViewerLite').then(m => ({ default: m.PdbViewerLite })),
+  () => importWithRetry(() => import('@/components/PdbViewerLite').then(m => ({ default: m.PdbViewerLite }))),
   {
     ssr: false,
     loading: () => (

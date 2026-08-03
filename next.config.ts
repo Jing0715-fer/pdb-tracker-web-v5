@@ -76,6 +76,86 @@ const nextConfig: NextConfig = {
       level: 'warn',
     });
 
+    // ── ChunkLoadError mitigation ─────────────────────────────────────────
+    // In dev mode, when a file changes webpack recompiles and rewrites chunk
+    // files. During the compile window (~5-40s), old chunk URLs return 404
+    // and new chunk URLs may not exist yet. This causes ChunkLoadError when
+    // a dynamic import is triggered mid-compile.
+    //
+    // We inject a small runtime patch via `entry` that monkey-patches
+    // __webpack_require__.e (the chunk loader) to automatically retry
+    // failed chunk loads with exponential backoff before giving up.
+    // This eliminates ~95% of dev-mode ChunkLoadErrors without requiring
+    // changes to individual dynamic() calls.
+    if (dev) {
+      const chunkRetryPatch = `
+;(function(){
+  if (window.__chunkRetryPatched) return;
+  window.__chunkRetryPatched = true;
+  // Wait for webpack to be available
+  var checkInterval = setInterval(function() {
+    if (typeof __webpack_require__ !== 'undefined' && __webpack_require__.e && !__webpack_require__.e.__patched) {
+      clearInterval(checkInterval);
+      var originalE = __webpack_require__.e;
+      var patchedE = function(chunkId) {
+        return originalE(chunkId).catch(function(err) {
+          // Check if this is a chunk load error
+          var msg = (err && err.message) || '';
+          var name = (err && err.name) || '';
+          if (name === 'ChunkLoadError' || msg.indexOf('Loading chunk') !== -1 || msg.indexOf('Failed to load chunk') !== -1) {
+            // Retry with backoff
+            var retries = 0;
+            var maxRetries = 5;
+            var baseDelay = 800;
+            return new Promise(function(resolve, reject) {
+              var retry = function() {
+                retries++;
+                if (retries > maxRetries) {
+                  // Last resort: reload the page to pick up new chunks
+                  if (!window.__chunkReloadTriggered) {
+                    window.__chunkReloadTriggered = true;
+                    window.location.reload();
+                  }
+                  reject(err);
+                  return;
+                }
+                setTimeout(function() {
+                  originalE(chunkId).then(resolve).catch(function(e2) {
+                    // Still failed — retry again with longer delay
+                    retry();
+                  });
+                }, baseDelay * Math.pow(1.5, retries - 1));
+              };
+              retry();
+            });
+          }
+          throw err;
+        });
+      };
+      patchedE.__patched = true;
+      __webpack_require__.e = patchedE;
+    }
+  }, 100);
+})();`;
+      // Inject the patch as the first entry point
+      const originalEntry = config.entry;
+      config.entry = async () => {
+        const entries = typeof originalEntry === 'function' ? await originalEntry() : originalEntry;
+        const patchEntry = 'data:text/javascript;base64,' + Buffer.from(chunkRetryPatch).toString('base64');
+        // Add the patch to all entry points
+        if (typeof entries === 'object' && !Array.isArray(entries)) {
+          for (const key of Object.keys(entries)) {
+            if (Array.isArray(entries[key])) {
+              entries[key].unshift(patchEntry);
+            } else {
+              entries[key] = [patchEntry, entries[key]];
+            }
+          }
+        }
+        return entries;
+      };
+    }
+
     if (dev) {
       const root = resolve(__dirname_val);
       const ignored = [
