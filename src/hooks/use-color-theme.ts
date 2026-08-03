@@ -52,9 +52,10 @@ export function useColorTheme() {
     const theme = COLOR_THEMES.find(t => t.id === id) || COLOR_THEMES[0];
     if (typeof document !== 'undefined') {
       const root = document.documentElement;
+      // Override both light and dark mode accent variables
       root.style.setProperty('--claude-accent', theme.accent);
-      root.style.setProperty('--claude-accent-light', theme.accentLight);
-      root.style.setProperty('--claude-accent-dark', theme.accentDark);
+      root.style.setProperty('--claude-accent-hover', theme.accentDark);
+      root.style.setProperty('--claude-accent-light', theme.accent + '15'); // 15% opacity for light bg usage
     }
   }, []);
 

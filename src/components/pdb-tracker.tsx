@@ -331,6 +331,14 @@ const WebVitalsIndicator = dynamic(() => import('@/hooks/use-web-vitals').then(m
   ssr: false,
   loading: () => null,
 });
+const ResolutionHistogramWidget = dynamic(() => import('@/components/resolution-histogram-widget').then(m => ({ default: m.ResolutionHistogramWidget })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
+});
+const JournalDistributionWidget = dynamic(() => import('@/components/journal-distribution-widget').then(m => ({ default: m.JournalDistributionWidget })), {
+  ssr: false,
+  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
+});
 const FacetedSearch = dynamic(() => import('@/components/faceted-search').then(m => ({ default: m.FacetedSearch })), {
   ssr: false,
   loading: () => null,
@@ -811,7 +819,7 @@ export default function PdbTracker() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const announce = useAriaLive();
   const [visibleWidgets, setVisibleWidgets] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set(['quality-score', 'method-distribution']);
+    if (typeof window === 'undefined') return new Set(['quality-score', 'method-distribution', 'resolution-histogram', 'journal-distribution']);
     try {
       const stored = localStorage.getItem('pdb-visible-widgets');
       if (stored) {
@@ -819,7 +827,7 @@ export default function PdbTracker() {
         if (Array.isArray(parsed)) return new Set(parsed);
       }
     } catch { /* ignore */ }
-    return new Set(['quality-score', 'method-distribution']);
+    return new Set(['quality-score', 'method-distribution', 'resolution-histogram', 'journal-distribution']);
   });
 
   useEffect(() => {
@@ -5183,6 +5191,8 @@ export default function PdbTracker() {
                     widgets={[
                       { id: 'quality-score', label: locale === 'zh' ? '质量评分' : 'Quality Score' },
                       { id: 'method-distribution', label: locale === 'zh' ? '方法分布' : 'Method Distribution' },
+                      { id: 'resolution-histogram', label: locale === 'zh' ? '分辨率分布' : 'Resolution Histogram' },
+                      { id: 'journal-distribution', label: locale === 'zh' ? '期刊分布' : 'Journal Distribution' },
                     ]}
                     visibleIds={visibleWidgets}
                     onToggle={toggleWidget}
@@ -5265,6 +5275,8 @@ export default function PdbTracker() {
                       widgets={[
                         { id: 'quality-score', title: locale === 'zh' ? '质量评分' : 'Quality Score', content: <QualityScoreDashboard entries={entries} locale={locale} /> },
                         { id: 'method-distribution', title: locale === 'zh' ? '方法分布' : 'Method Distribution', content: <WeeklyDashboardCharts entries={entries} snapshots={snapshots} /> },
+                        { id: 'resolution-histogram', title: locale === 'zh' ? '分辨率分布' : 'Resolution Histogram', content: <ResolutionHistogramWidget entries={entries} /> },
+                        { id: 'journal-distribution', title: locale === 'zh' ? '期刊分布' : 'Journal Distribution', content: <JournalDistributionWidget entries={entries} /> },
                       ].filter(w => visibleWidgets.has(w.id))}
                     />
                   </div>

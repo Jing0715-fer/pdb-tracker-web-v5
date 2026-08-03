@@ -52,7 +52,7 @@ export function ColorThemeSwatch() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.96 }}
             transition={{ duration: 0.12 }}
-            className="glass-dropdown absolute right-0 top-full mt-1 w-40 rounded-lg overflow-hidden z-50 shadow-lg border border-claude-border dark:border-[#3d3832]"
+            className="glass-dropdown absolute right-0 top-full mt-1 w-40 rounded-lg overflow-hidden z-[200] shadow-xl border border-claude-border dark:border-[#3d3832]"
           >
             <div className="px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-claude-text-muted border-b border-claude-border/30 dark:border-[#3d3832]/30">
               {locale === 'zh' ? '颜色主题' : 'Color Theme'}
