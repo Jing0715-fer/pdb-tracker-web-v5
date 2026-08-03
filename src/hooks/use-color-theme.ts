@@ -52,10 +52,18 @@ export function useColorTheme() {
     const theme = COLOR_THEMES.find(t => t.id === id) || COLOR_THEMES[0];
     if (typeof document !== 'undefined') {
       const root = document.documentElement;
-      // Override both light and dark mode accent variables
+      // Override ALL accent-related CSS variables so the entire UI changes color
+      // Claude custom variables
       root.style.setProperty('--claude-accent', theme.accent);
       root.style.setProperty('--claude-accent-hover', theme.accentDark);
-      root.style.setProperty('--claude-accent-light', theme.accent + '15'); // 15% opacity for light bg usage
+      root.style.setProperty('--claude-accent-light', theme.accent + '15');
+
+      // shadcn/ui theme variables (used by Button, Badge, etc.)
+      root.style.setProperty('--primary', theme.accent);
+      root.style.setProperty('--ring', theme.accent);
+      root.style.setProperty('--chart-1', theme.accent);
+      root.style.setProperty('--sidebar-primary', theme.accent);
+      root.style.setProperty('--sidebar-ring', theme.accent);
     }
   }, []);
 

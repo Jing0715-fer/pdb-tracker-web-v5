@@ -2423,3 +2423,81 @@ Stage Summary:
 4. **[P3]** Add collaborative features (shared evaluations, comments)
 5. **[P3]** Add data import from Excel files
 6. **[P3]** Add multi-language support beyond EN/ZH
+
+---
+Task ID: cron-review-48
+Agent: main
+Task: Fix sidebar animation replay + fix color theme (z-index + incomplete color swap)
+
+Work Log:
+- Read worklog to understand project state (cron-review-47)
+- Verified dev server running on port 3000
+
+- FIX 1: Sidebar animation replay on dynamic import resolution
+  - Root cause: `.stagger-list > *` CSS rule sets `opacity: 0` as initial state
+    with `animation: staggerFadeIn 0.3s ease-out forwards`
+    When dynamic imports resolve, React re-renders the sidebar, causing the
+    animation to replay — items fade from 0 to 1 again, appearing to "flash"
+  - Fix: Changed CSS to only set `opacity: 0` on first render:
+    * `.stagger-list > *` keeps the animation
+    * `.stagger-list:not(.stagger-done) > *` sets `opacity: 0` (only first render)
+    * Added `stagger-done` class to sidebar container in pdb-tracker.tsx
+    * After first render, items maintain `opacity: 1` (from `forwards`)
+    * Re-renders no longer cause opacity to reset to 0
+
+- FIX 2: Color theme dropdown obstructed (z-index issue)
+  - Root cause: Dropdown was rendered inside the header container which has
+    `z-index: 10` and the dropdown's `z-[200]` was relative to the header's
+    stacking context, not the document root
+  - Fix: Rewrote color-theme-swatch.tsx to use `createPortal`:
+    * Dropdown is now rendered at `document.body` level
+    * Uses `position: fixed` with calculated coordinates from button position
+    * `z-index: 9999` at document root level — cannot be obstructed
+    * Outside click handler checks both button and portal elements
+    * No parent container overflow or z-index can affect it
+  - E2E verified: Portal exists with zIndex=9999, visible at correct position
+
+- FIX 3: Color theme not changing most UI elements (incomplete color swap)
+  - Root cause: Only `--claude-accent` was being set, but many UI elements use
+    other CSS variables:
+    * `--primary` (shadcn Button, Badge)
+    * `--ring` (focus rings)
+    * `--chart-1` (chart colors)
+    * `--sidebar-primary` (sidebar active items)
+    * `--sidebar-ring` (sidebar focus)
+  - Fix: Updated use-color-theme.ts applyTheme to set ALL accent-related variables:
+    * --claude-accent, --claude-accent-hover, --claude-accent-light (Claude custom)
+    * --primary, --ring, --chart-1, --sidebar-primary, --sidebar-ring (shadcn/ui)
+  - Updated layout.tsx inline script to match (all 7 variables set on page load)
+  - E2E verified: After selecting "Ocean":
+    * --claude-accent = #2d8f8f ✅
+    * --primary = #2d8f8f ✅
+    * --ring = #2d8f8f ✅
+    * 29 text-claude-accent elements now show rgb(45, 143, 143) ✅
+    * 12 primary buttons affected ✅
+    * Theme persists in Evaluation (--accent=#2d8f8f) and Literature modes ✅
+
+Verification:
+- ESLint: 0 errors, 1 warning (pre-existing molstar.css)
+- E2E: Sidebar content stable (W31 visible, 1144 chars, no animation replay)
+- E2E: Theme dropdown uses portal (z-index=9999, position=fixed)
+- E2E: Ocean theme changes ALL accent variables (#2d8f8f)
+- E2E: 29 claude-accent elements + 12 primary buttons updated
+- E2E: Theme works in Weekly, Evaluation, Literature modes
+- E2E: 0 critical console errors
+- Screenshots: cron48-weekly-ocean.png, cron48-eval-ocean.png, cron48-lit-ocean.png
+
+Stage Summary:
+- Fixed sidebar animation: stagger-done class prevents opacity reset on re-render
+- Fixed dropdown z-index: createPortal to document.body with z-9999
+- Fixed incomplete color swap: now sets 7 CSS variables (not just 1)
+- ESLint: 0 errors, 0 warnings (1 pre-existing)
+- E2E: All fixes verified with screenshots
+
+### Next Priority Items (for future cron review rounds):
+1. **[P2]** Update header gradient border to use accent color dynamically
+2. **[P3]** User authentication (NextAuth.js)
+3. **[P3]** Add real-time PDB release notifications (WebSocket)
+4. **[P3]** Add collaborative features (shared evaluations, comments)
+5. **[P3]** Add data import from Excel files
+6. **[P3]** Add multi-language support beyond EN/ZH

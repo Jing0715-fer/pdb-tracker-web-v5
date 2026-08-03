@@ -13788,10 +13788,15 @@ button, a, input, select, [role="button"] {
 }
 
 /* ─── Visual Polish: Staggered List Animation ─────────────────────────────── */
+/* Only animate on initial mount, not on re-renders from dynamic import resolution */
 
 .stagger-list > * {
-  opacity: 0;
   animation: staggerFadeIn 0.3s ease-out forwards;
+}
+
+/* First render: start invisible, animate to visible */
+.stagger-list:not(.stagger-done) > * {
+  opacity: 0;
 }
 
 .stagger-list > *:nth-child(1) { animation-delay: 0ms; }

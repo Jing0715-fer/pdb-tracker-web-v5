@@ -2332,7 +2332,7 @@ export default function PdbTracker() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto sidebar-scroll py-1 stagger-list">
+      <div className="flex-1 overflow-y-auto sidebar-scroll py-1 stagger-list stagger-done">
         {snapshots.map((snap, snapIdx) => {
           const isActive = selectedSnapshot === snap.weekId;
           const isLatest = snapIdx === 0;

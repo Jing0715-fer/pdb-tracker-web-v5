@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { useColorTheme, COLOR_THEMES } from '@/hooks/use-color-theme';
@@ -11,20 +12,28 @@ import { useI18n } from '@/lib/i18n';
  *
  * A compact button in the header showing the current accent color.
  * Click to open a dropdown with all available color themes.
- * Selecting a theme instantly changes the app's accent color.
+ * Uses createPortal to render dropdown at document.body level,
+ * avoiding any z-index/overflow issues from parent containers.
  */
 
 export function ColorThemeSwatch() {
   const { locale } = useI18n();
   const { themeId, currentTheme, changeTheme } = useColorTheme();
   const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, right: 0 });
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    setDropdownPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
+      if (buttonRef.current && !buttonRef.current.contains(e.target as Node)) {
+        const dropdown = document.getElementById('color-theme-dropdown-portal');
+        if (dropdown && !dropdown.contains(e.target as Node)) {
+          setIsOpen(false);
+        }
       }
     };
     document.addEventListener('mousedown', handler);
@@ -32,8 +41,9 @@ export function ColorThemeSwatch() {
   }, [isOpen]);
 
   return (
-    <div ref={containerRef} className="relative">
+    <>
       <button
+        ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
         className="h-7 w-7 rounded-full flex items-center justify-center hover:scale-110 transition-transform"
         title={locale === 'zh' ? `${currentTheme.nameZh} 主题` : `${currentTheme.name} theme`}
@@ -45,14 +55,21 @@ export function ColorThemeSwatch() {
         />
       </button>
 
-      <AnimatePresence>
-        {isOpen && (
+      {isOpen && typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
           <motion.div
+            id="color-theme-dropdown-portal"
             initial={{ opacity: 0, y: -4, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.96 }}
             transition={{ duration: 0.12 }}
-            className="glass-dropdown absolute right-0 top-full mt-1 w-40 rounded-lg overflow-hidden z-[200] shadow-xl border border-claude-border dark:border-[#3d3832]"
+            style={{
+              position: 'fixed',
+              top: `${dropdownPos.top}px`,
+              right: `${dropdownPos.right}px`,
+              zIndex: 9999,
+            }}
+            className="w-40 rounded-lg overflow-hidden shadow-2xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220]"
           >
             <div className="px-2 py-1.5 text-[9px] font-bold uppercase tracking-wider text-claude-text-muted border-b border-claude-border/30 dark:border-[#3d3832]/30">
               {locale === 'zh' ? '颜色主题' : 'Color Theme'}
@@ -73,13 +90,14 @@ export function ColorThemeSwatch() {
                     style={{ backgroundColor: theme.accent }}
                   />
                   <span className="flex-1 text-left">{locale === 'zh' ? theme.nameZh : theme.name}</span>
-                  {themeId === theme.id && <Check className="h-3 w-3 text-claude-accent" />}
+                  {themeId === theme.id && <Check className="h-3 w-3" style={{ color: currentTheme.accent }} />}
                 </button>
               ))}
             </div>
           </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+        </AnimatePresence>,
+        document.body
+      )}
+    </>
   );
 }
