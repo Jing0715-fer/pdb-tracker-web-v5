@@ -82,6 +82,8 @@ export function AnalysisToolbar() {
           } catch {}
           let metadata: LoadedStructure["metadata"] | undefined;
           if (pdbText) {
+            // Cache the PDB text so interaction charts can use it
+            setStructureFileCache(id.toUpperCase(), pdbText, "pdb");
             try {
               const parsed = parsePdb(pdbText);
               metadata = {
@@ -127,7 +129,7 @@ export function AnalysisToolbar() {
         setLoading(false);
       }
     },
-    [viewer, addStructure, toast, logCommand]
+    [viewer, addStructure, toast, logCommand, setStructureFileCache]
   );
 
   const handleFileUpload = useCallback(
@@ -150,7 +152,11 @@ export function AnalysisToolbar() {
             fileData.push({ name: f.name, text, format });
           } catch {}
         }
+        if (fileData.length === 0) {
+          throw new Error("No files could be read. Check file permissions or format.");
+        }
         await viewer.loadFiles(Array.from(files));
+        let loadedCount = 0;
         for (const f of Array.from(files)) {
           const fd = fileData.find((d) => d.name === f.name);
           let metadata: LoadedStructure["metadata"] | undefined;
@@ -175,8 +181,13 @@ export function AnalysisToolbar() {
             pdbText,
             metadata,
           });
+          loadedCount++;
         }
-        toast(`Loaded ${files.length} file(s)`, "success");
+        if (loadedCount > 0) {
+          toast(`Loaded ${loadedCount} file(s)`, "success");
+        } else {
+          toast("No files were loaded. Viewer may not support this format.", "error");
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         toast(`File load failed: ${msg}`, "error");

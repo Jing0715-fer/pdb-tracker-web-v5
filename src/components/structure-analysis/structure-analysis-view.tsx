@@ -27,6 +27,7 @@ import { useAnalysisKeyboardShortcuts } from "./use-analysis-keyboard-shortcuts"
 import { DragDropOverlay } from "./drag-drop-overlay";
 import { ShortcutHelpDialog } from "./shortcut-help-dialog";
 import { AnalysisTour } from "./analysis-tour";
+import { useAtomPicking } from "./use-atom-picking";
 import { MolstarViewer } from "@/components/molcraft-molstar/molstar-viewer";
 import {
   useAppStore,
@@ -60,6 +61,9 @@ export function StructureAnalysisView() {
 
   // Enable keyboard shortcuts when the viewer is ready
   useAnalysisKeyboardShortcuts(ready);
+
+  // Enable click-to-pick atom selection (Molcraft-style distance/angle measurement)
+  useAtomPicking();
 
   // Listen for shortcut help toggle event (triggered by "?" key)
   useEffect(() => {

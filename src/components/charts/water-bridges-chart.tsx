@@ -44,6 +44,18 @@ export function WaterBridgesChart() {
   const isPdbId = activeId ? /^[a-zA-Z0-9]{4}$/.test(activeId) : false;
   const hasFileCache = activeId ? !!structureFileCache[activeId] : false;
 
+  // Auto-detect available chains from structure metadata
+  const availableChains: string[] = activeStructure?.metadata?.chains ?? [];
+  const chainCount = availableChains.length;
+
+  // Auto-set chain1/chain2 when structure changes
+  useEffect(() => {
+    if (chainCount > 0) {
+      setChain1(availableChains[0]);
+      setChain2(chainCount > 1 ? availableChains[1] : availableChains[0]);
+    }
+  }, [activeId, chainCount, availableChains]);
+
   const fetchData = useCallback(async () => {
     if (!activeId) {
       setData(null);
@@ -193,21 +205,46 @@ export function WaterBridgesChart() {
         <div className="grid grid-cols-3 gap-1.5">
           <div>
             <Label className="text-[9px] text-muted-foreground">Chain 1</Label>
-            <Input
-              value={chain1}
-              onChange={(e) => setChain1(e.target.value.toUpperCase())}
-              className="h-7 text-xs font-mono"
-              maxLength={2}
-            />
+            {chainCount > 0 ? (
+              <select
+                value={chain1}
+                onChange={(e) => setChain1(e.target.value)}
+                className="h-7 w-full text-xs font-mono rounded-md border border-input bg-background px-1"
+              >
+                {availableChains.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                value={chain1}
+                onChange={(e) => setChain1(e.target.value.toUpperCase())}
+                className="h-7 text-xs font-mono"
+                maxLength={2}
+              />
+            )}
           </div>
           <div>
             <Label className="text-[9px] text-muted-foreground">Chain 2</Label>
-            <Input
-              value={chain2}
-              onChange={(e) => setChain2(e.target.value.toUpperCase())}
-              className="h-7 text-xs font-mono"
-              maxLength={2}
-            />
+            {chainCount > 1 ? (
+              <select
+                value={chain2}
+                onChange={(e) => setChain2(e.target.value)}
+                className="h-7 w-full text-xs font-mono rounded-md border border-input bg-background px-1"
+              >
+                {availableChains.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                value={chain2}
+                onChange={(e) => setChain2(e.target.value.toUpperCase())}
+                className="h-7 text-xs font-mono"
+                maxLength={2}
+                placeholder={chainCount <= 1 ? "same as 1" : "B"}
+              />
+            )}
           </div>
           <div>
             <Label className="text-[9px] text-muted-foreground">Cutoff (Å)</Label>
@@ -222,6 +259,11 @@ export function WaterBridgesChart() {
             />
           </div>
         </div>
+        {chainCount <= 1 && (
+          <p className="text-[9px] text-muted-foreground">
+            Single-chain structure — will detect intra-chain water bridges.
+          </p>
+        )}
 
         {loading && <Skeleton className="h-24 w-full" />}
 

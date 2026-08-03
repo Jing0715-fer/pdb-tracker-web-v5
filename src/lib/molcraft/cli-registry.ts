@@ -2190,9 +2190,19 @@ from Bio.PDB import NeighborSearch
 struct = load_structure("${inputPath}")
 chain1_id = "${chain1}"; chain2_id = "${chain2}"; cutoff = ${cutoff}
 model = next(iter(struct))
-if chain1_id not in model or chain2_id not in model:
-    print(json.dumps({"error": "chain not found"}))
-    raise SystemExit
+# Auto-detect available chains if the specified ones don't exist
+available_chains = [c.id for c in model]
+if chain1_id not in model:
+    if available_chains:
+        chain1_id = available_chains[0]
+    else:
+        print(json.dumps({"error": "no chains found in structure"}))
+        raise SystemExit
+# If chain2 doesn't exist or is same as chain1, use same-chain mode
+same_chain_mode = (chain2_id not in model) or (chain2_id == chain1_id)
+if not same_chain_mode and chain2_id not in model:
+    chain2_id = chain1_id
+    same_chain_mode = True
 # Find water molecules
 waters = []
 for res in model.get_residues():
@@ -2201,29 +2211,62 @@ for res in model.get_residues():
 if not waters:
     print(json.dumps({"total_water_bridges": 0, "note": "no water molecules found"}))
     raise SystemExit
-# Collect protein polar atoms
+# Collect protein polar atoms for chain1
 polar_atoms_1 = []
-polar_atoms_2 = []
 POLAR = {'N', 'O', 'S'}
 for res in model[chain1_id]:
     if res.id[0].strip() != "": continue
     for atom in res:
         if atom.element in POLAR:
             polar_atoms_1.append((atom, res))
-for res in model[chain2_id]:
-    if res.id[0].strip() != "": continue
-    for atom in res:
-        if atom.element in POLAR:
-            polar_atoms_2.append((atom, res))
+if not polar_atoms_1:
+    print(json.dumps({"total_water_bridges": 0, "note": "no polar atoms in chain " + chain1_id}))
+    raise SystemExit
 ns1 = NeighborSearch([a for a, _ in polar_atoms_1])
-ns2 = NeighborSearch([a for a, _ in polar_atoms_2])
+# For cross-chain mode, collect chain2 polar atoms
+if not same_chain_mode:
+    polar_atoms_2 = []
+    for res in model[chain2_id]:
+        if res.id[0].strip() != "": continue
+        for atom in res:
+            if atom.element in POLAR:
+                polar_atoms_2.append((atom, res))
+    ns2 = NeighborSearch([a for a, _ in polar_atoms_2])
+else:
+    ns2 = ns1  # same chain — search within the same atom set
 bridges = []
 seen_pairs = set()
 for water in waters:
     o = water["O"]
     nearby1 = ns1.search(o.coord, cutoff, level="A")
-    nearby2 = ns2.search(o.coord, cutoff, level="A")
-    if nearby1 and nearby2:
+    if not nearby1: continue
+    if same_chain_mode:
+        # Intra-chain: need at least 2 different residues near the water
+        if len(nearby1) < 2: continue
+        for i, a1 in enumerate(nearby1):
+            r1 = a1.get_parent()
+            for a2 in nearby1[i+1:]:
+                r2 = a2.get_parent()
+                if r1 is r2: continue
+                d1 = round(float(a1 - o), 2)
+                d2 = round(float(a2 - o), 2)
+                if d1 > cutoff or d2 > cutoff: continue
+                key = (int(water.id[1]), f"{r1.resname}{r1.id[1]}({chain1_id})", f"{r2.resname}{r2.id[1]}({chain1_id})")
+                if key in seen_pairs: continue
+                seen_pairs.add(key)
+                bridges.append({
+                    'water_resno': int(water.id[1]),
+                    'res1': f"{r1.resname}{r1.id[1]}({chain1_id})",
+                    'atom1': a1.get_name(),
+                    'dist1_A': d1,
+                    'res2': f"{r2.resname}{r2.id[1]}({chain1_id})",
+                    'atom2': a2.get_name(),
+                    'dist2_A': d2,
+                    'total_path_A': round(d1 + d2, 2),
+                })
+    else:
+        nearby2 = ns2.search(o.coord, cutoff, level="A")
+        if not nearby2: continue
         for a1 in nearby1:
             r1 = a1.get_parent()
             for a2 in nearby2:
@@ -2231,9 +2274,7 @@ for water in waters:
                 if r1 is r2: continue
                 d1 = round(float(a1 - o), 2)
                 d2 = round(float(a2 - o), 2)
-                # Strictly enforce: both distances must be <= cutoff
                 if d1 > cutoff or d2 > cutoff: continue
-                # Deduplicate by (water, res1, res2)
                 key = (int(water.id[1]), f"{r1.resname}{r1.id[1]}({chain1_id})", f"{r2.resname}{r2.id[1]}({chain2_id})")
                 if key in seen_pairs: continue
                 seen_pairs.add(key)
@@ -2247,9 +2288,11 @@ for water in waters:
                     'dist2_A': d2,
                     'total_path_A': round(d1 + d2, 2),
                 })
+note = "intra-chain mode (chain " + chain1_id + ")" if same_chain_mode else None
 print(json.dumps({
     'total_water_bridges': len(bridges),
     'bridges': bridges[:30],
+    **({"note": note} if note else {}),
 }, ensure_ascii=False, indent=2))
 `;
     },
