@@ -40,14 +40,15 @@ const PdbViewerLite = dynamic(
 );
 
 // Lazy-load the StructureInfoPanel for inline analysis
+// Uses importWithRetry to handle ChunkLoadError during dev server recompiles.
 const StructureInfoPanel = dynamic(
-  () => import('@/components/structure-analysis/structure-info-panel').then(m => ({ default: m.StructureInfoPanel })),
+  () => importWithRetry(() => import('@/components/structure-analysis/structure-info-panel').then(m => ({ default: m.StructureInfoPanel }))),
   { ssr: false }
 );
 
 // Lazy-load a compact analysis summary (fetches quick stats)
 const AnalysisSummary = dynamic(
-  () => import('./analysis-summary').then(m => ({ default: m.AnalysisSummary })),
+  () => importWithRetry(() => import('./analysis-summary').then(m => ({ default: m.AnalysisSummary }))),
   { ssr: false }
 );
 
