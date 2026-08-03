@@ -243,14 +243,14 @@
   font-weight: 700;
   margin-bottom: 0.75rem;
   margin-top: 1.5rem;
-  color: #c96442;
-  border-bottom: 2px solid #c96442;
+  color: var(--claude-accent, #c96442);
+  border-bottom: 2px solid var(--claude-accent, #c96442);
   padding-bottom: 0.5rem;
 }
 
 .dark .markdown-content h1 {
-  color: #d4784f;
-  border-bottom-color: #d4784f;
+  color: var(--claude-accent, #d4784f);
+  border-bottom-color: var(--claude-accent, #d4784f);
 }
 
 .markdown-content h2 {
@@ -259,13 +259,13 @@
   margin-bottom: 0.5rem;
   margin-top: 1.25rem;
   color: #8b4a2e;
-  border-left: 3px solid #c96442;
+  border-left: 3px solid var(--claude-accent, #c96442);
   padding-left: 0.5rem;
 }
 
 .dark .markdown-content h2 {
   color: #b86840;
-  border-left-color: #d4784f;
+  border-left-color: var(--claude-accent, #d4784f);
 }
 .markdown-content h3 {
   font-size: 1rem;
@@ -332,7 +332,7 @@
 }
 
 .markdown-content blockquote {
-  border-left: 3px solid #c96442;
+  border-left: 3px solid var(--claude-accent, #c96442);
   padding-left: 1rem;
   margin: 0.75rem 0;
   color: #6b6560;
@@ -340,7 +340,7 @@
 }
 
 .dark .markdown-content blockquote {
-  border-left-color: #d4784f;
+  border-left-color: var(--claude-accent, #d4784f);
   color: #6b6560;
 }
 
@@ -1884,11 +1884,11 @@ button:active:not(:disabled) {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, #e8e4dd 20%, #c96442 50%, #e8e4dd 80%, transparent);
+  background: linear-gradient(90deg, transparent, var(--claude-border, #e8e4dd) 20%, var(--claude-accent, #c96442) 50%, var(--claude-border, #e8e4dd) 80%, transparent);
 }
 
 .dark .header-gradient-border::after {
-  background: linear-gradient(90deg, transparent, #3d3832 20%, #d4784f 50%, #3d3832 80%, transparent);
+  background: linear-gradient(90deg, transparent, var(--claude-border, #3d3832) 20%, var(--claude-accent, #d4784f) 50%, var(--claude-border, #3d3832) 80%, transparent);
 }
 
 /* ─── Enhanced Header Background ────────────────────────────────────────── */

@@ -2501,3 +2501,54 @@ Stage Summary:
 4. **[P3]** Add collaborative features (shared evaluations, comments)
 5. **[P3]** Add data import from Excel files
 6. **[P3]** Add multi-language support beyond EN/ZH
+
+---
+Task ID: cron-review-49
+Agent: main
+Task: Remove mode tab count badges + update header gradient to use accent color
+
+Work Log:
+- Read worklog to understand project state (cron-review-48)
+- Verified dev server running on port 3000
+
+- FIX 1: Remove count badges from mode tabs
+  - Removed the count badge span from Weekly/Evaluation/Literature mode tabs
+  - Tabs now show only the mode name (no number)
+  - Cleaner, less cluttered appearance
+  - E2E verified: Mode tabs show "WeeklyWeekly", "EvaluationEval", "LiteratureLit" (no numbers)
+
+- FIX 2: Update header gradient border to use accent color dynamically
+  - Updated `.header-gradient-border::after` CSS:
+    * Light mode: `var(--claude-accent, #c96442)` instead of hardcoded `#c96442`
+    * Dark mode: `var(--claude-accent, #d4784f)` instead of hardcoded `#d4784f`
+    * Also uses `var(--claude-border)` for the fade edges
+  - Updated markdown content styles to use `var(--claude-accent)`:
+    * `.markdown-content h1` color and border-bottom
+    * `.markdown-content h2` border-left
+    * `.markdown-content blockquote` border-left
+  - E2E verified: 
+    * Default (Claude): gradient center = rgb(201, 100, 66) = #c96442
+    * Ocean theme: gradient center = rgb(45, 143, 143) = #2d8f8f
+    * Gradient dynamically changes when switching color themes
+
+Verification:
+- ESLint: 0 errors, 0 warnings
+- E2E: Mode tabs have no count badges
+- E2E: Header gradient uses accent color variable
+- E2E: Gradient changes to #2d8f8f when Ocean theme selected
+- E2E: 0 console errors
+- Screenshot: cron49-no-badges-ocean.png
+
+Stage Summary:
+- Removed count badges from mode tabs for cleaner UI
+- Header gradient border now dynamically uses accent color
+- Markdown content styles also use accent color variable
+- ESLint: 0 errors, 0 warnings
+- E2E: All changes verified
+
+### Next Priority Items (for future cron review rounds):
+1. **[P3]** User authentication (NextAuth.js)
+2. **[P3]** Add real-time PDB release notifications (WebSocket)
+3. **[P3]** Add collaborative features (shared evaluations, comments)
+4. **[P3]** Add data import from Excel files
+5. **[P3]** Add multi-language support beyond EN/ZH

@@ -4738,15 +4738,6 @@ export default function PdbTracker() {
               >
                 <span className="hidden sm:inline">{tab.mode === 'weekly' ? t.modeWeeklyFull : tab.mode === 'evaluation' ? t.modeEvaluationFull : tab.mode === 'analysis' ? (t.modeAnalysisFull ?? 'Analysis') : t.modeLiteratureFull}</span>
                 <span className="sm:hidden text-[11px]">{tab.mode === 'weekly' ? t.modeWeeklyShort : tab.mode === 'evaluation' ? t.modeEvaluationShort : tab.mode === 'analysis' ? (t.modeAnalysisShort ?? 'Analysis') : t.modeLiteratureShort}</span>
-                {count > 0 && tab.mode !== 'analysis' && (
-                  <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[9px] font-bold transition-colors ${
-                    mode === tab.mode
-                      ? 'bg-claude-accent/20 text-claude-accent'
-                      : 'bg-claude-border-light dark:bg-[#2b2926] text-claude-text-muted'
-                  }`}>
-                    {count}
-                  </span>
-                )}
               </button>
               );
             })}
