@@ -301,11 +301,11 @@ const PaperMultiCompare = dynamic(() => import('@/components/paper-multi-compare
 });
 const TrendingStructures = dynamic(() => import('@/components/trending-structures').then(m => ({ default: m.TrendingStructures })), {
   ssr: false,
-  loading: () => null,
+  loading: () => <div className="p-3 space-y-2"><div className="animate-pulse bg-claude-border-light rounded h-4 w-3/4" /><div className="animate-pulse bg-claude-border-light rounded h-4 w-1/2" /><div className="animate-pulse bg-claude-border-light rounded h-4 w-2/3" /></div>,
 });
 const SnapshotComparison = dynamic(() => import('@/components/snapshot-comparison').then(m => ({ default: m.SnapshotComparison })), {
   ssr: false,
-  loading: () => null,
+  loading: () => <div className="p-3 space-y-2"><div className="animate-pulse bg-claude-border-light rounded h-6 w-full" /><div className="animate-pulse bg-claude-border-light rounded h-4 w-3/4" /></div>,
 });
 const SavedQueriesDropdown = dynamic(() => import('@/components/saved-queries-dropdown').then(m => ({ default: m.SavedQueriesDropdown })), {
   ssr: false,
@@ -316,6 +316,18 @@ const CustomDashboard = dynamic(() => import('@/components/custom-dashboard').th
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
 });
 const ShortcutHintBar = dynamic(() => import('@/components/shortcut-hint-bar').then(m => ({ default: m.ShortcutHintBar })), {
+  ssr: false,
+  loading: () => null,
+});
+const ColorThemeSwatch = dynamic(() => import('@/components/color-theme-swatch').then(m => ({ default: m.ColorThemeSwatch })), {
+  ssr: false,
+  loading: () => <div className="w-7 h-7" />,
+});
+const WidgetVisibilityToggle = dynamic(() => import('@/components/widget-visibility-toggle').then(m => ({ default: m.WidgetVisibilityToggle })), {
+  ssr: false,
+  loading: () => null,
+});
+const WebVitalsIndicator = dynamic(() => import('@/hooks/use-web-vitals').then(m => ({ default: m.WebVitalsIndicator })) as Promise<{ default: React.ComponentType }>, {
   ssr: false,
   loading: () => null,
 });
@@ -798,6 +810,32 @@ export default function PdbTracker() {
   // Settings panel state
   const [settingsOpen, setSettingsOpen] = useState(false);
   const announce = useAriaLive();
+  const [visibleWidgets, setVisibleWidgets] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set(['quality-score', 'method-distribution']);
+    try {
+      const stored = localStorage.getItem('pdb-visible-widgets');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch { /* ignore */ }
+    return new Set(['quality-score', 'method-distribution']);
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('pdb-visible-widgets', JSON.stringify(Array.from(visibleWidgets)));
+    } catch { /* ignore */ }
+  }, [visibleWidgets]);
+
+  const toggleWidget = useCallback((id: string) => {
+    setVisibleWidgets(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Keyboard hints overlay state
   const [keyboardHintsOpen, setKeyboardHintsOpen] = useState(false);
@@ -4708,6 +4746,9 @@ export default function PdbTracker() {
 
           <div className="flex-1" />
 
+          {/* Color Theme Preview — quick accent color switcher */}
+          <ColorThemeSwatch />
+
           {/* Search (desktop) — enhanced with recent + trending dropdown */}
           <div ref={searchWrapRef} className="relative max-w-xs w-full hidden md:block">
             <SearchDropdownEnhanced
@@ -5135,9 +5176,17 @@ export default function PdbTracker() {
                   · {entries.length} {locale === 'zh' ? '个结构' : 'structures'}
                 </span>
               </button>
-              {/* Chart Preset Save + Load buttons */}
+              {/* Chart Preset Save + Load + Widget Visibility buttons */}
               {showDashboard && (
                 <div className="flex items-center gap-1 ml-auto mr-2">
+                  <WidgetVisibilityToggle
+                    widgets={[
+                      { id: 'quality-score', label: locale === 'zh' ? '质量评分' : 'Quality Score' },
+                      { id: 'method-distribution', label: locale === 'zh' ? '方法分布' : 'Method Distribution' },
+                    ]}
+                    visibleIds={visibleWidgets}
+                    onToggle={toggleWidget}
+                  />
                   <button
                     onClick={() => {
                       const name = prompt(locale === 'zh' ? '预设名称:' : 'Preset name:', `Preset ${chartPresets.length + 1}`);
@@ -5216,7 +5265,7 @@ export default function PdbTracker() {
                       widgets={[
                         { id: 'quality-score', title: locale === 'zh' ? '质量评分' : 'Quality Score', content: <QualityScoreDashboard entries={entries} locale={locale} /> },
                         { id: 'method-distribution', title: locale === 'zh' ? '方法分布' : 'Method Distribution', content: <WeeklyDashboardCharts entries={entries} snapshots={snapshots} /> },
-                      ]}
+                      ].filter(w => visibleWidgets.has(w.id))}
                     />
                   </div>
                 )}
@@ -5536,7 +5585,9 @@ export default function PdbTracker() {
         usingFallbackData={usingFallbackData}
         onRefresh={handleRetryAll}
         isRefreshing={isRefreshing}
-      />
+      >
+        <WebVitalsIndicator />
+      </EnhancedFooter>
 
       {/* ─── Command Palette ──────────────────────────────────────────────── */}
       <CommandPalette

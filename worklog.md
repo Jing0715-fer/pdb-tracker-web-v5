@@ -2262,3 +2262,89 @@ Stage Summary:
 6. **[P3]** Add custom dashboard widget visibility toggles
 7. **[P3]** Add performance monitoring (Web Vitals tracking)
 8. **[P3]** Add multi-language support beyond EN/ZH
+
+---
+Task ID: cron-review-46
+Agent: main
+Task: Fix sidebar flash + implement 3 features (theme swatch, widget toggle, web vitals)
+
+Work Log:
+- Read worklog to understand project state (cron-review-45, 4 features implemented)
+- Verified dev server running on port 3000
+
+- FIX: Weekly sidebar items flash then disappear
+  - Root cause: TrendingStructures and SnapshotComparison had `loading: () => null`
+    which caused them to briefly disappear during dynamic import resolution
+  - Fix: Replaced null loading states with skeleton placeholders:
+    * TrendingStructures: 3-line pulse skeleton (p-3 space-y-2)
+    * SnapshotComparison: 2-line pulse skeleton (p-3 space-y-2)
+  - Verified: Sidebar content (Snapshots, Activity, Trending, QuickActions) all persist
+
+- FEATURE 1: Add color theme preview swatch in header
+  - Created src/components/color-theme-swatch.tsx:
+    * Compact circular button showing current accent color
+    * Click opens dropdown with all 6 themes (Claude, Ocean, Forest, Sunset, Berry, Rose)
+    * Each theme shows color circle + name + check mark for active
+    * Glass morphism dropdown, animated entrance
+    * EN/ZH i18n
+  - Integrated into header between mode tabs and search
+  - Dynamic import with placeholder div
+  - E2E verified: "Claude theme" button found, dropdown shows all 6 themes
+  - E2E verified: Selecting "Ocean" sets --claude-accent to #2d8f8f
+
+- FEATURE 2: Add custom dashboard widget visibility toggles
+  - Created src/components/widget-visibility-toggle.tsx:
+    * Dropdown with eye/eye-off icons for each widget
+    * Toggle visibility of dashboard widgets (Quality Score, Method Distribution)
+    * Hidden count badge when widgets are hidden
+    * Settings2 icon, glass morphism dropdown
+    * EN/ZH i18n
+  - Added visibleWidgets state to pdb-tracker.tsx:
+    * localStorage persistence (pdb-visible-widgets)
+    * toggleWidget callback
+  - Integrated WidgetVisibilityToggle next to preset buttons
+  - CustomDashboard widgets filtered by visibleWidgets
+  - Widgets can be shown/hidden dynamically
+
+- FEATURE 3: Add performance monitoring (Web Vitals tracking)
+  - Created src/hooks/use-web-vitals.tsx:
+    * useWebVitals hook: tracks CLS, LCP, FID, FCP, TTFB
+    * Uses built-in Performance API (no external deps)
+    * PerformanceObserver for LCP, CLS, FID
+    * Rating system: good/needs-improvement/poor
+    * Console debug logging in development
+    * WebVitalsIndicator component:
+      - Compact button in footer with status dot (green/amber)
+      - Click shows dropdown with all metrics
+      - Color-coded ratings (green/amber/red)
+      - Only visible in development mode
+  - Updated EnhancedFooter to accept children prop
+  - WebVitalsIndicator rendered as child of EnhancedFooter
+  - Dynamic import with null loading
+
+Verification:
+- ESLint: 0 errors, 0 warnings
+- E2E test: Sidebar content persists (Snapshots, Activity, Trending, QuickActions all present)
+- E2E test: Color theme swatch found ("Claude theme")
+- E2E test: Theme dropdown shows all 6 themes (Claude, Ocean, Forest, Sunset, Berry, Rose)
+- E2E test: Selecting "Ocean" sets --claude-accent to #2d8f8f
+- E2E test: 0 console errors
+- Dev server: stable
+
+Stage Summary:
+- Fixed sidebar flash: replaced null loading states with skeleton placeholders
+- Added color theme swatch in header with instant theme switching
+- Created widget visibility toggle for dashboard customization
+- Added Web Vitals monitoring (CLS, LCP, FID, FCP, TTFB) in footer
+- ESLint: 0 errors, 0 warnings
+- E2E: All features verified, sidebar flash fixed, 0 console errors
+
+### Next Priority Items (for future cron review rounds):
+1. **[P2]** Add more dashboard widgets (Resolution Histogram, Journal Distribution)
+2. **[P3]** User authentication (NextAuth.js)
+3. **[P3]** Add real-time PDB release notifications (WebSocket)
+4. **[P3]** Add collaborative features (shared evaluations, comments)
+5. **[P3]** Add data import from Excel files
+6. **[P3]** Add multi-language support beyond EN/ZH
+7. **[P3]** Add custom keyboard shortcut customization
+8. **[P3]** Add advanced data visualization (3D scatter plots, network graphs)
