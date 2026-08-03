@@ -35,14 +35,14 @@ const ResizableHandle = ({
 }) => (
   <ResizablePrimitive.Separator
     className={cn(
-      "relative flex w-px items-center justify-center bg-claude-border after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-claude-accent focus-visible:ring-offset-1 data-[orientation=vertical]:h-px data-[orientation=vertical]:w-full data-[orientation=vertical]:after:left-0 data-[orientation=vertical]:after:h-1 data-[orientation=vertical]:after:w-full data-[orientation=vertical]:after:-translate-y-1/2 data-[orientation=vertical]:after:translate-x-0 [&[data-orientation=vertical]>div]:rotate-90",
+      "relative flex w-1.5 items-center justify-center bg-claude-border hover:bg-claude-accent/40 transition-colors cursor-col-resize z-20 after:absolute after:inset-y-0 after:left-1/2 after:w-3 after:-translate-x-1/2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-claude-accent focus-visible:ring-offset-1 data-[orientation=vertical]:h-1.5 data-[orientation=vertical]:w-full data-[orientation=vertical]:cursor-row-resize data-[orientation=vertical]:after:left-0 data-[orientation=vertical]:after:h-3 data-[orientation=vertical]:after:w-full data-[orientation=vertical]:after:-translate-y-1/2 data-[orientation=vertical]:after:translate-x-0 [&[data-orientation=vertical]>div]:rotate-90",
       className
     )}
     {...props}
   >
     {withHandle && (
-      <div className="z-10 flex h-4 w-3 items-center justify-center rounded-sm border border-claude-border bg-claude-surface">
-        <GripVertical className="h-2.5 w-2.5 text-claude-text-muted" />
+      <div className="z-30 flex h-6 w-3 items-center justify-center rounded-sm border border-claude-border bg-claude-surface shadow-sm hover:border-claude-accent/40">
+        <GripVertical className="h-3 w-3 text-claude-text-muted" />
       </div>
     )}
   </ResizablePrimitive.Separator>

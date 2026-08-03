@@ -66,7 +66,7 @@ interface PdbViewerModalProps {
 export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: PdbViewerModalProps) {
   const openTimeRef = useRef<number>(0);
   const [viewerReadyKey, setViewerReadyKey] = useState(0);
-  const [analysisPanelOpen, setAnalysisPanelOpen] = useState(false);
+  const [analysisPanelOpen, setAnalysisPanelOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<AnalysisTab>('info');
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {
@@ -75,7 +75,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
       setViewerReadyKey(k => k + 1);
     } else {
       openTimeRef.current = 0;
-      setAnalysisPanelOpen(false);
+      setAnalysisPanelOpen(true);
       setActiveTab('info');
     }
     onOpenChange(nextOpen);

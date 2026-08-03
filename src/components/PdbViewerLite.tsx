@@ -45,6 +45,8 @@ interface EntityData {
   description: string;
   organism: string;
   entityType: string;
+  geneName?: string;
+  moleculeType?: string;
 }
 
 interface LigandData {
@@ -125,6 +127,8 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
           description: p.description ?? '',
           organism: p.organism ?? '',
           entityType: p.entityType ?? '',
+          geneName: p.geneName ?? p.gene_name ?? undefined,
+          moleculeType: p.moleculeType ?? p.molecule_type ?? p.entityType ?? undefined,
         }));
         const nonpolys: LigandData[] = (data.nonpolymers ?? []).map((np: any) => ({
           entityId: np.entityId,
@@ -177,10 +181,11 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     }
   }, [viewer, toast]);
 
-  // Toggle chain visibility — uses Molstar's structureInteractivity to
-  // select/deselect a chain, then highlights it for visual feedback.
-  // The eye icon toggles the UI state; the chain is highlighted/deselected
-  // in the 3D viewer to provide visual feedback.
+  // Toggle chain visibility — creates/removes a component for the chain
+  // using Molstar's builder API. When hidden, the component's representations
+  // are removed; when shown, a new component + representation is created.
+  const componentCacheRef = useRef<Record<string, unknown>>({});
+
   const toggleChainVisibility = useCallback(async (chain: string) => {
     const newHidden = new Set(hiddenChains);
     if (newHidden.has(chain)) {
@@ -193,22 +198,48 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     if (!viewer) return;
     try {
       const plugin = viewer.plugin;
-      // Build expression for this chain
-      const expr = (Q: any) => Q.struct.generator.atomGroups({
-        'chain-test': Q.core.rel.eq([
-          Q.struct.atomProperty.macromolecular.auth_asym_id
-            ? Q.struct.atomProperty.macromolecular.auth_asym_id()
-            : Q.struct.atomProperty.macromolecular.label_asym_id(),
-          chain,
-        ]),
-      });
+      const structs = plugin.managers.structure.hierarchy.current.structures;
+      if (!structs || structs.length === 0) return;
+      const structure = structs[0];
 
       if (newHidden.has(chain)) {
-        // Hidden: clear highlight on this chain
-        plugin.managers.interactivity.lociHighlights.clearHighlights();
+        // Hide: find the component for this chain and remove its representations
+        const components = (structure as any)?.components;
+        if (components && Array.isArray(components)) {
+          for (const comp of components) {
+            try {
+              const compLabel = (comp as any)?.cell?.obj?.label || '';
+              if (compLabel.includes(`Chain ${chain}`) || compLabel.includes(chain)) {
+                await plugin.managers.structure.component.removeRepresentations(comp);
+                break;
+              }
+            } catch { /* ignore */ }
+          }
+        }
       } else {
-        // Visible: highlight this chain
-        viewer.structureInteractivity({ expression: expr, action: ['highlight'] });
+        // Show: create a new component for this chain and add a representation
+        const expr = (Q: any) => Q.struct.generator.atomGroups({
+          'chain-test': Q.core.rel.eq([
+            Q.struct.atomProperty.macromolecular.auth_asym_id
+              ? Q.struct.atomProperty.macromolecular.auth_asym_id()
+              : Q.struct.atomProperty.macromolecular.label_asym_id(),
+            chain,
+          ]),
+        });
+
+        const structData = (structure as any)?.cell?.obj?.data;
+        if (structData) {
+          const component = plugin.builders.structure.tryCreateComponentFromExpression(
+            structData,
+            expr,
+            `Chain ${chain}`
+          );
+          if (component) {
+            await plugin.builders.structure.representation.addRepresentation(component, {
+              type: 'cartoon',
+            });
+          }
+        }
       }
 
       toast(`${newHidden.has(chain) ? 'Hidden' : 'Shown'} chain ${chain}`, 'info');
@@ -288,6 +319,7 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                       const entityKey = `poly-${entity.entityId}`;
                       const isExpanded = expandedEntities.has(entityKey);
                       const color = ENTITY_COLORS[idx % ENTITY_COLORS.length];
+                      const totalResidues = entity.sequenceLength * entity.chains.length;
                       return (
                         <div key={entityKey} className="rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/40 overflow-hidden">
                           {/* Entity header */}
@@ -300,15 +332,33 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                             <span className="text-[10px] text-claude-text font-medium truncate flex-1 min-w-0">
                               {entity.description || `Entity ${entity.entityId}`}
                             </span>
-                            {entity.organism && (
-                              <span className="text-[8px] text-claude-text-muted truncate max-w-[50px]" title={entity.organism}>
-                                {entity.organism}
+                            {entity.geneName && (
+                              <span className="text-[8px] px-1 py-0.5 rounded bg-claude-accent-light text-claude-accent border border-claude-accent/20 font-semibold truncate max-w-[50px]" title={entity.geneName}>
+                                {entity.geneName}
+                              </span>
+                            )}
+                            {totalResidues > 0 && (
+                              <span className="text-[8px] text-claude-text-muted whitespace-nowrap" title={`${totalResidues} total residues`}>
+                                {totalResidues.toLocaleString()} res
                               </span>
                             )}
                           </button>
-                          {/* Chains */}
+                          {/* Entity details + chains */}
                           {isExpanded && (
-                            <div className="px-1 pb-1 space-y-0.5">
+                            <div className="px-1.5 pb-1 space-y-0.5">
+                              {/* Entity meta */}
+                              <div className="text-[8px] text-claude-text-muted space-y-0.5 px-1 pb-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 mb-1">
+                                {entity.moleculeType && entity.moleculeType !== entity.entityType && (
+                                  <div><span className="text-claude-text-muted">Type:</span> <span className="text-claude-text-secondary">{entity.moleculeType}</span></div>
+                                )}
+                                {entity.organism && (
+                                  <div className="truncate"><span className="text-claude-text-muted">Organism:</span> <span className="text-claude-text-secondary">{entity.organism}</span></div>
+                                )}
+                                {entity.authChains.length > 0 && (
+                                  <div><span className="text-claude-text-muted">Auth chains:</span> <span className="font-mono text-claude-text-secondary">{entity.authChains.join(', ')}</span></div>
+                                )}
+                              </div>
+                              {/* Chain list */}
                               {entity.chains.map((chain) => {
                                 const isHidden = hiddenChains.has(chain);
                                 return (
@@ -318,10 +368,10 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                                   >
                                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
                                     <span className="font-mono text-[10px] font-semibold text-claude-text flex-1">
-                                      {chain}
+                                      Chain {chain}
                                     </span>
                                     {entity.sequenceLength > 0 && (
-                                      <span className="text-[8px] text-claude-text-muted">
+                                      <span className="text-[8px] text-claude-text-muted whitespace-nowrap">
                                         {entity.sequenceLength}aa
                                       </span>
                                     )}
