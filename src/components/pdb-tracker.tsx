@@ -46,6 +46,7 @@ import { usePaperTags } from '@/components/literature/LiteraturePaperTags';
 import { DemoDataBanner } from '@/components/demo-data-banner';
 import { QuickActions } from '@/components/quick-actions';
 import { StructureQualityRing } from '@/components/structure-quality-ring';
+import { QualityRing } from '@/components/quality-components';
 import { BreadcrumbNavEnhanced } from '@/components/breadcrumb-nav-enhanced';
 import { useLocalStorageSet } from '@/hooks/use-local-storage';
 import { useReadingProgress } from '@/hooks/use-reading-progress';
@@ -155,10 +156,9 @@ const HeaderParticles = dynamic(() => import('@/components/ui/pdb-animated').the
   loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
 });
 
-const QualityRing = dynamic(() => import('@/components/quality-components').then(m => ({ default: m.QualityRing })), {
-  ssr: false,
-  loading: () => <div className="animate-pulse bg-claude-border-light rounded h-8 w-full" />,
-});
+// QualityRing: static import (was dynamic, but the file is only 48 lines —
+// code-splitting caused ChunkLoadError on dev server restarts).
+// Import is at the top of the file with other static imports.
 
 const ScrollProgress = dynamic(() => import('@/components/scroll-progress').then(m => ({ default: m.ScrollProgress })), {
   ssr: false,

@@ -43,6 +43,15 @@ export default function RootLayout({
             __html: `try{var hc=localStorage.getItem('pdb-high-contrast');if(hc==='true'){document.documentElement.classList.add('high-contrast');}var ct=localStorage.getItem('pdb-color-theme');if(ct){var themes={'claude':['#c96442','#a04e32'],'ocean':['#2d8f8f','#1f6b6b'],'forest':['#16a34a','#15803d'],'sunset':['#ea580c','#c2410c'],'berry':['#7c5cbf','#5a3d99'],'rose':['#e11d48','#be123c']};var t=themes[ct]||themes['claude'];var r=document.documentElement;r.style.setProperty('--claude-accent',t[0]);r.style.setProperty('--claude-accent-hover',t[1]);r.style.setProperty('--claude-accent-light',t[0]+'15');r.style.setProperty('--primary',t[0]);r.style.setProperty('--ring',t[0]);r.style.setProperty('--chart-1',t[0]);r.style.setProperty('--sidebar-primary',t[0]);r.style.setProperty('--sidebar-ring',t[0]);}}catch(e){}`,
           }}
         />
+        {/* Global ChunkLoadError handler — auto-reload on dev server restart.
+            When the dev server recompiles, old chunk hashes become stale and
+            dynamic imports fail with ChunkLoadError. This handler catches
+            those errors and reloads the page once to pick up new chunks. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var r=false;window.addEventListener('error',function(e){if(r)return;var m=e.message||'';var n=(e.error&&e.error.name)||'';if(n==='ChunkLoadError'||m.includes('Loading chunk')||m.includes('Failed to load chunk')||m.includes('dynamically imported module')){r=true;setTimeout(function(){window.location.reload();},300);}});window.addEventListener('unhandledrejection',function(e){if(r)return;var rsn=e.reason;if(rsn&&typeof rsn==='object'){var m=rsn.message||'';var n=rsn.name||'';if(n==='ChunkLoadError'||m.includes('Loading chunk')||m.includes('Failed to load chunk')||m.includes('dynamically imported module')){r=true;e.preventDefault();setTimeout(function(){window.location.reload();},300);}}});})();`,
+          }}
+        />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
           <I18nProvider>
             {children}

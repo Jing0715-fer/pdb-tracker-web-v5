@@ -20,7 +20,8 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["molstar"],
   // Next.js 16 dev mode blocks cross-origin HMR by default. The preview
   // panel and Playwright headless chromium see 127.0.0.1:3000 as cross-origin.
-  allowedDevOrigins: ['127.0.0.1', 'localhost', '.space-z.ai'],
+  // Include both the bare domain and the preview-chat subdomain pattern.
+  allowedDevOrigins: ['127.0.0.1', 'localhost', '.space-z.ai', 'preview-chat-*.space-z.ai'],
   // Optimize barrel imports for heavy libraries so the bundler only resolves
   // the actually-used symbols instead of the entire barrel graph. This is
   // the single biggest dev-mode memory win for apps that pull from large
