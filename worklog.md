@@ -2683,3 +2683,113 @@ Stage Summary:
 4. **[P3]** Add data import from Excel files
 5. **[P3]** Add multi-language support beyond EN/ZH
 6. **[P3]** Consider removing or reviving the dead `PdbTrackerSidebar` component in `pdb-sidebar.tsx` (only its types are imported; the React component is unused)
+
+---
+Task ID: cron-review-52
+Agent: main
+Task: Polish Run Center UI details to match the overall Claude theme
+
+Work Log:
+- Read worklog to understand prior work (cron-review-51 beautified evaluation sidebar items)
+- Located the Run Center component (`settings-run-panel.tsx`, ~2900 lines) and took a "before" screenshot
+- VLM analysis of "before" state confirmed the Run Center felt "fragmented rather than cohesive" — it used cold/generic sky-blue/emerald/amber accents that clashed with the warm Claude theme (terracotta #c96442, teal #2d8f8f, purple #7c5cbf, amber #c9872e)
+- Refactored `ACCENT_CLASSES` to use Claude-themed tokens:
+  * `cryoem` (teal #2d8f8f) → Evaluation module ① (matches eval mode color)
+  * `nmr` (amber #c9872e) → Literature module ② (matches lit mode color)
+  * `accent` (terracotta #c96442) → Weekly module ③ (matches weekly mode color)
+  * `xray` (purple #7c5cbf) → batch / cross-target accent
+  * Added legacy aliases (sky/emerald/amber/violet) mapping to claude equivalents for backward compat
+- Updated the 3 module tabs to use the new accent names (cryoem/nmr/accent)
+- Polished `ModuleCard`:
+  * Added `claude-card-shadow`, `hover:border-claude-accent/30`, `hover:-translate-y-px` (subtle lift)
+  * Left accent bar widened to 3px with gradient
+  * Added top hairline accent bar that animates in on hover (opacity 0→100%)
+  * Icon now scales 1.05x on hover (`group-hover:scale-105`)
+  * Replaced generic `bg-card`/`border-border` with `bg-claude-surface`/`border-claude-border`
+- Warmed up the dialog header:
+  * Background now uses `bg-gradient-to-br from-claude-accent-light via-claude-surface to-claude-surface` (warm terracotta tint)
+  * Header icon uses `bg-gradient-to-br from-claude-accent/20 to-claude-accent/5` with `text-claude-accent`
+  * Running badge switched from sky to `claude-cryoem` (teal)
+- Warmed up LLM provider bar:
+  * Background `bg-claude-bg/40` instead of `bg-muted/20`
+  * "auto" pill active state uses `bg-claude-accent/10 text-claude-accent`
+  * z.ai SDK pill uses `claude-cryoem` (teal) instead of sky-blue
+- Warmed up DB config area:
+  * Schema badge → `claude-cryoem` (teal) instead of emerald
+  * Test DB badge → `claude-nmr` (amber) instead of amber-500
+  * Not-initialized badge → `claude-top` (red) instead of rose-500
+  * Loaded status → `claude-cryoem`/`claude-top` instead of emerald/rose
+  * "New" button → `claude-cryoem` border/text; "Select" button → `claude-xray` border/text
+  * Input uses `bg-claude-surface border-claude-border`
+- Polished tab buttons:
+  * Each tab has its own accent when active: Evaluation→teal, Literature→amber, Weekly→terracotta
+  * Active state: `bg-{accent}/15 text-{accent} border-{accent}/30 shadow-sm`
+  * Inactive: `text-claude-text-muted hover:text-claude-text`
+  * Loading spinner matches tab accent (no longer generic sky-500)
+- Polished `RunButton`:
+  * Uses `bg-gradient-to-br from-claude-accent to-claude-accent-hover` with `hover:shadow-md`
+  * Stop button uses `claude-top` (red) instead of rose-300
+- Polished `StreamFeed`:
+  * Empty state uses `bg-claude-bg/40 border-claude-border`
+  * Container uses `bg-claude-bg/40` instead of `bg-muted/20`
+  * Progress bar: running = `from-claude-accent to-claude-cryoem` gradient; done = `claude-cryoem`/`claude-top`
+  * Auto-scroll toggle uses `claude-cryoem` when active
+  * StatusPill: streaming/done = `claude-cryoem`; failed = `claude-top`; idle = muted
+- Polished `LLMPreview`:
+  * Replaced emerald/sky/violet/amber accent map with claude-themed cryoem/nmr/xray/accent (+ legacy aliases)
+  * Added `claude-card-shadow` to the card
+  * All status badges (LLM Generated, LLM Failed, Saved, Save Failed) use claude tokens
+  * Header bg uses `bg-claude-surface/60`
+- Polished `ChapterStream`:
+  * Card border/glow uses `claude-xray` (purple) instead of violet-500
+  * All status badges (All OK, failed, chapters) use claude tokens
+  * Sub-header bg uses `bg-claude-bg/40`
+  * Chapter row borders: running = `claude-xray`, error = `claude-top`, success = `claude-cryoem`
+- Polished `Cycle Orchestration` track:
+  * Container uses `from-claude-nmr/8` gradient
+  * Step dots/borders use claude tokens
+  * Verdict badges use `claude-cryoem` (pass) / `claude-nmr` (warn)
+- Polished "Recent runs" sidebar:
+  * Module badges: ① Eval → `claude-cryoem`, ② Lit → `claude-nmr`, ③ Weekly → `claude-accent`
+  * Status icons use claude tokens
+  * Left border uses CSS vars (`var(--claude-cryoem)` etc.) for status coloring
+- Polished Literature "existing reports" date chips:
+  * Active state uses `claude-nmr` instead of sky-500
+  * Inline digest viewer uses `claude-nmr` border/bg
+
+Verification:
+- ESLint: 0 errors, 0 warnings on settings-run-panel.tsx
+- Dev log: no errors or warnings
+- agent-browser DOM inspection: new claude-themed classes applied throughout
+- VLM visual analysis (multiple screenshots):
+  * "The interface now feels highly cohesive and warm. It has moved away from generic 'cold' SaaS aesthetics. The terracotta and teal pairing creates a sophisticated, organic look."
+  * Evaluation tab: teal accent on icon, left border, glow ✓
+  * Literature tab: amber accent on icon, left border, glow ✓
+  * Weekly tab: terracotta accent on icon, left border, glow ✓
+  * Dark mode: "excellent text contrast... accent color highly visible against the dark backdrop... strategic color placement for optimal visibility"
+- 0 console errors during page load + tab switching + theme toggle
+
+Stage Summary:
+- Run Center now fully aligned with the Claude theme palette:
+  * Module ① Evaluation → teal (claude-cryoem)
+  * Module ② Literature → amber (claude-nmr)
+  * Module ③ Weekly → terracotta (claude-accent)
+  * Batch/cross-target → purple (claude-xray)
+  * Success → teal, Warning → amber, Error → red, Idle → muted
+- All cold/generic sky-blue/emerald/amber-500/violet-500/rose-500 colors replaced with warm claude tokens
+- ModuleCard polished with claude-card-shadow, hover lift, animated top accent bar, icon scale on hover
+- RunButton uses terracotta gradient with shadow
+- StreamFeed/LLMPreview/ChapterStream all use claude-themed progress bars and status badges
+- Dialog header uses warm terracotta-tinted gradient
+- Dark mode verified: excellent contrast, vibrant accents
+- ESLint: 0 errors, 0 warnings
+- E2E: All visual changes verified via agent-browser + VLM (light + dark mode)
+
+### Next Priority Items (for future cron review rounds):
+1. **[P3]** User authentication (NextAuth.js)
+2. **[P3]** Add real-time PDB release notifications (WebSocket)
+3. **[P3]** Add collaborative features (shared evaluations, comments)
+4. **[P3]** Add data import from Excel files
+5. **[P3]** Add multi-language support beyond EN/ZH
+6. **[P4]** Consider removing or reviving the dead `PdbTrackerSidebar` component in `pdb-sidebar.tsx`
+7. **[P4]** A few remaining inline emerald-500/rose-500 references in rarely-seen error states (lines 491, 510, 659, 691, 980, 993, 1873, 1890, 1891, 1894, 2226) — could be aligned in a future pass
