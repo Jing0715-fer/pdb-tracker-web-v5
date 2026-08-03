@@ -2981,3 +2981,90 @@ Stage Summary:
 3. **[P3]** Apply same chain auto-detection to other interaction charts (ligand_interactions, hbonds, salt_bridges, hydrophobic_contacts)
 4. **[P3]** Wire the `show_interactions` TODO stub in commands.ts (ComputeContacts + InteractionsShape pipeline)
 5. **[P3]** Delete or revive dead code: molecule-viewer.tsx (4328 lines), molecule-controls.tsx, molecule-plugin-init.ts
+
+---
+Task ID: cron-review-55
+Agent: main
+Task: Fix PDB upload, modal molstar error, and resizable panel minSize
+
+Work Log:
+- Read worklog (cron-review-54 fixed upload toast, atom-picking, water bridges)
+- User reported 3 remaining issues:
+  1. "还是上传不了pdb结构" — still can't upload PDB structures
+  2. "从pdb列表打开结构预览后报错 Cannot find module 'molstar/lib/mol-plugin-ui/index.js'"
+  3. "分析页面的3栏共存时，中间的结构栏无法调整宽度到比较小的值"
+
+ROOT CAUSE ANALYSIS:
+
+1. **Modal error (Issue 2)**: `PdbStructureViewer.tsx` uses ESM dynamic imports
+   like `import('molstar/lib/mol-plugin-ui/index.js')`. But `next.config.ts` has
+   `IgnorePlugin({ resourceRegExp: /^molstar(\/|$)/ })` that blocks ALL
+   `molstar/...` imports in dev mode to prevent OOM from molstar's 95MB of TS
+   source. The comment says "3D viewer shows a placeholder in dev" — but the
+   PdbStructureViewer doesn't have a placeholder, it throws the import error.
+
+2. **Upload not working (Issue 1)**: `handleFileUpload` called
+   `viewer.loadFiles(Array.from(files))` — the prebuilt Molstar bundle's
+   `loadFiles` method can silently fail (no error thrown, but no structure
+   loaded). The toast showed "Loaded N file(s)" based on input count, but
+   0 structures actually appeared.
+
+3. **Panel minSize (Issue 3)**: Middle panel had `minSize={30}` (30% of total
+   width), preventing it from being shrunk below ~30% of viewport.
+
+FIXES IMPLEMENTED:
+
+1. **Created PdbViewerLite.tsx** (new lightweight viewer for modal):
+   - Uses the PREBUILT Molstar bundle (`MolstarViewer` from `molcraft-molstar/`)
+   - Loads via `<script src="/molstar.js">` — NOT webpack ESM imports
+   - Loads PDB via `executeCommand(viewer, { type: "load_pdb", id })` with
+     the RCSB fallback from cron-review-54
+   - Shows loading spinner while Molstar initializes
+   - Cleans up on unmount
+
+2. **Updated PdbViewerModal.tsx**:
+   - Replaced `PdbStructureViewer` (2837 lines, ESM imports) with `PdbViewerLite`
+   - Fixed `viewerReadyKey`: now increments on each open (was always 0, never
+     triggering remount)
+   - Kept the Info/Analysis/Tools side panels (they use RCSB API, not Molstar)
+
+3. **Fixed upload (analysis-toolbar.tsx)**:
+   - Replaced `viewer.loadFiles(files)` with `viewer.loadStructureFromData(text, format, {dataLabel})`
+   - This is more reliable because:
+     a. We already read the file text (via `f.text()`)
+     b. `loadStructureFromData` is a direct API call that either succeeds or throws
+     c. `loadFiles` in the prebuilt bundle can silently fail
+   - Each file now has its own try-catch with per-file error toast
+   - Counts `loadedCount` (actually loaded files) for the success toast
+
+4. **Fixed resizable panel (structure-analysis-view.tsx)**:
+   - Middle panel: `minSize={30}` → `minSize={15}`
+   - Left panel: `minSize={16}` → `minSize={12}`
+   - Right panel: `minSize={18}` → `minSize={12}`
+
+VERIFICATION:
+- ESLint: 0 errors, 0 warnings
+- Dev log: no errors after changes
+- Browser test (agent-browser):
+  * Upload: uploaded test-1cbs.pdb → structure loaded, metadata shown (Chains: A,
+    Residues: 137, Atoms: 1213), toast "Loaded 1 file(s)"
+  * Modal: clicked 7KQR in Weekly list → modal opened, 3D structure visible,
+    NO console errors (previous "Cannot find module" error is gone)
+  * VLM confirmed: "3D structure viewer modal showing protein structure 7KQR...
+    no error messages visible"
+- VLM confirmed upload: "3D protein structure visible in center panel...
+    structure list shows test-1cbs.pdb with residue/atom details"
+
+Stage Summary:
+- Modal error fixed: replaced 2837-line ESM-based PdbStructureViewer with 90-line
+  PdbViewerLite using the prebuilt Molstar bundle
+- Upload fixed: replaced unreliable `loadFiles` with `loadStructureFromData`
+- Panel sizing fixed: middle panel can now shrink to 15% of viewport (was 30%)
+- ESLint: 0 errors, 0 warnings
+- E2E: all 3 issues verified fixed via agent-browser + VLM
+
+### Next Priority Items:
+1. **[P3]** Apply same loadStructureFromData pattern to drag-drop overlay handler
+2. **[P3]** Consider deleting PdbStructureViewer.tsx (2837 lines) — now unused
+3. **[P3]** Apply chain auto-detection to other interaction charts (hbonds, salt_bridges, etc.)
+4. **[P3]** Wire the show_interactions TODO stub in commands.ts

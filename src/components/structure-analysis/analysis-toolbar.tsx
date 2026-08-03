@@ -140,8 +140,9 @@ export function AnalysisToolbar() {
       window.dispatchEvent(new CustomEvent("sa:structure-loading"));
       setLoading(true);
       try {
-        const fileData: Array<{ name: string; text: string; format: "pdb" | "cif" }> =
-          [];
+        // Read all files first, then load via loadStructureFromData (more reliable
+        // than viewer.loadFiles which can silently fail in the prebuilt bundle).
+        const fileData: Array<{ name: string; text: string; format: "pdb" | "cif" }> = [];
         for (const f of Array.from(files)) {
           try {
             const text = await f.text();
@@ -150,43 +151,56 @@ export function AnalysisToolbar() {
               ext === "cif" || ext === "mmcif" ? "cif" : "pdb";
             setStructureFileCache(f.name, text, format);
             fileData.push({ name: f.name, text, format });
-          } catch {}
+          } catch (readErr) {
+            const msg = readErr instanceof Error ? readErr.message : String(readErr);
+            toast(`Failed to read ${f.name}: ${msg}`, "error");
+          }
         }
         if (fileData.length === 0) {
           throw new Error("No files could be read. Check file permissions or format.");
         }
-        await viewer.loadFiles(Array.from(files));
+
+        // Load each file via loadStructureFromData (not loadFiles)
         let loadedCount = 0;
-        for (const f of Array.from(files)) {
-          const fd = fileData.find((d) => d.name === f.name);
-          let metadata: LoadedStructure["metadata"] | undefined;
-          let pdbText: string | undefined;
-          if (fd && fd.format === "pdb") {
-            pdbText = fd.text;
-            try {
-              const parsed = parsePdb(fd.text);
-              metadata = {
-                chains: parsed.chains,
-                numAtoms: parsed.numAtoms,
-                numResidues: parsed.numResidues,
-                title: parsed.title || undefined,
-              };
-            } catch {}
+        for (const fd of fileData) {
+          try {
+            // Use the Molstar viewer's loadStructureFromData API
+            await viewer.loadStructureFromData(fd.text, fd.format, {
+              dataLabel: fd.name,
+            });
+            let metadata: LoadedStructure["metadata"] | undefined;
+            let pdbText: string | undefined;
+            if (fd.format === "pdb") {
+              pdbText = fd.text;
+              try {
+                const parsed = parsePdb(fd.text);
+                metadata = {
+                  chains: parsed.chains,
+                  numAtoms: parsed.numAtoms,
+                  numResidues: parsed.numResidues,
+                  title: parsed.title || undefined,
+                };
+              } catch {}
+            }
+            addStructure({
+              id: fd.name,
+              label: fd.name,
+              source: "file",
+              loadedAt: Date.now(),
+              pdbText,
+              metadata,
+            });
+            loadedCount++;
+          } catch (loadErr) {
+            const msg = loadErr instanceof Error ? loadErr.message : String(loadErr);
+            toast(`Failed to load ${fd.name}: ${msg}`, "error");
           }
-          addStructure({
-            id: f.name,
-            label: f.name,
-            source: "file",
-            loadedAt: Date.now(),
-            pdbText,
-            metadata,
-          });
-          loadedCount++;
         }
+
         if (loadedCount > 0) {
           toast(`Loaded ${loadedCount} file(s)`, "success");
         } else {
-          toast("No files were loaded. Viewer may not support this format.", "error");
+          toast("No files were loaded. Check format (.pdb, .cif).", "error");
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
