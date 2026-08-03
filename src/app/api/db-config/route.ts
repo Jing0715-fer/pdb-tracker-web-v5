@@ -252,14 +252,16 @@ export async function POST(request: NextRequest) {
     const normalizedUrl = normalizeDbUrl(rawPath)
     const fsPath = normalizedUrl.replace(/^file:/, '')
 
-    // If create=true, touch an empty file (prisma db push will fill it).
+    // If create=true, create a TRULY NEW empty file. If the file already
+    // exists (e.g. from a previous run), we overwrite it with an empty file
+    // so the user gets a fresh database — this is the expected behavior when
+    // they explicitly click "Create new database" in the wizard.
     if (create) {
       await fs.mkdir(path.dirname(fsPath), { recursive: true })
-      // Only create if it doesn't exist — don't clobber an existing DB.
-      const fileExists = await fs.access(fsPath).then(() => true).catch(() => false)
-      if (!fileExists) {
-        await fs.writeFile(fsPath, Buffer.alloc(0))
-      }
+      // Overwrite with empty file — prisma db push will create the schema.
+      // The user explicitly asked for a NEW database, so any existing data
+      // in this file is replaced.
+      await fs.writeFile(fsPath, Buffer.alloc(0))
     } else {
       // Switching to an existing path — verify it exists.
       const fileExists = await fs.access(fsPath).then(() => true).catch(() => false)
