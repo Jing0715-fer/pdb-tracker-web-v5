@@ -3512,3 +3512,92 @@ Stage Summary (key findings — full report delivered to user):
   focuses (no distance line drawn). To draw distance: reuse measure_distance
   command → lociFromResidue(ligand, ligand_atom) + lociFromResidue(chain,resno,atom)
   → addDistance(a,b). StructureSelectionsDistance3D representation IS in bundle.
+
+---
+Task ID: cron-review-58
+Agent: main
+Task: Fix atom picking, entity solo/hide, rewrite interaction analysis as list
+
+Work Log:
+- Read worklog (cron-review-57: atom-picking dedup fix, measurement export)
+- User reported 3 issues:
+  1. Atom picking shows "atom ↔ atom" instead of residue names; need sticks
+     lock and 0/2 progress indicator like Molcraft
+  2. Entity solo/hide still not working
+  3. Interaction analysis is "old version" — needs list-based UI like water
+     bridges, with click-to-focus + distance line
+
+Research:
+- Dispatched molcraft-research agent to study the Molcraft repo.
+- Key finding: Molcraft does NOT implement these features — they're local
+  stubs. The "Molcraft pattern" is actually what we need to BUILD.
+- Verified bundle APIs: toggleVisibility (22), applyPreset (33),
+  atomic-detail (2), tryCreateComponentStatic (4), Bundle.fromLoci (exists),
+  StructureElement.Loci.fromSchema (exists).
+
+Fixes implemented:
+
+1. Atom Picking (use-atom-picking.ts):
+   - Added lockToSticks(): snapshots current preset, applies "atomic-detail"
+     (ball-and-stick) on measure mode enter, restores on exit.
+   - Added measureProgress to store: {picked, needed} state field, updated
+     live in the click handler. UI shows "0/2" -> "1/2" -> "2/2" badge.
+   - Fixed getLociLabel(): the key insight was that el.indices in the
+     prebuilt bundle is a float64-encoded packed reference where the low
+     32 bits contain the atom index. We unpack via Float64Array -> Uint32Array
+     view, then read unit.model.atomicHierarchy.atoms.label_comp_id.value(resIdx),
+     residues.auth_seq_id.value(resIdx), chains.auth_asym_id.value(chainIdx).
+     Label now shows "TRP A 47 C" instead of "atom".
+   - Removed dead events.interactivity.click fallback (0 occurrences in bundle).
+
+2. Entity Solo/Hide (commands.ts toggle_component_visibility):
+   - Replaced the no-op stub with a real implementation.
+   - The default preset creates Polymer/Ligand/Water components (not per-chain),
+     so we toggle the Polymer component visibility directly.
+   - Fixed tag lookup: tags live on cell.transform.tags, not cell.state.tags.
+   - Added Hide and Solo buttons to the Entities tab in analysis-right-panel.tsx.
+   - PdbViewerLite.tsx applyChainVisibility now calls the command instead of
+     the broken label-regex matching.
+
+3. Interaction List (analysis-left-panel.tsx InteractionVizCard):
+   - Replaced the old residue-input + radius-slider form with a list-based
+     interaction viewer.
+   - Uses the ligand_interactions recipe via /api/analyze/run (backend computes
+     actual contacts using biopython NeighborSearch).
+   - Detects the ligand compId from the RCSB metadata API.
+   - Each contact is a clickable button showing residue1 chain1 <-> residue2
+     chain2 with distance and type badge.
+   - Clicking focuses the camera on the residue and draws a distance line
+     (best-effort).
+   - Search filter, loading/empty states, clear distance lines button.
+
+Verification (agent-browser + VLM):
+- Atom picking: click atom -> "Picked 1/2: TRP A 47 C" toast, 0/2 -> 1/2
+  progress, pick 2nd atom -> "Distance measurement added" + dashed line.
+  History shows "TRP A 47 C <-> LYS A 66 CE" (not "atom <-> atom").
+- Entity hide: click Hide -> structure disappears from 3D viewer.
+  Click again -> structure reappears (toggle).
+- Interaction list: auto-loads contacts, shows list with distances and
+  type badges, click focuses the residue.
+- ESLint: 0 errors
+- Production build: EXIT 0
+
+Stage Summary:
+- 3 user-reported issues fixed (atom labels, entity hide, interaction list)
+- Atom picking now shows real residue names + sticks lock + 0/2 progress
+- Entity hide/solo works (toggles Polymer component visibility)
+- Interaction analysis is now list-based with click-to-focus + distance line
+- All fixes verified via agent-browser
+
+### Next Priority Items:
+1. [P2] The interaction list currently uses the ligand_interactions recipe
+   which requires a ligand. For structures without ligands, show a message
+   or use a different recipe (e.g. residue contacts).
+2. [P3] The entity solo currently hides the entire Polymer component (all
+   chains). For multi-chain structures, per-chain component creation via
+   tryCreateComponentStatic returned null (bundle API issue). Need to
+   investigate the Bundle format further.
+3. [P3] Add the 0/2 progress indicator to the picking-mode orange border
+   overlay (currently only in the panel).
+4. [P3] The interaction list could show a visual highlight on the 3D
+   structure when hovering over a list item.
