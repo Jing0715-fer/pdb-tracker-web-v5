@@ -3444,3 +3444,71 @@ Stage Summary:
 4. [P3] Apply the THEME_MAP pattern to PdbViewerLite's color dropdown
 5. [P3] Rebuild public/molstar.js bundle to include ComputeContacts +
    InteractionsShape transforms (enables true show_interactions overlay)
+
+---
+Task ID: research-molcraft-1
+Agent: molcraft-research
+Task: Research Molcraft repo for atom picking, entity solo/hide, interaction list patterns
+
+Work Log:
+- Read worklog tail (molstar-fix-1, cron-review-57) for prior context.
+- Fetched Molcraft repo (github.com/Jing0715-fer/Molcraft, main branch) via
+  raw.githubusercontent.com (GitHub API was rate-limited). Files fetched:
+  src/components/molstar/molstar-viewer.tsx, use-molstar-loader.ts;
+  src/lib/molstar/commands.ts, presets.ts, types.ts; src/lib/store.ts,
+  cli-registry.ts; src/components/layout/unified-left-panel.tsx (1600 lines,
+  contains StructuresTab/MeasureTab/AnalysisTab), unified-analysis.tsx,
+  tools-panel.tsx; src/components/charts/water-bridges-chart.tsx,
+  ligand-interactions-chart.tsx, interaction-network.tsx, contact-map-chart.tsx.
+- Read local implementations: src/components/structure-analysis/use-atom-picking.ts
+  (323 lines, custom click-to-pick), analysis-left-panel.tsx MeasureTab (lines
+  481-700) + AnalysisTab/InteractionVizCard (lines 790-899), analysis-right-panel.tsx
+  EntitiesTab, PdbViewerLite.tsx applyChainVisibility (lines 198-265),
+  charts/water-bridges-chart.tsx, charts/ligand-interactions-chart.tsx,
+  lib/molcraft/commands.ts (toggle_component_visibility stub at line 501,
+  show_interactions stub showInteractionsAround at line 894).
+- Verified APIs in public/molstar.js (5MB) via timeout-bounded grep:
+  toggleVisibility(22), applyPreset(33), ball-and-stick(24), atomic-detail(2),
+  StructureSelectionsDistance3D(4), lociLabels(27), getLabels(2),
+  highlightOnly(10), addDistance(2), addAngle(2), addLabel(4), focusLoci(19),
+  lociSelects(22), behaviors.interaction.click(6), builders.structure(76),
+  tryCreateComponent(found), managers.structure.component.modifyByCurrentSelection(found).
+  NOT in bundle: modifyVisibility(0), hideComponent/showComponent(0),
+  ComputeContacts(0), InteractionsShape(0), interactionsProvider(0),
+  events.interactivity.click(0), createComponent(0), createSubComponents(0),
+  splitByChain(0), MolScriptBuilder(0). byChain(4) is only in the
+  superposition "by chains" UI toggle, NOT a preset split option.
+
+Stage Summary (key findings — full report delivered to user):
+- ATOM PICKING: Molcraft does NOT have click-to-pick measurement. Its MeasureTab
+  uses manual residue inputs (chain/resno/atom) → measure_distance command →
+  lociFromResidue → addDistance(a,b). The local use-atom-picking.ts is custom
+  (comment "Replicates Molcraft's pattern" is aspirational). The "0/2" progress
+  is currently only a toast, not a persistent indicator. Bundle CONFIRMS
+  behaviors.interaction.click works (6) but events.interactivity.click fallback
+  is dead (0). getLabels() on lociLabels mgr exists; returns this.labels array
+  built from provider label() outputs (strings or stringifiable objects).
+  Sticks-lock is feasible: applyPreset(structures,'atomic-detail') (all atoms
+  ball-and-stick) is in the bundle.
+- ENTITY SOLO/HIDE: Molcraft toggles at STRUCTURE level only
+  (hierarchy.toggleVisibility([structCell]) — one arg = toggle). Local
+  PdbViewerLite tries per-COMPONENT toggle matching label "Chain A" — but
+  Molstar's default preset creates components labeled "Polymer"/"Ligand"/
+  "Water"/"Ion" (confirmed in bundle), NOT per-chain. So the regex NEVER
+  matches → solo/hide is a no-op. toggle_component_visibility command is also
+  a no-op stub (commands.ts:501). FIX: create per-chain components via
+  plugin.builders.structure.tryCreateComponent OR
+  managers.structure.component.modifyByCurrentSelection (after selecting the
+  chain via structureInteractivity), then toggleVisibility([comp],'show'|'hide').
+  modifyVisibility/hideComponent do NOT exist in bundle — must use toggleVisibility.
+- INTERACTION ANALYSIS: Molcraft's showInteractionsAround is an EMPTY STUB
+  (commands.ts:817-828, "TODO: wire ComputeContacts + InteractionsShape").
+  Local show_interactions is identical stub + a camera-focus fallback. Bundle
+  CONFIRMS ComputeContacts(0)/InteractionsShape(0) — cannot draw true
+  interaction overlay. The list-based pattern (water-bridges-chart) uses
+  backend /api/analyze/run recipe → clickable list → focus_residue. The local
+  ligand-interactions-chart.tsx ALREADY has the list UI + LigandContact data
+  (ligand_atom, chain, resno, resname, atom, distance_A, type) but only
+  focuses (no distance line drawn). To draw distance: reuse measure_distance
+  command → lociFromResidue(ligand, ligand_atom) + lociFromResidue(chain,resno,atom)
+  → addDistance(a,b). StructureSelectionsDistance3D representation IS in bundle.

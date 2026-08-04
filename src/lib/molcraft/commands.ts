@@ -498,8 +498,65 @@ export async function executeCommand(
         return { ok: true, detail: `Background: ${cmd.color}` };
       }
 
-      case "toggle_component_visibility":
-        return { ok: true, detail: `Toggled ${cmd.component} (no-op stub)` };
+      case "toggle_component_visibility": {
+        // Build per-chain components on demand and toggle their visibility.
+        // The default preset creates "Polymer"/"Ligand"/"Water" components,
+        // NOT per-chain — so we must create per-chain components ourselves
+        // using tryCreateComponentStatic + a chain loci.
+        const chain = cmd.component;
+        const action = (cmd.action ?? "toggle") as "show" | "hide" | "toggle";
+        const structs = getStructures(plugin);
+        if (structs.length === 0)
+          return { ok: false, detail: "No structures loaded" };
+
+        const structureCell = structs[0];
+        const builders = (plugin as any)?.builders?.structure;
+        if (!builders?.tryCreateComponentStatic)
+          return { ok: false, detail: "Component builder not available" };
+
+        // Try to find an existing per-chain component (tagged "chain-<id>")
+        const tag = `chain-${chain}`;
+        let chainComp: any = null;
+        try {
+          const components = structureCell.components ?? [];
+          for (const c of components) {
+            const tags = c?.cell?.state?.tags;
+            if (Array.isArray(tags) && tags.includes(tag)) {
+              chainComp = c;
+              break;
+            }
+          }
+        } catch { /* ignore */ }
+
+        // If not found, create it from a chain loci
+        if (!chainComp) {
+          const loci = await lociFromChain(viewer, chain);
+          if (!loci)
+            return { ok: false, detail: `Chain ${chain} not found` };
+          try {
+            chainComp = await builders.tryCreateComponentStatic(
+              structureCell,
+              loci,
+              { label: `Chain ${chain}`, tags: [tag] }
+            );
+          } catch (err) {
+            return { ok: false, detail: `Failed to create component: ${err}` };
+          }
+          if (!chainComp)
+            return { ok: false, detail: `Chain ${chain} is empty` };
+        }
+
+        // Toggle visibility
+        try {
+          plugin.managers.structure.hierarchy.toggleVisibility(
+            [chainComp],
+            action === "toggle" ? undefined : action
+          );
+          return { ok: true, detail: `Chain ${chain}: ${action}` };
+        } catch (err) {
+          return { ok: false, detail: `Visibility toggle failed: ${err}` };
+        }
+      }
 
       // ---------- APBS Electrostatic 3D Visualization ----------
       case "show_electrostatic_surface": {

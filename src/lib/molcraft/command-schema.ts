@@ -84,7 +84,7 @@ export type LlmCommand =
       action?: "set" | "add" | "remove";
     }
   | { type: "clear_selection" }
-  | { type: "toggle_component_visibility"; component: string; visible?: boolean }
+  | { type: "toggle_component_visibility"; component: string; visible?: boolean; action?: "show" | "hide" | "toggle" }
   | {
       type: "load_volume_url";
       url: string;

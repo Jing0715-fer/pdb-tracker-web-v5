@@ -8,7 +8,7 @@
  * Ported from Molcraft's unified-left-panel.tsx, restyled with
  * pdb-tracker-web-v4's Claude/terracotta theme.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Layers,
@@ -497,6 +497,8 @@ function MeasureTab() {
   const activeStructureId = useAppStore((s) => s.activeStructureId);
   const structures = useAppStore((s) => s.structures);
   const activeStructure = structures.find((s) => s.id === activeStructureId);
+  // Live picking progress (0/2 → 1/2 → 2/2) for the indicator badge
+  const measureProgress = useAppStore((s) => s.measureProgress);
 
   const isPicking = measureMode !== "off";
 
@@ -617,7 +619,17 @@ function MeasureTab() {
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-claude-accent" />
             </span>
             <span className="font-medium">
-              Click {measureMode === "distance" ? "2 atoms" : "3 atoms"} in the viewer…
+              Picking atoms
+            </span>
+            <span className="font-mono font-bold text-claude-accent bg-claude-accent-light/50 rounded px-1 py-0.5 text-[10px]">
+              {measureProgress.picked}/{measureProgress.needed}
+            </span>
+            <span className="text-claude-text-muted text-[9px]">
+              {measureProgress.picked === 0
+                ? `click ${measureProgress.needed === 2 ? "2 atoms" : "3 atoms"}`
+                : measureProgress.picked < measureProgress.needed
+                ? `${measureProgress.needed - measureProgress.picked} more…`
+                : "done"}
             </span>
             <button
               onClick={() => setMeasureMode("off")}
@@ -846,54 +858,201 @@ function ActiveStructureSelector() {
 }
 
 function InteractionVizCard() {
-  const { run, busy } = useRunCommand();
-  const [target, setTarget] = useState<ResidueRef>({ chain: "A", resno: 145 });
-  const [radius, setRadius] = useState(8);
+  const viewer = useAppStore((s) => s.viewer);
+  const toast = useAppStore((s) => s.toast);
+  const activeStructureId = useAppStore((s) => s.activeStructureId);
+  const structures = useAppStore((s) => s.structures);
+  const [contacts, setContacts] = useState<Array<{
+    chain1: string; residue1: string; chain2: string; residue2: string; distance: number; type: string;
+  }>>([]);
+  const [loading, setLoading] = useState(false);
+  const [fetched, setFetched] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const activePdbId = structures.find((s) => s.id === activeStructureId)?.id;
+
+  const fetchContacts = useCallback(async () => {
+    if (!activePdbId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/contacts/${activePdbId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setContacts(data.contacts ?? []);
+        setFetched(true);
+        toast(`Loaded ${data.contacts?.length ?? 0} interactions`, "success");
+      } else {
+        toast("Failed to load interactions", "error");
+      }
+    } catch {
+      toast("Failed to load interactions", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [activePdbId, toast]);
+
+  // Auto-fetch when a structure is loaded
+  useEffect(() => {
+    if (activePdbId && /^[a-zA-Z0-9]{4}$/.test(activePdbId) && !fetched) {
+      fetchContacts();
+    }
+    if (!activePdbId) {
+      setContacts([]);
+      setFetched(false);
+    }
+  }, [activePdbId, fetched, fetchContacts]);
+
+  const handleFocusContact = useCallback(async (contact: typeof contacts[0]) => {
+    if (!viewer) return;
+    try {
+      // Parse residue info: "123ALA" → resno=123, compId=ALA
+      const m1 = contact.residue1.match(/^(\d+)([A-Z]{3})/);
+      const m2 = contact.residue2.match(/^(\d+)([A-Z]{3})/);
+      if (!m1 || !m2) {
+        toast("Could not parse residue info", "error");
+        return;
+      }
+      const resno1 = parseInt(m1[1]);
+      const compId1 = m1[2];
+      const resno2 = parseInt(m2[1]);
+      const compId2 = m2[2];
+
+      // Draw a distance line between the two residues
+      await executeCommand(viewer, {
+        type: "measure_distance",
+        a: { chain: contact.chain1, resno: resno1, compId: compId1 },
+        b: { chain: contact.chain2, resno: resno2, compId: compId2 },
+      });
+
+      // Focus on the first residue
+      await executeCommand(viewer, {
+        type: "focus_residue",
+        chain: contact.chain1,
+        resno: resno1,
+        compId: compId1,
+      });
+
+      toast(`${compId1}${resno1} (${contact.chain1}) ↔ ${compId2}${resno2} (${contact.chain2})`, "info");
+    } catch (err) {
+      toast("Focus failed", "error");
+    }
+  }, [viewer, toast]);
+
+  const handleClear = useCallback(() => {
+    if (!viewer) return;
+    try {
+      viewer.plugin.managers.structure.measurement.clear();
+      toast("Distance lines cleared", "info");
+    } catch {
+      // ignore
+    }
+  }, [viewer, toast]);
+
+  const filtered = filter
+    ? contacts.filter(c =>
+        c.residue1.includes(filter) || c.residue2.includes(filter) ||
+        c.chain1.includes(filter) || c.chain2.includes(filter) ||
+        c.type.includes(filter)
+      )
+    : contacts;
 
   return (
     <div className="rounded-lg border border-claude-border bg-claude-surface p-2">
       <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-claude-text">
         <Zap className="h-3.5 w-3.5 text-claude-accent" />
-        3D Interaction Viz
+        Interaction List
+        {contacts.length > 0 && (
+          <Badge variant="secondary" className="ml-auto text-[9px] h-4">
+            {filtered.length}/{contacts.length}
+          </Badge>
+        )}
       </div>
-      <div className="space-y-1.5">
-        <ResidueInput label="Center residue" value={target} onChange={setTarget} />
-        <div>
-          <div className="flex justify-between">
-            <Label className="text-[10px] text-claude-text-secondary">
-              Radius (Å)
-            </Label>
-            <span className="font-mono text-[10px] text-claude-text">
-              {radius.toFixed(1)}
-            </span>
-          </div>
-          <Slider
-            value={[radius]}
-            min={3}
-            max={20}
-            step={0.5}
-            onValueChange={(v) => setRadius(v[0])}
-          />
+
+      {/* Search filter */}
+      {contacts.length > 0 && (
+        <Input
+          placeholder="Filter by residue, chain, type…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="h-6 mb-1.5 text-[10px]"
+        />
+      )}
+
+      {/* Loading state */}
+      {loading && (
+        <div className="flex items-center justify-center py-3 text-[10px] text-claude-text-muted">
+          <Loader2 className="h-3 w-3 animate-spin mr-1" />
+          Loading interactions…
         </div>
-        <div className="grid grid-cols-2 gap-1">
-          <Button
-            size="sm"
-            className="h-7 text-[10px]"
-            disabled={busy}
-            onClick={() => run({ type: "show_interactions", target, radius })}
-          >
-            Show
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            className="h-7 text-[10px]"
-            onClick={() => run({ type: "clear_interactions" })}
-          >
-            Clear
-          </Button>
+      )}
+
+      {/* Empty state */}
+      {!loading && contacts.length === 0 && fetched && (
+        <div className="text-center py-3 text-[10px] text-claude-text-muted">
+          <Zap className="mx-auto h-4 w-4 mb-1 opacity-40" />
+          No interactions found for this structure.
         </div>
-      </div>
+      )}
+
+      {/* Not fetched yet */}
+      {!loading && contacts.length === 0 && !fetched && (
+        <div className="text-center py-3 text-[10px] text-claude-text-muted">
+          <Zap className="mx-auto h-4 w-4 mb-1 opacity-40" />
+          Load a PDB structure to see interactions.
+        </div>
+      )}
+
+      {/* Contact list */}
+      {!loading && filtered.length > 0 && (
+        <div className="max-h-48 overflow-y-auto sa-scroll space-y-0.5">
+          {filtered.slice(0, 100).map((c, i) => (
+            <button
+              key={i}
+              onClick={() => handleFocusContact(c)}
+              className="w-full flex items-center gap-1 rounded px-1.5 py-1 text-[9px] hover:bg-claude-accent-light/50 transition-colors group text-left"
+              title={`Click to focus + draw distance line: ${c.residue1} (${c.chain1}) ↔ ${c.residue2} (${c.chain2})`}
+            >
+              <span className="font-mono text-claude-text font-semibold">
+                {c.residue1}
+              </span>
+              <span className="text-claude-text-muted text-[8px]">{c.chain1}</span>
+              <span className="text-claude-accent mx-0.5">↔</span>
+              <span className="font-mono text-claude-text font-semibold">
+                {c.residue2}
+              </span>
+              <span className="text-claude-text-muted text-[8px]">{c.chain2}</span>
+              <span className="ml-auto font-mono text-claude-accent text-[9px]">
+                {c.distance > 0 ? `${c.distance.toFixed(1)}Å` : ""}
+              </span>
+              <Badge
+                variant="outline"
+                className="text-[8px] h-3.5 px-1 capitalize"
+              >
+                {c.type}
+              </Badge>
+            </button>
+          ))}
+          {filtered.length > 100 && (
+            <div className="text-center text-[9px] text-claude-text-muted py-1">
+              +{filtered.length - 100} more (use filter to narrow)
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Clear distance lines button */}
+      {contacts.length > 0 && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full h-6 mt-1.5 text-[9px] gap-1"
+          onClick={handleClear}
+          disabled={!viewer}
+        >
+          <Trash2 className="h-2.5 w-2.5" />
+          Clear distance lines
+        </Button>
+      )}
     </div>
   );
 }

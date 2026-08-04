@@ -196,49 +196,30 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   }, [viewer, toast]);
 
   // Apply visibility to all chains in the 3D viewer.
-  // This walks the Molstar hierarchy and toggles visibility on components
-  // whose label matches a chain ID. Works with the prebuilt bundle because
-  // it uses the hierarchy manager's toggleVisibility API.
+  // Uses the toggle_component_visibility command which creates per-chain
+  // components on demand (via tryCreateComponentStatic) and toggles them.
+  // The previous approach tried to match component labels like "Chain A" but
+  // Molstar creates "Polymer"/"Ligand"/"Water" components, not per-chain.
   const applyChainVisibility = useCallback(async () => {
     if (!viewer) return;
-    try {
-      const plugin = viewer.plugin;
-      const hierarchy = plugin.managers.structure.hierarchy.current;
-      if (!hierarchy || hierarchy.structures.length === 0) return;
-
-      // Collect all chain IDs from loaded entities
-      const allChains = entities.flatMap(e => e.chains);
-
-      for (const structure of hierarchy.structures) {
-        const components = (structure as any)?.components;
-        if (!components || !Array.isArray(components)) continue;
-
-        for (const comp of components) {
-          try {
-            const label = (comp as any)?.cell?.obj?.label || '';
-            // Match labels like "Chain A", "Chain B", etc.
-            // Also match single-letter labels (default Molstar component names)
-            const chainMatch = label.match(/^Chain\s+(.+)$/) || (allChains.includes(label) ? [label, label] : null);
-            if (!chainMatch) continue;
-
-            const chainId = chainMatch[1];
-            // Determine if this chain should be visible
-            let shouldShow: boolean;
-            if (soloChain) {
-              shouldShow = chainId === soloChain;
-            } else {
-              shouldShow = chainVisibility[chainId] !== false;
-            }
-
-            // Use the hierarchy manager's toggleVisibility API
-            plugin.managers.structure.hierarchy.toggleVisibility(
-              [comp],
-              shouldShow ? 'show' : 'hide'
-            );
-          } catch { /* ignore individual component errors */ }
-        }
+    const allChains = entities.flatMap(e => e.chains);
+    for (const chain of allChains) {
+      let action: 'show' | 'hide';
+      if (soloChain) {
+        action = chain === soloChain ? 'show' : 'hide';
+      } else {
+        action = chainVisibility[chain] === false ? 'hide' : 'show';
       }
-    } catch { /* ignore */ }
+      try {
+        await executeCommand(viewer, {
+          type: 'toggle_component_visibility',
+          component: chain,
+          action,
+        });
+      } catch {
+        // ignore individual chain errors
+      }
+    }
   }, [viewer, entities, chainVisibility, soloChain]);
 
   // Apply visibility whenever chainVisibility or soloChain changes

@@ -136,6 +136,9 @@ interface AppState {
   // Measurement
   measureMode: "off" | "distance" | "angle";
   setMeasureMode: (m: "off" | "distance" | "angle") => void;
+  /** Live picking progress for the UI indicator (0/2 → 1/2 → 2/2). */
+  measureProgress: { picked: number; needed: number };
+  setMeasureProgress: (p: { picked: number; needed: number }) => void;
   measurements: Array<{ id: string; mode: "distance" | "angle"; label: string; detail: string; ts: number }>;
   addMeasurement: (m: { mode: "distance" | "angle"; label: string; detail: string }) => void;
   removeMeasurement: (id: string) => void;
@@ -418,7 +421,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearAlignmentHistory: () => set({ alignmentHistory: [] }),
 
   measureMode: "off",
-  setMeasureMode: (m) => set({ measureMode: m }),
+  setMeasureMode: (m) => set({ measureMode: m, measureProgress: { picked: 0, needed: m === "distance" ? 2 : m === "angle" ? 3 : 0 } }),
+  measureProgress: { picked: 0, needed: 0 },
+  setMeasureProgress: (p) => set({ measureProgress: p }),
   measurements: [],
   addMeasurement: (m) =>
     set((state) => ({

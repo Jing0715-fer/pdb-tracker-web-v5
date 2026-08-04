@@ -25,6 +25,8 @@ import {
   Dna,
   Pill,
   Beaker,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -579,6 +581,50 @@ function EntitiesTab({ structureInfo }: { structureInfo: StructureInfo | null })
                           <Box className="h-2.5 w-2.5" />
                           Focus in 3D
                         </Button>
+                        <div className="flex items-center gap-0.5 mt-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-5 px-1.5 text-[9px] gap-0.5"
+                            onClick={async () => {
+                              if (!viewer) return;
+                              const res = await executeCommand(viewer, {
+                                type: "toggle_component_visibility",
+                                component: p.chains[0],
+                                action: "toggle",
+                              });
+                              toast(res.ok ? `Toggled chain ${p.chains[0]}` : res.detail, res.ok ? "info" : "error");
+                            }}
+                            disabled={!viewer}
+                            title={`Toggle visibility of chain ${p.chains[0]}`}
+                          >
+                            <Eye className="h-2.5 w-2.5" />
+                            Hide
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-5 px-1.5 text-[9px] gap-0.5"
+                            onClick={async () => {
+                              if (!viewer) return;
+                              // Solo: hide all other chains, show this one
+                              const allChains = polymers.flatMap(pp => pp.chains);
+                              for (const c of allChains) {
+                                await executeCommand(viewer, {
+                                  type: "toggle_component_visibility",
+                                  component: c,
+                                  action: c === p.chains[0] ? "show" : "hide",
+                                });
+                              }
+                              toast(`Solo: chain ${p.chains[0]}`, "info");
+                            }}
+                            disabled={!viewer}
+                            title={`Solo chain ${p.chains[0]} (hide all others)`}
+                          >
+                            <EyeOff className="h-2.5 w-2.5" />
+                            Solo
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
