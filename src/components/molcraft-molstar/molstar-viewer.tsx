@@ -104,9 +104,34 @@ export function MolstarViewer({ className }: MolstarViewerProps) {
     });
     ro.observe(el);
 
+    // Additional periodic resize sync for the first 3 seconds — Molstar's
+    // internal canvas3d.input.width/height can be 0x0 right after mount if
+    // the container's layout wasn't fully settled when Viewer.create ran.
+    // handleResize() reads layout.root (the G_ container's parent) offset
+    // dimensions; if that's 0 we re-trigger after a short delay.
+    let resizeTicks = 0;
+    const resizeInterval = setInterval(() => {
+      if (!viewerRef.current) return;
+      resizeTicks++;
+      try {
+        const p = (viewerRef.current as unknown as { plugin?: { canvas3d?: { input?: { width?: number; height?: number } } } }).plugin;
+        const input = p?.canvas3d?.input;
+        if (input && (input.width === 0 || input.height === 0)) {
+          viewerRef.current?.handleResize();
+        } else {
+          // Canvas has a real size — stop the periodic check.
+          clearInterval(resizeInterval);
+        }
+      } catch {
+        // ignore
+      }
+      if (resizeTicks > 30) clearInterval(resizeInterval); // ~3s max
+    }, 100);
+
     return () => {
       disposed = true;
       ro.disconnect();
+      clearInterval(resizeInterval);
       if (viewerRef.current) {
         try {
           viewerRef.current.dispose();

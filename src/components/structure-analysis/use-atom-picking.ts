@@ -219,7 +219,13 @@ export function useAtomPicking() {
     const sub_obj = clickObs.subscribe((evt: unknown) => {
       try {
         const loci = extractLoci(evt);
-        if (!loci || isLociEmpty(loci)) return; // ignore empty clicks
+        if (!loci || isLociEmpty(loci)) {
+          // Click landed on empty space (no atom hit). The canvas3d hit-test
+          // returns empty-loci when input.width/height is 0 (canvas not sized
+          // correctly) OR when the click truly missed all geometry. Either
+          // way, ignore — don't count it toward the measurement.
+          return;
+        }
 
         // Highlight for visual feedback
         try {
