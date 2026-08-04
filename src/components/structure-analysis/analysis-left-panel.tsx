@@ -994,6 +994,40 @@ function InteractionVizCard() {
     }
   }, [viewer, toast]);
 
+  // Hover highlight: briefly highlight the residue in the 3D viewer without
+  // moving the camera. Uses lociHighlights which is non-destructive.
+  const handleHoverContact = useCallback((contact: typeof contacts[0]) => {
+    if (!viewer) return;
+    try {
+      const m2 = contact.residue2.match(/^(\d+)([A-Z]{3})/);
+      if (!m2) return;
+      const resno2 = parseInt(m2[1]);
+      const compId2 = m2[2];
+      const plugin = viewer.plugin;
+      // Use structureInteractivity to highlight (not select) the residue
+      viewer.structureInteractivity({
+        expression: (Q: any) => Q.struct.generator.atomGroups({
+          "residue-test": Q.core.logic.and([
+            Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno2]),
+            Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_comp_id(), compId2]),
+          ]),
+        }),
+        action: ["highlight"],
+      });
+    } catch {
+      // best-effort — ignore
+    }
+  }, [viewer]);
+
+  const handleHoverLeave = useCallback(() => {
+    if (!viewer) return;
+    try {
+      viewer.plugin.managers.interactivity.lociHighlights.clearHighlights();
+    } catch {
+      // ignore
+    }
+  }, [viewer]);
+
   const handleClear = useCallback(() => {
     if (!viewer) return;
     try {
@@ -1017,12 +1051,46 @@ function InteractionVizCard() {
       <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-claude-text">
         <Zap className="h-3.5 w-3.5 text-claude-accent" />
         Interaction List
+        {ligandCompId && (
+          <span className="text-[9px] text-claude-text-muted font-normal ml-0.5">
+            ({ligandCompId})
+          </span>
+        )}
         {contacts.length > 0 && (
           <Badge variant="secondary" className="ml-auto text-[9px] h-4">
             {filtered.length}/{contacts.length}
           </Badge>
         )}
       </div>
+
+      {/* Type distribution mini-bars */}
+      {contacts.length > 0 && (() => {
+        const typeCounts = contacts.reduce((acc, c) => {
+          acc[c.type] = (acc[c.type] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        const sorted = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        const max = sorted[0]?.[1] || 1;
+        return (
+          <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+            {sorted.map(([type, count]) => (
+              <button
+                key={type}
+                onClick={() => setFilter(filter === type ? "" : type)}
+                className={`flex items-center gap-0.5 text-[8px] px-1 py-0.5 rounded border transition-all ${
+                  filter === type
+                    ? "bg-claude-accent text-white border-claude-accent"
+                    : "bg-claude-bg/50 text-claude-text-muted border-claude-border/40 hover:bg-claude-accent-light/30"
+                }`}
+                title={`${count} ${type} interactions — click to filter`}
+              >
+                <span className="capitalize">{type.replace(/_/g, " ").substring(0, 6)}</span>
+                <span className="font-mono font-bold">{count}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Search filter */}
       {contacts.length > 0 && (
@@ -1060,36 +1128,57 @@ function InteractionVizCard() {
 
       {/* Contact list */}
       {!loading && filtered.length > 0 && (
-        <div className="max-h-48 overflow-y-auto sa-scroll space-y-0.5">
-          {filtered.slice(0, 100).map((c, i) => (
-            <button
-              key={i}
-              onClick={() => handleFocusContact(c)}
-              className="w-full flex items-center gap-1 rounded px-1.5 py-1 text-[9px] hover:bg-claude-accent-light/50 transition-colors group text-left"
-              title={`Click to focus + draw distance line: ${c.residue1} (${c.chain1}) ↔ ${c.residue2} (${c.chain2})`}
-            >
-              <span className="font-mono text-claude-text font-semibold">
-                {c.residue1}
-              </span>
-              <span className="text-claude-text-muted text-[8px]">{c.chain1}</span>
-              <span className="text-claude-accent mx-0.5">↔</span>
-              <span className="font-mono text-claude-text font-semibold">
-                {c.residue2}
-              </span>
-              <span className="text-claude-text-muted text-[8px]">{c.chain2}</span>
-              <span className="ml-auto font-mono text-claude-accent text-[9px]">
-                {c.distance > 0 ? `${c.distance.toFixed(1)}Å` : ""}
-              </span>
-              <Badge
-                variant="outline"
-                className="text-[8px] h-3.5 px-1 capitalize"
+        <div className="max-h-56 overflow-y-auto sa-scroll space-y-0.5">
+          {filtered.slice(0, 100).map((c, i) => {
+            // Color-code by interaction type
+            const typeColor = {
+              hbond: "text-blue-500 border-blue-300/40 bg-blue-50/50",
+              hydrogen_bond: "text-blue-500 border-blue-300/40 bg-blue-50/50",
+              hydrophobic: "text-amber-600 border-amber-300/40 bg-amber-50/50",
+              aromatic: "text-purple-500 border-purple-300/40 bg-purple-50/50",
+              "aromatic-stacking": "text-purple-500 border-purple-300/40 bg-purple-50/50",
+              ionic: "text-red-500 border-red-300/40 bg-red-50/50",
+              "salt-bridge": "text-red-500 border-red-300/40 bg-red-50/50",
+              "water-bridge": "text-cyan-500 border-cyan-300/40 bg-cyan-50/50",
+              contact: "text-claude-text-muted border-claude-border/40 bg-claude-surface",
+              ligand_contact: "text-claude-accent border-claude-accent/30 bg-claude-accent-light/30",
+              ligand_proximity: "text-claude-accent border-claude-accent/30 bg-claude-accent-light/30",
+            };
+            const colorClass = typeColor[c.type as keyof typeof typeColor] || typeColor.contact;
+            return (
+              <button
+                key={i}
+                onClick={() => handleFocusContact(c)}
+                onMouseEnter={() => handleHoverContact(c)}
+                onMouseLeave={() => handleHoverLeave()}
+                className="w-full flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] hover:bg-claude-accent-light/40 hover:shadow-sm transition-all group text-left border border-transparent hover:border-claude-accent/20"
+                title={`Click to focus: ${c.residue1} (${c.chain1}) ↔ ${c.residue2} (${c.chain2}) — ${c.distance > 0 ? c.distance.toFixed(1) + 'Å' : 'no distance'}`}
               >
-                {c.type}
-              </Badge>
-            </button>
-          ))}
+                <span className="font-mono text-claude-text font-semibold group-hover:text-claude-accent transition-colors">
+                  {c.residue2}
+                </span>
+                <span className="text-claude-text-muted text-[8px] group-hover:text-claude-accent/70">
+                  {c.chain2}
+                </span>
+                <span className="text-claude-accent/60 mx-0.5 text-[8px]">←</span>
+                <span className="font-mono text-claude-text-muted text-[8px]">
+                  {c.residue1}
+                </span>
+                <span className="ml-auto flex items-center gap-1">
+                  {c.distance > 0 && (
+                    <span className="font-mono text-claude-text-secondary text-[9px] tabular-nums">
+                      {c.distance.toFixed(1)}Å
+                    </span>
+                  )}
+                  <span className={`text-[8px] h-3.5 px-1 rounded border capitalize font-medium ${colorClass}`}>
+                    {c.type.replace(/_/g, " ").substring(0, 8)}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
           {filtered.length > 100 && (
-            <div className="text-center text-[9px] text-claude-text-muted py-1">
+            <div className="text-center text-[9px] text-claude-text-muted py-1 border-t border-claude-border/30 mt-1">
               +{filtered.length - 100} more (use filter to narrow)
             </div>
           )}
