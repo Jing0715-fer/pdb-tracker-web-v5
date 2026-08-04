@@ -3601,3 +3601,56 @@ Stage Summary:
    overlay (currently only in the panel).
 4. [P3] The interaction list could show a visual highlight on the 3D
    structure when hovering over a list item.
+
+---
+Task ID: cron-review-59
+Agent: main
+Task: QA + enhance interaction list with hover highlight and type distribution
+
+Work Log:
+- Read worklog (cron-review-58: atom picking, entity hide, interaction list)
+- QA verified all previous fixes working:
+  * Atom picking: 0/2 progress indicator, "Picked 1/2: TRP A 47 C" toast
+  * Entity hide: structure disappears/reappears on toggle
+  * Interaction list: 30 contacts loaded for REA, clickable, focus works
+- No bugs found — all features stable
+
+New feature: Interaction List UX enhancements
+1. Hover highlight: when the user hovers over a contact in the interaction
+   list, the corresponding residue is highlighted in the 3D viewer (magenta
+   highlight via lociHighlights). Moving the mouse away clears the highlight.
+   This gives instant visual feedback without clicking.
+2. Type distribution mini-bars: at the top of the interaction list, show
+   clickable filter chips for each interaction type with counts (e.g.
+   'Hydrophobic 26', 'H-bond 4'). Clicking a chip filters the list to
+   that type.
+3. Color-coded type badges: each contact row has a colored badge based on
+   interaction type (hydrogen=blue, hydrophobic=amber, aromatic=purple,
+   ionic=red, water=cyan, ligand=accent).
+4. Ligand name in header (e.g. 'Interaction List (REA)').
+5. Improved row layout: protein residue shown first (bold), arrow to ligand.
+6. Increased max-height for more visible contacts.
+
+Verification (agent-browser + VLM):
+- Type distribution chips show 'Hydrophobic 26' and 'H-bond 4', clickable
+- List items have yellow/gold badges for hydrophobic contacts
+- Hovering over 32ALA highlights the residue in magenta in the 3D viewer
+- Tooltip shows 'ALA 32' residue info
+- ESLint: 0 errors
+- Production build: EXIT 0
+
+Stage Summary:
+- All previous features verified stable (atom picking, entity hide, interactions)
+- New: hover highlight gives instant 3D visual feedback
+- New: type distribution chips for quick filtering
+- New: color-coded type badges for visual scanning
+- 1 commit pushed to GitHub
+
+### Next Priority Items:
+1. [P2] The interaction list distance line (measure_distance) doesn't draw
+   for ligand contacts — the lociFromResidue for REA (ligand) fails because
+   it's a non-polymer. Need to handle non-polymer loci differently.
+2. [P3] Add a "select all" / "deselect all" for interaction type filters
+3. [P3] Show a summary card with total interactions by type as a donut chart
+4. [P3] The entity solo currently hides the entire Polymer component. For
+   multi-chain structures, per-chain component creation is still needed.
