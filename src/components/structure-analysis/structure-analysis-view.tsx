@@ -232,19 +232,19 @@ export function StructureAnalysisView() {
         <div className="hidden lg:flex flex-1 min-h-0">
           <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
             {/* Left: structures + analysis */}
-            <ResizablePanel defaultSize={22} minSize={8} maxSize={38}>
+            <ResizablePanel defaultSize="22" minSize="10" maxSize="40">
               <div data-tour="left-panel" className="h-full min-w-0 overflow-hidden">
                 <AnalysisLeftPanel />
               </div>
             </ResizablePanel>
             <ResizableHandle withHandle />
             {/* Center: viewer */}
-            <ResizablePanel defaultSize={54} minSize={8}>
+            <ResizablePanel defaultSize="54" minSize="15">
               <div className="relative h-full min-w-0 overflow-hidden">{viewerBlock}</div>
             </ResizablePanel>
             <ResizableHandle withHandle />
             {/* Right: reports + history */}
-            <ResizablePanel defaultSize={24} minSize={8} maxSize={40}>
+            <ResizablePanel defaultSize="24" minSize="10" maxSize="40">
               <div data-tour="right-panel" className="h-full min-w-0 overflow-hidden">
                 <AnalysisRightPanel structureInfo={structureInfo} />
               </div>
