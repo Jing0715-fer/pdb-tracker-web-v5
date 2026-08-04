@@ -77,8 +77,11 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   const [entities, setEntities] = useState<EntityData[]>([]);
   const [ligands, setLigands] = useState<LigandData[]>([]);
   const [entityLoading, setEntityLoading] = useState(false);
-  const [hiddenChains, setHiddenChains] = useState<Set<string>>(new Set());
   const [expandedEntities, setExpandedEntities] = useState<Set<string>>(new Set());
+  // Visibility: track which chains are hidden (like old PdbStructureViewer)
+  const [chainVisibility, setChainVisibility] = useState<Record<string, boolean>>({});
+  // Solo mode: when set, only this chain is visible (like old 'show only')
+  const [soloChain, setSoloChain] = useState<string | null>(null);
 
   // Enable Molcraft-style click-to-pick atom selection for distance/angle measurement
   useAtomPicking();
@@ -120,7 +123,8 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
       setEntityLoading(true);
       setEntities([]);
       setLigands([]);
-      setHiddenChains(new Set());
+      setChainVisibility({});
+      setSoloChain(null);
     });
     fetch(`/api/analyze/metadata?id=${pdbId}&interfaces=0`)
       .then(r => r.ok ? r.json() : null)
@@ -191,88 +195,74 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     }
   }, [viewer, toast]);
 
-  // Toggle chain visibility — uses Molstar's component manager to
-  // hide/show a chain. Uses modifyBySelection to toggle visibility of
-  // the representation for atoms matching the chain.
-  const toggleChainVisibility = useCallback(async (chain: string) => {
-    const newHidden = new Set(hiddenChains);
-    if (newHidden.has(chain)) {
-      newHidden.delete(chain);
-    } else {
-      newHidden.add(chain);
-    }
-    setHiddenChains(newHidden);
-
+  // Apply visibility to all chains in the 3D viewer.
+  // This walks the Molstar hierarchy and toggles visibility on components
+  // whose label matches a chain ID. Works with the prebuilt bundle because
+  // it uses the hierarchy manager's toggleVisibility API.
+  const applyChainVisibility = useCallback(async () => {
     if (!viewer) return;
     try {
       const plugin = viewer.plugin;
-      const structs = plugin.managers.structure.hierarchy.current.structures;
-      if (!structs || structs.length === 0) return;
+      const hierarchy = plugin.managers.structure.hierarchy.current;
+      if (!hierarchy || hierarchy.structures.length === 0) return;
 
-      // Build a MolScript expression to select this chain
-      const expr = (Q: any) => Q.struct.generator.atomGroups({
-        'chain-test': Q.core.rel.eq([
-          Q.struct.atomProperty.macromolecular.auth_asym_id
-            ? Q.struct.atomProperty.macromolecular.auth_asym_id()
-            : Q.struct.atomProperty.macromolecular.label_asym_id(),
-          chain,
-        ]),
-      });
+      // Collect all chain IDs from loaded entities
+      const allChains = entities.flatMap(e => e.chains);
 
-      // Use structureInteractivity to select the chain, then use
-      // the component manager's modifyBySelection to toggle visibility.
-      if (newHidden.has(chain)) {
-        // Hide: select the chain then hide its representation
-        plugin.managers.structure.selection.clear();
-        viewer.structureInteractivity({ expression: expr, action: ['select'] });
-        // Wait for selection to propagate
-        await new Promise(r => setTimeout(r, 50));
-        // Apply hide via modifyBySelection on each component
-        for (const struct of structs) {
-          const components = (struct as any)?.components;
-          if (components && Array.isArray(components)) {
-            for (const comp of components) {
-              try {
-                plugin.managers.structure.component.modifyBySelection(
-                  comp,
-                  (state: any) => { state.hidden = true; },
-                  // Pass the selection loci
-                  plugin.managers.structure.selection.getLoci(
-                    (struct as any)?.cell?.obj?.data
-                  )
-                );
-              } catch { /* ignore */ }
+      for (const structure of hierarchy.structures) {
+        const components = (structure as any)?.components;
+        if (!components || !Array.isArray(components)) continue;
+
+        for (const comp of components) {
+          try {
+            const label = (comp as any)?.cell?.obj?.label || '';
+            // Match labels like "Chain A", "Chain B", etc.
+            // Also match single-letter labels (default Molstar component names)
+            const chainMatch = label.match(/^Chain\s+(.+)$/) || (allChains.includes(label) ? [label, label] : null);
+            if (!chainMatch) continue;
+
+            const chainId = chainMatch[1];
+            // Determine if this chain should be visible
+            let shouldShow: boolean;
+            if (soloChain) {
+              shouldShow = chainId === soloChain;
+            } else {
+              shouldShow = chainVisibility[chainId] !== false;
             }
-          }
+
+            // Use the hierarchy manager's toggleVisibility API
+            plugin.managers.structure.hierarchy.toggleVisibility(
+              [comp],
+              shouldShow ? 'show' : 'hide'
+            );
+          } catch { /* ignore individual component errors */ }
         }
-      } else {
-        // Show: unhide the chain's representation
-        for (const struct of structs) {
-          const components = (struct as any)?.components;
-          if (components && Array.isArray(components)) {
-            for (const comp of components) {
-              try {
-                plugin.managers.structure.component.modifyBySelection(
-                  comp,
-                  (state: any) => { state.hidden = false; },
-                  // Pass the selection loci
-                  plugin.managers.structure.selection.getLoci(
-                    (struct as any)?.cell?.obj?.data
-                  )
-                );
-              } catch { /* ignore */ }
-            }
-          }
-        }
-        // Highlight for visual feedback
-        viewer.structureInteractivity({ expression: expr, action: ['highlight'] });
       }
+    } catch { /* ignore */ }
+  }, [viewer, entities, chainVisibility, soloChain]);
 
-      toast(`${newHidden.has(chain) ? 'Hidden' : 'Shown'} chain ${chain}`, 'info');
-    } catch {
-      toast('Visibility toggle failed', 'error');
-    }
-  }, [viewer, hiddenChains, toast]);
+  // Apply visibility whenever chainVisibility or soloChain changes
+  useEffect(() => {
+    if (!ready || !viewer) return;
+    applyChainVisibility();
+  }, [ready, viewer, applyChainVisibility]);
+
+  // Toggle a single chain's visibility (eye icon)
+  const toggleChainVisibility = useCallback((chain: string) => {
+    setChainVisibility(prev => ({
+      ...prev,
+      [chain]: prev[chain] === false ? true : false,
+    }));
+    // Clear solo mode when toggling individual chains
+    setSoloChain(null);
+    toast(`Chain ${chain} ${chainVisibility[chain] === false ? 'shown' : 'hidden'}`, 'info');
+  }, [chainVisibility, toast]);
+
+  // Solo a chain (show only this chain, hide all others)
+  const toggleSoloChain = useCallback((chain: string) => {
+    setSoloChain(prev => prev === chain ? null : chain);
+    toast(soloChain === chain ? `Exit solo mode` : `Solo: showing only chain ${chain}`, 'info');
+  }, [soloChain, toast]);
 
   // Toggle entity expansion
   const toggleEntity = useCallback((entityKey: string) => {
@@ -470,11 +460,13 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                               </div>
                               {/* Chain list */}
                               {entity.chains.map((chain) => {
-                                const isHidden = hiddenChains.has(chain);
+                                const isHidden = chainVisibility[chain] === false;
+                                const isSolo = soloChain === chain;
+                                const isDimmed = soloChain !== null && !isSolo;
                                 return (
                                   <div
                                     key={chain}
-                                    className="flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-claude-border-light/40 dark:hover:bg-[#2b2926]/40 transition-colors group"
+                                    className={`flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-claude-border-light/40 dark:hover:bg-[#2b2926]/40 transition-colors group ${isDimmed ? 'opacity-40' : ''}`}
                                   >
                                     <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
                                     <span className="font-mono text-xs font-semibold text-claude-text flex-1">
@@ -492,6 +484,15 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                                     >
                                       <Focus className="w-3 h-3" />
                                     </button>
+                                    {/* Solo button (show only this chain) */}
+                                    <button
+                                      onClick={() => toggleSoloChain(chain)}
+                                      className={`transition-opacity ${isSolo ? 'opacity-100 text-claude-accent' : 'opacity-0 group-hover:opacity-100 text-claude-text-muted hover:text-claude-accent'}`}
+                                      title={isSolo ? 'Exit solo mode' : 'Solo: show only this chain'}
+                                    >
+                                      <Layers className="w-3 h-3" />
+                                    </button>
+                                    {/* Visibility toggle (eye icon) */}
                                     <button
                                       onClick={() => toggleChainVisibility(chain)}
                                       className="text-claude-text-muted hover:text-claude-text transition-colors"

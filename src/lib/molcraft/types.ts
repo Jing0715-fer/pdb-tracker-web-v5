@@ -124,7 +124,7 @@ export interface MolstarPlugin {
       hierarchy: {
         current: {
           structures: Array<{
-            cell?: { obj?: { data?: unknown } };
+            cell?: { obj?: { data?: unknown; label?: string } };
             components?: Array<unknown>;
           }>;
           selection: { structures: unknown[] };
@@ -133,6 +133,7 @@ export interface MolstarPlugin {
         remove(refs: unknown): Promise<void>;
         updateCurrent(structureDef: unknown): Promise<void>;
         add(structure: unknown): Promise<void>;
+        toggleVisibility(refs: unknown[], action: 'show' | 'hide'): void;
       };
       component: {
         applyPreset(refs: unknown, preset: string): Promise<void>;
