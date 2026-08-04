@@ -233,39 +233,55 @@ function disableClickFocus(plugin: MolstarPlugin): () => void {
 }
 
 /**
- * Snapshot the current representation preset and switch to "atomic-detail"
- * (ball-and-stick) so individual atoms are clickable. Returns a restore
- * function that re-applies the original preset.
+ * Add a ball-and-stick representation ON TOP of the existing cartoon,
+ * without removing the cartoon. This makes individual atoms clickable
+ * while preserving the cartoon overview. Returns a restore function
+ * that removes the added representation.
  */
-function lockToSticks(plugin: MolstarPlugin): () => void {
+function overlaySticks(plugin: MolstarPlugin): () => void {
   try {
     const structs = plugin.managers.structure.hierarchy.current.structures;
     if (!structs || structs.length === 0) return () => {};
 
-    // Snapshot the first structure's current preset label (best-effort)
-    let originalPreset = "polymer-and-ligand";
-    try {
-      const first = structs[0] as any;
-      const components = first?.components;
-      if (components && components.length > 0) {
-        const repr = components[0]?.cell?.obj?.data?.representations?.[0];
-        // We can't easily read the preset name back, so default to
-        // polymer-and-ligand on restore. This is acceptable because the
-        // user can always re-pick from the Representation dropdown.
+    const addedRepresentations: Array<{ component: any; repr: any }> = [];
+
+    for (const struct of structs as any[]) {
+      const components = struct?.components ?? [];
+      for (const comp of components) {
+        try {
+          // Only add sticks to polymer components (skip water/ligands)
+          const label = comp?.cell?.obj?.label || "";
+          const tags = comp?.cell?.transform?.tags || [];
+          if (
+            !tags.includes("structure-component-static-polymer") &&
+            label !== "Polymer"
+          ) {
+            continue;
+          }
+          // Add a ball-and-stick representation to this component
+          const repr = plugin.managers.structure.component.addRepresentation(
+            comp,
+            "ball-and-stick"
+          );
+          if (repr) {
+            addedRepresentations.push({ component: comp, repr });
+          }
+        } catch {
+          // ignore individual component errors
+        }
       }
-    } catch {
-      // ignore
     }
 
-    // Apply atomic-detail (ball-and-stick) to all structures
-    const allStructs = Array.from(structs);
-    plugin.managers.structure.component.applyPreset(allStructs, "atomic-detail");
-
     return () => {
-      try {
-        plugin.managers.structure.component.applyPreset(allStructs, originalPreset);
-      } catch {
-        // ignore
+      for (const { component, repr } of addedRepresentations) {
+        try {
+          plugin.managers.structure.component.removeRepresentations(
+            [repr],
+            component
+          );
+        } catch {
+          // ignore
+        }
       }
     };
   } catch {
@@ -309,18 +325,22 @@ export function useAtomPicking() {
       const plugin = viewer.plugin;
       if (!plugin) return;
 
-    // 1. Lock representation to atomic-detail (ball-and-stick) for easy atom clicking
-    restoreReprRef.current = lockToSticks(plugin);
+    // 1. Overlay ball-and-stick on top of the existing cartoon so individual
+    //    atoms are clickable without losing the cartoon overview.
+    restoreReprRef.current = overlaySticks(plugin);
 
     // 2. Set granularity to element (atom-level)
     try {
       plugin.managers.interactivity.setProps({ granularity: "element" });
     } catch { /* ignore */ }
 
-    // 3. Clear any existing selection
+    // 3. Clear any existing selection AND highlights so that the user
+    //    starts fresh at 0/2. Without this, a previously-highlighted atom
+    //    (from hovering or a prior click) gets counted as the first pick.
     try {
       plugin.managers.structure.selection.clear();
       plugin.managers.interactivity.lociSelects.deselectAll();
+      plugin.managers.interactivity.lociHighlights.clearHighlights();
     } catch { /* ignore */ }
 
     // 4. Disable click-to-focus

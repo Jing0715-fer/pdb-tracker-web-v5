@@ -109,7 +109,7 @@ import { ApbsSurfaceChart } from "@/components/charts/apbs-surface-chart";
 import { ScreeningChart } from "@/components/charts/screening-chart";
 import { PocketDetectionChart } from "@/components/charts/pocket-detection-chart";
 
-type TabId = "structures" | "measure" | "analysis";
+type TabId = "structures" | "analysis";
 
 // Chart ID to label mapping (for preset display)
 const ALL_CHART_LABELS: Record<string, string> = {
@@ -176,13 +176,6 @@ export function AnalysisLeftPanel() {
           )}
         </button>
         <button
-          className={`sa-tab-btn ${tab === "measure" ? "sa-tab-active" : ""}`}
-          onClick={() => setTab("measure")}
-        >
-          <Ruler className="h-3 w-3" />
-          Measure
-        </button>
-        <button
           className={`sa-tab-btn ${tab === "analysis" ? "sa-tab-active" : ""}`}
           onClick={() => setTab("analysis")}
         >
@@ -193,7 +186,6 @@ export function AnalysisLeftPanel() {
 
       <ScrollArea className="sa-scroll flex-1 min-h-0">
         {tab === "structures" && <StructuresTab />}
-        {tab === "measure" && <MeasureTab />}
         {tab === "analysis" && <AnalysisTab />}
       </ScrollArea>
     </div>
@@ -894,46 +886,103 @@ function InteractionVizCard() {
   }, [activePdbId]);
 
   const fetchContacts = useCallback(async () => {
-    if (!activePdbId || !ligandCompId) return;
+    if (!activePdbId) return;
     setLoading(true);
     try {
-      const body: Record<string, unknown> = {
-        recipe: "ligand_interactions",
-        params: { ligandCompId: ligandCompId.toUpperCase(), cutoff: 5.0 },
+      const allContacts: typeof contacts = [];
+
+      // Helper to run a recipe and parse contacts
+      const runRecipe = async (recipe: string, params: Record<string, unknown>, typeLabel: string) => {
+        const body: Record<string, unknown> = { recipe, params };
+        if (isPdbId) {
+          body.pdbId = activePdbId;
+        } else if (hasFileCache) {
+          body.fileContent = structureFileCache[activePdbId].content;
+          body.fileFormat = structureFileCache[activePdbId].format;
+        } else {
+          return;
+        }
+        try {
+          const res = await fetch("/api/analyze/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) return;
+          const json = await res.json();
+          const data = json.data;
+          if (!data || data.error) return;
+
+          // Parse recipe-specific contact formats
+          if (recipe === "ligand_interactions") {
+            const rawContacts = data?.ligand_contacts ?? data?.contacts ?? [];
+            for (const c of rawContacts) {
+              allContacts.push({
+                chain1: String(c.chain ?? c.chain_id ?? ""),
+                residue1: `${c.ligand_resno ?? 1}${ligandCompId}`,
+                chain2: String(c.chain ?? c.chain_id ?? ""),
+                residue2: `${c.resno}${c.resname ?? c.residue_name ?? ""}`,
+                distance: Number(c.distance ?? 0),
+                type: String(c.type ?? typeLabel),
+              });
+            }
+          } else if (recipe === "hbonds") {
+            // hbonds recipe returns: {hbonds: [{resname1, resno1, chain1, atom1, resname2, resno2, chain2, atom2, distance}]}
+            const rawHbonds = data?.hbonds ?? [];
+            for (const c of rawHbonds) {
+              allContacts.push({
+                chain1: String(c.chain1 ?? c.chain ?? ""),
+                residue1: `${c.resno1 ?? c.resno ?? ""}${c.resname1 ?? c.resname ?? ""}`,
+                chain2: String(c.chain2 ?? c.chain ?? ""),
+                residue2: `${c.resno2 ?? c.resno ?? ""}${c.resname2 ?? c.resname ?? ""}`,
+                distance: Number(c.distance ?? 0),
+                type: "hbond",
+              });
+            }
+          } else if (recipe === "salt_bridges") {
+            const rawSb = data?.salt_bridges ?? data?.contacts ?? [];
+            for (const c of rawSb) {
+              allContacts.push({
+                chain1: String(c.chain1 ?? c.chain ?? ""),
+                residue1: `${c.resno1 ?? c.resno ?? ""}${c.resname1 ?? c.resname ?? ""}`,
+                chain2: String(c.chain2 ?? c.chain ?? ""),
+                residue2: `${c.resno2 ?? c.resno ?? ""}${c.resname2 ?? c.resname ?? ""}`,
+                distance: Number(c.distance ?? 0),
+                type: "salt-bridge",
+              });
+            }
+          } else if (recipe === "hydrophobic_contacts") {
+            const rawHp = data?.hydrophobic_contacts ?? data?.contacts ?? [];
+            for (const c of rawHp) {
+              allContacts.push({
+                chain1: String(c.chain1 ?? c.chain ?? ""),
+                residue1: `${c.resno1 ?? c.resno ?? ""}${c.resname1 ?? c.resname ?? ""}`,
+                chain2: String(c.chain2 ?? c.chain ?? ""),
+                residue2: `${c.resno2 ?? c.resno ?? ""}${c.resname2 ?? c.resname ?? ""}`,
+                distance: Number(c.distance ?? 0),
+                type: "hydrophobic",
+              });
+            }
+          }
+        } catch {
+          // ignore individual recipe errors
+        }
       };
-      if (isPdbId) {
-        body.pdbId = activePdbId;
-      } else if (hasFileCache) {
-        body.fileContent = structureFileCache[activePdbId].content;
-        body.fileFormat = structureFileCache[activePdbId].format;
-      } else {
-        setLoading(false);
-        return;
+
+      // Run all interaction recipes in parallel
+      const recipes: Array<[string, Record<string, unknown>, string]> = [];
+      if (ligandCompId) {
+        recipes.push(["ligand_interactions", { ligandCompId: ligandCompId.toUpperCase(), cutoff: 5.0 }, "ligand_contact"]);
       }
-      const res = await fetch("/api/analyze/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const data = json.data;
-        // The recipe returns ligand_contacts: [{resname, resno, chain, atom, distance, type, ligand_atom}]
-        const rawContacts = data?.ligand_contacts ?? data?.contacts ?? [];
-        const parsed = rawContacts.map((c: any) => ({
-          chain1: String(c.chain ?? c.chain_id ?? ""),
-          residue1: `${c.ligand_resno ?? 1}${ligandCompId}`,
-          chain2: String(c.chain ?? c.chain_id ?? ""),
-          residue2: `${c.resno}${c.resname ?? c.residue_name ?? ""}`,
-          distance: Number(c.distance ?? 0),
-          type: String(c.type ?? c.interaction_type ?? "contact"),
-        }));
-        setContacts(parsed);
-        setFetched(true);
-        toast(`Loaded ${parsed.length} interactions for ${ligandCompId}`, "success");
-      } else {
-        toast("Failed to load interactions", "error");
-      }
+      recipes.push(["hbonds", { chain1: "A", chain2: "A", distanceCutoff: 0.4, angleTolerance: 20.0 }, "hbond"]);
+      recipes.push(["salt_bridges", { chain1: "A", chain2: "A", cutoff: 4.0 }, "salt-bridge"]);
+      recipes.push(["hydrophobic_contacts", { chain1: "A", chain2: "A", cutoff: 4.5 }, "hydrophobic"]);
+
+      await Promise.all(recipes.map(([r, p, label]) => runRecipe(r, p, label)));
+
+      setContacts(allContacts);
+      setFetched(true);
+      toast(`Loaded ${allContacts.length} interactions`, "success");
     } catch {
       toast("Failed to load interactions", "error");
     } finally {
@@ -941,16 +990,16 @@ function InteractionVizCard() {
     }
   }, [activePdbId, ligandCompId, isPdbId, hasFileCache, structureFileCache, toast]);
 
-  // Auto-fetch when a structure + ligand is loaded
+  // Auto-fetch when a structure is loaded
   useEffect(() => {
-    if (activePdbId && ligandCompId && !fetched) {
+    if (activePdbId && !fetched) {
       fetchContacts();
     }
     if (!activePdbId) {
       setContacts([]);
       setFetched(false);
     }
-  }, [activePdbId, ligandCompId, fetched, fetchContacts]);
+  }, [activePdbId, fetched, fetchContacts]);
 
   const handleFocusContact = useCallback(async (contact: typeof contacts[0]) => {
     if (!viewer) return;

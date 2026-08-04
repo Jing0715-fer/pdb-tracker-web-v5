@@ -19,7 +19,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Microscope, Activity, Box, Sparkles, FileText } from "lucide-react";
+import { Microscope, Activity, Box, Sparkles, FileText, Ruler, Triangle } from "lucide-react";
 import { AnalysisToolbar } from "./analysis-toolbar";
 import { AnalysisLeftPanel } from "./analysis-left-panel";
 import { AnalysisRightPanel } from "./analysis-right-panel";
@@ -533,6 +533,24 @@ function ViewerOverlay({
   commandLog: Array<{ ts: number; type: string; ok: boolean; detail?: string }>;
   structureInfo: StructureInfo | null;
 }) {
+  const measureMode = useAppStore((s) => s.measureMode);
+  const setMeasureMode = useAppStore((s) => s.setMeasureMode);
+  const measureProgress = useAppStore((s) => s.measureProgress);
+  const measurements = useAppStore((s) => s.measurements);
+  const viewer = useAppStore((s) => s.viewer);
+  const clearMeasurements = useAppStore((s) => s.clearMeasurements);
+  const toast = useAppStore((s) => s.toast);
+
+  const handleClearAll = () => {
+    clearMeasurements();
+    if (viewer) {
+      try {
+        viewer.plugin.managers.structure.measurement.clear();
+      } catch { /* ignore */ }
+    }
+    toast("Measurements cleared", "info");
+  };
+
   if (structures.length === 0) {
     return (
       <div className="sa-viewer-overlay" style={{ top: 12, left: 12 }}>
@@ -598,6 +616,97 @@ function ViewerOverlay({
                 Chains: {activeStructure.metadata.chains.join(", ")}
               </span>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Top-right: measurement toolbar (replaces the old Measure tab) */}
+      <div
+        className="sa-viewer-overlay"
+        style={{ top: 12, right: 12, maxWidth: 220 }}
+      >
+        <div className="mb-1 flex items-center gap-1.5">
+          <Ruler className="h-3 w-3 text-claude-accent" />
+          <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+            Measure
+          </span>
+          {measurements.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              className="ml-auto text-[9px] text-claude-text-muted hover:text-destructive transition-colors"
+              title="Clear all measurements"
+            >
+              Clear ({measurements.length})
+            </button>
+          )}
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={() =>
+              setMeasureMode(measureMode === "distance" ? "off" : "distance")
+            }
+            className={`flex-1 flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
+              measureMode === "distance"
+                ? "bg-claude-accent text-white shadow-sm shadow-claude-accent/30"
+                : "bg-claude-surface/80 text-claude-text-muted border border-claude-border/40 hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
+            }`}
+            title="Click-to-pick distance measurement"
+          >
+            <Ruler className="h-2.5 w-2.5" />
+            Distance
+          </button>
+          <button
+            onClick={() =>
+              setMeasureMode(measureMode === "angle" ? "off" : "angle")
+            }
+            className={`flex-1 flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
+              measureMode === "angle"
+                ? "bg-claude-accent text-white shadow-sm shadow-claude-accent/30"
+                : "bg-claude-surface/80 text-claude-text-muted border border-claude-border/40 hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
+            }`}
+            title="Click-to-pick angle measurement"
+          >
+            <Triangle className="h-2.5 w-2.5" />
+            Angle
+          </button>
+        </div>
+        {measureMode !== "off" && (
+          <div className="mt-1 flex items-center gap-1.5 text-[9px] text-claude-accent bg-claude-accent-light/30 rounded px-1.5 py-1 border border-claude-accent/20">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-claude-accent opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-claude-accent" />
+            </span>
+            <span className="font-medium">Picking</span>
+            <span className="font-mono font-bold text-claude-accent bg-claude-accent-light/50 rounded px-1 py-0.5 text-[10px]">
+              {measureProgress.picked}/{measureProgress.needed}
+            </span>
+            <span className="text-claude-text-muted text-[9px]">
+              {measureProgress.picked === 0
+                ? `click ${measureProgress.needed === 2 ? "2 atoms" : "3 atoms"}`
+                : measureProgress.picked < measureProgress.needed
+                ? `${measureProgress.needed - measureProgress.picked} more…`
+                : "done"}
+            </span>
+            <button
+              onClick={() => setMeasureMode("off")}
+              className="ml-auto text-claude-text-muted hover:text-destructive transition-colors px-1"
+              title="Cancel picking"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        {measurements.length > 0 && (
+          <div className="mt-1 space-y-0.5 max-h-24 overflow-y-auto sa-scroll">
+            {measurements.map((m) => (
+              <div
+                key={m.id}
+                className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] hover:bg-claude-accent-light/50 group transition-colors"
+              >
+                <span className="font-mono text-claude-text truncate flex-1">{m.label}</span>
+                <span className="font-mono text-claude-accent font-semibold">{m.detail}</span>
+              </div>
+            ))}
           </div>
         )}
       </div>

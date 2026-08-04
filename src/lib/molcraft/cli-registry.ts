@@ -16,10 +16,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-// Ensure /home/z/.local/bin (pdb2pqr, propka) is in PATH for child processes
+// Ensure /home/z/.local/bin (pdb2pqr, propka) and the Python venv are in PATH
+// for child processes. The Next.js dev server may inherit a PATH that doesn't
+// include the venv where biopython/numpy are installed.
+const VENV_BIN = '/home/z/.venv/bin';
 const EXTRA_PATH = '/home/z/.local/bin';
 const ENV_PATH = process.env.PATH || '';
-const FULL_PATH = ENV_PATH.includes(EXTRA_PATH) ? ENV_PATH : `${EXTRA_PATH}:${ENV_PATH}`;
+// Build the full PATH, ensuring both the venv and extra bin are present
+const pathParts = ENV_PATH.split(':').filter(Boolean);
+const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
+const FULL_PATH = fullParts.join(':');
 const CHILD_ENV = { ...process.env, PATH: FULL_PATH };
 
 export interface CliAdapter {
@@ -435,25 +441,39 @@ print(json.dumps({
   {
     id: "sasa",
     label: "溶剂可及表面积 (SASA)",
-    description: "计算每条链的 SASA 和总 SASA",
-    requires: ["freesasa"],
+    description: "计算每条链的 SASA 和总 SASA（使用 biopython 的 Shrake-Rupley 算法）",
+    requires: ["biopython"],
     params: [],
     buildScript: (inputPath) => `
 import json
-import freesasa
-freesasa.setVerbosity(freesasa.silent)
-struct = freesasa.Structure("${inputPath}")
-result = freesasa.calc(struct)
-total = result.totalArea()
-chain_areas = {}
-residue_areas = result.residueAreas()
-for cid in residue_areas:
-    area = sum(r.total for r in residue_areas[cid].values())
-    chain_areas[cid] = round(float(area), 2)
+from Bio.PDB import PDBParser, ShrakeRupley, MMCIFParser
+# Parse structure
+try:
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("s", "${inputPath}")
+except Exception:
+    parser = MMCIFParser(QUIET=True)
+    structure = parser.get_structure("s", "${inputPath}")
+
+# Compute SASA using Shrake-Rupley algorithm
+sr = ShrakeRupley()
+sr.compute(structure, level="S")
+total_sasa = round(float(structure.sasa), 2)
+
+# Per-chain SASA
+chain_sasa = {}
+for model in structure:
+    for chain in model:
+        chain_total = 0.0
+        for residue in chain:
+            if hasattr(residue, "sasa"):
+                chain_total += residue.sasa
+        chain_sasa[chain.id] = round(float(chain_total), 2)
+
 print(json.dumps({
-    "total_sasa_A2": round(float(total), 2),
-    "chain_sasa_A2": chain_areas,
-    "n_chains": len(chain_areas),
+    "total_sasa_A2": total_sasa,
+    "chain_sasa_A2": chain_sasa,
+    "n_chains": len(chain_sasa),
 }, ensure_ascii=False, indent=2))
 `,
   },
@@ -2653,8 +2673,8 @@ print(json.dumps({
     id: "surface_residues",
     label: "表面残基 (Surface Residues)",
     description:
-      "识别表面暴露 vs 内部 buried 残基 (基于 SASA 阈值)",
-    requires: ["biopython", "freesasa"],
+      "识别表面暴露 vs 内部 buried 残基 (基于 SASA 阈值，使用 biopython Shrake-Rupley)",
+    requires: ["biopython"],
     params: [
       { name: "chain", type: "string", required: false, description: "链 ID（可选）" },
       { name: "threshold", type: "number", required: false, description: "SASA 阈值 (Å²)，默认 30" },
@@ -2663,29 +2683,24 @@ print(json.dumps({
       const chain = String(params.chain ?? "");
       const threshold = Number(params.threshold ?? 30);
       return `${RECIPE_HEADER}
-import freesasa
+from Bio.PDB import ShrakeRupley
 struct = load_structure("${inputPath}")
 chain_filter = "${chain}"
 threshold = ${threshold}
 model = next(iter(struct))
-# Compute SASA
-fs_struct = freesasa.Structure("${inputPath}")
-result = freesasa.calc(fs_struct)
-residue_areas = result.residueAreas()
+# Compute SASA using biopython's Shrake-Rupley
+sr = ShrakeRupley()
+sr.compute(struct, level="R")
 surface = []
 buried = []
-for cid in residue_areas:
-    if chain_filter and cid != chain_filter: continue
-    for resno_str, area in residue_areas[cid].items():
-        resno = int(resno_str)
-        sasa = float(area.total)
-        # Find residue name
-        resname = "?"
-        for res in model[cid] if cid in model else []:
-            if res.id[1] == resno:
-                resname = res.resname
-                break
-        entry = {'chain': cid, 'resno': resno, 'resname': resname, 'sasa_A2': round(sasa, 1)}
+for cid in model:
+    if chain_filter and cid.id != chain_filter: continue
+    for res in cid:
+        if not hasattr(res, 'sasa'): continue
+        sasa = float(res.sasa)
+        resname = res.resname
+        resno = res.id[1]
+        entry = {'chain': cid.id, 'resno': resno, 'resname': resname, 'sasa_A2': round(sasa, 1)}
         if sasa > threshold:
             surface.append(entry)
         else:
