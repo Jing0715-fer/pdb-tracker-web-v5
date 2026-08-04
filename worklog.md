@@ -3345,3 +3345,102 @@ Stage Summary:
    real user clicks)
 4. [P3] Apply the THEME_MAP pattern to other color-related Selects in the
    codebase (e.g. PdbViewerLite chain visibility dropdown)
+
+---
+Task ID: cron-review-57
+Agent: main
+Task: QA structure analysis + fix atom-picking bug + add measurement export
+
+Work Log:
+- Read worklog (molstar-fix-1: 8 broken APIs fixed, 7926 lines dead code removed)
+- Checked server status: production build running on port 3000, 30 structures in DB
+- Set up todos: QA atom-picking (P3 from last round), test other modes, add new features
+
+QA Findings:
+1. Atom-picking was BROKEN — clicks fired empty-loci (no atom hit)
+   Root cause: TWO MolstarViewer instances were mounted simultaneously
+   (desktop 3-pane via "hidden lg:flex" + mobile tabbed via "lg:hidden").
+   Even though CSS hid one, React mounted both, causing:
+   - Double subscription to plugin.behaviors.interaction.click
+   - canvas3d.input.width/height = 0x0 on the hidden instance
+   - Molstar's hit-test returned empty-loci for real clicks
+2. Weekly/Evaluation/Literature modes all working correctly (no regressions)
+3. molstar.js 404 after rebuild — need to copy public/ to standalone/
+
+Fixes implemented:
+1. structure-analysis-view.tsx: replaced CSS-only responsive layout
+   (hidden lg:flex / lg:hidden) with JS media-query check (isDesktop
+   state via window.matchMedia). Only ONE layout branch renders,
+   ensuring a single MolstarViewer mount. This is the critical fix.
+2. molstar-viewer.tsx: added periodic resize-sync interval (100ms for
+   up to 3s after mount) that calls handleResize() while
+   canvas3d.input.width/height is 0. Molstar's internal canvas sizing
+   races with React layout; ResizeObserver alone misses the initial
+   0→N transition.
+3. use-molstar-loader.ts: made script-tag injection a singleton
+   (window.__molstarScriptLoading flag). Previously two MolstarViewer
+   mounts each injected their own <script src=/molstar.js> tag.
+4. use-atom-picking.ts: documented the empty-loci early-return.
+
+New feature: Measurement Export (CSV/JSON)
+- analysis-left-panel.tsx MeasureTab: added handleExportCSV and
+  handleExportJSON functions that serialize the measurements array
+  and trigger a browser download.
+- CSV format: id,mode,label,detail,timestamp_iso
+- JSON format: { exportedAt, structure, measurements: [...] }
+- Filenames include active structure ID: measurements-1CBS-<timestamp>.csv
+- Added CSV/JSON/Clear buttons to the history header with icons
+  (FileSpreadsheet, FileJson, Trash2) and hover states.
+
+Styling polish:
+- Distance/Angle buttons: hover transitions (border-accent, bg-accent-light)
+  + active shadow glow (shadow-claude-accent/30)
+- Picking-mode indicator: replaced animate-pulse text with a pinging
+  dot (animate-ping) inside a bordered accent badge
+- Measurement history entries: animated slide-in/out via framer-motion
+  AnimatePresence (opacity, height, x offset)
+- Empty state: dashed border + ruler icon + helper text
+- Measurement detail values: font-semibold for emphasis
+
+Cleanup:
+- .gitignore: added /tool-results/ (164 QA screenshots were tracked)
+- git rm -r --cached tool-results/ (removed 8.6MB of QA artifacts)
+
+Verification (agent-browser + VLM):
+- ✅ Single msp-plugin instance (was 2)
+- ✅ canvas3d.input = 683x386 (was 0x0)
+- ✅ Click on atom → element-loci event fires (was empty-loci)
+- ✅ Pick 2 atoms → 'Distance measurement added' toast + dashed line
+  visible in 3D viewport connecting the two picked atoms
+- ✅ Click CSV export → 'Exported 2 measurement(s) as CSV' toast
+- ✅ Click JSON export → 'Exported 2 measurement(s) as JSON' toast
+- ✅ Picking mode: pulsing dot + orange border + crosshair cursor
+- ✅ Weekly mode: 10 structures in table
+- ✅ Evaluation mode: 3 targets with druggability scores
+- ✅ Literature mode: 8 PubMed articles
+- ESLint: 0 errors on all changed files
+- Production build: EXIT 0
+
+Stage Summary:
+- Critical atom-picking bug FIXED (was broken since the desktop+mobile
+  layout split — both mounted MolstarViewer, causing double subscription
+  and 0x0 canvas on the hidden instance)
+- New measurement export feature (CSV + JSON) with download
+- 5 styling polish items (button hovers, picking indicator, animated
+  history, empty state, export buttons)
+- All 4 modes verified working, 0 regressions
+- 3 commits pushed to GitHub (dedup fix, export feature, this round)
+
+### Next Priority Items:
+1. [P2] The measurement state (mm._state.distances) shows 0 even after
+   addDistance succeeds visually — investigate whether the prebuilt
+   bundle's measurement manager uses a different state tracking path.
+   The dashed line IS drawn in 3D, so the measurement works; the store
+   just doesn't reflect it. Low priority since the visual is correct.
+2. [P3] Add "Copy to clipboard" option for measurement values (in addition
+   to CSV/JSON download)
+3. [P3] Add a "snapshot gallery" — collect multiple viewport screenshots
+   into a session album that can be browsed/exported as a zip
+4. [P3] Apply the THEME_MAP pattern to PdbViewerLite's color dropdown
+5. [P3] Rebuild public/molstar.js bundle to include ComputeContacts +
+   InteractionsShape transforms (enables true show_interactions overlay)
