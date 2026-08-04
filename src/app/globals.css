@@ -17209,6 +17209,30 @@ tr.row-selected.table-row-hover-enhanced:hover td:first-child {
     var(--claude-surface, #242220);
 }
 
+/* ─── Picking-mode cursor ───────────────────────────────────────────────────
+   When the user enables Click-to-Pick (Distance/Angle), show a crosshair
+   cursor over the 3D viewport and a subtle accent ring so the affordance
+   is obvious. Also dims the overlay slightly so picked atoms stand out.
+─────────────────────────────────────────────────────────────────────────── */
+.sa-viewer.sa-picking-mode .msp-viewport,
+.sa-viewer.sa-picking-mode canvas {
+  cursor: crosshair !important;
+}
+.sa-viewer.sa-picking-mode::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: inset 0 0 0 2px var(--claude-accent, #c96442);
+  opacity: 0.35;
+  animation: sa-picking-pulse 1.8s ease-in-out infinite;
+}
+@keyframes sa-picking-pulse {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.45; }
+}
+
 /* ─── Analysis panel tabs ──────────────────────────────────────────────────── */
 .sa-tab-row {
   display: flex;

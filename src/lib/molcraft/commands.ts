@@ -297,11 +297,34 @@ export async function executeCommand(
 
       // ---------- Interactions ----------
       case "show_interactions": {
+        const radius = cmd.radius ?? 8;
         const targetLoci = await resolveInteractionsTarget(viewer, cmd.target);
         if (!targetLoci)
           return { ok: false, detail: "Could not resolve interactions target" };
-        await showInteractionsAround(plugin, targetLoci, cmd.radius ?? 8);
-        return { ok: true, detail: `Interactions within ${cmd.radius ?? 8} Å` };
+        await showInteractionsAround(plugin, targetLoci, radius);
+        // The prebuilt Molstar bundle does NOT export the ComputeContacts /
+        // InteractionsShape transforms, so we cannot draw a true interaction
+        // network overlay. Instead we (a) focus the camera on the target so
+        // the user sees the neighborhood and (b) leave a highlight on the
+        // picked residue. The backend /api/analyze/run "ligand_interactions"
+        // and "water_bridges" recipes compute the actual contacts list,
+        // which the corresponding charts render in the right panel.
+        try {
+          // Focus the structure's boundary so the surrounding residues are framed.
+          const sel = plugin.managers.structure.selection.getBoundary();
+          if (sel?.sphere) {
+            plugin.managers.camera.focusSphere({
+              center: sel.sphere.center,
+              radius: (sel.sphere.radius ?? 12) + radius,
+            });
+          }
+        } catch {
+          // ignore — focus is best-effort
+        }
+        return {
+          ok: true,
+          detail: `Showing neighborhood within ${radius} Å (use the Analysis charts for full contact lists)`,
+        };
       }
 
       case "clear_interactions":
@@ -310,19 +333,43 @@ export async function executeCommand(
 
       // ---------- Selection ----------
       case "select": {
-        let loci: unknown = null;
-        if (cmd.target === "all") {
-          loci = getFirstStructureData(plugin);
-        } else if (cmd.target === "ligand") {
-          loci = await lociFromResidue(viewer, {});
-        } else {
-          loci = await lociFromResidue(viewer, cmd.target);
-        }
-        if (!loci) return { ok: false, detail: "Selection target not found" };
         const action = cmd.action ?? "set";
+        // For "all" and "ligand" we use Molstar's MolScript expression
+        // generator via structureInteractivity — this is the documented
+        // way to select by predicate. The previous code passed a Structure
+        // object to selection.modify (type error) and matched the first
+        // residue for "ligand" (wrong).
+        if (cmd.target === "all") {
+          viewer.structureInteractivity({
+            expression: (Q: any) => Q.struct.generator.all(),
+            action: [action],
+          });
+          return { ok: true, detail: `Selected all (${action})` };
+        }
+        if (cmd.target === "ligand") {
+          // Non-polymer entities (ligands, cofactors, ions, waters).
+          // "label_comp_id" alone matches by name; instead select atoms
+          // whose residue is NOT part of a polymer (objectPrimitive = "atom").
+          viewer.structureInteractivity({
+            expression: (Q: any) =>
+              Q.struct.generator.atomGroups({
+                "residue-test": Q.core.logic.not([
+                  Q.core.rel.eq([
+                    Q.struct.atomProperty.macromolecular.objectPrimitive(),
+                    "polymer",
+                  ]),
+                ]),
+              }),
+            action: [action],
+          });
+          return { ok: true, detail: `Selected ligands (${action})` };
+        }
+        // Specific residue/chain/atom ref
+        const loci = await lociFromResidue(viewer, cmd.target);
+        if (!loci) return { ok: false, detail: "Selection target not found" };
         // @ts-expect-error: action is union-typed at runtime
         plugin.managers.structure.selection.modify(action, loci);
-        return { ok: true, detail: `Selected (${cmd.action ?? "set"})` };
+        return { ok: true, detail: `Selected (${action})` };
       }
 
       case "clear_selection":
@@ -725,20 +772,20 @@ async function lociFromResidue(
   const expr = (Q: any) => {
     const residueTests: any[] = [];
     if (ref.chain)
+      // Molstar's MolScript DSL exposes only snake_case atom-property
+      // accessors in the prebuilt bundle (auth_asym_id, label_asym_id, …).
+      // The previous ternary `auth_asym_id ? auth_asym_id() : label_asym_id()`
+      // was dead code — `auth_asym_id` is always truthy (a function ref).
       residueTests.push(
         Q.core.rel.eq([
-          Q.struct.atomProperty.macromolecular.auth_asym_id
-            ? Q.struct.atomProperty.macromolecular.auth_asym_id()
-            : Q.struct.atomProperty.macromolecular.label_asym_id(),
+          Q.struct.atomProperty.macromolecular.auth_asym_id(),
           ref.chain,
         ])
       );
     if (ref.resno !== undefined)
       residueTests.push(
         Q.core.rel.eq([
-          Q.struct.atomProperty.macromolecular.auth_seq_id
-            ? Q.struct.atomProperty.macromolecular.auth_seq_id()
-            : Q.struct.atomProperty.macromolecular.label_seq_id(),
+          Q.struct.atomProperty.macromolecular.auth_seq_id(),
           ref.resno,
         ])
       );
@@ -885,7 +932,10 @@ function setTrackballAnimate(
     if (name) {
       props.trackball.animate = { name, params };
     } else {
-      props.trackball.animate = { name: "off", params: {} };
+      // The "off" animation name doesn't exist in Molstar's registry
+      // (only "spin", "rock", "oscillate"). Setting `animate = undefined`
+      // is the documented way to stop the trackball animation.
+      props.trackball.animate = undefined;
     }
   });
 }
@@ -893,16 +943,14 @@ function setTrackballAnimate(
 /**
  * Rotate the camera to one of four canonical angles before capturing.
  *
- * Strategy: reset to the default orientation, then apply a yaw rotation around
- * the world Y axis (vertical) so that front/side/back face the camera. "top"
- * rotates the camera to look down the Y axis by tweaking the trackball's
- * `position`-like state via canvas3d.setProps.
+ * Strategy: reset to the default orientation, then rotate the camera position
+ * around the world up axis (Y) by the requested yaw angle. For "top", also
+ * tilt the camera to look down the Y axis.
  *
- * Since the prebuilt Molstar bundle doesn't expose `PluginContext.canvas3d.camera`
- * in a stable way, we approximate by setting the trackball's animate spin to a
- * one-shot rotation; for "top" we use a tilt via canvas3d props. This is a
- * best-effort implementation — when more camera API is available, replace with
- * direct camera matrix manipulation.
+ * This uses `canvas3d.camera.setState({ position, up, target })` directly —
+ * the documented Molstar camera API (verified in the prebuilt bundle). The
+ * previous implementation used a 250ms spin hack that landed at an
+ * indeterminate angle.
  */
 async function applyCameraAngle(
   plugin: MolstarPlugin,
@@ -917,45 +965,73 @@ async function applyCameraAngle(
   // Allow the reset to settle
   await new Promise((r) => setTimeout(r, 80));
 
-  const canvas3d = plugin.canvas3d as
-    | {
-        setProps?: (fn: (p: unknown) => void) => void;
-        camera?: { position?: unknown; up?: unknown; target?: unknown };
-      }
-    | undefined;
-  if (!canvas3d?.setProps) return;
-
-  // Apply a trackball spin to rotate around Y axis to the requested angle.
-  // "front" = no rotation (after reset)
-  // "side"  = 90° around Y
-  // "back"  = 180° around Y
-  // "top"   = look down the Y axis (rotate camera up over the structure)
   if (angle === "front") {
     // already front after reset
     return;
   }
 
-  // For non-front angles, use a brief spin animation that rotates the view.
-  // Since the trackball.animate spin rotates continuously, we use a one-shot
-  // approximation by setting the spin speed then clearing after a brief delay.
-  const spinDurationMs = 250;
-  setTrackballAnimate(plugin, "spin", { speed: angle === "top" ? 0.6 : 0.4 });
+  const canvas3d = plugin.canvas3d as
+    | {
+        setProps?: (fn: (p: unknown) => void) => void;
+        camera?: {
+          position?: { toArray?: () => [number, number, number] } | [number, number, number];
+          up?: { toArray?: () => [number, number, number] } | [number, number, number];
+          target?: { toArray?: () => [number, number, number] } | [number, number, number];
+          setState?: (s: { position?: [number, number, number]; up?: [number, number, number]; target?: [number, number, number] }) => void;
+        };
+      }
+    | undefined;
+  if (!canvas3d?.camera?.setState) return;
 
-  // After a brief moment, stop the spin. The viewer will have rotated ~90°.
-  await new Promise((r) => setTimeout(r, spinDurationMs));
-  setTrackballAnimate(plugin, undefined, {});
+  try {
+    // Extract current camera basis vectors as plain tuples.
+    const toTuple = (v: unknown): [number, number, number] => {
+      if (Array.isArray(v) && v.length === 3) return v as [number, number, number];
+      if (v && typeof v === "object" && "toArray" in v && typeof (v as { toArray: () => number[] }).toArray === "function") {
+        const a = (v as { toArray: () => number[] }).toArray();
+        return [a[0] || 0, a[1] || 0, a[2] || 0];
+      }
+      return [0, 0, 0];
+    };
+    const pos = toTuple(canvas3d.camera.position);
+    const tgt = toTuple(canvas3d.camera.target);
+    const up = toTuple(canvas3d.camera.up);
 
-  // For "top", also try to tilt the camera via canvas3d props (best-effort)
-  if (angle === "top") {
-    try {
-      canvas3d.setProps((p: unknown) => {
-        const props = p as { trackball?: { spin?: boolean; tilt?: number } };
-        // No stable API for tilt — leave as best-effort
-        void props;
-      });
-    } catch {
-      /* ignore */
+    // Direction from target to camera (the view vector).
+    const dx = pos[0] - tgt[0];
+    const dy = pos[1] - tgt[1];
+    const dz = pos[2] - tgt[2];
+
+    if (angle === "side") {
+      // Rotate 90° around the Y (up) axis: (x, z) -> (-z, x)
+      const newPos: [number, number, number] = [
+        tgt[0] - dz,
+        tgt[1] + dy,
+        tgt[2] + dx,
+      ];
+      canvas3d.camera.setState({ position: newPos, up, target: tgt });
+    } else if (angle === "back") {
+      // Rotate 180° around Y: (x, z) -> (-x, -z)
+      const newPos: [number, number, number] = [
+        tgt[0] - dx,
+        tgt[1] + dy,
+        tgt[2] - dz,
+      ];
+      canvas3d.camera.setState({ position: newPos, up, target: tgt });
+    } else if (angle === "top") {
+      // Look down the Y axis: place camera directly above the target,
+      // keeping the distance constant. Up vector points toward -Z (front).
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const newPos: [number, number, number] = [tgt[0], tgt[1] + dist, tgt[2]];
+      // "Up" should point toward the previous front direction (negative Z
+      // in Molstar's default). Project the old view direction onto XZ plane
+      // and use it as the new up.
+      const xzLen = Math.sqrt(dx * dx + dz * dz) || 1;
+      const newUp: [number, number, number] = [dx / xzLen, 0, dz / xzLen];
+      canvas3d.camera.setState({ position: newPos, up: newUp, target: tgt });
     }
+  } catch {
+    /* ignore — camera manipulation is best-effort */
   }
 }
 

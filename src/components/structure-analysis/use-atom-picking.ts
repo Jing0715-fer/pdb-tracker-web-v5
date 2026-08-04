@@ -61,12 +61,53 @@ function isLociEmpty(loci: unknown): boolean {
 
 /**
  * Get a readable label for a loci using Molstar's lociLabels manager.
+ *
+ * The prebuilt Molstar bundle's `LociLabelsManager` does NOT expose a
+ * `getLabel(loci)` method (the previous code silently fell back to "atom").
+ * Instead it exposes `getLabels()` which returns the labels currently being
+ * highlighted. We trigger a highlight on the picked loci, read the labels,
+ * then clear the highlight so the UI doesn't show a persistent marker.
  */
 function getLociLabel(plugin: MolstarPlugin, loci: unknown): string {
   try {
-    if (plugin.managers.lociLabels?.getLabel) {
-      return plugin.managers.lociLabels.getLabel(loci);
+    const ll = plugin.managers.lociLabels as
+      | { getLabels?: () => string[] | unknown[] }
+      | undefined;
+    const interactivity = plugin.managers.interactivity as
+      | {
+          lociHighlights?: { highlightOnly?: (args: { loci: unknown }) => void; clearHighlights?: () => void };
+        }
+      | undefined;
+    if (ll?.getLabels && interactivity?.lociHighlights?.highlightOnly) {
+      interactivity.lociHighlights.highlightOnly({ loci });
+      const labels = ll.getLabels() as string[];
+      if (interactivity.lociHighlights.clearHighlights) {
+        interactivity.lociHighlights.clearHighlights();
+      }
+      if (labels && labels.length > 0) {
+        // Labels can be rich text; coerce to string and trim.
+        const text = String(labels[0]).trim();
+        if (text) return text;
+      }
     }
+  } catch {
+    // ignore — fall through to loci-based fallback
+  }
+  // Fallback: best-effort label from the loci's first element residue info.
+  try {
+    const l = loci as {
+      elements?: Array<{
+        unit?: {
+          residues?: Array<{ name?: string; seq?: { auth_seq_number?: number } }>;
+        };
+      }>;
+    };
+    const el = l?.elements?.[0];
+    const residue = el?.unit?.residues?.[0];
+    if (residue?.name && residue?.seq?.auth_seq_number !== undefined) {
+      return `${residue.name} ${residue.seq.auth_seq_number}`;
+    }
+    if (residue?.name) return residue.name;
   } catch {
     // ignore
   }

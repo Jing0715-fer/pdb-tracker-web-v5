@@ -64,16 +64,9 @@ export function useAnalysisKeyboardShortcuts(enabled: boolean = true) {
 
         case "f":
           e.preventDefault();
-          try {
-            const plugin = viewer.plugin;
-            plugin.managers.structure.hierarchy.current.structures.forEach(
-              (s: any) => {
-                plugin.managers.camera.focusSpheres(s.components);
-              }
-            );
-          } catch {
-            executeCommand(viewer, { type: "reset_camera" }).catch(() => {});
-          }
+          // Reuse the same reset_camera path as the toolbar button so the
+          // behavior is consistent and we avoid the broken focusSpheres call.
+          executeCommand(viewer, { type: "reset_camera" }).catch(() => {});
           break;
 
         case "p":

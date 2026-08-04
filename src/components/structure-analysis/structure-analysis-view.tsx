@@ -72,6 +72,9 @@ export function StructureAnalysisView() {
   const viewer = useAppStore((s) => s.viewer);
   const ready = useAppStore((s) => s.ready);
   const pendingPdbId = useAppStore((s) => s.pendingPdbId);
+  // Picking-mode cursor: when the user enables Distance/Angle click-to-pick,
+  // show a crosshair cursor over the 3D viewport so the interaction is obvious.
+  const measureMode = useAppStore((s) => s.measureMode);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
 
   // Enable keyboard shortcuts when the viewer is ready
@@ -211,7 +214,7 @@ export function StructureAnalysisView() {
   }, []);
 
   const viewerBlock = (
-    <div className={`sa-viewer absolute inset-0 ${viewerBgDark ? "dark-viewer" : ""}`}>
+    <div className={`sa-viewer absolute inset-0 ${viewerBgDark ? "dark-viewer" : ""} ${measureMode !== "off" ? "sa-picking-mode" : ""}`}>
       <div className="sa-viewer-backdrop" />
       <MolstarViewer className="absolute inset-0" />
       <ViewerOverlay

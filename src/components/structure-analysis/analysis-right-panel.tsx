@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore } from "@/lib/molcraft/store";
+import { executeCommand } from "@/lib/molcraft/commands";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -439,33 +440,17 @@ function EntitiesTab({ structureInfo }: { structureInfo: StructureInfo | null })
 
   const focusChain = async (chain: string) => {
     if (!viewer) return;
-    try {
-      // Use Molstar's structureInteractivity to focus on a chain
-      viewer.structureInteractivity({
-        expression: (Q: any) => Q.struct.generator.atomGroups({
-          "chain-test": Q.core.rel.eq([Q.struct.atomProperty.macromolecular.authAsymId(), chain]),
-        }),
-        action: ["focus"],
-      });
-      toast(`Focused chain ${chain}`, "info");
-    } catch {
-      toast("Focus failed", "error");
-    }
+    // Route through executeCommand so we reuse the verified lociFromChain
+    // path (snake_case MolScript properties). Direct structureInteractivity
+    // with camelCase props (authAsymId) silently fails — see molstar docs.
+    const res = await executeCommand(viewer, { type: "focus_chain", chain });
+    toast(res.ok ? `Focused chain ${chain}` : `Chain ${chain} not found`, res.ok ? "info" : "error");
   };
 
   const focusLigand = async (compId: string) => {
     if (!viewer) return;
-    try {
-      viewer.structureInteractivity({
-        expression: (Q: any) => Q.struct.generator.atomGroups({
-          "residue-test": Q.core.rel.eq([Q.struct.atomProperty.macromolecular.labelCompId(), compId]),
-        }),
-        action: ["focus"],
-      });
-      toast(`Focused ligand ${compId}`, "info");
-    } catch {
-      toast("Focus failed", "error");
-    }
+    const res = await executeCommand(viewer, { type: "focus_ligand", compId });
+    toast(res.ok ? `Focused ligand ${compId}` : `Ligand ${compId} not found`, res.ok ? "info" : "error");
   };
 
   if (!structureInfo && fileChains.length === 0) {

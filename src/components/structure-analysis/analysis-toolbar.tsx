@@ -276,16 +276,12 @@ export function AnalysisToolbar() {
 
   const handleFitToScreen = async () => {
     if (!viewer) return;
-    try {
-      const plugin = viewer.plugin;
-      plugin.managers.structure.hierarchy.current.structures.forEach((s: any) => {
-        plugin.managers.camera.focusSpheres(s.components);
-      });
-      toast("Fit to screen", "info");
-    } catch {
-      // Fallback: reset camera
-      await executeCommand(viewer, { type: "reset_camera" });
-    }
+    // `reset_camera` fits all structures into view with proper framing.
+    // The previous direct call to `camera.focusSpheres(s.components)` was
+    // broken — focusSpheres requires a mapper function as its 2nd arg and
+    // would throw, silently falling back to reset anyway.
+    await executeCommand(viewer, { type: "reset_camera" });
+    toast("Fit to screen", "info");
   };
 
   const handleRepresentationChange = async (preset: string) => {
@@ -306,8 +302,24 @@ export function AnalysisToolbar() {
 
   const handleColorSchemeChange = async (theme: string) => {
     if (!viewer || structures.length === 0) return;
+    // The UI uses short labels ("bfactor", "spectrum", "secondary", …) but
+    // Molstar's color theme registry uses canonical names ("uncertainty",
+    // "sequence-id", "secondary-structure", …). Map before dispatching.
+    const THEME_MAP: Record<string, string> = {
+      chain: "chain",
+      element: "element-symbol",
+      secondary: "secondary-structure",
+      spectrum: "sequence-id",
+      bfactor: "uncertainty",
+      residue: "residue-name",
+      charge: "partial-charge",
+      uniform: "uniform",
+      hydrophobicity: "hydrophobicity",
+      occupancy: "occupancy",
+    };
+    const canonical = THEME_MAP[theme] ?? theme;
     try {
-      await executeCommand(viewer, { type: "set_color_theme", theme, structures: "all" });
+      await executeCommand(viewer, { type: "set_color_theme", theme: canonical, structures: "all" });
       structures.forEach((s) => {
         useAppStore.getState().updateStructureStyle(s.id, {
           colorScheme: theme as any,
@@ -433,22 +445,28 @@ export function AnalysisToolbar() {
       {/* Color scheme quick-switcher */}
       {structures.length > 0 && (
         <Select onValueChange={handleColorSchemeChange} value="">
-          <SelectTrigger className="h-8 w-[100px] text-xs">
+          <SelectTrigger className="h-8 w-[110px] text-xs" title="Color scheme">
             <Palette className="h-3 w-3 mr-1" />
             <SelectValue placeholder="Color" />
           </SelectTrigger>
           <SelectContent>
             {[
-              { value: "chain", label: "By Chain" },
-              { value: "element", label: "By Element" },
-              { value: "secondary", label: "By Secondary" },
-              { value: "spectrum", label: "Spectrum" },
-              { value: "bfactor", label: "By B-factor" },
-              { value: "residue", label: "By Residue" },
-              { value: "charge", label: "By Charge" },
+              { value: "chain", label: "By Chain", swatch: "linear-gradient(90deg,#e41a1c,#377eb8,#4daf4a,#984ea3,#ff7f00)" },
+              { value: "element", label: "By Element", swatch: "linear-gradient(90deg,#909090,#ff2d2d,#3050f8,#ffff30)" },
+              { value: "secondary", label: "By Secondary", swatch: "linear-gradient(90deg,#ff0080,#00ffff,#a0a0a0)" },
+              { value: "spectrum", label: "Spectrum (seq.)", swatch: "linear-gradient(90deg,#313695,#fee090,#a50026)" },
+              { value: "bfactor", label: "By B-factor", swatch: "linear-gradient(90deg,#313695,#abd9e9,#fdae61,#a50026)" },
+              { value: "residue", label: "By Residue", swatch: "linear-gradient(90deg,#1f77b4,#ff7f0e,#2ca02c,#d62728,#9467bd)" },
+              { value: "charge", label: "By Charge", swatch: "linear-gradient(90deg,#0000ff,#ffffff,#ff0000)" },
             ].map((c) => (
               <SelectItem key={c.value} value={c.value} className="text-xs">
-                {c.label}
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="inline-block h-2.5 w-4 rounded-sm border border-black/10"
+                    style={{ background: c.swatch }}
+                  />
+                  {c.label}
+                </span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -463,7 +481,7 @@ export function AnalysisToolbar() {
           className="h-8 px-2 text-xs"
           disabled={!viewer}
           onClick={handleFitToScreen}
-          title="Fit to screen"
+          title="Fit to screen (F)"
         >
         <Maximize2 className="h-3.5 w-3.5" />
       </Button>
@@ -473,7 +491,7 @@ export function AnalysisToolbar() {
         className="h-8 px-2 text-xs"
         disabled={!viewer}
         onClick={handleResetCamera}
-        title="Reset camera"
+        title="Reset camera (R)"
       >
         <RotateCcw className="h-3.5 w-3.5" />
       </Button>
@@ -483,7 +501,7 @@ export function AnalysisToolbar() {
         className="h-8 px-2 text-xs"
         disabled={!viewer}
         onClick={handleToggleSpin}
-        title={spinning ? "Stop spin" : "Start spin"}
+        title={spinning ? "Stop spin (S)" : "Start spin (S)"}
       >
         {spinning ? (
           <Pause className="h-3.5 w-3.5" />
