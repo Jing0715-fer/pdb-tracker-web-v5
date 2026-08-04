@@ -862,6 +862,7 @@ function InteractionVizCard() {
   const toast = useAppStore((s) => s.toast);
   const activeStructureId = useAppStore((s) => s.activeStructureId);
   const structures = useAppStore((s) => s.structures);
+  const structureFileCache = useAppStore((s) => s.structureFileCache);
   const [contacts, setContacts] = useState<Array<{
     chain1: string; residue1: string; chain2: string; residue2: string; distance: number; type: string;
   }>>([]);
@@ -869,18 +870,67 @@ function InteractionVizCard() {
   const [fetched, setFetched] = useState(false);
   const [filter, setFilter] = useState("");
 
-  const activePdbId = structures.find((s) => s.id === activeStructureId)?.id;
+  const activeStruct = structures.find((s) => s.id === activeStructureId);
+  const activePdbId = activeStruct?.id;
+  const isPdbId = activePdbId && /^[a-zA-Z0-9]{4}$/.test(activePdbId);
+  const hasFileCache = activePdbId && structureFileCache?.[activePdbId];
+
+  // Detect ligand compId from the structure's metadata or RCSB data
+  const [ligandCompId, setLigandCompId] = useState<string>("");
+  useEffect(() => {
+    if (!activePdbId) { setLigandCompId(""); return; }
+    // Try to fetch ligand info from the metadata API
+    fetch(`/api/analyze/metadata?id=${activePdbId}&interfaces=0`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const nps = data?.nonpolymers ?? [];
+        if (nps.length > 0) {
+          // Pick the first non-polymer that's not water
+          const lig = nps.find((n: any) => n.compId && n.compId !== "HOH") ?? nps[0];
+          if (lig?.compId) setLigandCompId(lig.compId);
+        }
+      })
+      .catch(() => {});
+  }, [activePdbId]);
 
   const fetchContacts = useCallback(async () => {
-    if (!activePdbId) return;
+    if (!activePdbId || !ligandCompId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/contacts/${activePdbId}`);
+      const body: Record<string, unknown> = {
+        recipe: "ligand_interactions",
+        params: { ligandCompId: ligandCompId.toUpperCase(), cutoff: 5.0 },
+      };
+      if (isPdbId) {
+        body.pdbId = activePdbId;
+      } else if (hasFileCache) {
+        body.fileContent = structureFileCache[activePdbId].content;
+        body.fileFormat = structureFileCache[activePdbId].format;
+      } else {
+        setLoading(false);
+        return;
+      }
+      const res = await fetch("/api/analyze/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       if (res.ok) {
-        const data = await res.json();
-        setContacts(data.contacts ?? []);
+        const json = await res.json();
+        const data = json.data;
+        // The recipe returns ligand_contacts: [{resname, resno, chain, atom, distance, type, ligand_atom}]
+        const rawContacts = data?.ligand_contacts ?? data?.contacts ?? [];
+        const parsed = rawContacts.map((c: any) => ({
+          chain1: String(c.chain ?? c.chain_id ?? ""),
+          residue1: `${c.ligand_resno ?? 1}${ligandCompId}`,
+          chain2: String(c.chain ?? c.chain_id ?? ""),
+          residue2: `${c.resno}${c.resname ?? c.residue_name ?? ""}`,
+          distance: Number(c.distance ?? 0),
+          type: String(c.type ?? c.interaction_type ?? "contact"),
+        }));
+        setContacts(parsed);
         setFetched(true);
-        toast(`Loaded ${data.contacts?.length ?? 0} interactions`, "success");
+        toast(`Loaded ${parsed.length} interactions for ${ligandCompId}`, "success");
       } else {
         toast("Failed to load interactions", "error");
       }
@@ -889,50 +939,56 @@ function InteractionVizCard() {
     } finally {
       setLoading(false);
     }
-  }, [activePdbId, toast]);
+  }, [activePdbId, ligandCompId, isPdbId, hasFileCache, structureFileCache, toast]);
 
-  // Auto-fetch when a structure is loaded
+  // Auto-fetch when a structure + ligand is loaded
   useEffect(() => {
-    if (activePdbId && /^[a-zA-Z0-9]{4}$/.test(activePdbId) && !fetched) {
+    if (activePdbId && ligandCompId && !fetched) {
       fetchContacts();
     }
     if (!activePdbId) {
       setContacts([]);
       setFetched(false);
     }
-  }, [activePdbId, fetched, fetchContacts]);
+  }, [activePdbId, ligandCompId, fetched, fetchContacts]);
 
   const handleFocusContact = useCallback(async (contact: typeof contacts[0]) => {
     if (!viewer) return;
     try {
       // Parse residue info: "123ALA" → resno=123, compId=ALA
-      const m1 = contact.residue1.match(/^(\d+)([A-Z]{3})/);
       const m2 = contact.residue2.match(/^(\d+)([A-Z]{3})/);
-      if (!m1 || !m2) {
+      const m1 = contact.residue1.match(/^(\d+)([A-Z]{3})/);
+      if (!m2) {
         toast("Could not parse residue info", "error");
         return;
       }
-      const resno1 = parseInt(m1[1]);
-      const compId1 = m1[2];
       const resno2 = parseInt(m2[1]);
       const compId2 = m2[2];
 
-      // Draw a distance line between the two residues
-      await executeCommand(viewer, {
-        type: "measure_distance",
-        a: { chain: contact.chain1, resno: resno1, compId: compId1 },
-        b: { chain: contact.chain2, resno: resno2, compId: compId2 },
-      });
-
-      // Focus on the first residue
+      // Focus on the protein residue
       await executeCommand(viewer, {
         type: "focus_residue",
-        chain: contact.chain1,
-        resno: resno1,
-        compId: compId1,
+        chain: contact.chain2,
+        resno: resno2,
+        compId: compId2,
       });
 
-      toast(`${compId1}${resno1} (${contact.chain1}) ↔ ${compId2}${resno2} (${contact.chain2})`, "info");
+      // Try to draw a distance line if we have both residues
+      if (m1) {
+        const resno1 = parseInt(m1[1]);
+        const compId1 = m1[2];
+        try {
+          await executeCommand(viewer, {
+            type: "measure_distance",
+            a: { chain: contact.chain1, resno: resno1, compId: compId1 },
+            b: { chain: contact.chain2, resno: resno2, compId: compId2 },
+          });
+        } catch {
+          // Distance line is best-effort — focus is the primary action
+        }
+      }
+
+      toast(`${compId2}${resno2} (${contact.chain2})`, "info");
     } catch (err) {
       toast("Focus failed", "error");
     }

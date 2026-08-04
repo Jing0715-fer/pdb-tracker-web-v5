@@ -64,70 +64,106 @@ function isLociEmpty(loci: unknown): boolean {
  * Get a readable label for a picked atom by directly introspecting the
  * StructureElement.Loci's first element.
  *
- * The loci shape (from Molstar's click event) is:
+ * Verified loci shape (from the prebuilt bundle's click event):
  *   {
  *     kind: "element-loci",
  *     structure: Structure,
- *     elements: Array<{ unit: Unit; indices: OrderedSet<number> }>
+ *     elements: Array<{ unit: Unit; indices: number | Int32Array }>
  *   }
  *
- * Each `unit` has:
- *   - `model.atomicHierarchy.residueName: string[]`  (3-letter codes)
- *   - `model.atomicHierarchy.authSeqId: number[]`
- *   - `model.atomicHierarchy.label_asym_id: string[]`  (chain ID)
- *   - `residueIndex(element)`: the residue row for a given atom
- *
- * We also try `lociLabels.getLabels()` as a secondary path (after a
- * microtask delay for the highlight to propagate), but the direct
- * introspection is the primary, reliable path.
+ * `unit` has:
+ *   - `residueIndex`: Int32Array (atom index → residue index)
+ *   - `chainIndex`: Int32Array (atom index → chain index)
+ *   - `model.atomicHierarchy.atoms.label_comp_id`: { value(i) → "PRO" }
+ *   - `model.atomicHierarchy.atoms.label_atom_id`: { value(i) → "CA" }
+ *   - `model.atomicHierarchy.residues.auth_seq_id`: { value(i) → 1 }
+ *   - `model.atomicHierarchy.chains.auth_asym_id`: { value(i) → "A" }
  */
 function getLociLabel(plugin: MolstarPlugin, loci: unknown): string {
-  // Primary: direct StructureElement.Loci introspection
   try {
     const l = loci as {
       elements?: Array<{
         unit?: {
-          residueIndex?: (idx: number) => number;
+          residueIndex?: Int32Array;
+          chainIndex?: Int32Array;
           model?: {
             atomicHierarchy?: {
-              residueName?: { label?: string; value?: (i: number) => string } | string[];
-              authSeqId?: { label?: string; value?: (i: number) => number } | number[];
-              label_asym_id?: { label?: string; value?: (i: number) => string } | string[];
+              atoms?: {
+                label_comp_id?: { value?: (i: number) => string };
+                label_atom_id?: { value?: (i: number) => string };
+              };
+              residues?: {
+                auth_seq_id?: { value?: (i: number) => number };
+              };
+              chains?: {
+                auth_asym_id?: { value?: (i: number) => string };
+                label_asym_id?: { value?: (i: number) => string };
+              };
             };
           };
         };
-        indices?: { size: number; valueAt: (i: number) => number } | number[];
+        indices?: number | Int32Array | { size: number; valueAt: (i: number) => number };
       }>;
     };
     const el = l?.elements?.[0];
-    if (el?.unit && el?.indices) {
-      const unit = el.unit as Record<string, unknown>;
-      const indices = el.indices as { size: number; valueAt: (i: number) => number } | number[];
-      const atomIdx = Array.isArray(indices) ? indices[0] : indices.valueAt(0);
-      if (atomIdx !== undefined && typeof unit.residueIndex === "function") {
-        const resIdx = (unit.residueIndex as (i: number) => number)(atomIdx);
-        const hierarchy = (unit.model as any)?.atomicHierarchy;
-        if (hierarchy) {
-          const getVal = (col: any, idx: number) => {
-            if (!col) return undefined;
-            if (typeof col.value === "function") return col.value(idx);
-            if (typeof col.valueAt === "function") return col.valueAt(idx);
-            if (Array.isArray(col)) return col[idx];
-            return undefined;
-          };
-          const resName = getVal(hierarchy.residueName, resIdx);
-          const seqId = getVal(hierarchy.authSeqId, resIdx);
-          const chain = getVal(hierarchy.label_asym_id, resIdx);
-          if (resName && seqId !== undefined && chain) {
-            return `${resName} ${chain}${seqId}`;
-          }
-          if (resName && seqId !== undefined) {
-            return `${resName} ${seqId}`;
-          }
-          if (resName) return resName;
-        }
+    if (!el?.unit) return "atom";
+    const unit = el.unit as any;
+    const indices = el.indices as any;
+
+    // Resolve the atom index.
+    // In the prebuilt bundle, `el.indices` is stored as a float64-encoded
+    // packed reference: the low 32 bits contain the atom index. We unpack
+    // it via a Float64Array → Uint32Array view.
+    let atomIdx: number;
+    if (typeof indices === "number") {
+      const buf = new ArrayBuffer(8);
+      const f64 = new Float64Array(buf);
+      const u32 = new Uint32Array(buf);
+      f64[0] = indices;
+      atomIdx = u32[0];
+    } else if (indices?.valueAt) {
+      atomIdx = indices.valueAt(0);
+    } else if (Array.isArray(indices) || indices?.length !== undefined) {
+      atomIdx = indices[0];
+    } else {
+      return "atom";
+    }
+
+    const ri = unit.residueIndex;
+    const ci = unit.chainIndex;
+    if (!ri || typeof atomIdx !== "number") return "atom";
+
+    const resIdx = ri[atomIdx];
+    if (resIdx === undefined) return "atom";
+
+    const hierarchy = unit.model?.atomicHierarchy;
+    if (!hierarchy) return "atom";
+
+    const atoms = hierarchy.atoms;
+    const residues = hierarchy.residues;
+    const chains = hierarchy.chains;
+
+    const resName = atoms?.label_comp_id?.value?.(resIdx);
+    const atomName = atoms?.label_atom_id?.value?.(resIdx);
+    const seqId = residues?.auth_seq_id?.value?.(resIdx);
+
+    // Chain index: `chainIndex` is an Int32Array keyed by atom index
+    let chainId: string | undefined;
+    if (ci) {
+      const chainIdx = ci[atomIdx];
+      if (chainIdx !== undefined) {
+        chainId = chains?.auth_asym_id?.value?.(chainIdx)
+          ?? chains?.label_asym_id?.value?.(chainIdx);
       }
     }
+
+    // Build label: "PRO A1 CA" or "PRO 1 CA" or "PRO A1" etc.
+    const parts: string[] = [];
+    if (resName) parts.push(resName);
+    if (chainId) parts.push(chainId);
+    if (seqId !== undefined) parts.push(String(seqId));
+    if (atomName) parts.push(atomName);
+    if (parts.length > 0) return parts.join(" ");
   } catch {
     // fall through to secondary path
   }

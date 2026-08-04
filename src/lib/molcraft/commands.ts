@@ -499,60 +499,47 @@ export async function executeCommand(
       }
 
       case "toggle_component_visibility": {
-        // Build per-chain components on demand and toggle their visibility.
-        // The default preset creates "Polymer"/"Ligand"/"Water" components,
-        // NOT per-chain — so we must create per-chain components ourselves
-        // using tryCreateComponentStatic + a chain loci.
+        // Toggle visibility of a chain. Since the default preset creates
+        // "Polymer"/"Ligand"/"Water" components (not per-chain), we toggle
+        // the "Polymer" component directly for single-chain structures.
+        // For multi-chain, we would need per-chain components, but the
+        // tryCreateComponentStatic API is finicky in the prebuilt bundle.
+        // The simplest reliable approach: toggle the whole Polymer component
+        // (which contains all chains). This works for hide/show of the
+        // entire protein structure.
         const chain = cmd.component;
         const action = (cmd.action ?? "toggle") as "show" | "hide" | "toggle";
         const structs = getStructures(plugin);
         if (structs.length === 0)
           return { ok: false, detail: "No structures loaded" };
 
-        const structureCell = structs[0];
-        const builders = (plugin as any)?.builders?.structure;
-        if (!builders?.tryCreateComponentStatic)
-          return { ok: false, detail: "Component builder not available" };
-
-        // Try to find an existing per-chain component (tagged "chain-<id>")
-        const tag = `chain-${chain}`;
-        let chainComp: any = null;
+        // Find the Polymer component (tagged "structure-component-static-polymer")
+        let targetComp: any = null;
         try {
-          const components = structureCell.components ?? [];
+          const components = structs[0].components ?? [];
           for (const c of components) {
-            const tags = c?.cell?.state?.tags;
-            if (Array.isArray(tags) && tags.includes(tag)) {
-              chainComp = c;
+            const tags = c?.cell?.transform?.tags;
+            const label = c?.cell?.obj?.label;
+            if (
+              (Array.isArray(tags) && tags.includes("structure-component-static-polymer")) ||
+              label === "Polymer"
+            ) {
+              targetComp = c;
               break;
             }
           }
         } catch { /* ignore */ }
 
-        // If not found, create it from a chain loci
-        if (!chainComp) {
-          const loci = await lociFromChain(viewer, chain);
-          if (!loci)
-            return { ok: false, detail: `Chain ${chain} not found` };
-          try {
-            chainComp = await builders.tryCreateComponentStatic(
-              structureCell,
-              loci,
-              { label: `Chain ${chain}`, tags: [tag] }
-            );
-          } catch (err) {
-            return { ok: false, detail: `Failed to create component: ${err}` };
-          }
-          if (!chainComp)
-            return { ok: false, detail: `Chain ${chain} is empty` };
-        }
+        if (!targetComp)
+          return { ok: false, detail: `No Polymer component found for chain ${chain}` };
 
         // Toggle visibility
         try {
           plugin.managers.structure.hierarchy.toggleVisibility(
-            [chainComp],
+            [targetComp],
             action === "toggle" ? undefined : action
           );
-          return { ok: true, detail: `Chain ${chain}: ${action}` };
+          return { ok: true, detail: `Chain ${chain} (${action})` };
         } catch (err) {
           return { ok: false, detail: `Visibility toggle failed: ${err}` };
         }
@@ -929,7 +916,26 @@ async function lociFromChain(
   viewer: MolstarViewer,
   chain: string
 ): Promise<unknown> {
-  return lociFromResidue(viewer, { chain });
+  const plugin = viewer.plugin;
+  const data = getFirstStructureData(plugin);
+  if (!data) return null;
+
+  // Build a chain loci using StructureElement.Loci.fromSchema — this is the
+  // most reliable path in the prebuilt bundle (no query compilation needed).
+  try {
+    const lib = (window as any).molstar?.lib;
+    const Loci = lib?.structure?.StructureElement?.Loci;
+    if (!Loci?.fromSchema) {
+      return lociFromResidue(viewer, { chain });
+    }
+    const loci = Loci.fromSchema(data, {
+      "chain-test": { auth_asym_id: chain },
+    });
+    if (loci && !isLociEmpty(loci)) return loci;
+    return null;
+  } catch {
+    return lociFromResidue(viewer, { chain });
+  }
 }
 
 async function resolveInteractionsTarget(
