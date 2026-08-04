@@ -89,6 +89,8 @@ export function StructureAnalysisView() {
 
   const setPendingPdbId = useAppStore((s) => s.setPendingPdbId);
   const addStructure = useAppStore((s) => s.addStructure);
+  const setStructureFileCache = useAppStore((s) => s.setStructureFileCache);
+  const setActiveStructure = useAppStore((s) => s.setActiveStructure);
   const toast = useAppStore((s) => s.toast);
   const logCommand = useAppStore((s) => s.logCommand);
 
@@ -100,6 +102,7 @@ export function StructureAnalysisView() {
     // Don't re-load if already loaded
     if (structures.some((s) => s.id === id)) {
       setPendingPdbId(null);
+      setActiveStructure(id);
       return;
     }
     let cancelled = false;
@@ -116,6 +119,9 @@ export function StructureAnalysisView() {
         } catch {}
         let metadata: LoadedStructure["metadata"] | undefined;
         if (pdbText) {
+          // Cache the PDB text so interaction charts (water bridges, etc.)
+          // can analyze it without requiring a separate file upload.
+          setStructureFileCache(id, pdbText, "pdb");
           try {
             const parsed = parsePdb(pdbText);
             metadata = {
@@ -134,6 +140,8 @@ export function StructureAnalysisView() {
           pdbText: pdbText || undefined,
           metadata,
         });
+        // Explicitly set as active structure so left panel + charts pick it up
+        setActiveStructure(id);
         logCommand({ type: "load_pdb", ok: true, detail: id });
         toast(`Loaded ${id}`, "success");
       } catch (err) {

@@ -21,11 +21,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { MolstarViewer } from '@/components/molcraft-molstar/molstar-viewer';
 import { useAppStore } from '@/lib/molcraft/store';
 import { executeCommand } from '@/lib/molcraft/commands';
+import { useAtomPicking } from '@/components/structure-analysis/use-atom-picking';
 import {
   Loader2, Box, ChevronDown, Eye, EyeOff, Layers, Focus,
-  Dna, Pill, Droplet,
+  Dna, Pill, Droplet, Ruler, Triangle, MousePointerClick, X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -66,12 +68,20 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   const viewer = useAppStore((s) => s.viewer);
   const ready = useAppStore((s) => s.ready);
   const toast = useAppStore((s) => s.toast);
+  const measureMode = useAppStore((s) => s.measureMode);
+  const setMeasureMode = useAppStore((s) => s.setMeasureMode);
+  const measurements = useAppStore((s) => s.measurements);
+  const addMeasurement = useAppStore((s) => s.addMeasurement);
+  const clearMeasurements = useAppStore((s) => s.clearMeasurements);
   const loadedRef = useRef<string | null>(null);
   const [entities, setEntities] = useState<EntityData[]>([]);
   const [ligands, setLigands] = useState<LigandData[]>([]);
   const [entityLoading, setEntityLoading] = useState(false);
   const [hiddenChains, setHiddenChains] = useState<Set<string>>(new Set());
   const [expandedEntities, setExpandedEntities] = useState<Set<string>>(new Set());
+
+  // Enable Molcraft-style click-to-pick atom selection for distance/angle measurement
+  useAtomPicking();
 
   // Load the PDB structure when the viewer is ready and pdbId changes
   useEffect(() => {
@@ -283,6 +293,17 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
 
   const hasEntityData = entities.length > 0 || ligands.length > 0;
 
+  // Clear all measurements + Molstar measurement manager
+  const handleClearMeasurements = useCallback(() => {
+    clearMeasurements();
+    if (viewer) {
+      try {
+        viewer.plugin.managers.structure.measurement.clear();
+      } catch { /* ignore */ }
+    }
+    toast('Measurements cleared', 'info');
+  }, [viewer, clearMeasurements, toast]);
+
   return (
     <div className={className} style={{ display: 'flex', width: '100%', height: '100%' }}>
       {/* 3D Viewer — takes remaining space */}
@@ -299,10 +320,83 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
             </div>
           </div>
         )}
+
+        {/* Measurement toolbar — top-left overlay */}
+        {ready && (
+          <div className="absolute top-2 left-2 z-20 flex items-center gap-1 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 p-1 shadow-sm">
+            <Button
+              size="sm"
+              variant={measureMode === 'distance' ? 'default' : 'ghost'}
+              className={`h-7 px-2 text-[10px] gap-1 ${measureMode === 'distance' ? 'bg-claude-accent text-white' : ''}`}
+              disabled={!viewer}
+              onClick={() => setMeasureMode(measureMode === 'distance' ? 'off' : 'distance')}
+              title="Click 2 atoms to measure distance"
+            >
+              <Ruler className="h-3 w-3" />
+              Distance
+            </Button>
+            <Button
+              size="sm"
+              variant={measureMode === 'angle' ? 'default' : 'ghost'}
+              className={`h-7 px-2 text-[10px] gap-1 ${measureMode === 'angle' ? 'bg-claude-accent text-white' : ''}`}
+              disabled={!viewer}
+              onClick={() => setMeasureMode(measureMode === 'angle' ? 'off' : 'angle')}
+              title="Click 3 atoms to measure angle"
+            >
+              <Triangle className="h-3 w-3" />
+              Angle
+            </Button>
+            {measurements.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[10px] gap-1 text-claude-text-muted hover:text-destructive"
+                onClick={handleClearMeasurements}
+                title="Clear all measurements"
+              >
+                <X className="h-3 w-3" />
+                Clear
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* Picking status hint */}
+        {measureMode !== 'off' && ready && (
+          <div className="absolute top-12 left-2 z-20 flex items-center gap-1 bg-claude-accent/10 backdrop-blur-sm rounded-md border border-claude-accent/30 px-2 py-1">
+            <MousePointerClick className="h-3 w-3 text-claude-accent animate-pulse" />
+            <span className="text-[10px] text-claude-accent font-medium">
+              Click {measureMode === 'distance' ? '2 atoms' : '3 atoms'} in the viewer…
+            </span>
+            <button
+              onClick={() => setMeasureMode('off')}
+              className="ml-1 text-claude-text-muted hover:text-destructive"
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Measurement list — bottom-left overlay */}
+        {measurements.length > 0 && ready && (
+          <div className="absolute bottom-2 left-2 z-20 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-md border border-claude-border/60 dark:border-[#3d3832]/60 p-1.5 shadow-sm max-w-[280px]">
+            <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted mb-1">
+              Measurements ({measurements.length})
+            </div>
+            <div className="space-y-0.5 max-h-24 overflow-y-auto sa-scroll">
+              {measurements.map((m) => (
+                <div key={m.id} className="flex items-center gap-1 text-[10px]">
+                  <span className="font-mono text-claude-text truncate">{m.label}</span>
+                  <span className="ml-auto font-mono text-claude-accent">{m.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Entity Panel — right side, interactive */}
-      <div className="w-[240px] shrink-0 border-l border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] overflow-y-auto sa-scroll">
+      <div className="w-[260px] shrink-0 border-l border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] overflow-y-auto sa-scroll">
         {entityLoading ? (
           <div className="flex items-center justify-center p-8">
             <Loader2 className="h-5 w-5 animate-spin text-claude-accent" />
@@ -321,12 +415,12 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
               <Collapsible open={true}>
                 <CollapsibleTrigger asChild>
                   <button className="flex items-center gap-1.5 w-full px-2 py-1.5 hover:bg-claude-border-light/40 dark:hover:bg-[#2b2926]/40 transition-colors">
-                    <ChevronDown className="w-3 h-3 text-claude-text-muted" />
-                    <Dna className="w-3 h-3 text-claude-accent" />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-claude-text-muted">
+                    <ChevronDown className="w-3.5 h-3.5 text-claude-text-muted" />
+                    <Dna className="w-3.5 h-3.5 text-claude-accent" />
+                    <span className="text-xs font-semibold uppercase tracking-wider text-claude-text-muted">
                       Entities
                     </span>
-                    <span className="text-[9px] text-claude-text-muted ml-auto">({entities.length})</span>
+                    <span className="text-[10px] text-claude-text-muted ml-auto">({entities.length})</span>
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
@@ -343,18 +437,18 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                             onClick={() => toggleEntity(entityKey)}
                             className="flex items-center gap-1.5 w-full px-2 py-1 text-left hover:bg-claude-border-light/40 dark:hover:bg-[#2b2926]/40 transition-colors"
                           >
-                            <ChevronDown className={`w-3 h-3 text-claude-text-muted transition-transform flex-shrink-0 ${isExpanded ? '' : '-rotate-90'}`} />
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                            <span className="text-[10px] text-claude-text font-medium truncate flex-1 min-w-0">
+                            <ChevronDown className={`w-3.5 h-3.5 text-claude-text-muted transition-transform flex-shrink-0 ${isExpanded ? '' : '-rotate-90'}`} />
+                            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                            <span className="text-xs text-claude-text font-medium truncate flex-1 min-w-0">
                               {entity.description || `Entity ${entity.entityId}`}
                             </span>
                             {entity.geneName && (
-                              <span className="text-[8px] px-1 py-0.5 rounded bg-claude-accent-light text-claude-accent border border-claude-accent/20 font-semibold truncate max-w-[50px]" title={entity.geneName}>
+                              <span className="text-[10px] px-1 py-0.5 rounded bg-claude-accent-light text-claude-accent border border-claude-accent/20 font-semibold truncate max-w-[60px]" title={entity.geneName}>
                                 {entity.geneName}
                               </span>
                             )}
                             {totalResidues > 0 && (
-                              <span className="text-[8px] text-claude-text-muted whitespace-nowrap" title={`${totalResidues} total residues`}>
+                              <span className="text-[10px] text-claude-text-muted whitespace-nowrap" title={`${totalResidues} total residues`}>
                                 {totalResidues.toLocaleString()} res
                               </span>
                             )}
@@ -363,7 +457,7 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                           {isExpanded && (
                             <div className="px-1.5 pb-1 space-y-0.5">
                               {/* Entity meta */}
-                              <div className="text-[8px] text-claude-text-muted space-y-0.5 px-1 pb-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 mb-1">
+                              <div className="text-[10px] text-claude-text-muted space-y-0.5 px-1 pb-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 mb-1">
                                 {entity.moleculeType && entity.moleculeType !== entity.entityType && (
                                   <div><span className="text-claude-text-muted">Type:</span> <span className="text-claude-text-secondary">{entity.moleculeType}</span></div>
                                 )}
@@ -382,12 +476,12 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                                     key={chain}
                                     className="flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-claude-border-light/40 dark:hover:bg-[#2b2926]/40 transition-colors group"
                                   >
-                                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                                    <span className="font-mono text-[10px] font-semibold text-claude-text flex-1">
+                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                                    <span className="font-mono text-xs font-semibold text-claude-text flex-1">
                                       Chain {chain}
                                     </span>
                                     {entity.sequenceLength > 0 && (
-                                      <span className="text-[8px] text-claude-text-muted whitespace-nowrap">
+                                      <span className="text-[10px] text-claude-text-muted whitespace-nowrap">
                                         {entity.sequenceLength}aa
                                       </span>
                                     )}
@@ -396,14 +490,14 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                                       className="opacity-0 group-hover:opacity-100 text-claude-text-muted hover:text-claude-accent transition-opacity"
                                       title={`Focus chain ${chain}`}
                                     >
-                                      <Focus className="w-2.5 h-2.5" />
+                                      <Focus className="w-3 h-3" />
                                     </button>
                                     <button
                                       onClick={() => toggleChainVisibility(chain)}
                                       className="text-claude-text-muted hover:text-claude-text transition-colors"
                                       title={isHidden ? 'Show chain' : 'Hide chain'}
                                     >
-                                      {isHidden ? <EyeOff className="w-2.5 h-2.5" /> : <Eye className="w-2.5 h-2.5" />}
+                                      {isHidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
                                     </button>
                                   </div>
                                 );
@@ -423,12 +517,12 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
               <Collapsible open={true}>
                 <CollapsibleTrigger asChild>
                   <button className="flex items-center gap-1.5 w-full px-2 py-1.5 hover:bg-claude-border-light/40 dark:hover:bg-[#2b2926]/40 transition-colors">
-                    <ChevronDown className="w-3 h-3 text-claude-text-muted" />
-                    <Pill className="w-3 h-3 text-claude-accent" />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-claude-text-muted">
+                    <ChevronDown className="w-3.5 h-3.5 text-claude-text-muted" />
+                    <Pill className="w-3.5 h-3.5 text-claude-accent" />
+                    <span className="text-xs font-semibold uppercase tracking-wider text-claude-text-muted">
                       Ligands
                     </span>
-                    <span className="text-[9px] text-claude-text-muted ml-auto">({ligands.length})</span>
+                    <span className="text-[10px] text-claude-text-muted ml-auto">({ligands.length})</span>
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
@@ -440,11 +534,11 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                       >
                         <Badge
                           variant="outline"
-                          className="text-[8px] font-mono font-bold px-1 h-4 bg-claude-accent-light text-claude-accent border-claude-accent/30"
+                          className="text-[10px] font-mono font-bold px-1.5 h-5 bg-claude-accent-light text-claude-accent border-claude-accent/30"
                         >
                           {lig.compId}
                         </Badge>
-                        <span className="text-[9px] text-claude-text truncate flex-1" title={lig.name}>
+                        <span className="text-xs text-claude-text truncate flex-1" title={lig.name}>
                           {lig.name}
                         </span>
                         <button
