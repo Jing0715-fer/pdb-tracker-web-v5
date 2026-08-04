@@ -76,6 +76,19 @@ export function StructureAnalysisView() {
   // show a crosshair cursor over the 3D viewport so the interaction is obvious.
   const measureMode = useAppStore((s) => s.measureMode);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+  // Desktop vs. mobile layout. We use a JS media-query check (not CSS-only
+  // `hidden lg:flex`) so that only ONE MolstarViewer instance is mounted at
+  // a time. Two mounted instances (even if one is CSS-hidden) both subscribe
+  // to Molstar's click events, causing atom-picking to fire twice and
+  // measurements to fail.
+  const [isDesktop, setIsDesktop] = useState(true);
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => setIsDesktop(mql.matches);
+    onChange(); // sync initial
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   // Enable keyboard shortcuts when the viewer is ready
   useAnalysisKeyboardShortcuts(ready);
@@ -213,6 +226,11 @@ export function StructureAnalysisView() {
     });
   }, []);
 
+  // Shared viewer JSX — used by BOTH desktop (3-pane) and mobile (tabbed).
+  // We render a SINGLE MolstarViewer instance to avoid double-subscribing to
+  // Molstar's click/selection events (which caused atom-picking to fire twice
+  // and measurement to fail). The mobile <MobilePanelSwitcher> receives this
+  // same element; React only mounts it once.
   const viewerBlock = (
     <div className={`sa-viewer absolute inset-0 ${viewerBgDark ? "dark-viewer" : ""} ${measureMode !== "off" ? "sa-picking-mode" : ""}`}>
       <div className="sa-viewer-backdrop" />
@@ -239,38 +257,44 @@ export function StructureAnalysisView() {
     <TooltipProvider delayDuration={300}>
       <div className="flex h-full w-full flex-col overflow-hidden bg-claude-bg">
         <AnalysisToolbar />
-        {/* Desktop layout: 3-pane resizable (lg and up, >= 1024px) */}
-        <div className="hidden lg:flex flex-1 min-h-0">
-          <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
-            {/* Left: structures + analysis */}
-            <ResizablePanel defaultSize="22" minSize="10" maxSize="40">
-              <div data-tour="left-panel" className="h-full min-w-0 overflow-hidden">
-                <AnalysisLeftPanel />
-              </div>
-            </ResizablePanel>
-            <ResizableHandle withHandle />
-            {/* Center: viewer */}
-            <ResizablePanel defaultSize="54" minSize="15">
-              <div className="relative h-full min-w-0 overflow-hidden">{viewerBlock}</div>
-            </ResizablePanel>
-            <ResizableHandle withHandle />
-            {/* Right: reports + history */}
-            <ResizablePanel defaultSize="24" minSize="10" maxSize="40">
-              <div data-tour="right-panel" className="h-full min-w-0 overflow-hidden">
-                <AnalysisRightPanel structureInfo={structureInfo} />
-              </div>
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        </div>
-
-        {/* Tablet/mobile layout: tabbed panels (below lg, < 1024px) */}
-        <div className="flex lg:hidden flex-1 min-h-0 flex-col">
-          <MobilePanelSwitcher
-            viewerBlock={viewerBlock}
-            leftPanel={<AnalysisLeftPanel />}
-            rightPanel={<AnalysisRightPanel structureInfo={structureInfo} />}
-          />
-        </div>
+        {/* Responsive layout: we use a JS media-query check to render ONLY ONE
+            of the two layout variants. This is critical because MolstarViewer
+            is expensive to mount and subscribes to global click/selection
+            events — having two mounted instances (even if one is CSS-hidden)
+            causes atom-picking subscriptions to fire twice and measurement
+            to fail. CSS-only `hidden lg:flex` would mount both; we avoid that. */}
+        {isDesktop ? (
+          <div className="flex flex-1 min-h-0 w-full">
+            <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
+              {/* Left: structures + analysis */}
+              <ResizablePanel defaultSize="22" minSize="10" maxSize="40">
+                <div data-tour="left-panel" className="h-full min-w-0 overflow-hidden">
+                  <AnalysisLeftPanel />
+                </div>
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+              {/* Center: viewer */}
+              <ResizablePanel defaultSize="54" minSize="15">
+                <div className="relative h-full min-w-0 overflow-hidden">{viewerBlock}</div>
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+              {/* Right: reports + history */}
+              <ResizablePanel defaultSize="24" minSize="10" maxSize="40">
+                <div data-tour="right-panel" className="h-full min-w-0 overflow-hidden">
+                  <AnalysisRightPanel structureInfo={structureInfo} />
+                </div>
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </div>
+        ) : (
+          <div className="flex flex-1 min-h-0 flex-col w-full">
+            <MobilePanelSwitcher
+              viewerBlock={viewerBlock}
+              leftPanel={<AnalysisLeftPanel />}
+              rightPanel={<AnalysisRightPanel structureInfo={structureInfo} />}
+            />
+          </div>
+        )}
 
         <div data-tour="status-bar">
           <AnalysisStatusBar
