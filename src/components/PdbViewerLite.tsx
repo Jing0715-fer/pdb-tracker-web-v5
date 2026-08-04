@@ -181,11 +181,9 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     }
   }, [viewer, toast]);
 
-  // Toggle chain visibility — creates/removes a component for the chain
-  // using Molstar's builder API. When hidden, the component's representations
-  // are removed; when shown, a new component + representation is created.
-  const componentCacheRef = useRef<Record<string, unknown>>({});
-
+  // Toggle chain visibility — uses Molstar's component manager to
+  // hide/show a chain. Uses modifyBySelection to toggle visibility of
+  // the representation for atoms matching the chain.
   const toggleChainVisibility = useCallback(async (chain: string) => {
     const newHidden = new Set(hiddenChains);
     if (newHidden.has(chain)) {
@@ -200,46 +198,64 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
       const plugin = viewer.plugin;
       const structs = plugin.managers.structure.hierarchy.current.structures;
       if (!structs || structs.length === 0) return;
-      const structure = structs[0];
 
+      // Build a MolScript expression to select this chain
+      const expr = (Q: any) => Q.struct.generator.atomGroups({
+        'chain-test': Q.core.rel.eq([
+          Q.struct.atomProperty.macromolecular.auth_asym_id
+            ? Q.struct.atomProperty.macromolecular.auth_asym_id()
+            : Q.struct.atomProperty.macromolecular.label_asym_id(),
+          chain,
+        ]),
+      });
+
+      // Use structureInteractivity to select the chain, then use
+      // the component manager's modifyBySelection to toggle visibility.
       if (newHidden.has(chain)) {
-        // Hide: find the component for this chain and remove its representations
-        const components = (structure as any)?.components;
-        if (components && Array.isArray(components)) {
-          for (const comp of components) {
-            try {
-              const compLabel = (comp as any)?.cell?.obj?.label || '';
-              if (compLabel.includes(`Chain ${chain}`) || compLabel.includes(chain)) {
-                await plugin.managers.structure.component.removeRepresentations(comp);
-                break;
-              }
-            } catch { /* ignore */ }
+        // Hide: select the chain then hide its representation
+        plugin.managers.structure.selection.clear();
+        viewer.structureInteractivity({ expression: expr, action: ['select'] });
+        // Wait for selection to propagate
+        await new Promise(r => setTimeout(r, 50));
+        // Apply hide via modifyBySelection on each component
+        for (const struct of structs) {
+          const components = (struct as any)?.components;
+          if (components && Array.isArray(components)) {
+            for (const comp of components) {
+              try {
+                plugin.managers.structure.component.modifyBySelection(
+                  comp,
+                  (state: any) => { state.hidden = true; },
+                  // Pass the selection loci
+                  plugin.managers.structure.selection.getLoci(
+                    (struct as any)?.cell?.obj?.data
+                  )
+                );
+              } catch { /* ignore */ }
+            }
           }
         }
       } else {
-        // Show: create a new component for this chain and add a representation
-        const expr = (Q: any) => Q.struct.generator.atomGroups({
-          'chain-test': Q.core.rel.eq([
-            Q.struct.atomProperty.macromolecular.auth_asym_id
-              ? Q.struct.atomProperty.macromolecular.auth_asym_id()
-              : Q.struct.atomProperty.macromolecular.label_asym_id(),
-            chain,
-          ]),
-        });
-
-        const structData = (structure as any)?.cell?.obj?.data;
-        if (structData) {
-          const component = plugin.builders.structure.tryCreateComponentFromExpression(
-            structData,
-            expr,
-            `Chain ${chain}`
-          );
-          if (component) {
-            await plugin.builders.structure.representation.addRepresentation(component, {
-              type: 'cartoon',
-            });
+        // Show: unhide the chain's representation
+        for (const struct of structs) {
+          const components = (struct as any)?.components;
+          if (components && Array.isArray(components)) {
+            for (const comp of components) {
+              try {
+                plugin.managers.structure.component.modifyBySelection(
+                  comp,
+                  (state: any) => { state.hidden = false; },
+                  // Pass the selection loci
+                  plugin.managers.structure.selection.getLoci(
+                    (struct as any)?.cell?.obj?.data
+                  )
+                );
+              } catch { /* ignore */ }
+            }
           }
         }
+        // Highlight for visual feedback
+        viewer.structureInteractivity({ expression: expr, action: ['highlight'] });
       }
 
       toast(`${newHidden.has(chain) ? 'Hidden' : 'Shown'} chain ${chain}`, 'info');
