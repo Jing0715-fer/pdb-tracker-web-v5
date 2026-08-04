@@ -874,20 +874,22 @@ async function lociFromResidue(
     // to let the state propagate before reading back.
     await new Promise((r) => setTimeout(r, 30));
     // Read back the loci from the selection manager.
-    // `entries` is a Map<Structure, { selection: Loci }> — iterate to find any
-    // non-empty entry.
+    // `entries` is a Map<Structure, { _selection: Loci }> (note: the field is
+    // `_selection` in the prebuilt bundle, not `selection`). Iterate to find
+    // any non-empty entry.
     const entries = plugin.managers.structure.selection.entries as
-      | Map<unknown, { selection?: { elements?: unknown[] } }>
+      | Map<unknown, { _selection?: { elements?: unknown[] }; selection?: { elements?: unknown[] } }>
       | undefined;
     if (entries && typeof entries.forEach === "function") {
       let foundLoci: unknown = null;
       entries.forEach((val) => {
+        const sel = val?._selection || val?.selection;
         if (
-          val?.selection?.elements &&
-          val.selection.elements.length > 0 &&
+          sel?.elements &&
+          sel.elements.length > 0 &&
           !foundLoci
         ) {
-          foundLoci = val.selection;
+          foundLoci = sel;
         }
       });
       if (foundLoci) return foundLoci;

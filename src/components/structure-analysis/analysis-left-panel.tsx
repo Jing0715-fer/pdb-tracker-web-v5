@@ -973,14 +973,19 @@ function InteractionVizCard() {
         compId: compId2,
       });
 
-      // Try to draw a distance line if we have both residues
+      // Try to draw a distance line between the ligand and the protein residue.
+      // The ligand (residue1) is a non-polymer — its auth_asym_id may differ
+      // from the protein chain. We pass only compId + resno for the ligand
+      // (no chain) so lociFromResidue matches by compId alone.
       if (m1) {
         const resno1 = parseInt(m1[1]);
         const compId1 = m1[2];
         try {
           await executeCommand(viewer, {
             type: "measure_distance",
-            a: { chain: contact.chain1, resno: resno1, compId: compId1 },
+            // Ligand: match by compId + resno only (chain may be different)
+            a: { resno: resno1, compId: compId1 },
+            // Protein residue: full spec
             b: { chain: contact.chain2, resno: resno2, compId: compId2 },
           });
         } catch {
@@ -1063,31 +1068,59 @@ function InteractionVizCard() {
         )}
       </div>
 
-      {/* Type distribution mini-bars */}
+      {/* Type distribution with proportional bars */}
       {contacts.length > 0 && (() => {
         const typeCounts = contacts.reduce((acc, c) => {
           acc[c.type] = (acc[c.type] || 0) + 1;
           return acc;
         }, {} as Record<string, number>);
-        const sorted = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-        const max = sorted[0]?.[1] || 1;
+        const sorted = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+        const total = contacts.length;
+        const typeColors: Record<string, string> = {
+          hbond: "bg-blue-400",
+          hydrogen_bond: "bg-blue-400",
+          hydrophobic: "bg-amber-400",
+          aromatic: "bg-purple-400",
+          "aromatic-stacking": "bg-purple-400",
+          ionic: "bg-red-400",
+          "salt-bridge": "bg-red-400",
+          "water-bridge": "bg-cyan-400",
+          ligand_contact: "bg-claude-accent",
+          ligand_proximity: "bg-claude-accent",
+          contact: "bg-claude-text-muted",
+        };
         return (
-          <div className="flex items-center gap-1 mb-1.5 flex-wrap">
-            {sorted.map(([type, count]) => (
-              <button
-                key={type}
-                onClick={() => setFilter(filter === type ? "" : type)}
-                className={`flex items-center gap-0.5 text-[8px] px-1 py-0.5 rounded border transition-all ${
-                  filter === type
-                    ? "bg-claude-accent text-white border-claude-accent"
-                    : "bg-claude-bg/50 text-claude-text-muted border-claude-border/40 hover:bg-claude-accent-light/30"
-                }`}
-                title={`${count} ${type} interactions — click to filter`}
-              >
-                <span className="capitalize">{type.replace(/_/g, " ").substring(0, 6)}</span>
-                <span className="font-mono font-bold">{count}</span>
-              </button>
-            ))}
+          <div className="mb-1.5 space-y-0.5">
+            {/* Proportional stacked bar */}
+            <div className="flex h-1.5 rounded-full overflow-hidden bg-claude-border/30">
+              {sorted.map(([type, count]) => (
+                <div
+                  key={type}
+                  className={`${typeColors[type] || typeColors.contact} transition-all hover:opacity-80`}
+                  style={{ width: `${(count / total) * 100}%` }}
+                  title={`${type}: ${count} (${((count / total) * 100).toFixed(0)}%)`}
+                />
+              ))}
+            </div>
+            {/* Type chips with counts */}
+            <div className="flex items-center gap-0.5 flex-wrap">
+              {sorted.slice(0, 6).map(([type, count]) => (
+                <button
+                  key={type}
+                  onClick={() => setFilter(filter === type ? "" : type)}
+                  className={`flex items-center gap-0.5 text-[8px] px-1 py-0.5 rounded border transition-all ${
+                    filter === type
+                      ? "bg-claude-accent text-white border-claude-accent"
+                      : "bg-claude-bg/50 text-claude-text-muted border-claude-border/40 hover:bg-claude-accent-light/30"
+                  }`}
+                  title={`${count} ${type} interactions — click to filter`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${typeColors[type] || typeColors.contact}`} />
+                  <span className="capitalize">{type.replace(/_/g, " ").substring(0, 6)}</span>
+                  <span className="font-mono font-bold">{count}</span>
+                </button>
+              ))}
+            </div>
           </div>
         );
       })()}
