@@ -3654,3 +3654,67 @@ Stage Summary:
 3. [P3] Show a summary card with total interactions by type as a donut chart
 4. [P3] The entity solo currently hides the entire Polymer component. For
    multi-chain structures, per-chain component creation is still needed.
+
+---
+Task ID: cron-review-60
+Agent: main
+Task: Fix interaction distance line + proportional type distribution bar
+
+Work Log:
+- Read worklog (cron-review-59: hover highlight, type distribution)
+- QA verified all features working, no bugs
+- Identified P2 issue: interaction list distance line doesn't draw for
+  ligand contacts
+
+Root cause analysis:
+- lociFromResidue reads the selection from plugin.managers.structure.selection.entries
+- The code was reading val.selection, but the prebuilt bundle stores the
+  selection at val._selection (underscore prefix for private fields)
+- This caused lociFromResidue to return null for all residues, which made
+  measure_distance silently fail (returned {ok: false})
+- Additionally, for ligand contacts, the ligand's auth_asym_id may differ
+  from the protein chain (e.g. REA is on struct_asym_id "B", protein on "A")
+
+Fixes implemented:
+1. commands.ts lociFromResidue: changed selection read-back to check
+   val._selection || val.selection (handles both public and private field
+   names). This is the critical fix — now lociFromResidue returns valid
+   loci for both polymer and non-polymer residues.
+
+2. analysis-left-panel.tsx handleFocusContact: for ligand contacts, pass
+   only { resno, compId } (no chain) for the ligand residue. This allows
+   lociFromResidue to match by compId alone, which works for non-polymers
+   whose chain ID may differ from the protein chain.
+
+Enhancement: proportional stacked bar for type distribution
+- Replaced the plain type chips with a proportional stacked bar showing
+  the relative distribution of interaction types as colored segments.
+- Each type chip now has a colored dot matching the bar segment color.
+- Colors: hydrogen=blue, hydrophobic=amber, aromatic=purple, ionic=red,
+  water=cyan, ligand=accent.
+- Hover on a bar segment shows a tooltip with type, count, and percentage.
+
+Verification (agent-browser + VLM):
+- Click 32ALA interaction -> dashed distance line visible connecting the
+  REA ligand to the ALA 32 protein residue
+- Toast 'ALA32 (A)' appears
+- Proportional bar shows yellow (hydrophobic) + grey (metallic) segments
+- Type chips have colored dots matching the bar
+- ESLint: 0 errors
+- Production build: EXIT 0
+
+Stage Summary:
+- P2 issue fixed: interaction list now draws distance lines between ligand
+  and protein residues on click
+- New: proportional stacked bar for visual type distribution
+- New: colored dots on type chips for legend matching
+- 1 commit pushed to GitHub
+
+### Next Priority Items:
+1. [P3] The lociFromResidue _selection fix should also improve focus_residue
+   and focus_chain commands (they use the same lociFromResidue path).
+   Verify these still work correctly.
+2. [P3] Add a "select all" / "deselect all" for interaction type filters
+3. [P3] Show a summary card with total interactions by type as a donut chart
+4. [P3] The entity solo currently hides the entire Polymer component. For
+   multi-chain structures, per-chain component creation is still needed.
