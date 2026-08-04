@@ -47,6 +47,9 @@ import {
   MousePointerClick,
   CornerDownLeft,
   Triangle,
+  Download,
+  FileJson,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -490,6 +493,10 @@ function MeasureTab() {
   const setMeasureMode = useAppStore((s) => s.setMeasureMode);
   const viewer = useAppStore((s) => s.viewer);
   const toast = useAppStore((s) => s.toast);
+  // For export filename + labeling
+  const activeStructureId = useAppStore((s) => s.activeStructureId);
+  const structures = useAppStore((s) => s.structures);
+  const activeStructure = structures.find((s) => s.id === activeStructureId);
 
   const isPicking = measureMode !== "off";
 
@@ -504,6 +511,60 @@ function MeasureTab() {
       }
     }
     toast("Measurements cleared", "info");
+  };
+
+  // Export measurements as JSON (full detail) or CSV (tabular)
+  const handleExportJSON = () => {
+    if (measurements.length === 0) {
+      toast("No measurements to export", "error");
+      return;
+    }
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      structure: activeStructure?.id ?? "unknown",
+      measurements: measurements.map((m) => ({
+        id: m.id,
+        mode: m.mode,
+        label: m.label,
+        detail: m.detail,
+        timestamp: new Date(m.ts).toISOString(),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `measurements-${activeStructure?.id ?? "export"}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${measurements.length} measurement(s) as JSON`, "success");
+  };
+
+  const handleExportCSV = () => {
+    if (measurements.length === 0) {
+      toast("No measurements to export", "error");
+      return;
+    }
+    const header = "id,mode,label,detail,timestamp_iso\n";
+    const rows = measurements
+      .map(
+        (m) =>
+          `${m.id},${m.mode},"${m.label.replace(/"/g, '""')}","${m.detail.replace(/"/g, '""')}",${new Date(
+            m.ts
+          ).toISOString()}`
+      )
+      .join("\n");
+    const csv = header + rows + "\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `measurements-${activeStructure?.id ?? "export"}-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${measurements.length} measurement(s) as CSV`, "success");
   };
 
   return (
@@ -521,10 +582,10 @@ function MeasureTab() {
           <Button
             size="sm"
             variant={measureMode === "distance" ? "default" : "outline"}
-            className={`h-7 text-[10px] gap-1 ${
+            className={`h-7 text-[10px] gap-1 transition-all duration-150 ${
               measureMode === "distance"
-                ? "bg-claude-accent text-white border-claude-accent"
-                : ""
+                ? "bg-claude-accent text-white border-claude-accent shadow-sm shadow-claude-accent/30"
+                : "hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
             }`}
             disabled={!viewer}
             onClick={() =>
@@ -537,10 +598,10 @@ function MeasureTab() {
           <Button
             size="sm"
             variant={measureMode === "angle" ? "default" : "outline"}
-            className={`h-7 text-[10px] gap-1 ${
+            className={`h-7 text-[10px] gap-1 transition-all duration-150 ${
               measureMode === "angle"
-                ? "bg-claude-accent text-white border-claude-accent"
-                : ""
+                ? "bg-claude-accent text-white border-claude-accent shadow-sm shadow-claude-accent/30"
+                : "hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
             }`}
             disabled={!viewer}
             onClick={() => setMeasureMode(measureMode === "angle" ? "off" : "angle")}
@@ -550,12 +611,18 @@ function MeasureTab() {
           </Button>
         </div>
         {isPicking && (
-          <div className="flex items-center gap-1 text-[9px] text-claude-accent animate-pulse">
-            <CornerDownLeft className="h-2.5 w-2.5" />
-            Click {measureMode === "distance" ? "2 atoms" : "3 atoms"} in the viewer…
+          <div className="flex items-center gap-1.5 text-[9px] text-claude-accent bg-claude-accent-light/30 rounded px-1.5 py-1 border border-claude-accent/20">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-claude-accent opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-claude-accent" />
+            </span>
+            <span className="font-medium">
+              Click {measureMode === "distance" ? "2 atoms" : "3 atoms"} in the viewer…
+            </span>
             <button
               onClick={() => setMeasureMode("off")}
-              className="ml-auto text-claude-text-muted hover:text-destructive"
+              className="ml-auto text-claude-text-muted hover:text-destructive transition-colors px-1"
+              title="Cancel picking"
             >
               cancel
             </button>
@@ -602,42 +669,68 @@ function MeasureTab() {
             <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
               History ({measurements.length})
             </span>
-            <button
-              onClick={handleClearAll}
-              className="text-[9px] text-claude-text-muted hover:text-destructive"
-            >
-              Clear
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={handleExportCSV}
+                className="flex items-center gap-0.5 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors px-1 py-0.5 rounded hover:bg-claude-accent-light/40"
+                title="Export as CSV"
+              >
+                <FileSpreadsheet className="h-2.5 w-2.5" />
+                CSV
+              </button>
+              <button
+                onClick={handleExportJSON}
+                className="flex items-center gap-0.5 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors px-1 py-0.5 rounded hover:bg-claude-accent-light/40"
+                title="Export as JSON"
+              >
+                <FileJson className="h-2.5 w-2.5" />
+                JSON
+              </button>
+              <div className="mx-0.5 h-3 w-px bg-claude-border" />
+              <button
+                onClick={handleClearAll}
+                className="flex items-center gap-0.5 text-[9px] text-claude-text-muted hover:text-destructive transition-colors px-1 py-0.5 rounded hover:bg-destructive/10"
+                title="Clear all measurements"
+              >
+                <Trash2 className="h-2.5 w-2.5" />
+              </button>
+            </div>
           </div>
           <div className="space-y-0.5 max-h-32 overflow-y-auto sa-scroll">
-            {measurements.map((m) => (
-              <div
-                key={m.id}
-                className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] hover:bg-claude-accent-light/50 group"
-              >
-                <span className="font-mono text-claude-text">{m.label}</span>
-                <span className="ml-auto font-mono text-claude-accent">{m.detail}</span>
-                <button
-                  onClick={() => removeMeasurement(m.id)}
-                  className="text-claude-text-muted opacity-0 group-hover:opacity-100 hover:text-destructive"
+            <AnimatePresence initial={false}>
+              {measurements.map((m) => (
+                <motion.div
+                  key={m.id}
+                  initial={{ opacity: 0, height: 0, x: -8 }}
+                  animate={{ opacity: 1, height: "auto", x: 0 }}
+                  exit={{ opacity: 0, height: 0, x: 8 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] hover:bg-claude-accent-light/50 group transition-colors"
                 >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </div>
-            ))}
+                  <span className="font-mono text-claude-text">{m.label}</span>
+                  <span className="ml-auto font-mono text-claude-accent font-semibold">{m.detail}</span>
+                  <button
+                    onClick={() => removeMeasurement(m.id)}
+                    className="text-claude-text-muted opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                    title="Remove this measurement"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         </div>
       )}
 
       {measurements.length === 0 && (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 w-full text-[10px] text-claude-text-muted"
-          disabled
-        >
-          No measurements yet
-        </Button>
+        <div className="mt-2 rounded-md border border-dashed border-claude-border/60 bg-claude-bg/30 p-3 text-center">
+          <Ruler className="mx-auto h-4 w-4 text-claude-text-muted/50 mb-1" />
+          <p className="text-[10px] text-claude-text-muted">No measurements yet</p>
+          <p className="text-[9px] text-claude-text-muted/70 mt-0.5">
+            Enable a mode above and click atoms in the 3D viewer
+          </p>
+        </div>
       )}
     </div>
   );
