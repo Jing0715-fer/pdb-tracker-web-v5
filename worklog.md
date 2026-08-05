@@ -3878,3 +3878,38 @@ Stage Summary:
 - Weekly report no longer hangs at the report generation step
 - LLM calls succeed via z-ai SDK with retry + backoff
 - Rate limiting is handled gracefully (retry instead of hang)
+
+---
+Task ID: cron-review-64
+Agent: main
+Task: Fix hardcoded 300 limit + null constraint violation on method field
+
+Two issues reported by user:
+1. "硬编码了300的上限吗？实际不止300条" — RCSB returns more than 300 PDB IDs per week
+2. "PdbStructure 写入失败：Null constraint violation on the fields: (method)" — null values cause Prisma error
+
+Fixes:
+1. Increased PDB fetch limit from 300 to 1000:
+   - fetchWeeklyPdbIds() default max: 300 → 1000
+   - pdb-weekly/run route call: 300 → 1000
+   - Verified: RCSB now returns 396 PDB IDs for 2026-W31 (was capped at 300)
+
+2. Fixed null constraint violation:
+   - When RCSB returns null for method (or any nullable field), Prisma on
+     SQLite throws "Null constraint violation" because it treats null as
+     "set to NULL" but SQLite may reject it on certain field configurations.
+   - Fix: convert all null values to undefined using `?? undefined` before
+     passing to Prisma. Prisma treats undefined as "skip this field" (don't
+     update), which avoids the null constraint issue entirely.
+   - Applied to all 11 nullable fields: method, releaseDate, resolution,
+     title, doi, journal, journalIf, authors, organisms, ligands, pubmedId.
+
+Verification:
+- RCSB returns 396 PDB IDs (was 300)
+- DB now has 426 entries (was 330) — new entries written successfully
+- No "Null constraint violation" error in dev.log
+- ESLint: 0 errors
+
+Stage Summary:
+- PDB weekly fetch limit increased to 1000 (was 300)
+- Null constraint violation fixed (null → undefined conversion)
