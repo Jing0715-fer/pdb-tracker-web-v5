@@ -3942,3 +3942,48 @@ Stage Summary:
 - All 5 user-reported issues fixed
 - ESLint: 0 errors
 - Production build: EXIT 0
+
+---
+Task ID: cron-review-66
+Agent: main
+Task: Fix executing log animation + picked atoms display + Molcraft comparison
+
+Research (Molcraft comparison):
+- Dispatched research agent to study Molcraft repo thoroughly.
+- Key finding: Molcraft does NOT have click-to-pick measurement — it uses
+  typed ResidueInput boxes (chain/resno/atom). PDB Tracker's click-to-pick
+  is a custom addition.
+- Molcraft does NOT show selected atoms or 0/2 progress indicator.
+- Molcraft's executing log uses flat Badge chips (no spinner/checkmark).
+- Molcraft's interaction analysis uses the SAME backend recipes and chart
+  components (ported faithfully). show_interactions is a no-op stub in BOTH
+  codebases (prebuilt bundle lacks ComputeContacts).
+- Distance measurement accuracy is correct on both paths — the raw click
+  loci is passed to addDistance which uses Molstar's own geometry.
+
+Fixes implemented:
+
+1. Executing log completed items show checkmark (not spinning):
+   - Root cause: log() was adding a NEW entry with status='success' when
+     a task completed, but the original 'running' entry stayed in the log
+     with its spinning Loader2 animation.
+   - Fix: log() now updates the existing 'running' entry in-place when a
+     success/error entry arrives for the same module.
+   - Effect: executing log correctly transitions spinning → checkmark.
+
+2. Picked atoms display in measure overlay:
+   - Added 'pickedAtoms' state to store (string[] of labels).
+   - use-atom-picking.ts calls setPickedAtoms() with labels of all atoms
+     picked so far (e.g. ['TRP A 47 C', 'LYS A 66 CE']).
+   - ViewerOverlay's Measure panel shows numbered list of picked atoms:
+     '1. TRP A 47 C' etc., below the 0/2 progress indicator.
+   - List resets to empty when measurement completes (ready for next).
+
+3. Distance measurement accuracy:
+   - Confirmed correct — raw click loci passed to addDistance.
+   - The picked atoms list makes it clear WHICH atoms were selected.
+
+Stage Summary:
+- All 3 user-reported issues fixed
+- Molcraft comparison complete — PDB Tracker matches or exceeds Molcraft
+- ESLint: 0 errors
