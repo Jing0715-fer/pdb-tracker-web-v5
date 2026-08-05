@@ -6,7 +6,7 @@ export interface PdbEntryDetail {
   pubmedId: string | null; releaseDate: string | null; depositDate: string | null;
   organisms: string | null; ligands: string | null;
 }
-export async function fetchWeeklyPdbIds(startDate: string, endDate: string, max = 300): Promise<string[]> {
+export async function fetchWeeklyPdbIds(startDate: string, endDate: string, max = 1000): Promise<string[]> {
   const body = { query: { type: 'terminal', service: 'text', parameters: { attribute: 'rcsb_accession_info.initial_release_date', operator: 'range', value: { from: startDate, to: endDate } } }, return_type: 'entry', request_options: { paginate: { start: 0, rows: max }, sort: [{ sort_by: 'rcsb_accession_info.initial_release_date', direction: 'desc' }] } };
   try {
     const res = await fetch(SEARCH_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });

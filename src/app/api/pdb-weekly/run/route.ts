@@ -221,7 +221,7 @@ export async function POST(req: Request) {
     emit({ stage: 'init', level: 'info', message: `启动 pdb-weekly · ${window.weekId} · ${maxCycles}-cycle`, progress: 1 });
     await sleep(300);
     emit({ stage: 'fetch-rcsb', level: 'info', message: `RCSB 检索 ${window.startDate} → ${window.endDate}（真实 API）`, progress: 6 });
-    const pdbIds = await fetchWeeklyPdbIds(window.startDate, window.endDate, 300);
+    const pdbIds = await fetchWeeklyPdbIds(window.startDate, window.endDate, 1000);
     const fetched = pdbIds.length;
     if (fetched === 0) emit({ stage: 'fetch-rcsb', level: 'error', message: `✗ RCSB 返回 0 条`, progress: 14 });
     else emit({ stage: 'fetch-rcsb', level: 'success', message: `✓ RCSB 返回 ${fetched} 条真实 PDB ID`, progress: 14 });
@@ -231,7 +231,35 @@ export async function POST(req: Request) {
     emit({ stage: 'write-pdb', level: 'info', message: `写入 PdbStructure 表（${details.length} 条，全部写入）`, progress: 28 });
     let pdbSaved = 0, withAuthors = 0, withPubmedId = 0;
     try {
-      for (const e of details) { await db.pdbStructure.upsert({ where: { pdbId: e.pdbId }, create: { pdbId: e.pdbId, method: e.method, releaseDate: e.releaseDate, resolution: e.resolution, title: e.title, doi: e.doi, journal: e.journal, journalIf: e.journalIf, authors: e.authors, organisms: e.organisms, ligands: e.ligands, weekId: window.weekId, pubmedId: e.pubmedId, fetchDate: new Date().toISOString().slice(0, 10) }, update: { method: e.method, releaseDate: e.releaseDate, resolution: e.resolution, title: e.title, doi: e.doi, journal: e.journal, journalIf: e.journalIf, authors: e.authors, organisms: e.organisms, ligands: e.ligands, weekId: window.weekId, pubmedId: e.pubmedId, fetchDate: new Date().toISOString().slice(0, 10) } }); pdbSaved++; if (e.authors) withAuthors++; if (e.pubmedId) withPubmedId++; }
+      for (const e of details) {
+        // Convert null → undefined for nullable fields. Prisma treats
+        // undefined as "skip this field" but null as "set to NULL".
+        // Some SQLite versions reject NULL on fields that were previously
+        // non-null, causing "Null constraint violation" errors.
+        const data = {
+          method: e.method ?? undefined,
+          releaseDate: e.releaseDate ?? undefined,
+          resolution: e.resolution ?? undefined,
+          title: e.title ?? undefined,
+          doi: e.doi ?? undefined,
+          journal: e.journal ?? undefined,
+          journalIf: e.journalIf ?? undefined,
+          authors: e.authors ?? undefined,
+          organisms: e.organisms ?? undefined,
+          ligands: e.ligands ?? undefined,
+          weekId: window.weekId,
+          pubmedId: e.pubmedId ?? undefined,
+          fetchDate: new Date().toISOString().slice(0, 10),
+        };
+        await db.pdbStructure.upsert({
+          where: { pdbId: e.pdbId },
+          create: { pdbId: e.pdbId, ...data },
+          update: data,
+        });
+        pdbSaved++;
+        if (e.authors) withAuthors++;
+        if (e.pubmedId) withPubmedId++;
+      }
       emit({ stage: 'write-pdb', level: 'success', message: `✓ 已写入 ${pdbSaved} 条 PdbStructure（with_authors=${withAuthors}, with_pubmedId=${withPubmedId}）`, progress: 34 });
     } catch (err: any) { emit({ stage: 'write-pdb', level: 'error', message: `✗ PdbStructure 写入失败：${err?.message}`, progress: 34 }); }
 
