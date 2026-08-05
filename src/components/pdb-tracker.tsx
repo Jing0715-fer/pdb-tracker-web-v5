@@ -1892,6 +1892,9 @@ export default function PdbTracker() {
     setSelectedEntry(entry);
     setDetailPanelOpen(true);
     addRecentlyViewed({ pdbId: entry.pdbId, title: entry.title || entry.pdbId, method: entry.method });
+    // Also open the 3D preview modal so the user can click "Full Analysis"
+    setViewerModalPdbId(entry.pdbId);
+    setViewerModalOpen(true);
   }, [addRecentlyViewed]);
 
   const toggleBookmark = useCallback((pdbId: string) => {

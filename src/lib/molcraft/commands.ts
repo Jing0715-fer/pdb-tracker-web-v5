@@ -499,47 +499,96 @@ export async function executeCommand(
       }
 
       case "toggle_component_visibility": {
-        // Toggle visibility of a chain. Since the default preset creates
-        // "Polymer"/"Ligand"/"Water" components (not per-chain), we toggle
-        // the "Polymer" component directly for single-chain structures.
-        // For multi-chain, we would need per-chain components, but the
-        // tryCreateComponentStatic API is finicky in the prebuilt bundle.
-        // The simplest reliable approach: toggle the whole Polymer component
-        // (which contains all chains). This works for hide/show of the
-        // entire protein structure.
+        // Toggle visibility of a specific chain using tryCreateComponentFromExpression.
+        // This creates a per-chain component (if not already cached) and toggles
+        // its visibility — NOT the entire Polymer component.
         const chain = cmd.component;
         const action = (cmd.action ?? "toggle") as "show" | "hide" | "toggle";
         const structs = getStructures(plugin);
         if (structs.length === 0)
           return { ok: false, detail: "No structures loaded" };
 
-        // Find the Polymer component (tagged "structure-component-static-polymer")
-        let targetComp: any = null;
+        const structureCell = structs[0]?.cell;
+        if (!structureCell)
+          return { ok: false, detail: "No structure cell available" };
+
+        // Tag for caching the per-chain component
+        const tag = `chain-${chain}`;
+
+        // Try to find an existing per-chain component
+        let chainComp: any = null;
         try {
           const components = structs[0].components ?? [];
           for (const c of components) {
             const tags = c?.cell?.transform?.tags;
-            const label = c?.cell?.obj?.label;
-            if (
-              (Array.isArray(tags) && tags.includes("structure-component-static-polymer")) ||
-              label === "Polymer"
-            ) {
-              targetComp = c;
+            if (Array.isArray(tags) && tags.includes(tag)) {
+              chainComp = c;
               break;
             }
           }
         } catch { /* ignore */ }
 
-        if (!targetComp)
-          return { ok: false, detail: `No Polymer component found for chain ${chain}` };
+        // If not found, create it via tryCreateComponentFromExpression
+        if (!chainComp) {
+          const builders = (plugin as any)?.builders?.structure;
+          if (!builders?.tryCreateComponentFromExpression)
+            return { ok: false, detail: "Component builder not available" };
+
+          try {
+            const lib = (window as any).molstar?.lib;
+            const SE = lib?.structure?.StructureElement;
+            const SP = lib?.structure?.StructureProperties;
+            if (!SE || !SP) return { ok: false, detail: "StructureElement not available" };
+
+            const data = structureCell.obj?.data;
+            if (!data) return { ok: false, detail: "No structure data" };
+
+            // Build a loci for this chain using StructureElement.Location
+            const elementsByUnit = new Map();
+            for (const unit of data.units) {
+              if (unit.kind !== 0) continue; // atomic only
+              const indices: number[] = [];
+              for (let i = 0; i < unit.elements.length; i++) {
+                const loc = SE.Location.create(data, unit, i);
+                const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+                if (chainId === chain) indices.push(i);
+              }
+              if (indices.length > 0) elementsByUnit.set(unit, indices);
+            }
+
+            if (elementsByUnit.size === 0)
+              return { ok: false, detail: `Chain ${chain} not found` };
+
+            // Build the loci from the elements
+            const elements: any[] = [];
+            elementsByUnit.forEach((indices, unit) => {
+              elements.push({ unit, indices: new Int32Array(indices) });
+            });
+            const loci = { kind: 'element-loci', structure: data, elements };
+
+            // Convert to expression and create component
+            const expr = SE.Loci.toExpression(loci);
+            chainComp = await builders.tryCreateComponentFromExpression(
+              structureCell,
+              expr,
+              tag,
+              { label: `Chain ${chain}`, tags: [tag] }
+            );
+
+            if (!chainComp)
+              return { ok: false, detail: `Chain ${chain} component creation failed` };
+          } catch (err) {
+            return { ok: false, detail: `Failed to create chain component: ${err}` };
+          }
+        }
 
         // Toggle visibility
         try {
           plugin.managers.structure.hierarchy.toggleVisibility(
-            [targetComp],
+            [chainComp],
             action === "toggle" ? undefined : action
           );
-          return { ok: true, detail: `Chain ${chain} (${action})` };
+          return { ok: true, detail: `Chain ${chain}: ${action}` };
         } catch (err) {
           return { ok: false, detail: `Visibility toggle failed: ${err}` };
         }
