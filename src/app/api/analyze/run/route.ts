@@ -182,8 +182,15 @@ export async function POST(req: NextRequest) {
 
     // Run it.
     try {
-      // Ensure pdb2pqr and other local binaries are in PATH
-      const childEnv = { ...process.env, PATH: `/home/z/.local/bin:${process.env.PATH || ''}` };
+      // Ensure the Python venv (biopython, numpy) AND local binaries are in PATH.
+      // The Next.js server process may inherit a PATH that doesn't include
+      // /home/z/.venv/bin where biopython/numpy are installed.
+      const VENV_BIN = '/home/z/.venv/bin';
+      const EXTRA_PATH = '/home/z/.local/bin';
+      const ENV_PATH = process.env.PATH || '';
+      const pathParts = ENV_PATH.split(':').filter(Boolean);
+      const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
+      const childEnv = { ...process.env, PATH: fullParts.join(':') };
       const { stdout, stderr } = await execFileAsync(
         "python3",
         [scriptPath],
