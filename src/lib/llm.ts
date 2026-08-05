@@ -1437,8 +1437,8 @@ async function callOpenai(prompt: string, system?: string, model?: string): Prom
 async function callZai(prompt: string, system?: string, model?: string): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const MAX_RETRIES = 3;
-  const BASE_DELAY = 5000; // 5s initial backoff for 429 errors
+  const MAX_RETRIES = 5;
+  const BASE_DELAY = 10_000; // 10s initial backoff for 429 errors
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const resp = await zai.chat.completions.create({
@@ -1452,7 +1452,7 @@ async function callZai(prompt: string, system?: string, model?: string): Promise
     } catch (err: any) {
       const is429 = err?.message?.includes('429') || err?.message?.includes('Too many');
       if (is429 && attempt < MAX_RETRIES - 1) {
-        const delay = BASE_DELAY * Math.pow(2, attempt); // 5s, 10s, 20s
+        const delay = BASE_DELAY * Math.pow(2, attempt); // 10s, 20s, 40s, 80s, 160s
         await new Promise(r => setTimeout(r, delay));
         continue;
       }

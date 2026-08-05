@@ -137,9 +137,9 @@ async function generateMethodReport(opts: {
     }
     // Rate-limit delay between chapters to avoid 429 from z-ai SDK.
     // Each chapter is a separate LLM call; firing them back-to-back triggers
-    // "Too many requests" (429). A 3s gap gives the API time to recover.
+    // "Too many requests" (429). A 10s gap gives the API time to recover.
     if (i < totalChapters - 1) {
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, 10000));
     }
   }
 
