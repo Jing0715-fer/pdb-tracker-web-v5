@@ -1709,10 +1709,8 @@ export function SettingsRunPanel({
       Promise.resolve().then(() => log({ ts: new Date().toISOString(), module: 'eval', status: 'error', summary: s.error || 'Unknown error' }));
     }
     Promise.resolve().then(() => markDone('eval'));
-    // ★ Notify parent so the evaluation list (including new batch entries) is
-    // refetched immediately — fixes "first target appears in single evals
-    // instead of under the batch" caused by stale UI data.
-    if (s.ok) onDbChanged?.();
+    // NOTE: we intentionally do NOT call onDbChanged?.() here — same reason
+    // as the weekly completion handler. See comment there.
   }, [evalStream.state.done]);
 
   const weeklyLogThrottle = useRef(0);
@@ -1758,7 +1756,20 @@ export function SettingsRunPanel({
       Promise.resolve().then(() => log({ ts: new Date().toISOString(), module: 'weekly', status: 'error', summary: s.error || 'Unknown error' }));
     }
     Promise.resolve().then(() => markDone('weekly'));
-     
+    // NOTE: we intentionally do NOT call onDbChanged?.() here. Calling it
+    // triggers handleRetryAll in the parent, which refetches ALL data
+    // (snapshots + entries + evaluations + literature) simultaneously.
+    // This causes a cascade of state updates that makes the page appear to
+    // "frequently refresh" — the data tables flicker as they empty and
+    // refill. Instead, show a toast prompting the user to refresh manually.
+    if (s.ok) {
+      import('sonner').then(({ toast }) => {
+        toast.success('Weekly report completed', {
+          description: 'Click "Refresh data" to load the new structures',
+          duration: 8000,
+        });
+      });
+    }
   }, [weeklyStream.state.done]);
 
   /* ──────────────────────────────────────────────────────────────────── */
