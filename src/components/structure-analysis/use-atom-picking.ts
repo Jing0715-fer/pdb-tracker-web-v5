@@ -342,8 +342,22 @@ export function useAtomPicking() {
 
     // 1. Overlay ball-and-stick on top of the existing cartoon so individual
     //    atoms are clickable without losing the cartoon overview.
+    //    Save camera state before and restore after to prevent the viewer
+    //    from re-framing when a new representation is added.
+    let cameraSnapshot: any = null;
+    try {
+      const cam = (plugin as any)?.canvas3d?.camera;
+      if (cam?.getSnapshot) cameraSnapshot = cam.getSnapshot();
+    } catch { /* ignore */ }
     overlaySticks(plugin).then((restore) => {
       restoreReprRef.current = restore;
+      // Restore camera position after representation is added
+      if (cameraSnapshot) {
+        try {
+          const cam = (plugin as any)?.canvas3d?.camera;
+          if (cam?.setState) cam.setState(cameraSnapshot);
+        } catch { /* ignore */ }
+      }
     }).catch(() => {
       // ignore — sticks overlay is best-effort
     });
@@ -376,7 +390,18 @@ export function useAtomPicking() {
     const needed = measureMode === "distance" ? 2 : 3;
     setMeasureProgress({ picked: 0, needed });
 
+    // Flag to ignore the first click event that fires immediately after
+    // subscribing. The click observable sometimes emits a stale event from
+    // the last hover/click that happened BEFORE measure mode was entered.
+    // Without this, the user sees 1/2 instead of 0/2 right after clicking
+    // the Distance button.
+    let ignoreNextClick = true;
+    // Small delay to let any pending click events drain before we start
+    // listening. This ensures the user must click AFTER entering measure mode.
+    setTimeout(() => { ignoreNextClick = false; }, 150);
+
     const sub_obj = clickObs.subscribe((evt: unknown) => {
+      if (ignoreNextClick) return; // ignore stale events from before measure mode
       try {
         const loci = extractLoci(evt);
         if (!loci || isLociEmpty(loci)) {
@@ -426,8 +451,10 @@ export function useAtomPicking() {
               .catch(() => toast("Angle measurement failed", "error"));
           }
 
-          // Auto-exit pick mode after measurement
-          setMeasureMode("off");
+          // Reset for the next measurement — stay in measure mode so the
+          // user can make multiple measurements without re-clicking Distance.
+          pendingRef.current = [];
+          setMeasureProgress({ picked: 0, needed });
         }
       } catch (err) {
         console.warn("[atom-picking] click handler error:", err);

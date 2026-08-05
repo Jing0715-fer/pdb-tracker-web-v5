@@ -5686,9 +5686,18 @@ export default function PdbTracker() {
         open={viewerModalOpen}
         onOpenChange={setViewerModalOpen}
         onOpenInAnalysis={(pdbId) => {
-          // Hand off the PDB ID to the Structure Analysis module
-          useMolcraftStore.getState().setPendingPdbId(pdbId);
+          // Close the modal FIRST so the PdbViewerLite's MolstarViewer is
+          // unmounted before the StructureAnalysisView's MolstarViewer
+          // initializes. Otherwise both viewers compete for the same
+          // global plugin state.
+          setViewerModalOpen(false);
           setMode('analysis');
+          // Delay setting pendingPdbId to allow the modal's fade-out
+          // animation to complete and the PdbViewerLite to unmount.
+          // Radix Dialog has a ~200ms exit animation; 500ms is safe.
+          setTimeout(() => {
+            useMolcraftStore.getState().setPendingPdbId(pdbId);
+          }, 500);
         }}
       />
 

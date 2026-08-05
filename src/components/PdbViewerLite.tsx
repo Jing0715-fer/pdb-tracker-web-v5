@@ -280,17 +280,6 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
       {/* 3D Viewer — takes remaining space */}
       <div className="relative flex-1 min-w-0">
         <MolstarViewer className="absolute inset-0" />
-        {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="flex flex-col items-center gap-3 bg-claude-surface/80 dark:bg-[#242220]/80 rounded-lg p-4">
-              <Box className="h-8 w-8 text-claude-accent animate-pulse" />
-              <div className="flex items-center gap-2 text-xs text-claude-text-muted">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>Initializing 3D Viewer...</span>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Measurement toolbar — top-left overlay */}
         {ready && (
