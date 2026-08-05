@@ -237,13 +237,21 @@ function disableClickFocus(plugin: MolstarPlugin): () => void {
  * without removing the cartoon. This makes individual atoms clickable
  * while preserving the cartoon overview. Returns a restore function
  * that removes the added representation.
+ *
+ * Uses plugin.builders.structure.representation.addRepresentation which
+ * is the correct API (NOT managers.structure.component.addRepresentation
+ * which doesn't exist in the prebuilt bundle).
  */
-function overlaySticks(plugin: MolstarPlugin): () => void {
+async function overlaySticks(plugin: MolstarPlugin): Promise<() => void> {
   try {
     const structs = plugin.managers.structure.hierarchy.current.structures;
     if (!structs || structs.length === 0) return () => {};
 
     const addedRepresentations: Array<{ component: any; repr: any }> = [];
+    const reprBuilder = (plugin as any)?.builders?.structure?.representation;
+    const reprRegistry = (plugin as any)?.representation?.structure?.registry;
+
+    if (!reprBuilder?.addRepresentation) return () => {};
 
     for (const struct of structs as any[]) {
       const components = struct?.components ?? [];
@@ -258,11 +266,14 @@ function overlaySticks(plugin: MolstarPlugin): () => void {
           ) {
             continue;
           }
-          // Add a ball-and-stick representation to this component
-          const repr = plugin.managers.structure.component.addRepresentation(
-            comp,
-            "ball-and-stick"
-          );
+          // Build the representation params. The addRepresentation API
+          // expects {type: registry.get("ball-and-stick")} as the 2nd arg.
+          const reprType = reprRegistry?.get
+            ? reprRegistry.get("ball-and-stick")
+            : "ball-and-stick";
+          const repr = await reprBuilder.addRepresentation(comp, {
+            type: reprType,
+          });
           if (repr) {
             addedRepresentations.push({ component: comp, repr });
           }
@@ -275,10 +286,13 @@ function overlaySticks(plugin: MolstarPlugin): () => void {
     return () => {
       for (const { component, repr } of addedRepresentations) {
         try {
-          plugin.managers.structure.component.removeRepresentations(
-            [repr],
-            component
-          );
+          if (repr) {
+            // Remove via the state builder
+            const build = (plugin as any)?.state?.data?.build();
+            if (build && repr.cell?.transform?.ref) {
+              build.delete(repr.cell.transform.ref).commit();
+            }
+          }
         } catch {
           // ignore
         }
@@ -327,7 +341,11 @@ export function useAtomPicking() {
 
     // 1. Overlay ball-and-stick on top of the existing cartoon so individual
     //    atoms are clickable without losing the cartoon overview.
-    restoreReprRef.current = overlaySticks(plugin);
+    overlaySticks(plugin).then((restore) => {
+      restoreReprRef.current = restore;
+    }).catch(() => {
+      // ignore — sticks overlay is best-effort
+    });
 
     // 2. Set granularity to element (atom-level)
     try {
