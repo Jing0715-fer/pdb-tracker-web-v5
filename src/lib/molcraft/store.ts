@@ -139,6 +139,9 @@ interface AppState {
   /** Live picking progress for the UI indicator (0/2 → 1/2 → 2/2). */
   measureProgress: { picked: number; needed: number };
   setMeasureProgress: (p: { picked: number; needed: number }) => void;
+  /** Labels of atoms picked so far (e.g. ["TRP A 47 C", "LYS A 66 CE"]). */
+  pickedAtoms: string[];
+  setPickedAtoms: (a: string[]) => void;
   measurements: Array<{ id: string; mode: "distance" | "angle"; label: string; detail: string; ts: number }>;
   addMeasurement: (m: { mode: "distance" | "angle"; label: string; detail: string }) => void;
   removeMeasurement: (id: string) => void;
@@ -421,9 +424,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearAlignmentHistory: () => set({ alignmentHistory: [] }),
 
   measureMode: "off",
-  setMeasureMode: (m) => set({ measureMode: m, measureProgress: { picked: 0, needed: m === "distance" ? 2 : m === "angle" ? 3 : 0 } }),
+  setMeasureMode: (m) => set({ measureMode: m, measureProgress: { picked: 0, needed: m === "distance" ? 2 : m === "angle" ? 3 : 0 }, pickedAtoms: [] }),
   measureProgress: { picked: 0, needed: 0 },
   setMeasureProgress: (p) => set({ measureProgress: p }),
+  pickedAtoms: [],
+  setPickedAtoms: (a) => set({ pickedAtoms: a }),
   measurements: [],
   addMeasurement: (m) =>
     set((state) => ({

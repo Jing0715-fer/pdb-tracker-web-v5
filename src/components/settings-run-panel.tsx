@@ -1467,7 +1467,21 @@ export function SettingsRunPanel({
 
   useEffect(() => { persistCfg(llmCfg); }, [llmCfg]);
 
-  const log = (entry: RunLog) => setLogs(l => [entry, ...l].slice(0, 50));
+  const log = (entry: RunLog) => setLogs(l => {
+    // If this is a success/error entry for a module that has a 'running'
+    // entry, UPDATE the running entry in-place instead of adding a new one.
+    // This prevents the executing log from showing both a spinning 'running'
+    // row AND a completed 'success' row for the same task.
+    if (entry.status !== 'running') {
+      const runningIdx = l.findIndex(x => x.module === entry.module && x.status === 'running');
+      if (runningIdx >= 0) {
+        const updated = [...l];
+        updated[runningIdx] = { ...updated[runningIdx], status: entry.status, summary: entry.summary, details: entry.details, durationMs: entry.durationMs };
+        return updated;
+      }
+    }
+    return [entry, ...l].slice(0, 50);
+  });
 
   /** Export the current (filtered) logs as a Markdown file download. */
   const exportLogs = (format: 'md' | 'json') => {

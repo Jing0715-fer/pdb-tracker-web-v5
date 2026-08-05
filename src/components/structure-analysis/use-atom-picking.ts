@@ -309,6 +309,7 @@ export function useAtomPicking() {
   const measureMode = useAppStore((s) => s.measureMode);
   const setMeasureMode = useAppStore((s) => s.setMeasureMode);
   const setMeasureProgress = useAppStore((s) => s.setMeasureProgress);
+  const setPickedAtoms = useAppStore((s) => s.setPickedAtoms);
   const addMeasurement = useAppStore((s) => s.addMeasurement);
   const toast = useAppStore((s) => s.toast);
   const pendingRef = useRef<PickedAtom[]>([]);
@@ -415,6 +416,7 @@ export function useAtomPicking() {
 
         const label = getLociLabel(plugin, loci);
         pendingRef.current.push({ loci, label });
+        setPickedAtoms(pendingRef.current.map(p => p.label));
 
         const picked = pendingRef.current.length;
         setMeasureProgress({ picked, needed });
@@ -455,6 +457,7 @@ export function useAtomPicking() {
           // user can make multiple measurements without re-clicking Distance.
           pendingRef.current = [];
           setMeasureProgress({ picked: 0, needed });
+          setPickedAtoms([]);
         }
       } catch (err) {
         console.warn("[atom-picking] click handler error:", err);

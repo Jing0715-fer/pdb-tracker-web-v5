@@ -536,6 +536,7 @@ function ViewerOverlay({
   const measureMode = useAppStore((s) => s.measureMode);
   const setMeasureMode = useAppStore((s) => s.setMeasureMode);
   const measureProgress = useAppStore((s) => s.measureProgress);
+  const pickedAtoms = useAppStore((s) => s.pickedAtoms);
   const measurements = useAppStore((s) => s.measurements);
   const viewer = useAppStore((s) => s.viewer);
   const clearMeasurements = useAppStore((s) => s.clearMeasurements);
@@ -694,6 +695,16 @@ function ViewerOverlay({
             >
               ✕
             </button>
+          </div>
+        )}
+        {measureMode !== "off" && pickedAtoms.length > 0 && (
+          <div className="mt-1 space-y-0.5">
+            {pickedAtoms.map((label, i) => (
+              <div key={i} className="flex items-center gap-1 text-[9px] bg-claude-surface/80 rounded px-1.5 py-0.5 border border-claude-accent/20">
+                <span className="font-mono text-claude-accent font-bold">{i + 1}.</span>
+                <span className="font-mono text-claude-text">{label}</span>
+              </div>
+            ))}
           </div>
         )}
         {measurements.length > 0 && (
