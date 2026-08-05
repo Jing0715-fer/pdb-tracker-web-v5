@@ -268,10 +268,11 @@ async function overlaySticks(plugin: MolstarPlugin): Promise<() => void> {
           }
           // Build the representation params. The addRepresentation API
           // expects {type: registry.get("ball-and-stick")} as the 2nd arg.
+          // CRITICAL: pass comp.cell (the state cell), NOT comp (the wrapper).
           const reprType = reprRegistry?.get
             ? reprRegistry.get("ball-and-stick")
             : "ball-and-stick";
-          const repr = await reprBuilder.addRepresentation(comp, {
+          const repr = await reprBuilder.addRepresentation(comp.cell, {
             type: reprType,
           });
           if (repr) {
