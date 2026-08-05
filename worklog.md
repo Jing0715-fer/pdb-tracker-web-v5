@@ -3913,3 +3913,32 @@ Verification:
 Stage Summary:
 - PDB weekly fetch limit increased to 1000 (was 300)
 - Null constraint violation fixed (null → undefined conversion)
+
+---
+Task ID: cron-review-65
+Agent: main
+Task: Fix 5 issues: duplicate loading, 0/2 start, auto-exit, camera reset, full analysis
+
+Fixes:
+1. Duplicate loading animation: removed the second "Initializing 3D Viewer..."
+   overlay in PdbViewerLite that overlapped with MolstarViewer's built-in
+   loading animation. Now only one loading spinner shows.
+
+2. Distance starts at 0/2: added 150ms delay + ignoreNextClick flag after
+   subscribing to click events. Stale events from before measure mode are
+   ignored. User must click AFTER entering measure mode.
+
+3. No auto-exit: removed setMeasureMode("off") after measurement completes.
+   Instead reset to 0/needed so user can make multiple measurements.
+
+4. Camera preserved: save camera snapshot before overlaySticks(), restore
+   after. The addRepresentation was causing Molstar to re-frame the view.
+
+5. Full Analysis loads structure: close modal FIRST, then delay 500ms before
+   setting pendingPdbId. This allows Radix Dialog fade-out + PdbViewerLite
+   unmount before StructureAnalysisView's MolstarViewer initializes.
+
+Stage Summary:
+- All 5 user-reported issues fixed
+- ESLint: 0 errors
+- Production build: EXIT 0
