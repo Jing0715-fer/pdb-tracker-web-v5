@@ -135,6 +135,12 @@ async function generateMethodReport(opts: {
       emit({ stage: `${methodKey}-chapter_done`, level: 'error', message: `[${methodLabel}] [${chapterIdx}/${totalChapters}] ${ch.key}. ${ch.title} ✗ ${r.error?.slice(0, 100) ?? 'unknown'}`, progress: chapterProgress + Math.round(methodProgressSpan / totalChapters) - 1, chapter: ch.key, chapterIndex: chapterIdx, chapterTotal: totalChapters, method: methodKey });
       chapterDetails.push({ key: ch.key, title: ch.title, ok: false, error: r.error, durationMs: r.durationMs });
     }
+    // Rate-limit delay between chapters to avoid 429 from z-ai SDK.
+    // Each chapter is a separate LLM call; firing them back-to-back triggers
+    // "Too many requests" (429). A 3s gap gives the API time to recover.
+    if (i < totalChapters - 1) {
+      await new Promise(r => setTimeout(r, 3000));
+    }
   }
 
   // Merge chapters in order — sanitize to close unclosed bold/code spans

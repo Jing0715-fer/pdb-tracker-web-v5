@@ -1437,14 +1437,29 @@ async function callOpenai(prompt: string, system?: string, model?: string): Prom
 async function callZai(prompt: string, system?: string, model?: string): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const resp = await zai.chat.completions.create({
-    model: model || 'glm-4.6',
-    messages: [
-      ...(system ? [{ role: 'system' as const, content: system }] : []),
-      { role: 'user' as const, content: prompt }],
-    thinking: { type: 'disabled' as const },
-  });
-  return resp.choices?.[0]?.message?.content || '';
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 5000; // 5s initial backoff for 429 errors
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const resp = await zai.chat.completions.create({
+        model: model || 'glm-4.6',
+        messages: [
+          ...(system ? [{ role: 'system' as const, content: system }] : []),
+          { role: 'user' as const, content: prompt }],
+        thinking: { type: 'disabled' as const },
+      });
+      return resp.choices?.[0]?.message?.content || '';
+    } catch (err: any) {
+      const is429 = err?.message?.includes('429') || err?.message?.includes('Too many');
+      if (is429 && attempt < MAX_RETRIES - 1) {
+        const delay = BASE_DELAY * Math.pow(2, attempt); // 5s, 10s, 20s
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('callZai: max retries exceeded');
 }
 
 // ─── llmComplete (legacy interface used by pdb-weekly/literature-daily/target-eval) ─
