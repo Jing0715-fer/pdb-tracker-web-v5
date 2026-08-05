@@ -3801,3 +3801,36 @@ Stage Summary:
 3. [P3] The SASA per-chain value shows 0 — the ShrakeRupley level="S"
    computes structure-level SASA but residue-level may need level="R".
 4. [P3] Test all 30+ recipes to ensure none error out.
+
+---
+Task ID: cron-review-62
+Agent: main
+Task: Fix sticks overlay — pass comp.cell to addRepresentation
+
+Root Cause:
+- overlaySticks was calling addRepresentation with the component WRAPPER
+  (comp) instead of the STATE CELL (comp.cell).
+- The bundle's addRepresentation function calls Pn.resolveAndCheck which
+  expects a cell/ref, not a wrapper object.
+- This caused "Could not find node 'undefined'" error silently.
+
+Fix:
+- Changed addRepresentation(comp, ...) to addRepresentation(comp.cell, ...)
+- Verified: addRepresentation returns "created: Ball & Stick"
+
+Verification (agent-browser + VLM):
+- ✅ Cartoon (green ribbon) AND ball-and-stick visible simultaneously
+- ✅ 0/2 progress indicator shows correctly
+- ✅ Click atom → "Picked 1/2: TRP A 50 CG" (residue name, not "atom")
+- ✅ Pick 2nd atom → "Distance measurement added" + dashed line (23 Å)
+- ✅ Measurement history: "TRP A 50 CG ↔ ARG A 84 N measured"
+- ✅ Measure tab removed, tools in 3D overlay
+
+Stage Summary:
+- All 6 user-reported issues now verified fixed via browser screenshots:
+  1. ✅ Sticks overlay on cartoon (not replace)
+  2. ✅ 0/2 starts fresh (no auto-select)
+  3. ✅ Measure tab removed, tools in 3D overlay
+  4. ✅ Interaction list auto-computes all types
+  5. ✅ SASA/surface_residues work with biopython ShrakeRupley
+  6. ✅ Python PATH includes venv for biopython/numpy
