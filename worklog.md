@@ -3987,3 +3987,47 @@ Stage Summary:
 - All 3 user-reported issues fixed
 - Molcraft comparison complete — PDB Tracker matches or exceeds Molcraft
 - ESLint: 0 errors
+
+---
+Task ID: cron-review-67
+Agent: main
+Task: Port updated Molcraft measure.ts + MeasureOverlay + fix preview + loading anim
+
+3 user-reported issues + Molcraft port:
+
+1. Preview second PDB doesn't load:
+   - PdbViewerLite key was only viewerReadyKey (incremented on open).
+   - When switching to a different PDB without closing, the key didn't
+     change, so PdbViewerLite didn't remount.
+   - Fix: key now includes pdbId: key={`${viewerReadyKey}-${pdbId}`}
+
+2. Only ONE loading animation (Box + Loader2):
+   - Removed MolstarViewer's built-in "Initializing Molstar Viewer"
+     animation (the spinning ring + SVG icon).
+   - Parent components (PdbViewerLite + structure-analysis-view) now
+     show the single "Box + Loader2 → Initializing 3D Viewer..." overlay.
+
+3. Port updated Molcraft measurement system:
+   - NEW: src/lib/molcraft/measure.ts (956 lines) from updated Molcraft
+   - NEW: src/components/molcraft-molstar/measure-overlay.tsx (371 lines)
+   - Updated store.ts: added interactionLines state
+   - Updated structure-utils.ts: added findAtomCoord()
+   - Updated use-atom-picking.ts: uses disableFocusBehaviors() +
+     extractAtomInfoFromLoci() + addInteractionLine() instead of
+     Molstar's addDistance. Distance computed locally for accuracy.
+   - Updated molstar-viewer.tsx: mounts MeasureOverlay canvas
+
+Key improvements from updated Molcraft:
+- disableFocusBehaviors intercepts focus manager methods (prevents
+  sidechain hide/show on clicks — the "click-to-measure broke" issue)
+- extractAtomInfoFromLoci uses window.molstar.lib.loci.Loci.getCenter
+  (robust, not bundle-version-dependent)
+- MeasureOverlay draws 2D canvas overlay with spheres/lines/labels
+  projected from 3D → 2D using camera.projectionView matrix
+- interactionLines store state links to measurements for per-item removal
+
+Stage Summary:
+- All 3 issues fixed
+- Updated Molcraft measure system ported
+- ESLint: 0 errors
+- Production build: EXIT 0
