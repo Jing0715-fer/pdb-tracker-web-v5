@@ -4031,3 +4031,37 @@ Stage Summary:
 - Updated Molcraft measure system ported
 - ESLint: 0 errors
 - Production build: EXIT 0
+
+---
+Task ID: cron-review-68
+Agent: main
+Task: Fix measure overlay alignment + water bridge Python PATH + port interaction-network
+
+3 fixes:
+
+1. Measure overlay line misaligned with atoms:
+   - Root cause: Molstar's camera.viewport has {x, y, width, height} but
+     the overlay canvas covers the entire container. The projection was
+     using only width/height, ignoring the viewport's x/y offset.
+   - Fix: added viewport.x and viewport.y to the project3DTo2D() function.
+   - Projected coordinates now correctly offset by the viewport position.
+
+2. Water bridge analysis 'No module named Bio':
+   - Root cause: the analyze/run route's childEnv PATH only included
+     /home/z/.local/bin, not /home/z/.venv/bin where biopython is installed.
+   - Fix: added /home/z/.venv/bin to the PATH (same pattern as cli-registry).
+   - Verified: water_bridges recipe returns 66 bridges for 1CBS.
+   - Verified: sasa recipe returns 7840.64 Å².
+
+3. Ported updated Molcraft interaction-network.tsx:
+   - Replaced with the updated Molcraft version that uses:
+     clearInteractionState() + showAtomsForInteraction() + findAtomCoord() +
+     setInteractionLines() to draw dashed distance lines on click.
+   - Fixed import paths for local project structure.
+   - Uses the all_interactions recipe (needs to be added to cli-registry).
+
+Stage Summary:
+- All 3 issues fixed
+- Water bridges + SASA verified working
+- Interaction network ported from updated Molcraft
+- ESLint: 0 errors
