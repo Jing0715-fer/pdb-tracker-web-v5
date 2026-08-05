@@ -150,7 +150,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
             <div className="flex-1 min-w-0 relative">
               {pdbId && viewerReady ? (
                 <PdbViewerLite
-                  key={viewerReadyKey}
+                  key={`${viewerReadyKey}-${pdbId}`}
                   pdbId={pdbId}
                   className="h-full border-0 rounded-none"
                 />

@@ -142,10 +142,15 @@ interface AppState {
   /** Labels of atoms picked so far (e.g. ["TRP A 47 C", "LYS A 66 CE"]). */
   pickedAtoms: string[];
   setPickedAtoms: (a: string[]) => void;
-  measurements: Array<{ id: string; mode: "distance" | "angle"; label: string; detail: string; ts: number }>;
-  addMeasurement: (m: { mode: "distance" | "angle"; label: string; detail: string }) => void;
+  measurements: Array<{ id: string; mode: "distance" | "angle"; label: string; detail: string; ts: number; atoms?: Array<{ x: number; y: number; z: number; label?: string }>; lineId?: string }>;
+  addMeasurement: (m: { mode: "distance" | "angle"; label: string; detail: string; atoms?: Array<{ x: number; y: number; z: number; label?: string }>; lineId?: string }) => void;
   removeMeasurement: (id: string) => void;
   clearMeasurements: () => void;
+  /** Overlay lines for interactions (drawn by MeasureOverlay canvas). */
+  interactionLines: Array<{ id: string; from: { x: number; y: number; z: number; label?: string }; to: { x: number; y: number; z: number; label?: string }; color: string; label?: string; dashed?: boolean }>;
+  addInteractionLine: (line: { id?: string; from: { x: number; y: number; z: number; label?: string }; to: { x: number; y: number; z: number; label?: string }; color: string; label?: string; dashed?: boolean }) => void;
+  setInteractionLines: (lines: Array<{ from: { x: number; y: number; z: number; label?: string }; to: { x: number; y: number; z: number; label?: string }; color: string; label?: string; dashed?: boolean }>) => void;
+  clearInteractionLines: () => void;
 
   // Advanced visualization overlays
   electrostaticViz: ElectrostaticViz | null;
@@ -438,8 +443,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       ].slice(0, 50),
     })),
   removeMeasurement: (id) =>
-    set((state) => ({ measurements: state.measurements.filter((m) => m.id !== id) })),
-  clearMeasurements: () => set({ measurements: [] }),
+    set((state) => {
+      const target = state.measurements.find((mm) => mm.id === id);
+      const lineId = target?.lineId;
+      return {
+        measurements: state.measurements.filter((m) => m.id !== id),
+        interactionLines: lineId
+          ? state.interactionLines.filter((l) => l.id !== lineId)
+          : state.interactionLines,
+      };
+    }),
+  clearMeasurements: () => set({ measurements: [], interactionLines: [] }),
+  interactionLines: [],
+  addInteractionLine: (line) =>
+    set((state) => ({
+      interactionLines: [
+        ...state.interactionLines,
+        { id: line.id ?? `il-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...line },
+      ],
+    })),
+  setInteractionLines: (lines) =>
+    set({
+      interactionLines: lines.map((l, i) => ({
+        id: `il-${Date.now()}-${i}`,
+        ...l,
+      })),
+    }),
+  clearInteractionLines: () => set({ interactionLines: [] }),
 
   electrostaticViz: null,
   setElectrostaticViz: (v) => set({ electrostaticViz: v }),

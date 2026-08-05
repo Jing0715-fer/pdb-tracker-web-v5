@@ -3,7 +3,8 @@
 import { useEffect, useRef } from "react";
 import { useMolstarLoader } from "./use-molstar-loader";
 import { useAppStore } from "@/lib/molcraft/store";
-import type { MolstarViewer } from "@/lib/molcraft/types";
+import type { MolstarViewer as MolstarViewerType } from "@/lib/molcraft/types";
+import { MeasureOverlay } from "./measure-overlay";
 
 interface MolstarViewerProps {
   className?: string;
@@ -162,44 +163,11 @@ export function MolstarViewer({ className }: MolstarViewerProps) {
           </div>
         </div>
       )}
-      {!molstar && !error && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="sa-molstar-loader flex flex-col items-center gap-4 text-claude-text-secondary">
-            <div className="relative h-16 w-16">
-              {/* Outer ring */}
-              <div className="absolute inset-0 rounded-full border-2 border-claude-accent/20" />
-              {/* Spinning arc */}
-              <div className="absolute inset-0 rounded-full border-t-2 border-claude-accent animate-spin" />
-              {/* Center icon */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <svg
-                  className="h-6 w-6 text-claude-accent animate-pulse"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
-                </svg>
-              </div>
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-claude-text">
-                Initializing Molstar Viewer
-              </p>
-              <p className="mt-0.5 text-[10px] text-claude-text-muted">
-                Loading 3D rendering engine...
-              </p>
-            </div>
-            {/* Progress bar */}
-            <div className="h-1 w-32 overflow-hidden rounded-full bg-claude-border">
-              <div className="sa-progress-bar h-full bg-claude-accent" />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* NOTE: The loading animation is handled by the PARENT component
+          (PdbViewerLite or structure-analysis-view) which shows a
+          "Box + Loader2" overlay while !ready. We do NOT render a
+          separate loading animation here to avoid duplicate spinners. */}
+      <MeasureOverlay />
     </div>
   );
 }

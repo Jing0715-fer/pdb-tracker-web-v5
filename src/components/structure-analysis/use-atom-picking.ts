@@ -25,6 +25,8 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "@/lib/molcraft/store";
 import type { MolstarViewer, MolstarPlugin } from "@/lib/molcraft/types";
+import { disableFocusBehaviors, extractAtomInfoFromLoci, clearAllMeasurementsAndFocus } from "@/lib/molcraft/measure";
+import { addInteractionLine } from "@/lib/molcraft/store";
 
 interface PickedAtom {
   loci: unknown;
@@ -311,10 +313,10 @@ export function useAtomPicking() {
   const setMeasureProgress = useAppStore((s) => s.setMeasureProgress);
   const setPickedAtoms = useAppStore((s) => s.setPickedAtoms);
   const addMeasurement = useAppStore((s) => s.addMeasurement);
+  const addLine = useAppStore((s) => s.addInteractionLine);
   const toast = useAppStore((s) => s.toast);
   const pendingRef = useRef<PickedAtom[]>([]);
   const restoreFocusRef = useRef<(() => void) | null>(null);
-  const restoreReprRef = useRef<(() => void) | null>(null);
 
   // Clear pending atoms when mode changes
   useEffect(() => {
@@ -329,10 +331,6 @@ export function useAtomPicking() {
         try { restoreFocusRef.current(); } catch { /* ignore */ }
         restoreFocusRef.current = null;
       }
-      if (restoreReprRef.current) {
-        try { restoreReprRef.current(); } catch { /* ignore */ }
-        restoreReprRef.current = null;
-      }
       return;
     }
 
@@ -341,46 +339,24 @@ export function useAtomPicking() {
       const plugin = viewer.plugin;
       if (!plugin) return;
 
-    // 1. Overlay ball-and-stick on top of the existing cartoon so individual
-    //    atoms are clickable without losing the cartoon overview.
-    //    Save camera state before and restore after to prevent the viewer
-    //    from re-framing when a new representation is added.
-    let cameraSnapshot: any = null;
-    try {
-      const cam = (plugin as any)?.canvas3d?.camera;
-      if (cam?.getSnapshot) cameraSnapshot = cam.getSnapshot();
-    } catch { /* ignore */ }
-    overlaySticks(plugin).then((restore) => {
-      restoreReprRef.current = restore;
-      // Restore camera position after representation is added
-      if (cameraSnapshot) {
-        try {
-          const cam = (plugin as any)?.canvas3d?.camera;
-          if (cam?.setState) cam.setState(cameraSnapshot);
-        } catch { /* ignore */ }
-      }
-    }).catch(() => {
-      // ignore — sticks overlay is best-effort
+    // 1. Disable focus behaviors (clickCenterFocus, clickFocus, hoverHighlight)
+    //    + add ball-and-stick overlay + set granularity to "element".
+    //    This is the updated Molcraft pattern from measure.ts.
+    disableFocusBehaviors(plugin).then((restore) => {
+      restoreFocusRef.current = restore;
+      try { plugin.canvas3d?.requestDraw?.(); } catch { /* ignore */ }
+    }).catch((e) => {
+      console.warn("[atom-picking] disableFocusBehaviors failed:", e);
     });
 
-    // 2. Set granularity to element (atom-level)
-    try {
-      plugin.managers.interactivity.setProps({ granularity: "element" });
-    } catch { /* ignore */ }
-
-    // 3. Clear any existing selection AND highlights so that the user
-    //    starts fresh at 0/2. Without this, a previously-highlighted atom
-    //    (from hovering or a prior click) gets counted as the first pick.
+    // 2. Clear any existing selection AND highlights
     try {
       plugin.managers.structure.selection.clear();
       plugin.managers.interactivity.lociSelects.deselectAll();
       plugin.managers.interactivity.lociHighlights.clearHighlights();
     } catch { /* ignore */ }
 
-    // 4. Disable click-to-focus
-    restoreFocusRef.current = disableClickFocus(plugin);
-
-    // 5. Subscribe to clicks — ONLY behaviors.interaction.click works
+    // 3. Subscribe to clicks — ONLY behaviors.interaction.click works
     //    (events.interactivity.click does NOT exist in the prebuilt bundle)
     const clickObs = (plugin as any)?.behaviors?.interaction?.click;
     if (!clickObs?.subscribe) {
@@ -424,33 +400,58 @@ export function useAtomPicking() {
         if (picked < needed) {
           toast(`Picked ${picked}/${needed}: ${label}`, "info");
         } else {
-          // We have enough atoms — perform the measurement
+          // We have enough atoms — perform the measurement using the
+          // updated Molcraft pattern from measure.ts:
+          // extract 3D coords + draw overlay line + compute distance.
           const done = pendingRef.current;
           pendingRef.current = [];
 
-          const mm = plugin.managers.structure.measurement;
-          if (measureMode === "distance" && done.length >= 2) {
-            mm.addDistance(done[0].loci, done[1].loci)
-              .then(() => {
-                addMeasurement({
-                  mode: "distance",
-                  label: `${done[0].label} ↔ ${done[1].label}`,
-                  detail: "measured",
-                });
-                toast("Distance measurement added", "success");
-              })
-              .catch(() => toast("Distance measurement failed", "error"));
-          } else if (measureMode === "angle" && done.length >= 3) {
-            mm.addAngle(done[0].loci, done[1].loci, done[2].loci)
-              .then(() => {
-                addMeasurement({
-                  mode: "angle",
-                  label: `${done[0].label} ∠ ${done[1].label} ∠ ${done[2].label}`,
-                  detail: "measured",
-                });
-                toast("Angle measurement added", "success");
-              })
-              .catch(() => toast("Angle measurement failed", "error"));
+          const atomInfos = done.map((p) => extractAtomInfoFromLoci(plugin, p.loci));
+
+          if (measureMode === "distance" && atomInfos.length >= 2) {
+            const [a0, a1] = atomInfos;
+            if (a0 && a1) {
+              const dist = Math.sqrt((a0.x - a1.x) ** 2 + (a0.y - a1.y) ** 2 + (a0.z - a1.z) ** 2);
+              const lineId = `ml-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              addLine({
+                id: lineId,
+                from: { x: a0.x, y: a0.y, z: a0.z, label: a0.label },
+                to: { x: a1.x, y: a1.y, z: a1.z, label: a1.label },
+                color: "#f59e0b",
+                label: `${dist.toFixed(2)} Å`,
+                dashed: false,
+              });
+              addMeasurement({
+                mode: "distance",
+                label: `${a0.label} ↔ ${a1.label}`,
+                detail: `${dist.toFixed(2)} Å`,
+                atoms: [{ x: a0.x, y: a0.y, z: a0.z, label: a0.label }, { x: a1.x, y: a1.y, z: a1.z, label: a1.label }],
+                lineId,
+              });
+              toast(`Distance: ${dist.toFixed(2)} Å`, "success");
+            }
+          } else if (measureMode === "angle" && atomInfos.length >= 3) {
+            const [a0, a1, a2] = atomInfos;
+            if (a0 && a1 && a2) {
+              // Compute angle at a1
+              const v1 = { x: a0.x - a1.x, y: a0.y - a1.y, z: a0.z - a1.z };
+              const v2 = { x: a2.x - a1.x, y: a2.y - a1.y, z: a2.z - a1.z };
+              const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+              const mag1 = Math.sqrt(v1.x ** 2 + v1.y ** 2 + v1.z ** 2);
+              const mag2 = Math.sqrt(v2.x ** 2 + v2.y ** 2 + v2.z ** 2);
+              const angle = Math.acos(dot / (mag1 * mag2)) * (180 / Math.PI);
+              const lineId1 = `ml-${Date.now()}-1`;
+              const lineId2 = `ml-${Date.now()}-2`;
+              addLine({ id: lineId1, from: { x: a0.x, y: a0.y, z: a0.z, label: a0.label }, to: { x: a1.x, y: a1.y, z: a1.z, label: a1.label }, color: "#a855f7", label: "", dashed: false });
+              addLine({ id: lineId2, from: { x: a1.x, y: a1.y, z: a1.z, label: a1.label }, to: { x: a2.x, y: a2.y, z: a2.z, label: a2.label }, color: "#a855f7", label: `${angle.toFixed(1)}°`, dashed: false });
+              addMeasurement({
+                mode: "angle",
+                label: `${a0.label} ∠ ${a1.label} ∠ ${a2.label}`,
+                detail: `${angle.toFixed(1)}°`,
+                lineId: lineId2,
+              });
+              toast(`Angle: ${angle.toFixed(1)}°`, "success");
+            }
           }
 
           // Reset for the next measurement — stay in measure mode so the
@@ -477,15 +478,11 @@ export function useAtomPicking() {
         try { restoreFocusRef.current(); } catch { /* ignore */ }
         restoreFocusRef.current = null;
       }
-      if (restoreReprRef.current) {
-        try { restoreReprRef.current(); } catch { /* ignore */ }
-        restoreReprRef.current = null;
-      }
       try {
         viewer.plugin.managers.interactivity.lociHighlights.clearHighlights();
       } catch { /* ignore */ }
     };
-  }, [viewer, measureMode, addMeasurement, setMeasureMode, setMeasureProgress, toast]);
+  }, [viewer, measureMode, addMeasurement, addLine, setMeasureMode, setMeasureProgress, setPickedAtoms, toast]);
 
   const cancelPicking = useCallback(() => {
     pendingRef.current = [];
