@@ -1733,6 +1733,12 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
   const chatProvider = useAppStore((s) => s.chatProvider);
   const toast = useAppStore((s) => s.toast);
 
+  // Reset chat messages when pdbId changes (switching structures)
+  useEffect(() => {
+    setMessages([]);
+    setInput("");
+  }, [pdbId]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     const el = scrollRef.current;
