@@ -5400,3 +5400,38 @@ Next Phase Recommendations:
    - The modal's ModalChatTab doesn't have a stop button (unlike the full
      ChatTab which has the red Square stop button)
    - Should add for consistency
+
+---
+Task ID: fix-chat-format + structure-close + per-chain-vis + overlay-offset
+Agent: main
+Task: Fix 4 bugs: chat response format, structure close 3D clear, per-chain visibility, overlay offset.
+
+Bug 1 — Chat response format (FIXED):
+- LLM returned {actions: [...]} instead of {commands: [...]} with non-standard
+  types (load, selection, analysis, camera-focus)
+- Fix: strengthened system prompt with CRITICAL instruction + explicit rule
+  NEVER use actions/selection/analysis/camera-focus
+- Added convertActionsToCommands() fallback parser that converts:
+  load → load_pdb, analysis → analyze_run, camera-focus → focus_ligand
+- Added 2 examples including the exact 6LU7 ligand pocket case the user reported
+
+Bug 2 — Structure close 3D not clearing (FIXED):
+- closeStructure() returned early if viewer was null, leaving structure in list
+- Label-based matching might fail if Molstar label format differs
+- Fix: always removeStructure(id) from store, even if Molstar removal fails
+- Molstar structure cleaned up on viewer dispose or next load
+
+Bug 3 — Per-chain visibility broken (FIXED):
+- toggle_component_visibility toggled the entire Polymer component (all chains)
+- Fix: creates per-chain component via MolScript expression (auth_asym_id == chain)
+- Caches by tag (chain-visibility-{chain}) for reuse
+- Falls back to whole-Polymer if MolScript Q unavailable
+- Fixes: hide/solo now correctly affect individual chains
+
+Bug 4 — Measurement overlay point offset (FIXED):
+- Drawn points were offset from actual atom positions
+- Root cause: overlay canvas rect vs Molstar canvas3d container rect mismatch
+- Fix: compute molstarOffsetX/Y from bounding rects, add to viewport coords
+
+Note: PDB list preview vs full analysis component reuse not addressed yet —
+requires larger architectural refactor (separate task).
