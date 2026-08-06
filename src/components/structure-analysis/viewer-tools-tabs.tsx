@@ -13,7 +13,7 @@
  * preview any PDB regardless of what's loaded in the full Analysis module.
  */
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Palette, Zap, Download, Upload, Loader2, Trash2, Box,
   Microscope, FlaskConical, ShieldCheck, Atom, Camera, RotateCcw, Copy,
@@ -33,7 +33,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { useAppStore } from "@/lib/molcraft/store";
+import { useAppStore, selectActiveStructure } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
 import { extractAtomInfoFromLoci } from "@/lib/molcraft/measure";
 import {
@@ -337,6 +337,20 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
   const [analysisChain1, setAnalysisChain1] = useState("A");
   const [analysisChain2, setAnalysisChain2] = useState("B");
   const [analysisSummary, setAnalysisSummary] = useState<string | null>(null);
+
+  // Auto-detect available chains from the active structure's metadata.
+  const activeStructure = useAppStore(selectActiveStructure);
+  const availableChains: string[] = activeStructure?.metadata?.chains ?? [];
+  useEffect(() => {
+    if (availableChains.length === 0) return;
+    if (availableChains.length === 1) {
+      setAnalysisChain1(availableChains[0]);
+      setAnalysisChain2(availableChains[0]);
+    } else {
+      if (!availableChains.includes(analysisChain1)) setAnalysisChain1(availableChains[0]);
+      if (!availableChains.includes(analysisChain2)) setAnalysisChain2(availableChains[1] ?? availableChains[0]);
+    }
+  }, [availableChains.join(",")]);
   const [analysisRows, setAnalysisRows] = useState<Array<{
     type: string;
     chain1?: string; resno1?: number; resname1?: string; atom1?: string;
@@ -628,21 +642,50 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       <div className="grid grid-cols-2 gap-2">
         <div>
           <Label className="text-[10px] text-claude-text-muted">Chain 1</Label>
-          <Input
-            value={analysisChain1}
-            onChange={(e) => setAnalysisChain1(e.target.value)}
-            className="h-8 text-xs font-mono"
-          />
+          {availableChains.length > 0 ? (
+            <select
+              value={analysisChain1}
+              onChange={(e) => setAnalysisChain1(e.target.value)}
+              className="h-8 w-full text-xs font-mono rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-bg dark:bg-[#1a1917] px-1.5"
+            >
+              {availableChains.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              value={analysisChain1}
+              onChange={(e) => setAnalysisChain1(e.target.value)}
+              className="h-8 text-xs font-mono"
+            />
+          )}
         </div>
         <div>
           <Label className="text-[10px] text-claude-text-muted">Chain 2</Label>
-          <Input
-            value={analysisChain2}
-            onChange={(e) => setAnalysisChain2(e.target.value)}
-            className="h-8 text-xs font-mono"
-          />
+          {availableChains.length > 0 ? (
+            <select
+              value={analysisChain2}
+              onChange={(e) => setAnalysisChain2(e.target.value)}
+              className="h-8 w-full text-xs font-mono rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-bg dark:bg-[#1a1917] px-1.5"
+            >
+              {availableChains.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          ) : (
+            <Input
+              value={analysisChain2}
+              onChange={(e) => setAnalysisChain2(e.target.value)}
+              className="h-8 text-xs font-mono"
+            />
+          )}
         </div>
       </div>
+      {analysisChain1 === analysisChain2 && (
+        <div className="rounded-md bg-claude-accent-light/30 border border-claude-accent/20 px-2 py-1 text-[9px] text-claude-text-muted">
+          Intra-chain mode (chain {analysisChain1} ↔ itself). Use "All" for same-chain contacts.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-1.5">
         <Button
           size="sm"

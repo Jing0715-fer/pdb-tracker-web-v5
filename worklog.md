@@ -4816,3 +4816,113 @@ Stage Summary:
 - All local features preserved (chat/agent, right-panel results, viewport controls,
   upload tab, viewer-tools-tabs, dihedral/label measurement, /api/llm/chat).
 - Merged result pushed to github.com/Jing0715-fer/pdb-tracker-web-v5 (main branch).
+
+---
+Task ID: structure-analysis-testing
+Agent: main
+Task: Perform structure analysis testing, evaluate results, propose improvement plan.
+
+Test Results Summary:
+
+1. all_interactions API (1CBS, chain A↔A):
+   ✅ OK: total=272, salt_bridges=20, hbonds=100, hydrophobic=152
+   ✅ Distance range: 0.00-4.50Å, avg 2.33Å
+   ✅ Returns numeric counts (matches Molcraft form)
+   ✅ Returns atom-level interactions array (272 items)
+
+2. Individual hbonds API (1CBS, chain A↔A):
+   ⚠️ Returns 0 hydrogen bonds (chain1==chain2, recipe skips same-chain pairs)
+   Root cause: the hbonds recipe uses `if a.get_parent().get_parent().id == b.get_parent().get_parent().id: continue`
+   which skips ALL pairs when chain1==chain2. This is by design for inter-chain
+   analysis, but confusing for single-chain structures.
+
+3. Individual salt_bridges API (1CBS, chain A↔A):
+   ⚠️ Returns 0 (same issue as hbonds — skips same-chain)
+
+4. Individual hydrophobic_contacts API (1CBS, chain A↔A):
+   ⚠️ Returns 0 (same issue — uses NeighborSearch that skips same-chain)
+
+5. metadata API (1CBS):
+   ✅ OK: title, method (X-RAY), resolution (1.8Å), polymer entities, etc.
+
+6. Chat API (simple "Hello"):
+   ✅ OK: provider=zai, reply with helpful description of capabilities
+
+7. Chat API (analysis request "Load 1CBS and run hydrogen bond analysis"):
+   ✅ OK: returns commands=[load_pdb 1CBS, analyze_run hbonds], continueAfterAnalysis=true
+   Agent correctly parsed the request and generated executable commands.
+
+8. providers API:
+   ❌ Dev server OOM during provider scan (CLI detection is memory-intensive)
+
+9. Structure Analysis 3D viewer:
+   ❌ Dev server OOM during 3D rendering (4GB sandbox cannot sustain molstar.js + 3D)
+   The viewer initializes but the server dies during heavy 3D ops.
+
+Issues Found:
+
+A. Chain selection UX problem:
+   - interaction-network.tsx defaults to chain1="A", chain2="B"
+   - viewer-tools-tabs InteractionsTab defaults to chain1="A", chain2="B"
+   - For single-chain structures (1CBS has only chain A), this fails silently
+   - No auto-detection of available chains from the loaded structure's metadata
+
+B. Individual recipe vs all_interactions inconsistency:
+   - hbonds/salt_bridges/hydrophobic_contacts skip same-chain pairs (inter-chain only)
+   - all_interactions includes same-chain pairs (intra-chain)
+   - Users get 0 results from individual recipes but 272 from all_interactions
+   - No UI guidance about this difference
+
+C. Dev server OOM (infrastructure):
+   - 4GB sandbox cannot sustain the Structure Analysis 3D viewer + 24 charts
+   - Provider CLI scanning also causes OOM
+   - This is a sandbox limitation, not a code bug
+
+D. Chat agent missing chain guidance:
+   - The system prompt doesn't mention that chain1=chain2 gives different results
+     for individual recipes vs all_interactions
+   - The agent might suggest chain1="A", chain2="B" for single-chain structures
+
+Improvement Plan (prioritized):
+
+P0 — Fix chain auto-detection (high impact, low effort):
+   - In interaction-network.tsx and InteractionsTab, auto-detect available chains
+     from the active structure's metadata (activeStructure.metadata.chains)
+   - Default chain2 to the same as chain1 if only one chain exists
+   - Show a warning when chain1==chain2 for individual recipes
+
+P0 — Add chain guidance to chat system prompt:
+   - Update /api/llm/chat SYSTEM_PROMPT to explain that:
+     * For single-chain structures, use chain1=chain2="A" with all_interactions
+     * Individual recipes (hbonds/salt_bridges/hydrophobic) only find inter-chain
+       contacts — use all_interactions for intra-chain analysis
+
+P1 — Add "intra-chain" mode to individual recipes:
+   - Modify hbonds/salt_bridges/hydrophobic_contacts recipes to NOT skip
+     same-chain pairs when chain1==chain2 (add a param `intra_chain=true`)
+   - Or: add a new recipe variant `intra_hbonds` that allows same-chain
+
+P1 — Add chain selector dropdown (instead of text input):
+   - Replace the chain1/chain2 text inputs with dropdowns populated from
+     the structure's available chains
+   - Prevents typos and impossible chain selections
+
+P2 — Add loading state to interaction-network:
+   - Show a skeleton/spinner while the all_interactions recipe runs
+   - Currently shows nothing for ~5-10 seconds during analysis
+
+P2 — Add "copy results" button to interaction-network:
+   - Allow copying the interaction list as TSV/CSV for external analysis
+
+P2 — Add contacts visualization to the modal's Interactions tab:
+   - The viewer-tools-tabs InteractionsTab already has a "Visualize contacts in 3D"
+     section, but the full Structure Analysis view's interaction-network doesn't
+   - Port the drawContacts3D function to the interaction-network component
+
+P3 — Streaming chat responses:
+   - Currently generateText returns the full response (no streaming)
+   - Add SSE streaming so the chat reply appears incrementally
+
+P3 — Agent command preview:
+   - Before executing commands, show the user what the agent wants to do
+   - Add a "confirm" step for destructive commands (clear_measurements, etc.)

@@ -77,6 +77,24 @@ export function InteractionNetwork() {
   const [chain2, setChain2] = useState("B");
   const [data, setData] = useState<AllInteractionsData | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Auto-detect available chains from the active structure's metadata.
+  // When the structure changes, update chain1/chain2 to valid values:
+  // - If only 1 chain: set both to that chain (intra-chain analysis)
+  // - If 2+ chains: keep chain1=A, set chain2 to the second chain
+  const availableChains: string[] = activeStructure?.metadata?.chains ?? [];
+  useEffect(() => {
+    if (availableChains.length === 0) return;
+    if (availableChains.length === 1) {
+      setChain1(availableChains[0]);
+      setChain2(availableChains[0]);
+    } else {
+      // If current chain1 isn't available, pick the first available
+      if (!availableChains.includes(chain1)) setChain1(availableChains[0]);
+      // If current chain2 isn't available, pick the second chain
+      if (!availableChains.includes(chain2)) setChain2(availableChains[1] ?? availableChains[0]);
+    }
+  }, [availableChains.join(",")]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
   const [drawingIdx, setDrawingIdx] = useState<number | null>(null);
@@ -247,13 +265,43 @@ export function InteractionNetwork() {
         <div className="grid grid-cols-2 gap-1.5">
           <div>
             <Label className="text-[9px] text-claude-text-muted">Chain 1</Label>
-            <Input value={chain1} onChange={(e) => setChain1(e.target.value.toUpperCase())} className="h-7 text-xs font-mono" maxLength={2} />
+            {availableChains.length > 0 ? (
+              <select
+                value={chain1}
+                onChange={(e) => setChain1(e.target.value)}
+                className="h-7 w-full text-xs font-mono rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-bg dark:bg-[#1a1917] px-1.5"
+              >
+                {availableChains.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <Input value={chain1} onChange={(e) => setChain1(e.target.value.toUpperCase())} className="h-7 text-xs font-mono" maxLength={2} />
+            )}
           </div>
           <div>
             <Label className="text-[9px] text-claude-text-muted">Chain 2</Label>
-            <Input value={chain2} onChange={(e) => setChain2(e.target.value.toUpperCase())} className="h-7 text-xs font-mono" maxLength={2} />
+            {availableChains.length > 0 ? (
+              <select
+                value={chain2}
+                onChange={(e) => setChain2(e.target.value)}
+                className="h-7 w-full text-xs font-mono rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-bg dark:bg-[#1a1917] px-1.5"
+              >
+                {availableChains.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <Input value={chain2} onChange={(e) => setChain2(e.target.value.toUpperCase())} className="h-7 text-xs font-mono" maxLength={2} />
+            )}
           </div>
         </div>
+        {chain1 === chain2 && (
+          <div className="rounded-md bg-claude-accent-light/30 border border-claude-accent/20 px-2 py-1 text-[9px] text-claude-text-muted">
+            <Info className="inline h-2.5 w-2.5 mr-1 text-claude-accent" />
+            Intra-chain analysis (chain {chain1} ↔ itself). all_interactions includes same-chain contacts.
+          </div>
+        )}
 
         {loading && <Skeleton className="h-24 w-full" />}
 

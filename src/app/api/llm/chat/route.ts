@@ -81,13 +81,19 @@ Rules:
 4. Keep replies concise (2-4 sentences). Use markdown for structure (lists, bold).
 5. For complex analyses, break them into steps and use continueAfterAnalysis to loop.
 
+Chain selection guidance:
+- For interaction analysis (hbonds, salt_bridges, hydrophobic_contacts), chain1 and chain2 can be the SAME chain (e.g. both "A") to find intra-chain contacts. Use all_interactions for the most comprehensive results.
+- Individual recipes (hbonds, salt_bridges, hydrophobic_contacts) only find INTER-chain contacts when chain1 ≠ chain2. For intra-chain analysis, use all_interactions with chain1=chain2.
+- If the structure has only one chain, always use chain1=chain2="A" (or the correct chain id).
+- If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B" (different chains).
+
 If the user's request doesn't require commands, just return { "reply": "..." }.
 
 Available analysis recipes: ramachandran, bfactor, sasa, secondary_structure, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination.
 
 Example:
 User: "Load 1CBS and analyze its hydrogen bonds"
-Assistant: { "reply": "Loading 1CBS and running hydrogen bond analysis on chain A.", "commands": [ {"type":"load_pdb","id":"1CBS"}, {"type":"analyze_run","pdbId":"1CBS","recipe":"hbonds","params":{"chain1":"A","chain2":"A","distanceCutoff":3.5}} ], "continueAfterAnalysis": true }`;
+Assistant: { "reply": "Loading 1CBS and running hydrogen bond analysis on chain A.", "commands": [ {"type":"load_pdb","id":"1CBS"}, {"type":"analyze_run","pdbId":"1CBS","recipe":"all_interactions","params":{"chain1":"A","chain2":"A"}} ], "continueAfterAnalysis": true }`;
 
 export async function POST(request: NextRequest) {
   try {
