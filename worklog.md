@@ -4642,3 +4642,108 @@ Unresolved Risks / Next Steps:
 - Could add chart result history (keep last 3-5 charts in a stack with
   back/forward navigation).
 - Could persist the active chart across sessions via saveSession/loadSession.
+
+---
+Task ID: chat-agent-port
+Agent: main
+Task: Port Molcraft's chat/agent conversation feature; add chat input box + provider selection reusing run center's LLM provider system.
+
+Problem:
+- The user saw a chat-like window but no input box. Molcraft's chat/agent panel
+  was intentionally removed in the initial port (the store comment said "we
+  reuse pdb-tracker-web-v4's own LLM system"). But no actual chat UI was built.
+- The user wanted: (1) a chat input box, (2) agent provider selection reusing
+  the run center's provider system (NOT Molcraft's CLI agent detection), and
+  (3) the agent analysis structure feature (where the agent can execute
+  commands to analyze structures).
+
+Solution:
+
+1. Added chat state to the Zustand store (src/lib/molcraft/store.ts):
+   - chatMessages: ChatMessage[] — conversation history
+   - addChatMessage, updateChatMessage, clearChat
+   - chatProvider: string — selected LLM provider (persisted to localStorage
+     via the SAME key as the run center: "pdb-tracker:llm-provider:v2")
+   - setChatProvider
+   - ChatMessage interface: { id, role, content, ts, pending?, commands?,
+     analysisResults?, provider? }
+   - loadChatProvider/persistChatProvider helpers
+
+2. Created POST /api/llm/chat (src/app/api/llm/chat/route.ts):
+   - Receives { messages, context, provider }
+   - Builds a system prompt that instructs the LLM to return JSON:
+     { reply, commands?, captureSnapshot?, continueAfterAnalysis? }
+   - Lists all available command types (load_pdb, focus_residue, set_representation,
+     measure_distance, analyze_run, etc.) so the agent can request actions
+   - Calls generateText from src/lib/llm.ts (the run-center LLM system)
+   - Resolves provider via resolveLlmConfig with the provider override
+   - Parses the LLM response as JSON (strips markdown fences if present)
+   - Returns { reply, commands, captureSnapshot, continueAfterAnalysis, provider, model }
+   - Verified: POST with "Hello" → returns valid JSON from the zai/glm-4.6
+     provider with a helpful reply.
+
+3. Created ChatTab component (src/components/structure-analysis/chat-tab.tsx):
+   - Provider selector pills (Popover): fetches GET /api/llm/providers, shows
+     Auto + all available providers with icons/labels. Shares the same
+     localStorage key as the run center so provider selection is synced.
+   - Message list: user/assistant bubbles with markdown rendering
+     (ReactMarkdown + remarkGfm). Each assistant message shows executed
+     command badges (✓/✗) + provider attribution.
+   - Input textarea: Enter to send, Shift+Enter for newline, send button
+     with loading spinner.
+   - Suggestion chips: 4 quick-start prompts (Analyze complex, Active site,
+     Oligomer analysis, Visualize).
+   - Clear chat button.
+   - Agent ReAct loop: sends message → LLM returns commands → executes
+     commands via executeCommand on the Molstar viewer → feeds analysis
+     results back → loops up to 8 rounds until the agent stops requesting
+     continuation. Retries failed LLM calls up to 3x with exponential backoff.
+   - Empty state: Sparkles icon + "Molcraft AI Agent" + suggestion chips.
+
+4. Added Chat tab to the right panel (analysis-right-panel.tsx):
+   - New "Chat" tab button (MessageSquare icon) between Results and Reports.
+   - Renders <ChatTab /> when the Chat tab is active.
+   - RightTab type now includes "chat".
+
+5. Created Textarea UI component (src/components/ui/textarea.tsx):
+   - Standard shadcn textarea (was missing from the UI library).
+
+Verification (agent-browser + curl):
+- Structure Analysis view loads with all 5 right-panel tabs visible
+  (Results / Chat / Reports / Entities / History).
+- Chat tab: textarea renders with placeholder "Ask the agent to analyze a
+  structure…", provider selector shows "Auto", 4 suggestion chips render.
+- Provider popover opens on click, shows "Auto" + "Refresh providers" button.
+- POST /api/llm/chat returns valid JSON: reply + commands + provider (zai/glm-4.6).
+- GET /api/llm/providers returns the run-center provider list.
+- No console errors. Screenshot saved to download/chat-tab.png.
+- ESLint: 0 errors on all changed files.
+
+Stage Summary:
+- Molcraft's chat/agent conversation feature is now ported with an input box,
+  provider selection (reusing the run center's /api/llm/providers), and the
+  full agent ReAct loop (execute commands → feed results back → continue).
+- The agent can load structures, run analyses, change visualizations, measure
+  distances — all via natural language commands.
+- Provider selection is shared with the run center via the same localStorage
+  key, so users configure once and use everywhere.
+- All changes confined to the Structure Analysis module + new API endpoint.
+  No changes to table/dashboard/eval/weekly views.
+
+Files changed/created:
+- src/lib/molcraft/store.ts — chat state (chatMessages, chatProvider, etc.)
+- src/app/api/llm/chat/route.ts — NEW chat endpoint (wraps src/lib/llm.ts)
+- src/components/structure-analysis/chat-tab.tsx — NEW chat UI + agent loop
+- src/components/structure-analysis/analysis-right-panel.tsx — add Chat tab
+- src/components/ui/textarea.tsx — NEW shadcn Textarea component
+
+Unresolved Risks / Next Steps:
+- Dev server OOM during full Structure Analysis 3D rendering persists (4GB
+  sandbox). The chat tab + API work when the server is up.
+- The agent's command execution depends on the Molstar viewer being ready
+  (viewer must be non-null). If no structure is loaded, the send function
+  shows an error toast.
+- Could add streaming responses (currently generateText returns the full
+  response — no SSE/streaming support in src/lib/llm.ts).
+- Could add a "stop generation" button to abort long agent loops.
+- Could persist chat messages across sessions (via saveSession/loadSession).

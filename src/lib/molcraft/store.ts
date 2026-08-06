@@ -18,6 +18,7 @@ import type { MolstarViewer, MolstarPlugin } from "./types";
 
 // ---- localStorage persistence helpers ----
 const STORAGE_KEY_REPORTS = "pdb-tracker:molcraft-reports";
+const STORAGE_KEY_CHAT_PROVIDER = "pdb-tracker:llm-provider:v2";
 
 function loadFromStorage<T>(key: string): T[] {
   if (typeof window === "undefined") return [];
@@ -230,10 +231,36 @@ interface AppState {
   activeAnalysisChart: string | null;
   setActiveAnalysisChart: (chartId: string | null) => void;
 
+  // Chat / agent conversation state (ported from Molcraft, adapted to use
+  // pdb-tracker-web-v5's run-center LLM provider system instead of Molcraft's
+  // CLI agent detection).
+  chatMessages: ChatMessage[];
+  addChatMessage: (m: ChatMessage) => void;
+  updateChatMessage: (id: string, patch: Partial<ChatMessage>) => void;
+  clearChat: () => void;
+  // Selected LLM provider (persisted to localStorage, shared with run center).
+  // Empty string = auto (use the run center's chosen provider).
+  chatProvider: string;
+  setChatProvider: (providerId: string) => void;
+
   // Chart presets (save/load chart parameter combinations)
   chartPresets: ChartPreset[];
   saveChartPreset: (preset: ChartPreset) => void;
   deleteChartPreset: (id: string) => void;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  ts: number;
+  pending?: boolean;
+  /** Optional commands the agent requested (for display in the message bubble). */
+  commands?: unknown[];
+  /** Optional analysis results the agent collected (for ReAct display). */
+  analysisResults?: unknown[];
+  /** Provider that produced this message (for the avatar badge). */
+  provider?: string;
 }
 
 export interface ChartPreset {
@@ -613,6 +640,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeAnalysisChart: null,
   setActiveAnalysisChart: (chartId) => set({ activeAnalysisChart: chartId }),
 
+  // Chat / agent conversation state
+  chatMessages: [],
+  addChatMessage: (m) =>
+    set((state) => ({ chatMessages: [...state.chatMessages, m] })),
+  updateChatMessage: (id, patch) =>
+    set((state) => ({
+      chatMessages: state.chatMessages.map((m) =>
+        m.id === id ? { ...m, ...patch } : m
+      ),
+    })),
+  clearChat: () => set({ chatMessages: [] }),
+  chatProvider: loadChatProvider(),
+  setChatProvider: (providerId) => {
+    persistChatProvider(providerId);
+    set({ chatProvider: providerId });
+  },
+
   chartPresets: loadChartPresets(),
   saveChartPreset: (preset) =>
     set((state) => {
@@ -691,4 +735,21 @@ try { if (typeof window !== "undefined") (window as any).__molcraftStore = useAp
 export function selectActiveStructure(state: AppState): LoadedStructure | null {
   if (!state.activeStructureId) return state.structures[0] ?? null;
   return state.structures.find((s) => s.id === state.activeStructureId) ?? state.structures[0] ?? null;
+}
+
+// ---- chat provider persistence (shared with run center via the same localStorage key) ----
+function loadChatProvider(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return localStorage.getItem(STORAGE_KEY_CHAT_PROVIDER) || "";
+  } catch {
+    return "";
+  }
+}
+
+function persistChatProvider(providerId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_CHAT_PROVIDER, providerId);
+  } catch { /* ignore */ }
 }

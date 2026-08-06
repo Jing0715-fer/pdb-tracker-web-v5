@@ -28,6 +28,7 @@ import {
   Eye,
   EyeOff,
   BarChart3,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
 import { ChartRenderer, ALL_CHART_LABELS } from "./chart-renderer";
+import { ChatTab } from "./chat-tab";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -64,7 +66,7 @@ interface StructureInfo {
   }>;
 }
 
-type RightTab = "results" | "reports" | "entities" | "history";
+type RightTab = "results" | "chat" | "reports" | "entities" | "history";
 
 export function AnalysisRightPanel({ structureInfo }: { structureInfo?: StructureInfo | null }) {
   const [tab, setTab] = useState<RightTab>("reports");
@@ -140,6 +142,13 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
           )}
         </button>
         <button
+          className={`sa-tab-btn ${tab === "chat" ? "sa-tab-active" : ""}`}
+          onClick={() => setTab("chat")}
+        >
+          <MessageSquare className="h-3 w-3" />
+          Chat
+        </button>
+        <button
           className={`sa-tab-btn ${tab === "reports" ? "sa-tab-active" : ""}`}
           onClick={() => setTab("reports")}
         >
@@ -201,6 +210,7 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
           )
         )}
         {tab === "reports" && <ReportsTab />}
+        {tab === "chat" && <ChatTab />}
         {tab === "entities" && <EntitiesTab structureInfo={structureInfo} />}
         {tab === "history" && <HistoryTab />}
       </div>
