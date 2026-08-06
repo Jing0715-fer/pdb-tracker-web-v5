@@ -560,7 +560,7 @@ print(json.dumps({
     id: "hbonds",
     label: "氢键检测 (H-bonds, Mills-Dean 几何标准)",
     description:
-      "基于 Mills & Dean (1996) 几何标准检测氢键：考虑供体/受体原子类型、距离和角度。参考 ChimeraX 的实现。",
+      "基于 Mills & Dean (1996) 几何标准检测氢键：考虑供体/受体原子类型、距离和角度。参考 ChimeraX 的实现。支持链内分析（chain1==chain2 时自动启用）。",
     requires: ["biopython", "numpy"],
     params: [
       { name: "chain1", type: "string", required: true, description: "链 1 ID" },
@@ -577,12 +577,20 @@ print(json.dumps({
         required: false,
         description: "角度容差 (度)，从下限减去，默认 20.0",
       },
+      {
+        name: "intra_chain",
+        type: "boolean",
+        required: false,
+        description: "是否允许链内氢键（chain1==chain2 时自动启用），默认 false",
+      },
     ],
     buildScript: (inputPath, params) => {
       const chain1 = String(params.chain1 ?? "A");
       const chain2 = String(params.chain2 ?? "B");
       const distTol = Number(params.distanceCutoff ?? 0.4);
       const angleTol = Number(params.angleTolerance ?? 20.0);
+      // Auto-enable intra-chain mode when chain1==chain2, or if explicitly requested
+      const intraChain = params.intra_chain === true || chain1 === chain2;
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 import numpy as np
@@ -590,6 +598,7 @@ import math
 
 struct = load_structure("${inputPath}")
 chain1_id = "${chain1}"; chain2_id = "${chain2}"
+intra_chain = ${intraChain ? "True" : "False"}  # allow same-chain pairs (auto-enabled when chain1==chain2)
 dist_tolerance = ${distTol}  # added to distance upper bounds
 angle_tolerance = ${angleTol}  # subtracted from angle lower bounds
 model = next(iter(struct))
@@ -766,9 +775,19 @@ pairs = ns.search_all(search_cutoff, level="A")
 
 hbonds = []
 for a, b in pairs:
-    # Must be cross-chain
-    if a.get_parent().get_parent().id == b.get_parent().get_parent().id:
-        continue
+    # Cross-chain filter: skip same-chain pairs UNLESS intra_chain mode is on.
+    # In intra_chain mode, still skip same-RESIDUE pairs (a residue can't H-bond with itself).
+    a_chain = a.get_parent().get_parent().id
+    b_chain = b.get_parent().get_parent().id
+    a_res = a.get_parent()
+    b_res = b.get_parent()
+    if not intra_chain:
+        if a_chain == b_chain:
+            continue
+    else:
+        # Intra-chain mode: skip same-residue pairs (not same-chain)
+        if a_res is b_res:
+            continue
     # Find info records
     info_a = None; info_b = None
     for x in info1 + info2:
@@ -848,7 +867,7 @@ print(json.dumps({
     id: "salt_bridges",
     label: "盐桥检测 (Salt Bridges)",
     description:
-      "检测两条链之间的盐桥：正电残基 (ARG/LYS/HIS) 与负电残基 (ASP/GLU) 之间 < 4.0Å",
+      "检测两条链之间的盐桥：正电残基 (ARG/LYS/HIS) 与负电残基 (ASP/GLU) 之间 < 4.0Å。支持链内分析（chain1==chain2 时自动启用）。",
     requires: ["biopython"],
     params: [
       { name: "chain1", type: "string", required: true, description: "链 1 ID" },
@@ -859,15 +878,23 @@ print(json.dumps({
         required: false,
         description: "距离截断 (Å)，默认 4.0",
       },
+      {
+        name: "intra_chain",
+        type: "boolean",
+        required: false,
+        description: "是否允许链内盐桥（chain1==chain2 时自动启用），默认 false",
+      },
     ],
     buildScript: (inputPath, params) => {
       const chain1 = String(params.chain1 ?? "A");
       const chain2 = String(params.chain2 ?? "B");
       const cutoff = Number(params.cutoff ?? 4.0);
+      const intraChain = params.intra_chain === true || chain1 === chain2;
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure("${inputPath}")
 chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
+intra_chain = ${intraChain ? "True" : "False"}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
     print(json.dumps({"error": f"chain {chain1} or {chain2} not found", "available_chains": [c.id for c in model]}))
@@ -884,9 +911,15 @@ pairs = ns.search_all(cutoff, level="A")
 bridges = []
 for a, b in pairs:
     ca = a.get_parent().get_parent().id; cb = b.get_parent().get_parent().id
-    if ca == cb:
-        continue
     ra = a.get_parent(); rb = b.get_parent()
+    # Cross-chain filter: skip same-chain UNLESS intra_chain mode.
+    # In intra_chain mode, skip same-RESIDUE (not same-chain).
+    if not intra_chain:
+        if ca == cb:
+            continue
+    else:
+        if ra is rb:
+            continue
     a_pos = ra.resname in POS and a.get_name() in POS[ra.resname]
     b_pos = rb.resname in POS and b.get_name() in POS[rb.resname]
     a_neg = ra.resname in NEG and a.get_name() in NEG[ra.resname]
@@ -917,7 +950,7 @@ print(json.dumps({
     id: "hydrophobic_contacts",
     label: "疏水接触 (Hydrophobic)",
     description:
-      "检测两条链之间的疏水接触：疏水残基 (ALA/VAL/LEU/ILE/MET/PHE/TRP/PRO) 之间 < 4.5Å",
+      "检测两条链之间的疏水接触：疏水残基 (ALA/VAL/LEU/ILE/MET/PHE/TRP/PRO) 之间 < 4.5Å。支持链内分析（chain1==chain2 时自动启用）。",
     requires: ["biopython"],
     params: [
       { name: "chain1", type: "string", required: true, description: "链 1 ID" },
@@ -928,15 +961,23 @@ print(json.dumps({
         required: false,
         description: "距离截断 (Å)，默认 4.5",
       },
+      {
+        name: "intra_chain",
+        type: "boolean",
+        required: false,
+        description: "是否允许链内疏水接触（chain1==chain2 时自动启用），默认 false",
+      },
     ],
     buildScript: (inputPath, params) => {
       const chain1 = String(params.chain1 ?? "A");
       const chain2 = String(params.chain2 ?? "B");
       const cutoff = Number(params.cutoff ?? 4.5);
+      const intraChain = params.intra_chain === true || chain1 === chain2;
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure("${inputPath}")
 chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
+intra_chain = ${intraChain ? "True" : "False"}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
     print(json.dumps({"error": f"chain {chain1} or {chain2} not found", "available_chains": [c.id for c in model]}))
@@ -948,9 +989,15 @@ ns = NeighborSearch(h1 + h2)
 pairs = ns.search_all(cutoff, level="A")
 contacts = []
 for a, b in pairs:
-    if a.get_parent().get_parent().id == b.get_parent().get_parent().id:
-        continue
     ra = a.get_parent(); rb = b.get_parent()
+    # Cross-chain filter: skip same-chain UNLESS intra_chain mode.
+    # In intra_chain mode, skip same-RESIDUE (not same-chain).
+    if not intra_chain:
+        if a.get_parent().get_parent().id == b.get_parent().get_parent().id:
+            continue
+    else:
+        if ra is rb:
+            continue
     contacts.append({
         "chain1": a.get_parent().get_parent().id,
         "resno1": int(ra.id[1]), "resname1": ra.resname,

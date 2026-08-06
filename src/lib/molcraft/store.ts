@@ -261,6 +261,11 @@ export interface ChatMessage {
   analysisResults?: unknown[];
   /** Provider that produced this message (for the avatar badge). */
   provider?: string;
+  /** P3: When true, the message bubble shows confirm/deny buttons and the agent
+   *  loop waits for the user to approve destructive commands. */
+  needsConfirmation?: boolean;
+  /** P3: The user's confirmation response (true = proceed, false = skip). */
+  confirmationResult?: boolean;
 }
 
 export interface ChartPreset {

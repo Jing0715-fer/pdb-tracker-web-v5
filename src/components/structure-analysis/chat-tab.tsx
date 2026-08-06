@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -48,6 +48,33 @@ interface LlmProviderInfo {
   label: string;
   available: boolean;
   description?: string;
+}
+
+/**
+ * Wait for the user to confirm or deny a destructive command execution.
+ * Polls the store for the `confirmationResult` field on the message.
+ * Times out after 60 seconds (defaults to "skip" = false).
+ */
+async function waitForConfirmation(
+  messageId: string,
+  updateMessage: (id: string, patch: Partial<ChatMessage>) => void
+): Promise<boolean> {
+  const MAX_WAIT = 60_000;
+  const POLL_INTERVAL = 200;
+  const start = Date.now();
+  while (Date.now() - start < MAX_WAIT) {
+    const msg = useAppStore.getState().chatMessages.find((m) => m.id === messageId);
+    if (msg?.confirmationResult !== undefined) {
+      const result = msg.confirmationResult;
+      // Clear the confirmation state
+      updateMessage(messageId, { needsConfirmation: false, confirmationResult: undefined });
+      return result;
+    }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+  }
+  // Timeout — default to skip
+  updateMessage(messageId, { needsConfirmation: false, confirmationResult: undefined });
+  return false;
 }
 
 const SUGGESTIONS = [
@@ -184,12 +211,12 @@ export function ChatTab() {
             });
           }
 
-          // Call the LLM chat endpoint
+          // Call the LLM streaming chat endpoint (SSE)
           let res: Response | null = null;
           let lastErr: string | null = null;
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              res = await fetch("/api/llm/chat", {
+              res = await fetch("/api/llm/chat/stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -225,20 +252,117 @@ export function ChatTab() {
             break;
           }
 
-          const data = await res.json();
-          const reply: string = data.reply || "";
-          const commands: LlmCommand[] = Array.isArray(data.commands) ? data.commands : [];
-          const continueAfter = !!data.continueAfterAnalysis;
-          const provider = data.provider;
+          // Parse the SSE stream: read chunks, accumulate the reply text,
+          // and update the pending message incrementally (typewriter effect).
+          const reader = res.body?.getReader();
+          const decoder = new TextDecoder();
+          let accumulatedReply = "";
+          let commands: LlmCommand[] = [];
+          let continueAfter = false;
+          let provider: string | undefined;
+          let streamError: string | null = null;
+          let buffer = "";
+
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              // SSE events are separated by \n\n
+              const events = buffer.split("\n\n");
+              buffer = events.pop() || ""; // keep the last partial event
+              for (const evt of events) {
+                const line = evt.trim();
+                if (!line.startsWith("data: ")) continue;
+                const jsonStr = line.slice(6);
+                try {
+                  const data = JSON.parse(jsonStr);
+                  if (data.type === "chunk") {
+                    accumulatedReply += data.text;
+                    updateMessage(pendingId, {
+                      content: accumulatedReply,
+                      pending: true,
+                    });
+                  } else if (data.type === "done") {
+                    commands = Array.isArray(data.commands) ? data.commands : [];
+                    continueAfter = !!data.continueAfterAnalysis;
+                    provider = data.provider;
+                  } else if (data.type === "error") {
+                    streamError = data.error;
+                  }
+                } catch {
+                  // ignore parse errors for partial chunks
+                }
+              }
+            }
+          }
+
+          if (streamError) {
+            updateMessage(pendingId, {
+              content: `❌ ${streamError}`,
+              pending: false,
+            });
+            break;
+          }
+
+          const reply = accumulatedReply;
 
           // If the LLM requested commands, execute them
           if (commands.length > 0) {
-            updateMessage(pendingId, {
-              content: reply || `⚡ Executing ${commands.length} command(s)…`,
-              commands: [...allCommands, ...commands],
-              pending: true,
-              provider,
-            });
+            // P3: Command preview — show what the agent is about to do
+            const cmdSummary = commands.map((c) => {
+              const cmd = c as LlmCommand;
+              if (cmd.type === "load_pdb") return `load ${cmd.id}`;
+              if (cmd.type === "load_alphafold") return `load AlphaFold ${cmd.uniprotId}`;
+              if (cmd.type === "focus_residue") return `focus ${cmd.chain}${cmd.resno}`;
+              if (cmd.type === "focus_chain") return `focus chain ${cmd.chain}`;
+              if (cmd.type === "focus_ligand") return `focus ligand ${cmd.compId}`;
+              if (cmd.type === "reset_camera") return "reset camera";
+              if (cmd.type === "set_representation") return `set ${cmd.preset}`;
+              if (cmd.type === "set_color_theme") return `color: ${cmd.theme}`;
+              if (cmd.type === "analyze_run") return `run ${cmd.recipe}`;
+              if (cmd.type === "analyze_metadata") return `metadata ${cmd.pdbId}`;
+              if (cmd.type === "measure_distance") return "measure distance";
+              if (cmd.type === "clear_measurements") return "⚠️ clear measurements";
+              if (cmd.type === "clear_interactions") return "⚠️ clear interactions";
+              if (cmd.type === "clear_selection") return "clear selection";
+              return cmd.type;
+            }).join(", ");
+
+            // Check for destructive commands (require user confirmation)
+            const DESTRUCTIVE_TYPES = ["clear_measurements", "clear_interactions", "clear_selection"];
+            const hasDestructive = commands.some((c) => DESTRUCTIVE_TYPES.includes((c as LlmCommand).type));
+
+            if (hasDestructive) {
+              updateMessage(pendingId, {
+                content: `${reply || ""}\n\n⚠️ **Confirmation required** — the agent wants to execute: ${cmdSummary}\n\nClick ✓ to proceed or ✗ to skip these commands.`,
+                commands: [...allCommands, ...commands],
+                pending: true,
+                provider,
+                needsConfirmation: true,
+              });
+
+              // Wait for user confirmation (the MessageBubble renders confirm/deny buttons
+              // when needsConfirmation is set; we poll the store for the resolution)
+              const confirmed = await waitForConfirmation(pendingId, updateMessage);
+              if (!confirmed) {
+                updateMessage(pendingId, {
+                  content: `${reply || ""}\n\n⏭️ Skipped destructive commands: ${cmdSummary}`,
+                  commands: allCommands.length > 0 ? allCommands : undefined,
+                  pending: false,
+                  provider,
+                  needsConfirmation: false,
+                });
+                break;
+              }
+            } else {
+              updateMessage(pendingId, {
+                content: `${reply || `⚡ Executing ${commands.length} command(s)…`}\n\n*Commands: ${cmdSummary}*`,
+                commands: [...allCommands, ...commands],
+                pending: true,
+                provider,
+              });
+            }
 
             for (const cmd of commands) {
               try {
@@ -468,6 +592,7 @@ export function ChatTab() {
 // ============================================================
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
+  const updateMessage = useAppStore((s) => s.updateChatMessage);
   return (
     <div className={`flex gap-1.5 ${isUser ? "flex-row-reverse" : ""}`}>
       <div
@@ -502,8 +627,28 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 </ReactMarkdown>
               </div>
             )}
+            {/* P3: Confirmation buttons for destructive commands */}
+            {!isUser && message.needsConfirmation && (
+              <div className="mt-2 flex items-center gap-2 border-t border-claude-border-light/30 dark:border-[#3d3832]/30 pt-1.5">
+                <button
+                  onClick={() => updateMessage(message.id, { needsConfirmation: false, confirmationResult: true })}
+                  className="flex items-center gap-1 rounded-md bg-green-600 text-white px-2 py-1 text-[10px] font-medium hover:bg-green-700 transition-colors"
+                >
+                  <Check className="h-3 w-3" />
+                  Confirm
+                </button>
+                <button
+                  onClick={() => updateMessage(message.id, { needsConfirmation: false, confirmationResult: false })}
+                  className="flex items-center gap-1 rounded-md bg-destructive text-white px-2 py-1 text-[10px] font-medium hover:bg-destructive/90 transition-colors"
+                >
+                  <X className="h-3 w-3" />
+                  Skip
+                </button>
+                <span className="text-[8px] text-claude-text-muted ml-auto">Auto-skip in 60s</span>
+              </div>
+            )}
             {/* Commands executed by the agent */}
-            {!isUser && message.commands && Array.isArray(message.commands) && message.commands.length > 0 && (
+            {!isUser && message.commands && Array.isArray(message.commands) && message.commands.length > 0 && !message.needsConfirmation && (
               <div className="mt-1.5 border-t border-claude-border-light/30 dark:border-[#3d3832]/30 pt-1">
                 <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">
                   Commands ({message.commands.length})
@@ -531,7 +676,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               </div>
             )}
             {/* Provider badge */}
-            {!isUser && message.provider && (
+            {!isUser && message.provider && !message.needsConfirmation && (
               <div className="mt-1 text-[8px] text-claude-text-muted/70">
                 via {message.provider}
               </div>
