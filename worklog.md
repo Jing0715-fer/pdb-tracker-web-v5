@@ -5707,3 +5707,37 @@ Code Review Summary (round 7, no bugs found in these areas):
 - MeasureTab: all 4 measurement types (distance/angle/dihedral/label)
 
 No remaining bugs found after 7 rounds of code review.
+
+---
+Task ID: 3d-code-review-round-8
+Agent: main
+Task: Deep code review round 8, focus on store state transitions + command error paths + memory leaks.
+
+Bugs Found + Fixed:
+
+Bug 1 — clearStructures doesn't clear visualization state (store.ts):
+- clearStructures only cleared structures/activeStructureId/structureFileCache
+- Stale electrostaticViz/druggabilityViz/screeningViz/pocketDetectionViz remained
+- removeStructure didn't clear viz state belonging to the removed structure
+- Fix: clearStructures now clears all 4 viz states + alignmentHistory
+  removeStructure clears viz state if pdbId matches the removed structure
+
+Bug 2 — useRunCommand has no catch block (viewer-tools-tabs.tsx + use-run-command.ts):
+- If executeCommand threw (Molstar API error), error propagated unhandled
+- Would cause unhandled promise rejection + busy stuck at true if finally didn't run
+- Fix: added catch block: logs error + shows toast + returns {ok:false}
+  Applied to BOTH useRunCommand implementations (viewer-tools-tabs + use-run-command.ts)
+
+E2E Test Results:
+- Modal: all 10 tabs + toolbar + viewport controls ✅
+- No console errors ✅
+
+Code Review Summary (round 8, no bugs found in these areas):
+- Store state transitions: all measurement/interactionLine ops persist to localStorage
+- saveSession/loadSession: saves structures/measurements/reports/fileCache (chat is ephemeral)
+- Command error paths: executeCommand has try/catch in each case, returns {ok:false}
+- Memory leaks: ResizeObserver disconnected, setInterval cleared, RAF cancelled
+- use-atom-picking: subscription unsubscribed on cleanup
+- molstar-viewer: viewer disposed on cleanup, store viewer cleared (guarded)
+
+No remaining bugs found after 8 rounds of code review.
