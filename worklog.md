@@ -5486,3 +5486,38 @@ Remaining Issues (architectural, not bugs):
   have duplicate viewport controls — user requested unification but this
   requires extracting shared components (larger refactor)
 - Dev server OOM (4GB sandbox) prevents full 3D interaction testing
+
+---
+Task ID: 3d-code-review-round-2
+Agent: main
+Task: Deep code review round 2 of all 3D structure code, find and fix bugs.
+
+Bugs Found + Fixed:
+
+Bug 1 — Dihedral measurements not rendered in overlay (measure-overlay.tsx):
+- The overlay canvas only handled distance (2 atoms) and angle (3 atoms)
+- Dihedral measurements (4 atoms, 3 lines) were silently skipped
+- Fix: added dihedral rendering — 3 cyan lines (p1-p2, p2-p3, p3-p4),
+  4 red spheres at all atoms, cyan label at midpoint of central bond
+
+Bug 2 — Modal close doesn't clear measurements (PdbViewerModal.tsx):
+- Measurements persisted to localStorage survived modal close/reopen
+- Old structure's measurements showed on the next structure's view
+- Fix: handleOpenChange(false) calls clearMeasurements() + clearInteractionLines()
+- Verified: after closing modal, localStorage measurements = null
+
+E2E Test Results:
+- Modal opens with all 10 tabs + toolbar + viewport controls ✅
+- Modal closes via Escape ✅
+- localStorage measurements cleared on close (both null) ✅
+- No console errors ✅
+
+Code Review Summary (no bugs found in these areas):
+- use-atom-picking: disableFocusBehaviors + restoreFocusRef cleanup correct
+- molstar-viewer: ResizeObserver + periodic resize interval correct
+- store: measurement/interactionLine persistence + removal correct
+- commands: focus_chain, focus_ligand, toggle_component_visibility all fixed
+- PdbViewerLite: structure switch clears measurements (prevPdbIdRef) correct
+- applyChainVisibility deps: works via useCallback ref change (indirect but correct)
+
+No remaining bugs found in the 3D structure code.
