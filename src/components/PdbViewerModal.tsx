@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useI18n } from '@/lib/i18n';
 import { importWithRetry } from '@/lib/dynamic-import-retry';
+import { useAppStore } from '@/lib/molcraft/store';
 
 // PdbViewerLite uses the prebuilt Molstar bundle (/molstar.js) via <script>
 // tag, avoiding the ESM `molstar/lib/...` imports that are blocked by
@@ -107,6 +108,12 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
       // Increment key to force remount of the viewer on each open
       setViewerReadyKey(k => k + 1);
     } else {
+      // BUG FIX: clear measurements + interaction lines when the modal closes.
+      // Since measurements are persisted to localStorage (P3), they would
+      // survive modal close/reopen and show on the next structure's view.
+      // We clear them here so each modal session starts fresh.
+      useAppStore.getState().clearMeasurements();
+      useAppStore.getState().clearInteractionLines();
       openTimeRef.current = 0;
       setAnalysisPanelOpen(true);
       setActiveTab('info');

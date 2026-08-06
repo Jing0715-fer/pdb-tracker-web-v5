@@ -337,6 +337,23 @@ export function MeasureOverlay() {
             // Label at vertex (p2).
             drawLabel(ctx, m.label, p2.x, p2.y - 15, "#8b5cf6");
           }
+        } else if (m.mode === "dihedral" && projected.length === 4) {
+          // Three lines: p1-p2, p2-p3, p3-p4 (the dihedral bond chain)
+          const [p1, p2, p3, p4] = projected;
+          if (p1.visible && p2.visible && p3.visible && p4.visible) {
+            drawLine(ctx, p1.x, p1.y, p2.x, p2.y, "#06b6d4", 2.5, false);
+            drawLine(ctx, p2.x, p2.y, p3.x, p3.y, "#06b6d4", 2.5, false);
+            drawLine(ctx, p3.x, p3.y, p4.x, p4.y, "#06b6d4", 2.5, false);
+            // Spheres at all 4 atoms.
+            drawSphere(ctx, p1.x, p1.y, 6, "#ef4444");
+            drawSphere(ctx, p2.x, p2.y, 6, "#ef4444");
+            drawSphere(ctx, p3.x, p3.y, 6, "#ef4444");
+            drawSphere(ctx, p4.x, p4.y, 6, "#ef4444");
+            // Label at midpoint of the central bond (p2-p3).
+            const midX = (p2.x + p3.x) / 2;
+            const midY = (p2.y + p3.y) / 2;
+            drawLabel(ctx, m.label, midX, midY - 15, "#06b6d4");
+          }
         }
       }
 
