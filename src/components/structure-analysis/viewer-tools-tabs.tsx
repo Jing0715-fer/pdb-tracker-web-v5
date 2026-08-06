@@ -1730,6 +1730,7 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const chatProvider = useAppStore((s) => s.chatProvider);
   const toast = useAppStore((s) => s.toast);
 
@@ -1737,7 +1738,23 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
   useEffect(() => {
     setMessages([]);
     setInput("");
+    // Abort any in-flight request when switching structures
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setSending(false);
   }, [pdbId]);
+
+  // Abort any in-flight request on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, []);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -1755,6 +1772,8 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
     setInput("");
 
     try {
+      const controller = new AbortController();
+      abortRef.current = controller;
       const res = await fetch("/api/llm/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1763,6 +1782,7 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
           context: { loadedStructures: [{ id: pdbId, label: pdbId }] },
           provider: chatProvider,
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -1804,12 +1824,17 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
         }
       }
     } catch (err) {
-      setMessages((prev) => {
-        const updated = [...prev];
-        updated[updated.length - 1] = { role: "assistant", content: `❌ Error: ${err instanceof Error ? err.message : String(err)}` };
-        return updated;
-      });
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // Aborted by user (pdbId change or unmount) — don't show error
+      } else {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { role: "assistant", content: `❌ Error: ${err instanceof Error ? err.message : String(err)}` };
+          return updated;
+        });
+      }
     } finally {
+      abortRef.current = null;
       setSending(false);
     }
   }, [messages, sending, pdbId, chatProvider]);

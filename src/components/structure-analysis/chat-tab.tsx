@@ -120,6 +120,17 @@ export function ChatTab() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const stopRequestedRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Abort any in-flight SSE stream on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, []);
 
   // Provider list (from run center's /api/llm/providers)
   const [providers, setProviders] = useState<LlmProviderInfo[]>([]);
@@ -229,6 +240,10 @@ export function ChatTab() {
           // Call the LLM streaming chat endpoint (SSE)
           let res: Response | null = null;
           let lastErr: string | null = null;
+          // Create an AbortController for this round so the Stop button
+          // can abort the current SSE stream (not just prevent the next round).
+          const controller = new AbortController();
+          abortRef.current = controller;
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
               res = await fetch("/api/llm/chat/stream", {
@@ -242,6 +257,7 @@ export function ChatTab() {
                   },
                   provider: chatProvider,
                 }),
+                signal: controller.signal,
               });
               if (res.ok) break;
               const err = await res.json().catch(() => ({}));
@@ -422,11 +438,21 @@ export function ChatTab() {
           break;
         }
       } catch (err) {
-        updateMessage(pendingId, {
-          content: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
-          pending: false,
-        });
+        if (err instanceof DOMException && err.name === "AbortError") {
+          // Aborted by user (Stop button or unmount) — don't show error
+          updateMessage(pendingId, {
+            content: `⏹️ Stopped by user.`,
+            commands: allCommands.length > 0 ? allCommands : undefined,
+            pending: false,
+          });
+        } else {
+          updateMessage(pendingId, {
+            content: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
+            pending: false,
+          });
+        }
       } finally {
+        abortRef.current = null;
         sendingRef.current = false;
         stopRequestedRef.current = false;
       }
@@ -580,7 +606,14 @@ export function ChatTab() {
           />
           {sendingRef.current && (
             <button
-              onClick={() => { stopRequestedRef.current = true; }}
+              onClick={() => {
+                stopRequestedRef.current = true;
+                // Abort the current SSE stream immediately
+                if (abortRef.current) {
+                  abortRef.current.abort();
+                  abortRef.current = null;
+                }
+              }}
               className="absolute bottom-1.5 right-9 grid h-7 w-7 place-items-center rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors"
               title="Stop generation"
             >
