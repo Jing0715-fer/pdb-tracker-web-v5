@@ -996,9 +996,9 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                           </button>
                           {/* Entity details + chains */}
                           {isExpanded && (
-                            <div className="px-1.5 pb-1 space-y-0.5">
+                            <div className="px-1.5 pb-1 space-y-0.5 min-w-0">
                               {/* Entity meta */}
-                              <div className="text-[10px] text-claude-text-muted space-y-0.5 px-1 pb-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 mb-1">
+                              <div className="text-[10px] text-claude-text-muted space-y-0.5 px-1 pb-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 mb-1 overflow-hidden">
                                 {entity.moleculeType && entity.moleculeType !== entity.entityType && (
                                   <div><span className="text-claude-text-muted">Type:</span> <span className="text-claude-text-secondary">{entity.moleculeType}</span></div>
                                 )}
@@ -1006,7 +1006,7 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                                   <div className="truncate"><span className="text-claude-text-muted">Organism:</span> <span className="text-claude-text-secondary">{entity.organism}</span></div>
                                 )}
                                 {entity.authChains.length > 0 && (
-                                  <div><span className="text-claude-text-muted">Auth chains:</span> <span className="font-mono text-claude-text-secondary">{entity.authChains.join(', ')}</span></div>
+                                  <div className="truncate"><span className="text-claude-text-muted">Auth chains:</span> <span className="font-mono text-claude-text-secondary">{entity.authChains.join(', ')}</span></div>
                                 )}
                               </div>
                               {/* Chain list */}
