@@ -5629,3 +5629,45 @@ Code Review Summary (round 5, no bugs found in these areas):
 - Keyboard handler: now skips INPUT/TEXTAREA/SELECT/contentEditable
 
 No remaining bugs found after 5 rounds of code review.
+
+---
+Task ID: 3d-code-review-round-6
+Agent: main
+Task: Deep code review round 6, focus on Viz/Volume/Export/PresetManager/chart-renderer.
+
+Bugs Found + Fixed:
+
+Bug 1 — Keyboard shortcuts fire on SELECT dropdowns (PdbViewerLite.tsx):
+- Handler checked INPUT/TEXTAREA/contentEditable but not SELECT
+- Fix: added SELECT to the tagName check
+
+Bug 2 — InteractionsTab doesn't handle Python recipe errors (viewer-tools-tabs.tsx):
+- Python recipes return { error: 'chain not found' } on failure
+- runDetailedAnalysis didn't check for d.error
+- Fix: check for d.error before processing, show error + available chains
+
+Bug 3 — MeasureTab missing angle + dihedral typed inputs (analysis-left-panel.tsx):
+- The MeasureTab in the left panel only had distance + label
+- Missing: measure_angle (3 atoms) and measure_dihedral (4 atoms)
+- The commands exist in schema + commands.ts but had no UI
+- Fix: added Manual Angle section (3 ResidueInputs + button) and
+  Manual Dihedral section (4 ResidueInputs + button)
+- Added c, d state variables
+
+E2E Test Results:
+- Modal: all controls render ✅
+- ? shortcut help overlay opens ✅
+- No console errors ✅
+
+Code Review Summary (round 6, no bugs found in these areas):
+- Viz tab: all 4 viz commands (electrostatic/druggability/screening/pockets) correct
+- Export tab: session save/load via snapshots API correct
+- Volume tab: EMDB loading via load_volume_url correct
+- chart-renderer: all 24 chartIds match between left panel and renderer
+- PresetManager: 157 lines, handles save/load/delete
+- Right panel Results tab: auto-switch + ChartRenderer + empty state correct
+- Left panel AnalysisChartsGrid: search + filter + favorites + recent correct
+- Left panel StructuresTab: closeStructure + clearStructures correct
+- MeasureTab: now has all 4 measurement types (distance/angle/dihedral/label)
+
+No remaining bugs found after 6 rounds of code review.
