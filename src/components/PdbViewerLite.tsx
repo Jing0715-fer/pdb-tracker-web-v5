@@ -26,7 +26,7 @@ import { useAtomPicking } from '@/components/structure-analysis/use-atom-picking
 import {
   Loader2, ChevronDown, Eye, EyeOff, Layers, Focus,
   Dna, Pill, Droplet, Ruler, Triangle, MousePointerClick, X,
-  Sigma, Tag,
+  Sigma, Tag, Copy, Download, Undo2, Crosshair, ClipboardList,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -294,6 +294,112 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     toast('Measurements cleared', 'info');
   }, [viewer, clearMeasurements, clearInteractionLines, toast]);
 
+  // Undo the last measurement (removes it + its linked interactionLine)
+  const handleUndoMeasurement = useCallback(() => {
+    if (measurements.length === 0) return;
+    const last = measurements[0]; // newest is at index 0 (addMeasurement unshifts)
+    removeMeasurement(last.id);
+    toast(`Removed: ${last.label}`, 'info');
+  }, [measurements, removeMeasurement, toast]);
+
+  // Focus the camera on a measurement's atoms (sphere around the centroid)
+  const handleFocusMeasurement = useCallback((m: typeof measurements[number]) => {
+    if (!viewer || !m.atoms || m.atoms.length === 0) {
+      toast('No atom coordinates for this measurement', 'info');
+      return;
+    }
+    try {
+      const xs = m.atoms.map(a => a.x);
+      const ys = m.atoms.map(a => a.y);
+      const zs = m.atoms.map(a => a.z);
+      const cx = xs.reduce((s, v) => s + v, 0) / xs.length;
+      const cy = ys.reduce((s, v) => s + v, 0) / ys.length;
+      const cz = zs.reduce((s, v) => s + v, 0) / zs.length;
+      // Radius = max distance from centroid + padding
+      let maxR = 8;
+      for (let i = 0; i < m.atoms.length; i++) {
+        const d = Math.hypot(xs[i] - cx, ys[i] - cy, zs[i] - cz);
+        if (d > maxR) maxR = d;
+      }
+      viewer.plugin.managers.camera.focusSphere({
+        center: [cx, cy, cz],
+        radius: maxR + 4,
+      });
+      toast(`Focused: ${m.label}`, 'info');
+    } catch (err) {
+      toast('Focus failed', 'error');
+    }
+  }, [viewer, toast]);
+
+  // Copy measurements as CSV to clipboard
+  const handleCopyCSV = useCallback(() => {
+    if (measurements.length === 0) return;
+    const header = 'mode,label,detail,timestamp';
+    const rows = measurements.map(m => {
+      const ts = new Date(m.ts).toISOString();
+      const label = `"${m.label.replace(/"/g, '""')}"`;
+      const detail = `"${m.detail.replace(/"/g, '""')}"`;
+      return `${m.mode},${label},${detail},${ts}`;
+    });
+    const csv = [header, ...rows].join('\n');
+    navigator.clipboard.writeText(csv).then(
+      () => toast(`Copied ${measurements.length} measurements as CSV`, 'success'),
+      () => toast('Copy failed', 'error')
+    );
+  }, [measurements, toast]);
+
+  // Download measurements as JSON
+  const handleDownloadJSON = useCallback(() => {
+    if (measurements.length === 0) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      count: measurements.length,
+      measurements: measurements.map(m => ({
+        id: m.id,
+        mode: m.mode,
+        label: m.label,
+        detail: m.detail,
+        atoms: m.atoms,
+        timestamp: new Date(m.ts).toISOString(),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `measurements-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Downloaded ${measurements.length} measurements as JSON`, 'success');
+  }, [measurements, toast]);
+
+  // Keyboard shortcuts: Esc = exit measure mode, Z = undo, 1-4 = switch mode
+  useEffect(() => {
+    if (!ready) return;
+    const handler = (e: KeyboardEvent) => {
+      // Don't intercept when typing in inputs
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (e.key === 'Escape' && measureMode !== 'off') {
+        e.preventDefault();
+        setMeasureMode('off');
+      } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        handleUndoMeasurement();
+      } else if (e.key === '1' && measureMode !== 'distance') {
+        setMeasureMode('distance');
+      } else if (e.key === '2' && measureMode !== 'angle') {
+        setMeasureMode('angle');
+      } else if (e.key === '3' && measureMode !== 'dihedral') {
+        setMeasureMode('dihedral');
+      } else if (e.key === '4' && measureMode !== 'label') {
+        setMeasureMode('label');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [ready, measureMode, setMeasureMode, handleUndoMeasurement]);
+
   return (
     <div className={className} style={{ display: 'flex', width: '100%', height: '100%' }}>
       {/* 3D Viewer — takes remaining space */}
@@ -351,16 +457,56 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
               Label
             </Button>
             {measurements.length > 0 && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 px-2 text-[10px] gap-1 text-claude-text-muted hover:text-destructive"
-                onClick={handleClearMeasurements}
-                title="Clear all measurements"
-              >
-                <X className="h-3 w-3" />
-                Clear
-              </Button>
+              <>
+                <div className="h-4 w-px bg-claude-border/60 dark:bg-[#3d3832]/60 mx-0.5" />
+                <Badge
+                  variant="outline"
+                  className="h-5 px-1.5 text-[10px] font-mono bg-claude-accent-light text-claude-accent border-claude-accent/30"
+                  title={`${measurements.length} measurement${measurements.length > 1 ? 's' : ''}`}
+                >
+                  {measurements.length}
+                </Badge>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                  onClick={handleUndoMeasurement}
+                  disabled={measurements.length === 0}
+                  title="Undo last measurement (Ctrl+Z)"
+                >
+                  <Undo2 className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                  onClick={handleCopyCSV}
+                  disabled={measurements.length === 0}
+                  title="Copy as CSV"
+                >
+                  <Copy className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                  onClick={handleDownloadJSON}
+                  disabled={measurements.length === 0}
+                  title="Download as JSON"
+                >
+                  <Download className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-[10px] gap-1 text-claude-text-muted hover:text-destructive"
+                  onClick={handleClearMeasurements}
+                  title="Clear all measurements"
+                >
+                  <X className="h-3 w-3" />
+                  Clear
+                </Button>
+              </>
             )}
           </div>
         )}
@@ -395,45 +541,105 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
 
         {/* Measurement list — bottom-left overlay */}
         {measurements.length > 0 && ready && (
-          <div className="absolute bottom-2 left-2 z-20 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-md border border-claude-border/60 dark:border-[#3d3832]/60 p-1.5 shadow-sm max-w-[300px]">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
-                Measurements ({measurements.length})
-              </span>
-              <button
-                onClick={handleClearMeasurements}
-                className="text-claude-text-muted hover:text-destructive"
-                title="Clear all"
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
+          <div className="absolute bottom-2 left-2 z-20 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-md border border-claude-border/60 dark:border-[#3d3832]/60 shadow-sm max-w-[320px]">
+            <div className="flex items-center justify-between px-2 py-1.5 border-b border-claude-border/40 dark:border-[#3d3832]/40">
+              <div className="flex items-center gap-1.5">
+                <ClipboardList className="h-3 w-3 text-claude-accent" />
+                <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+                  Measurements
+                </span>
+                <Badge
+                  variant="outline"
+                  className="h-4 px-1 text-[9px] font-mono bg-claude-accent-light text-claude-accent border-claude-accent/30"
+                >
+                  {measurements.length}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={handleUndoMeasurement}
+                  className="p-0.5 text-claude-text-muted hover:text-claude-accent transition-colors"
+                  title="Undo last (Ctrl+Z)"
+                >
+                  <Undo2 className="h-2.5 w-2.5" />
+                </button>
+                <button
+                  onClick={handleCopyCSV}
+                  className="p-0.5 text-claude-text-muted hover:text-claude-accent transition-colors"
+                  title="Copy CSV"
+                >
+                  <Copy className="h-2.5 w-2.5" />
+                </button>
+                <button
+                  onClick={handleDownloadJSON}
+                  className="p-0.5 text-claude-text-muted hover:text-claude-accent transition-colors"
+                  title="Download JSON"
+                >
+                  <Download className="h-2.5 w-2.5" />
+                </button>
+                <button
+                  onClick={handleClearMeasurements}
+                  className="p-0.5 text-claude-text-muted hover:text-destructive transition-colors"
+                  title="Clear all"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
             </div>
-            <div className="space-y-0.5 max-h-32 overflow-y-auto sa-scroll">
-              {measurements.map((m) => (
-                <div key={m.id} className="flex items-center gap-1.5 text-[10px] group">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full flex-shrink-0"
-                    style={{
-                      backgroundColor:
-                        m.mode === 'distance' ? '#f59e0b' :
-                        m.mode === 'angle' ? '#8b5cf6' :
-                        m.mode === 'dihedral' ? '#06b6d4' :
-                        '#6b7280',
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-mono text-claude-text truncate font-semibold">{m.label}</div>
-                    <div className="text-[9px] text-claude-accent truncate">{m.detail}</div>
-                  </div>
-                  <button
-                    onClick={() => removeMeasurement(m.id)}
-                    className="opacity-0 group-hover:opacity-100 text-claude-text-muted hover:text-destructive transition-opacity flex-shrink-0"
-                    title="Remove this measurement"
+            <div className="max-h-40 overflow-y-auto sa-scroll p-1 space-y-0.5">
+              {measurements.map((m, idx) => {
+                const color =
+                  m.mode === 'distance' ? '#f59e0b' :
+                  m.mode === 'angle' ? '#8b5cf6' :
+                  m.mode === 'dihedral' ? '#06b6d4' :
+                  '#6b7280';
+                const ago = Date.now() - m.ts;
+                const agoStr = ago < 60_000 ? `${Math.max(1, Math.round(ago / 1000))}s ago` : `${Math.round(ago / 60_000)}m ago`;
+                return (
+                  <div
+                    key={m.id}
+                    className="flex items-center gap-1.5 px-1.5 py-1 rounded text-[10px] group hover:bg-claude-accent-light/30 transition-colors"
                   >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </div>
-              ))}
+                    <span
+                      className="h-2 w-2 rounded-full flex-shrink-0 ring-2 ring-claude-surface dark:ring-[#242220]"
+                      style={{ backgroundColor: color }}
+                      title={m.mode}
+                    />
+                    <span className="font-mono text-[8px] text-claude-text-muted/70 w-5 flex-shrink-0">
+                      {String(measurements.length - idx).padStart(2, '0')}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-mono text-claude-text truncate font-semibold leading-tight">{m.label}</div>
+                      <div className="flex items-center gap-1.5 leading-tight">
+                        <span className="text-[9px] font-mono font-bold" style={{ color }}>{m.detail}</span>
+                        <span className="text-[8px] text-claude-text-muted/60">· {agoStr}</span>
+                      </div>
+                    </div>
+                    {m.atoms && m.atoms.length > 0 && (
+                      <button
+                        onClick={() => handleFocusMeasurement(m)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 text-claude-text-muted hover:text-claude-accent transition-opacity flex-shrink-0"
+                        title="Focus camera on these atoms"
+                      >
+                        <Crosshair className="h-2.5 w-2.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => removeMeasurement(m.id)}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 text-claude-text-muted hover:text-destructive transition-opacity flex-shrink-0"
+                      title="Remove this measurement"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Keyboard shortcut hint */}
+            <div className="px-2 py-1 border-t border-claude-border/40 dark:border-[#3d3832]/40 text-[8px] text-claude-text-muted/70 flex items-center gap-2 flex-wrap">
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">1</kbd>–<kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">4</kbd> mode</span>
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">Esc</kbd> exit</span>
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">⌘Z</kbd> undo</span>
             </div>
           </div>
         )}

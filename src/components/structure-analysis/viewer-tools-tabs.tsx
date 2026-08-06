@@ -16,7 +16,7 @@
 import { useState, useRef } from "react";
 import {
   Palette, Zap, Download, Upload, Loader2, Trash2, Box,
-  Microscope, FlaskConical, ShieldCheck, Atom, Camera, RotateCcw,
+  Microscope, FlaskConical, ShieldCheck, Atom, Camera, RotateCcw, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -334,7 +334,15 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
 
   const [analysisChain1, setAnalysisChain1] = useState("A");
   const [analysisChain2, setAnalysisChain2] = useState("B");
-  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
+  const [analysisSummary, setAnalysisSummary] = useState<string | null>(null);
+  const [analysisRows, setAnalysisRows] = useState<Array<{
+    type: string;
+    chain1?: string; resno1?: number; resname1?: string; atom1?: string;
+    chain2?: string; resno2?: number; resname2?: string; atom2?: string;
+    distance_A?: number;
+  }>>([]);
+  const [sortKey, setSortKey] = useState<"distance_A" | "type" | "resno1">("distance_A");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [analysisKind, setAnalysisKind] = useState<
     "hbonds" | "salt_bridges" | "hydrophobic_contacts" | "all_interactions" | null
   >(null);
@@ -347,7 +355,8 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       return;
     }
     setAnalysisKind(recipe);
-    setAnalysisResult(null);
+    setAnalysisSummary(null);
+    setAnalysisRows([]);
     try {
       const res = await fetch("/api/analyze/run", {
         method: "POST",
@@ -369,59 +378,95 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.data) {
+        const d = data.data;
         if (recipe === "hbonds") {
-          const d = data.data;
-          setAnalysisResult(
-            `Hydrogen bonds: ${d.total_hbonds}\nTop residue pairs:\n${(d.top_residue_pairs || [])
-              .slice(0, 5)
-              .map((p: { pair: string; count: number }) => `  ${p.pair}: ${p.count}`)
-              .join("\n")}`
+          setAnalysisSummary(
+            `Hydrogen bonds: ${d.total_hbonds}` +
+              (d.top_residue_pairs?.length
+                ? `\nTop residue pairs:\n${(d.top_residue_pairs || [])
+                    .slice(0, 5)
+                    .map((p: { pair: string; count: number }) => `  ${p.pair}: ${p.count}`)
+                    .join("\n")}`
+                : "")
           );
+          setAnalysisRows((d.hbonds || []).map((b: any) => ({
+            type: "hbond",
+            chain1: b.chain1, resno1: b.resno1, resname1: b.resname1, atom1: b.atom1,
+            chain2: b.chain2, resno2: b.resno2, resname2: b.resname2, atom2: b.atom2,
+            distance_A: b.distance_A,
+          })));
         } else if (recipe === "salt_bridges") {
-          const d = data.data;
-          setAnalysisResult(
-            `Salt bridges: ${d.total_salt_bridges}\n${(d.salt_bridges || [])
-              .slice(0, 5)
-              .map(
-                (b: {
-                  pos_resname: string;
-                  pos_resno: number;
-                  pos_chain: string;
-                  neg_resname: string;
-                  neg_resno: number;
-                  neg_chain: string;
-                  distance_A: number;
-                }) =>
-                  `  ${b.pos_resname}${b.pos_resno}(${b.pos_chain}) ↔ ${b.neg_resname}${b.neg_resno}(${b.neg_chain}): ${b.distance_A}Å`
-              )
-              .join("\n")}`
-          );
+          setAnalysisSummary(`Salt bridges: ${d.total_salt_bridges}`);
+          setAnalysisRows((d.salt_bridges || []).map((b: any) => ({
+            type: "salt_bridge",
+            chain1: b.pos_chain, resno1: b.pos_resno, resname1: b.pos_resname, atom1: b.pos_atom || b.atom1,
+            chain2: b.neg_chain, resno2: b.neg_resno, resname2: b.neg_resname, atom2: b.neg_atom || b.atom2,
+            distance_A: b.distance_A,
+          })));
         } else if (recipe === "hydrophobic_contacts") {
-          const d = data.data;
-          setAnalysisResult(
-            `Atom contacts: ${d.total_atom_contacts}\nResidue pairs: ${d.total_residue_pairs}\nTop residue pairs:\n${(d.top_residue_pairs || [])
-              .slice(0, 5)
-              .map((p: { pair: string; contacts: number }) => `  ${p.pair}: ${p.contacts} contacts`)
-              .join("\n")}`
+          setAnalysisSummary(
+            `Atom contacts: ${d.total_atom_contacts}\nResidue pairs: ${d.total_residue_pairs}`
           );
+          setAnalysisRows((d.hydrophobic_contacts || d.contacts || []).map((b: any) => ({
+            type: "hydrophobic",
+            chain1: b.chain1, resno1: b.resno1, resname1: b.resname1, atom1: b.atom1,
+            chain2: b.chain2, resno2: b.resno2, resname2: b.resname2, atom2: b.atom2,
+            distance_A: b.distance_A,
+          })));
         } else if (recipe === "all_interactions") {
-          const d = data.data;
-          const hb = d.hbonds?.total_hbonds ?? d.total_hbonds ?? 0;
-          const sb = d.salt_bridges?.total_salt_bridges ?? d.total_salt_bridges ?? 0;
-          const hp = d.hydrophobic_contacts?.total_residue_pairs ?? d.total_residue_pairs ?? 0;
-          setAnalysisResult(
-            `All interactions summary:\n  Hydrogen bonds: ${hb}\n  Salt bridges: ${sb}\n  Hydrophobic residue pairs: ${hp}`
+          const hb = d.hbonds?.total_hbonds ?? 0;
+          const sb = d.salt_bridges?.total_salt_bridges ?? 0;
+          const hp = d.hydrophobic_contacts?.total_residue_pairs ?? 0;
+          setAnalysisSummary(
+            `All interactions:\n  Hydrogen bonds: ${hb}\n  Salt bridges: ${sb}\n  Hydrophobic residue pairs: ${hp}\n  Total atom-level: ${d.total ?? 0}`
           );
+          setAnalysisRows(d.interactions || []);
         }
       } else {
-        setAnalysisResult(`No data (stderr: ${data.stderr ?? "none"})`);
+        setAnalysisSummary(`No data (stderr: ${data.stderr ?? "none"})`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setAnalysisResult(`Error: ${msg}`);
+      setAnalysisSummary(`Error: ${msg}`);
     } finally {
       setAnalysisKind(null);
     }
+  };
+
+  const sortedRows = [...analysisRows].sort((a, b) => {
+    let cmp = 0;
+    if (sortKey === "distance_A") {
+      cmp = (a.distance_A ?? 999) - (b.distance_A ?? 999);
+    } else if (sortKey === "type") {
+      cmp = (a.type || "").localeCompare(b.type || "");
+    } else if (sortKey === "resno1") {
+      cmp = (a.resno1 ?? 0) - (b.resno1 ?? 0);
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  const toggleSort = (key: typeof sortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const exportRowsCSV = () => {
+    if (sortedRows.length === 0) return;
+    const header = "type,chain1,resno1,resname1,atom1,chain2,resno2,resname2,atom2,distance_A";
+    const rows = sortedRows.map(r =>
+      [r.type, r.chain1, r.resno1, r.resname1, r.atom1, r.chain2, r.resno2, r.resname2, r.atom2, r.distance_A]
+        .map(v => `"${String(v ?? "").replace(/"/g, '""')}"`)
+        .join(",")
+    );
+    const csv = [header, ...rows].join("\n");
+    navigator.clipboard.writeText(csv).then(
+      () => useAppStore.getState().toast(`Copied ${rows.length} rows as CSV`, "success"),
+      () => useAppStore.getState().toast("Copy failed", "error")
+    );
   };
 
   return (
@@ -557,14 +602,102 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
         </Button>
       </div>
 
-      {analysisResult && (
+      {analysisSummary && (
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5">
-          <div className="mb-1 text-[10px] font-medium text-claude-text-muted">
-            Analysis Result
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[10px] font-medium text-claude-text-muted">Analysis Result</span>
+            {analysisRows.length > 0 && (
+              <button
+                onClick={exportRowsCSV}
+                className="flex items-center gap-1 text-[9px] text-claude-accent hover:text-claude-accent-hover transition-colors"
+                title="Copy as CSV"
+              >
+                <Copy className="h-2.5 w-2.5" />
+                CSV ({analysisRows.length})
+              </button>
+            )}
           </div>
           <pre className="whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-claude-text">
-            {analysisResult}
+            {analysisSummary}
           </pre>
+        </div>
+      )}
+
+      {analysisRows.length > 0 && (
+        <div className="rounded-lg border border-claude-border-light/60 dark:border-[#3d3832]/60 overflow-hidden">
+          <div className="px-2 py-1 bg-claude-bg/60 dark:bg-[#1a1917]/60 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 flex items-center justify-between">
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+              Atom-level contacts ({analysisRows.length})
+            </span>
+            <span className="text-[8px] text-claude-text-muted/70">click header to sort</span>
+          </div>
+          <div className="max-h-48 overflow-y-auto sa-scroll">
+            <table className="w-full text-[9px] font-mono">
+              <thead className="sticky top-0 bg-claude-surface dark:bg-[#242220] z-10">
+                <tr className="text-claude-text-muted border-b border-claude-border-light/40 dark:border-[#3d3832]/40">
+                  <th
+                    className="px-1.5 py-1 text-left cursor-pointer hover:text-claude-accent transition-colors"
+                    onClick={() => toggleSort("type")}
+                  >
+                    Type {sortKey === "type" && (sortDir === "asc" ? "▲" : "▼")}
+                  </th>
+                  <th
+                    className="px-1.5 py-1 text-left cursor-pointer hover:text-claude-accent transition-colors"
+                    onClick={() => toggleSort("resno1")}
+                  >
+                    Res1 {sortKey === "resno1" && (sortDir === "asc" ? "▲" : "▼")}
+                  </th>
+                  <th className="px-1.5 py-1 text-left">Atom1</th>
+                  <th className="px-1.5 py-1 text-left">Res2</th>
+                  <th className="px-1.5 py-1 text-left">Atom2</th>
+                  <th
+                    className="px-1.5 py-1 text-right cursor-pointer hover:text-claude-accent transition-colors"
+                    onClick={() => toggleSort("distance_A")}
+                  >
+                    Å {sortKey === "distance_A" && (sortDir === "asc" ? "▲" : "▼")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedRows.slice(0, 100).map((r, i) => {
+                  const color =
+                    r.type === "salt_bridge" ? "bg-amber-500" :
+                    r.type === "hbond" ? "bg-sky-500" :
+                    r.type === "hydrophobic" ? "bg-emerald-600" :
+                    "bg-gray-400";
+                  return (
+                    <tr
+                      key={i}
+                      className="border-b border-claude-border-light/20 dark:border-[#3d3832]/20 hover:bg-claude-accent-light/20 transition-colors"
+                    >
+                      <td className="px-1.5 py-0.5">
+                        <span className="inline-flex items-center gap-1">
+                          <span className={`h-1.5 w-1.5 rounded-full ${color}`} />
+                          <span className="text-claude-text truncate max-w-[60px]">{r.type}</span>
+                        </span>
+                      </td>
+                      <td className="px-1.5 py-0.5 text-claude-text">
+                        {r.resname1}{r.resno1}{r.chain1 ? `.${r.chain1}` : ""}
+                      </td>
+                      <td className="px-1.5 py-0.5 text-claude-text-muted">{r.atom1 || "-"}</td>
+                      <td className="px-1.5 py-0.5 text-claude-text">
+                        {r.resname2}{r.resno2}{r.chain2 ? `.${r.chain2}` : ""}
+                      </td>
+                      <td className="px-1.5 py-0.5 text-claude-text-muted">{r.atom2 || "-"}</td>
+                      <td className="px-1.5 py-0.5 text-right font-bold text-claude-accent">
+                        {r.distance_A !== undefined ? r.distance_A.toFixed(2) : "-"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {sortedRows.length > 100 && (
+              <div className="px-2 py-1 text-[8px] text-center text-claude-text-muted bg-claude-bg/40 dark:bg-[#1a1917]/40">
+                Showing first 100 of {sortedRows.length} — use CSV export for full data
+              </div>
+            )}
+          </div>
         </div>
       )}
 

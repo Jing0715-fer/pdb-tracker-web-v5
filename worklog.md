@@ -4160,3 +4160,95 @@ Stage Summary:
   for normal page/table/modal-tab usage but can be killed during full 3D
   rendering. Restart with: NODE_OPTIONS="--max-old-space-size=2560" next dev
   --webpack -p 3000.
+
+---
+Task ID: cron-review-202608060815
+Agent: main
+Task: QA + bug fix + feature enhancements for structure preview.
+
+Project State Assessment:
+- Dev server (next dev --webpack) runs on port 3000. NOTE: the 4GB sandbox
+  OOM-kills the Node process during heavy 3D rendering + agent-browser
+  interaction. Server stays up for normal page/table/API usage but dies
+  during prolonged 3D modal sessions. Restart command:
+  `cd /home/z/my-project && NODE_OPTIONS=--max-old-space-size=2048 ./node_modules/.bin/next dev --webpack -p 3000`
+- Prior work confirmed intact: PDB-reload bug fix, unified Box+Loader2
+  loading, Molcraft measurement port (distance/angle/dihedral/label),
+  Interactions/Display/Viz/Volume/Export tabs.
+
+Bugs Found + Fixed:
+- BUG: Biopython `ModuleNotFoundError: No module named 'Bio'` in
+  /api/analyze/run. Root cause: the route's childEnv PATH only prepended
+  /home/z/.local/bin, but NOT /home/z/.venv/bin (where Biopython is
+  installed). The dev server's inherited PATH also lacks /home/z/.venv/bin,
+  so `python3` resolved to /usr/bin/python3 which has no Biopython.
+  FIX: src/app/api/analyze/run/route.ts — childEnv PATH now prepends
+  `/home/z/.venv/bin:/home/z/.local/bin:` so python3 resolves to the venv
+  interpreter with Biopython. Verified: POST /api/analyze/run with
+  recipe=hbonds returns ok:true with valid JSON data (was 500 error before).
+
+Features Added (structure preview only):
+1. Measurement list enhancements (src/components/PdbViewerLite.tsx):
+   - Undo last measurement button (Ctrl+Z) — removes newest measurement
+     + its linked interactionLine.
+   - Copy as CSV — copies all measurements (mode,label,detail,timestamp)
+     to clipboard.
+   - Download as JSON — full export with atom coordinates + ISO timestamps.
+   - Focus camera on measurement — Crosshair button per row, calls
+     plugin.managers.camera.focusSphere on the atoms' centroid.
+   - Count badge in toolbar — shows live measurement count.
+   - Per-row numbering (01, 02, …) + "Xs ago" / "Xm ago" timestamps.
+   - Color-coded detail text (amber for distance, violet for angle, cyan
+     for dihedral).
+   - Ring around color dot for better visibility on light/dark bg.
+   - Hover row highlight (bg-claude-accent-light/30).
+   - Keyboard shortcut hint footer (1-4 mode / Esc exit / ⌘Z undo).
+2. Keyboard shortcuts (PdbViewerLite):
+   - 1 = distance, 2 = angle, 3 = dihedral, 4 = label
+   - Esc = exit measure mode
+   - Ctrl/Cmd+Z = undo last measurement
+   - Shortcuts disabled when typing in inputs/textareas.
+3. Interactions tab atomic-level results table
+   (src/components/structure-analysis/viewer-tools-tabs.tsx):
+   - runDetailedAnalysis now stores raw atom-level rows (analysisRows)
+     alongside the summary string.
+   - New sortable table: columns Type / Res1 / Atom1 / Res2 / Atom2 / Å.
+   - Click column header to sort (asc/desc toggle), ▲/▼ indicator.
+   - Color dot per type (amber=salt_bridge, sky=hbond, emerald=hydrophobic).
+   - Sticky header + scrollable body (max-h-48) + "showing first 100" note.
+   - CSV export button in result header — copies all rows to clipboard.
+   - Handles all 4 recipes: hbonds, salt_bridges, hydrophobic_contacts,
+     all_interactions (uses d.interactions array).
+
+Verification (agent-browser):
+- Page loads: 406 structures, modal opens with "3D Structure Viewer — 7KQR".
+- All 8 tabs visible (Info/Analysis/Display/Interact/Viz/Volume/Export/Links).
+- Measurement toolbar: Distance/Angle/Dihedral/Label buttons present.
+- Interact tab: H-bonds button runs recipe → POST /api/analyze/run 200 in 4.0s.
+- Result shows: summary + "CSV (31)" button + sortable table with
+  Type/Res1/Res2 columns (31 hydrogen bonds found for 7KQR chain A↔A).
+- No console errors. Screenshot saved to download/interactions-tab-hbonds.png.
+- ESLint: 0 errors on all 3 changed files.
+
+Stage Summary:
+- Biopython bug FIXED (was breaking all 4 interaction recipes + any future
+  recipe that uses Bio.PDB).
+- Measurement list is now a full-featured panel: undo, CSV/JSON export,
+  per-item focus + remove, timestamps, count badge, keyboard shortcuts.
+- Interactions tab now shows atomic-level details in a sortable table
+  instead of just a text summary — matches Molcraft's detail level.
+- All changes confined to structure preview (PdbViewerLite, viewer-tools-tabs,
+  analyze/run route). No changes to table/dashboard/eval/weekly views.
+
+Unresolved Risks / Next Steps:
+- Dev server OOM: the 4GB sandbox cannot sustain prolonged 3D rendering +
+  agent-browser interaction. Consider lowering molstar bundle memory usage
+  or splitting the viewer into a web worker. For now, restart as needed.
+- The `show_interactions` command is still a stub (prebuilt Molstar bundle
+  lacks ComputeContacts) — it only focuses the camera. Could be replaced
+  with a custom contacts visualization using the Biopython data + the
+  MeasureOverlay canvas (draw lines between contacting atoms).
+- Could add a "Load from PDB file" upload option in the Volume/Export tab
+  for users who want to preview local PDB files.
+- Could add measurement persistence (save/restore across modal sessions
+  via the existing saveSession/loadSession store methods).

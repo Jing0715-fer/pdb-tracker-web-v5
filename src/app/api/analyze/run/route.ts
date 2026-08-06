@@ -182,8 +182,15 @@ export async function POST(req: NextRequest) {
 
     // Run it.
     try {
-      // Ensure pdb2pqr and other local binaries are in PATH
-      const childEnv = { ...process.env, PATH: `/home/z/.local/bin:${process.env.PATH || ''}` };
+      // Ensure biopython (installed in /home/z/.venv) and pdb2pqr / other
+      // local binaries are resolvable. The dev server's inherited PATH often
+      // does NOT include /home/z/.venv/bin, so `python3` resolves to
+      // /usr/bin/python3 which lacks Biopython → ModuleNotFoundError: Bio.
+      // We prepend both venv and local bin to be safe.
+      const childEnv = {
+        ...process.env,
+        PATH: `/home/z/.venv/bin:/home/z/.local/bin:${process.env.PATH || ''}`,
+      };
       const { stdout, stderr } = await execFileAsync(
         "python3",
         [scriptPath],
