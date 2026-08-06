@@ -101,6 +101,9 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   // Load the PDB structure when the viewer is ready and pdbId changes.
   // Also reload when the viewer instance itself changes (modal reopen),
   // even if pdbId is the same — the old viewer was disposed.
+  // BUG FIX: when switching structures (pdbId changes), clear old measurements
+  // and interaction lines so they don't show on the new structure's view.
+  const prevPdbIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!viewer || !ready || !pdbId) return;
     if (loadedViewerRef.current !== viewer) {
@@ -108,6 +111,15 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
       loadedViewerRef.current = viewer;
       loadedRef.current = null;
     }
+    // If switching to a DIFFERENT pdbId, clear measurements from the old structure
+    if (prevPdbIdRef.current && prevPdbIdRef.current !== pdbId) {
+      clearMeasurements();
+      clearInteractionLines();
+      try {
+        viewer.plugin.managers.structure.measurement.clear();
+      } catch { /* ignore */ }
+    }
+    prevPdbIdRef.current = pdbId;
     if (loadedRef.current === pdbId) return;
 
     loadedRef.current = pdbId;
@@ -426,27 +438,50 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   const handleZoomIn = useCallback(() => {
     if (!viewer) return;
     try {
+      // Molstar's camera doesn't have a .zoom() method. Instead, move the
+      // camera position 20% closer to the target (which zooms in).
       const cam = (viewer.plugin as any)?.canvas3d?.camera;
-      if (cam?.zoom) cam.zoom(0.8);
-      toast('Zoomed in', 'info');
+      if (cam?.position && cam?.target && cam?.setState) {
+        const pos = cam.position;
+        const tgt = cam.target;
+        const up = cam.up;
+        // Move position 20% closer to target
+        const newPos = [
+          tgt[0] + (pos[0] - tgt[0]) * 0.8,
+          tgt[1] + (pos[1] - tgt[1]) * 0.8,
+          tgt[2] + (pos[2] - tgt[2]) * 0.8,
+        ];
+        cam.setState({ position: newPos, up, target: tgt });
+      }
     } catch { /* ignore */ }
-  }, [viewer, toast]);
+  }, [viewer]);
 
   const handleZoomOut = useCallback(() => {
     if (!viewer) return;
     try {
+      // Move the camera position 25% farther from the target (which zooms out).
       const cam = (viewer.plugin as any)?.canvas3d?.camera;
-      if (cam?.zoom) cam.zoom(1.25);
-      toast('Zoomed out', 'info');
+      if (cam?.position && cam?.target && cam?.setState) {
+        const pos = cam.position;
+        const tgt = cam.target;
+        const up = cam.up;
+        const newPos = [
+          tgt[0] + (pos[0] - tgt[0]) * 1.25,
+          tgt[1] + (pos[1] - tgt[1]) * 1.25,
+          tgt[2] + (pos[2] - tgt[2]) * 1.25,
+        ];
+        cam.setState({ position: newPos, up, target: tgt });
+      }
     } catch { /* ignore */ }
-  }, [viewer, toast]);
+  }, [viewer]);
 
   const handleScreenshot = useCallback(() => {
     if (!viewer) return;
     try {
-      const canvas = (viewer.plugin as any)?.canvas3d;
-      if (canvas?.getCanvas) {
-        const c = canvas.getCanvas() as HTMLCanvasElement;
+      const canvas3d = (viewer.plugin as any)?.canvas3d;
+      // Try getCanvas() first, then fall back to canvas3d.canvas (the raw element)
+      const c = (canvas3d?.getCanvas?.() ?? canvas3d?.canvas) as HTMLCanvasElement | undefined;
+      if (c && c.toBlob) {
         c.toBlob((blob) => {
           if (!blob) return;
           const url = URL.createObjectURL(blob);
@@ -458,7 +493,22 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
           toast('Screenshot saved', 'success');
         }, 'image/png');
       } else {
-        toast('Screenshot not available', 'error');
+        // Last resort: find any canvas in the viewer container
+        const viewerCanvas = document.querySelector('.molstar-viewer canvas') as HTMLCanvasElement;
+        if (viewerCanvas?.toBlob) {
+          viewerCanvas.toBlob((blob) => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `screenshot-${pdbId}-${Date.now()}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast('Screenshot saved', 'success');
+          }, 'image/png');
+        } else {
+          toast('Screenshot not available', 'error');
+        }
       }
     } catch (err) {
       toast('Screenshot failed', 'error');

@@ -240,10 +240,51 @@ export async function executeCommand(
       }
 
       case "focus_ligand": {
-        const loci = await lociFromResidue(viewer, { compId: cmd.compId });
-        if (!loci) return { ok: false, detail: `Ligand ${cmd.compId} not found` };
+        // If compId is "ligand" (generic), focus on ALL non-polymer HETATM residues.
+        // Otherwise, focus on the specific ligand by compId (e.g. "HEM", "ATP").
+        const compId = cmd.compId;
+        if (compId === "ligand" || compId === "all" || !compId) {
+          // Focus on all non-polymer entities (HETATM)
+          try {
+            const data = getFirstStructureData(plugin);
+            if (!data) return { ok: false, detail: "No structure data" };
+            const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+            if (Q) {
+              const expr = Q.struct.generator.atomGroups({
+                'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.entityType(), 'non-polymer'])
+              });
+              const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
+              if (loci && !isLociEmpty(loci)) {
+                plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
+                return { ok: true, detail: `Focused all ligands` };
+              }
+            }
+            // Fallback: use the first non-polymer component in the hierarchy
+            const structs = getStructures(plugin);
+            for (const s of structs) {
+              const components = s.components ?? [];
+              for (const c of components) {
+                const tags = c?.cell?.transform?.tags;
+                const label = c?.cell?.obj?.label;
+                if ((Array.isArray(tags) && tags.includes("structure-component-static-ligand")) || label === "Ligand") {
+                  const loci = c.cell.obj?.data?.sourceSelection?.loci;
+                  if (loci) {
+                    plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
+                    return { ok: true, detail: `Focused all ligands (component)` };
+                  }
+                }
+              }
+            }
+            return { ok: false, detail: "No ligands found" };
+          } catch (err) {
+            return { ok: false, detail: `Focus all ligands failed: ${err}` };
+          }
+        }
+        // Specific compId: focus on that ligand
+        const loci = await lociFromResidue(viewer, { compId });
+        if (!loci) return { ok: false, detail: `Ligand ${compId} not found` };
         plugin.managers.camera.focusLoci(loci, { minRadius: 10 });
-        return { ok: true, detail: `Focused ligand ${cmd.compId}` };
+        return { ok: true, detail: `Focused ligand ${compId}` };
       }
 
       case "focus_chain": {
