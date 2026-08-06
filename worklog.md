@@ -5435,3 +5435,54 @@ Bug 4 — Measurement overlay point offset (FIXED):
 
 Note: PDB list preview vs full analysis component reuse not addressed yet —
 requires larger architectural refactor (separate task).
+
+---
+Task ID: 3d-code-review-and-bug-fixes
+Agent: main
+Task: Systematic code review of all 3D structure code, find and fix bugs.
+
+Code Review: reviewed 8 files (5544 lines total):
+- PdbViewerLite.tsx (1064 lines)
+- PdbViewerModal.tsx (534 lines)
+- molstar-viewer.tsx (191 lines)
+- measure-overlay.tsx (397 lines)
+- use-atom-picking.ts (374 lines)
+- measure.ts (956 lines)
+- commands.ts (1214 lines)
+- store.ts (814 lines)
+
+4 Bugs Found + Fixed:
+
+Bug 1 — focus_ligand with compId='ligand' (commands.ts):
+- Chat agent sends focus_ligand compId='ligand' (from convertActionsToCommands)
+- lociFromResidue tried to find label_comp_id='ligand' → not found → error
+- Fix: generic compId ('ligand'/'all'/empty) → focus ALL non-polymer HETATM
+  via MolScript expression (entityType == 'non-polymer')
+
+Bug 2 — Measurements persist across structure switch (PdbViewerLite.tsx):
+- Switching from 7KQR to 6LU7: 7KQR's measurements showed on 6LU7's view
+- Root cause: no cleanup on pdbId change (localStorage + overlay persisted)
+- Fix: prevPdbIdRef tracks previous pdbId; on change, clears measurements +
+  interactionLines + Molstar native measurements
+
+Bug 3 — Zoom in/out broken (PdbViewerLite.tsx):
+- cam.zoom(0.8) called but Molstar camera has no .zoom() method
+- Fix: cam.setState({position, up, target}) moves camera 20% closer (in)
+  or 25% farther (out) from target
+
+Bug 4 — Screenshot may fail (PdbViewerLite.tsx):
+- canvas3d.getCanvas() might not exist in all Molstar versions
+- Fix: 3-tier fallback — getCanvas() → canvas3d.canvas → querySelector
+
+E2E Test Results:
+- Modal: all 10 tabs + toolbar + viewport controls render ✅
+- Chat API (6LU7 ligand): 4 correct commands (load_pdb + 3x analyze_run) ✅
+  Format is 'commands' (not 'actions') ✅
+  continueAfterAnalysis=true ✅
+- No console errors ✅
+
+Remaining Issues (architectural, not bugs):
+- PDB list preview (PdbViewerLite) and full analysis (StructureAnalysisView)
+  have duplicate viewport controls — user requested unification but this
+  requires extracting shared components (larger refactor)
+- Dev server OOM (4GB sandbox) prevents full 3D interaction testing
