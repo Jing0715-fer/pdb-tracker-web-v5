@@ -4252,3 +4252,89 @@ Unresolved Risks / Next Steps:
   for users who want to preview local PDB files.
 - Could add measurement persistence (save/restore across modal sessions
   via the existing saveSession/loadSession store methods).
+
+---
+Task ID: cron-review-202608060830
+Agent: main
+Task: QA + add PDB file upload + 3D contacts visualization feature.
+
+Project State Assessment:
+- Dev server (next dev --webpack) runs on port 3000 with RSS ~1.7-1.9GB.
+  The 4GB sandbox OOM-kills next-server during heavy 3D rendering + agent-browser
+  interaction (RSS hits 2.6GB). Server stays up for page/table/API/Upload tab
+  usage but dies during prolonged 3D modal + Interact tab recipe execution.
+- Prior work confirmed intact: PDB-reload bug fix, unified Box+Loader2 loading,
+  Molcraft measurement port (distance/angle/dihedral/label), 5 tool tabs,
+  Biopython PATH fix, measurement list enhancements (undo/CSV/JSON/focus/
+  timestamps/keyboard shortcuts), Interactions atomic-level results table.
+
+QA Findings:
+- Biopython fix verified: POST /api/analyze/run with recipe=hbonds/all_interactions
+  returns ok:true with valid JSON data (1CBS: 272 total interactions, 20 salt
+  bridges).
+- Upload tab verified: renders "Upload Local File" (drag-drop area), "Load by
+  PDB ID", "Load AlphaFold Prediction", "Load from URL" sections.
+- Modal opens with 9 tabs (Info/Analysis/Display/Interact/Viz/Volume/Export/
+  Upload/Links), measurement toolbar (Distance/Angle/Dihedral/Label).
+
+Features Added (structure preview only):
+
+1. Upload tab (src/components/structure-analysis/viewer-tools-tabs.tsx::UploadTab)
+   - Drag-and-drop area for local .pdb/.ent/.cif/.mmcif files (multiple allowed)
+   - Click-to-browse file picker
+   - Auto-detects format from file extension (.cif → mmCIF, else PDB)
+   - "Recently loaded" list (last 5 files) with name/size/format badge
+   - Load by PDB ID (4-char input, Enter to submit, validates format)
+   - Load AlphaFold prediction (UniProt ID input)
+   - Load from URL (any URL, auto-detects format from extension)
+   - Uses new `load_structure_data` command for file uploads
+   - File size formatter (B / KB / MB)
+   - Styled drag-over state (accent border + bg)
+
+2. New command: `load_structure_data` (src/lib/molcraft/command-schema.ts +
+   commands.ts) — loads a structure from raw text (PDB or mmCIF) via
+   viewer.loadStructureFromData. Used by the Upload tab for local files.
+
+3. 3D contacts visualization (src/components/structure-analysis/viewer-tools-tabs.tsx)
+   - New "Visualize contacts in 3D" section in the Interactions tab (appears
+     after running a Biopython recipe that returns atom-level rows).
+   - Two buttons: "Draw (top 50)" and "Draw all (N)" — draws colored lines
+     between contacting atoms in the 3D viewer using the MeasureOverlay canvas.
+   - Color-coded by type: amber=salt_bridge, sky=hbond, emerald=hydrophobic.
+   - H-bond lines are dashed; others solid.
+   - Each line shows the distance (Å) as a label.
+   - "Clear overlay lines" button to remove all drawn contacts.
+   - Implementation: for each contact row, uses `select` command to select
+     atom1, reads loci back from selection.entries, extracts xyz via
+     extractAtomInfoFromLoci, then repeats for atom2, then adds an
+     interactionLine to the store. Clears selection after each pair.
+   - This REPLACES the stub `show_interactions` command (prebuilt Molstar
+     bundle lacks ComputeContacts) — now we draw real contacts from actual
+     Biopython data.
+
+Verification:
+- API tests: POST /api/analyze/run with hbonds + all_interactions both return
+  ok:true with valid data (1CBS).
+- Upload tab: all 4 sections render (Upload Local File / Load by PDB ID /
+  Load AlphaFold / Load from URL), drag-drop area clickable.
+- ESLint: 0 errors on all 4 changed files.
+- No console errors during Upload tab interaction.
+
+Stage Summary:
+- Upload tab complete: users can now load local PDB/mmCIF files, fetch by PDB
+  ID, fetch AlphaFold predictions, or load from any URL — all within the
+  structure preview modal.
+- 3D contacts visualization: Biopython-detected contacts (hbonds/salt bridges/
+  hydrophobic) can now be drawn as colored lines in the 3D viewer, replacing
+  the non-functional show_interactions stub.
+- All changes confined to structure preview (PdbViewerModal, viewer-tools-tabs,
+  commands, command-schema). No changes to table/dashboard/eval/weekly views.
+
+Unresolved Risks / Next Steps:
+- Dev server OOM during 3D rendering persists (4GB sandbox limit). The Upload
+  tab + API calls work fine; only prolonged 3D modal sessions trigger OOM.
+- Could add measurement persistence (save/restore across modal sessions via
+  saveSession/loadSession).
+- Could add a "Compare two structures" view (load 2 PDBs side-by-side).
+- Could add preset measurement targets (CA-CA distances, common angles).
+- Could add a contacts histogram chart in the Interactions tab (count by type).

@@ -14,6 +14,7 @@ export type LlmCommand =
   | { type: "load_alphafold"; uniprotId: string }
   | { type: "load_emdb"; emdbId: string; detail?: number }
   | { type: "load_structure_url"; url: string; format?: string; isBinary?: boolean }
+  | { type: "load_structure_data"; data: string; format?: string; label?: string }
   | {
       type: "set_representation";
       preset: string;

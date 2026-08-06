@@ -10,7 +10,7 @@ import {
 import {
   X, Loader2, Box, Microscope, PanelLeft, PanelRightClose,
   Activity, FileText, ChevronRight, ExternalLink, Download,
-  Palette, Zap, Atom, Box as BoxIcon, Camera,
+  Palette, Zap, Atom, Box as BoxIcon, Camera, Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -76,8 +76,12 @@ const ExportTab = dynamic(
   () => importWithRetry(() => import('@/components/structure-analysis/viewer-tools-tabs').then(m => ({ default: m.ExportTab }))),
   { ssr: false }
 );
+const UploadTab = dynamic(
+  () => importWithRetry(() => import('@/components/structure-analysis/viewer-tools-tabs').then(m => ({ default: m.UploadTab }))),
+  { ssr: false }
+);
 
-type AnalysisTab = 'info' | 'analysis' | 'display' | 'interactions' | 'viz' | 'volume' | 'export';
+type AnalysisTab = 'info' | 'analysis' | 'display' | 'interactions' | 'viz' | 'volume' | 'export' | 'upload';
 
 interface PdbViewerModalProps {
   pdbId: string | null;
@@ -243,6 +247,12 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                     label="Export"
                   />
                   <AnalysisTabButton
+                    active={activeTab === 'upload'}
+                    onClick={() => setActiveTab('upload')}
+                    icon={<Upload className="h-3 w-3" />}
+                    label="Upload"
+                  />
+                  <AnalysisTabButton
                     active={activeTab === 'tools'}
                     onClick={() => setActiveTab('tools')}
                     icon={<Microscope className="h-3 w-3" />}
@@ -263,6 +273,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                   {activeTab === 'viz' && pdbId && <VisualizationTab pdbId={pdbId} />}
                   {activeTab === 'volume' && <VolumeTab />}
                   {activeTab === 'export' && <ExportTab />}
+                  {activeTab === 'upload' && <UploadTab />}
                   {activeTab === 'tools' && pdbId && (
                     <ToolsTab
                       pdbId={pdbId}

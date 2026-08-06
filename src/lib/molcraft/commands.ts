@@ -161,6 +161,24 @@ export async function executeCommand(
         );
         return { ok: true, detail: `Loaded structure from ${cmd.url}` };
 
+      case "load_structure_data": {
+        // Load a structure from raw text (PDB or mmCIF). Used by the
+        // "Upload PDB file" feature in the modal — the user picks a local
+        // .pdb / .cif file and we load it into the viewer without going
+        // through RCSB. Also used by drag-and-drop.
+        const format = (cmd.format ?? "pdb") as "pdb" | "mmcif";
+        const label = cmd.label ?? `Uploaded ${format.toUpperCase()}`;
+        try {
+          await viewer.loadStructureFromData(cmd.data, format, {
+            dataLabel: label,
+          });
+          return { ok: true, detail: `Loaded structure from data (${format})` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, detail: `Failed to load structure data: ${msg}` };
+        }
+      }
+
       case "load_volume_url": {
         const color = cmd.color
           ? hexToNumber(cmd.color)

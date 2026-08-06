@@ -17,6 +17,7 @@ import { useState, useRef } from "react";
 import {
   Palette, Zap, Download, Upload, Loader2, Trash2, Box,
   Microscope, FlaskConical, ShieldCheck, Atom, Camera, RotateCcw, Copy,
+  FileBox, Link2, Dna, Crosshair,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { useAppStore } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
+import { extractAtomInfoFromLoci } from "@/lib/molcraft/measure";
 import {
   REPRESENTATION_PRESETS,
   COLOR_THEMES,
@@ -469,6 +471,101 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
     );
   };
 
+  // 3D contacts visualization state + drawer
+  const viewer = useAppStore((s) => s.viewer);
+  const addInteractionLine = useAppStore((s) => s.addInteractionLine);
+  const clearInteractionLines = useAppStore((s) => s.clearInteractionLines);
+  const [vizBusy, setVizBusy] = useState(false);
+
+  const CONTACT_COLORS: Record<string, string> = {
+    salt_bridge: "#f59e0b",   // amber
+    hbond: "#0ea5e9",         // sky
+    hydrophobic: "#10b981",   // emerald
+  };
+
+  /** Draw contact lines in 3D by looking up each atom's coords via the
+   *  Molstar structure. Uses the `select` command to set the selection
+   *  to each atom, then reads the loci back from the selection manager
+   *  and extracts xyz via extractAtomInfoFromLoci. */
+  const drawContacts3D = async (rows: typeof analysisRows) => {
+    if (!viewer || rows.length === 0) {
+      useAppStore.getState().toast("No viewer or no contacts to draw", "error");
+      return;
+    }
+    setVizBusy(true);
+    let drawn = 0;
+    let skipped = 0;
+    try {
+      for (const r of rows) {
+        try {
+          const plugin = viewer.plugin;
+          // Select atom 1
+          await executeCommand(viewer, {
+            type: "select",
+            target: { chain: r.chain1, resno: r.resno1, atom: r.atom1 },
+            action: "set",
+          } as LlmCommand);
+          await new Promise((res) => setTimeout(res, 20));
+          const entries = plugin.managers.structure.selection.entries as
+            | Map<unknown, { _selection?: any; selection?: any }>
+            | undefined;
+          let lociA: unknown = null;
+          if (entries && typeof entries.forEach === "function") {
+            entries.forEach((val: any) => {
+              const sel = val?._selection || val?.selection;
+              if (sel?.elements?.length > 0 && !lociA) lociA = sel;
+            });
+          }
+          if (!lociA) { skipped++; continue; }
+          const infoA = extractAtomInfoFromLoci(plugin, lociA);
+          if (!infoA) { skipped++; continue; }
+
+          // Select atom 2
+          await executeCommand(viewer, {
+            type: "select",
+            target: { chain: r.chain2, resno: r.resno2, atom: r.atom2 },
+            action: "set",
+          } as LlmCommand);
+          await new Promise((res) => setTimeout(res, 20));
+          let lociB: unknown = null;
+          if (entries && typeof entries.forEach === "function") {
+            entries.forEach((val: any) => {
+              const sel = val?._selection || val?.selection;
+              if (sel?.elements?.length > 0 && !lociB) lociB = sel;
+            });
+          }
+          if (!lociB) { skipped++; continue; }
+          const infoB = extractAtomInfoFromLoci(plugin, lociB);
+          if (!infoB) { skipped++; continue; }
+
+          // Clear selection so we don't leave residue highlights
+          plugin.managers.structure.selection.clear();
+          plugin.managers.interactivity.lociHighlights.clearHighlights();
+
+          const color = CONTACT_COLORS[r.type] || "#6b7280";
+          addInteractionLine({
+            from: { x: infoA.x, y: infoA.y, z: infoA.z, label: `${r.resname1}${r.resno1}.${r.chain1}/${r.atom1}` },
+            to: { x: infoB.x, y: infoB.y, z: infoB.z, label: `${r.resname2}${r.resno2}.${r.chain2}/${r.atom2}` },
+            color,
+            label: r.distance_A !== undefined ? `${r.distance_A.toFixed(1)}Å` : r.type,
+            dashed: r.type === "hbond",
+          });
+          drawn++;
+        } catch {
+          skipped++;
+        }
+      }
+      // Clear selection at the end
+      try { viewer.plugin.managers.structure.selection.clear(); } catch { /* ignore */ }
+      useAppStore.getState().toast(
+        `Drew ${drawn} contact line${drawn === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""}`,
+        drawn > 0 ? "success" : "info"
+      );
+    } finally {
+      setVizBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-2 p-3">
       <SectionTitle icon={<Zap className="h-3 w-3 text-claude-accent" />}>Non-covalent Interactions (3D Viz)</SectionTitle>
@@ -698,6 +795,57 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 3D contacts visualization — draws interactionLines between contacting
+          atoms using the MeasureOverlay canvas. Replaces the stub show_interactions
+          command (prebuilt Molstar bundle lacks ComputeContacts). */}
+      {analysisRows.length > 0 && (
+        <div className="rounded-lg border border-claude-accent/30 bg-claude-accent-light/20 p-2.5 space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Crosshair className="h-3 w-3 text-claude-accent" />
+            <span className="text-[10px] font-semibold text-claude-accent">
+              Visualize contacts in 3D
+            </span>
+          </div>
+          <p className="text-[10px] text-claude-text-muted leading-relaxed">
+            Draw {analysisRows.length} contact{analysisRows.length > 1 ? "s" : ""} as colored lines between atoms in the 3D viewer (overlay canvas). Uses the atom-level data from the last analysis run.
+          </p>
+          <div className="grid grid-cols-2 gap-1.5">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-7 text-[10px] gap-1"
+              disabled={vizBusy || analysisRows.length === 0}
+              onClick={() => drawContacts3D(analysisRows.slice(0, 50))}
+              title="Draw first 50 contacts as overlay lines"
+            >
+              {vizBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+              Draw (top 50)
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-7 text-[10px] gap-1"
+              disabled={vizBusy || analysisRows.length === 0}
+              onClick={() => drawContacts3D(analysisRows)}
+              title="Draw ALL contacts (may be slow for >200)"
+            >
+              {vizBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+              Draw all ({analysisRows.length})
+            </Button>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full h-7 text-[10px] gap-1 text-claude-text-muted"
+            onClick={() => { clearInteractionLines(); useAppStore.getState().toast("Cleared overlay lines", "info"); }}
+            title="Clear all overlay lines"
+          >
+            <Trash2 className="h-3 w-3" />
+            Clear overlay lines
+          </Button>
         </div>
       )}
 
@@ -1103,6 +1251,242 @@ export function ExportTab() {
       <div className="text-[10px] text-claude-text-muted leading-relaxed">
         <Badge variant="outline" className="mr-1 text-claude-accent border-claude-accent/40">Tip</Badge>
         Screenshot resolution is independent of the browser window; 4K takes a few seconds. Session files save all structures, representations, measurements, and camera state.
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Upload tab — load structures from local files / URLs / AlphaFold
+// ============================================================
+
+export function UploadTab() {
+  const { run, busy } = useRunCommand();
+  const viewer = useAppStore((s) => s.viewer);
+  const toast = useAppStore((s) => s.toast);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [recentFiles, setRecentFiles] = useState<Array<{ name: string; size: number; format: string; loadedAt: number }>>([]);
+  const [urlInput, setUrlInput] = useState("");
+  const [alphafoldId, setAlphafoldId] = useState("");
+  const [pdbIdInput, setPdbIdInput] = useState("");
+
+  const detectFormat = (name: string): "pdb" | "mmcif" => {
+    const lower = name.toLowerCase();
+    if (lower.endsWith(".cif") || lower.endsWith(".mmcif")) return "mmcif";
+    return "pdb";
+  };
+
+  const loadFile = async (file: File) => {
+    if (!viewer) {
+      toast("Viewer not ready", "error");
+      return;
+    }
+    const format = detectFormat(file.name);
+    try {
+      const text = await file.text();
+      const res = await run({
+        type: "load_structure_data",
+        data: text,
+        format,
+        label: file.name,
+      } as LlmCommand);
+      if (res?.ok) {
+        setRecentFiles(prev => [
+          { name: file.name, size: file.size, format, loadedAt: Date.now() },
+          ...prev.slice(0, 4),
+        ]);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast(`Load failed: ${msg}`, "error");
+    }
+  };
+
+  const handleFileSelect = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    for (const file of Array.from(files)) {
+      await loadFile(file);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      await handleFileSelect(files);
+    }
+  };
+
+  const handleLoadUrl = async () => {
+    if (!urlInput.trim()) return;
+    await run({
+      type: "load_structure_url",
+      url: urlInput.trim(),
+      format: urlInput.toLowerCase().endsWith(".cif") ? "mmcif" : "pdb",
+      isBinary: false,
+    });
+  };
+
+  const handleLoadPdbId = async () => {
+    const id = pdbIdInput.trim().toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(id)) {
+      toast("PDB ID must be 4 alphanumeric chars", "error");
+      return;
+    }
+    await run({ type: "load_pdb", id });
+  };
+
+  const handleLoadAlphafold = async () => {
+    const id = alphafoldId.trim().toUpperCase();
+    if (!id) {
+      toast("Enter a UniProt ID", "error");
+      return;
+    }
+    await run({ type: "load_alphafold", uniprotId: id });
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className="space-y-3 p-3">
+      <SectionTitle icon={<FileBox className="h-3 w-3 text-claude-accent" />}>Upload Local File</SectionTitle>
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+        className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+          dragOver
+            ? "border-claude-accent bg-claude-accent-light/40"
+            : "border-claude-border-light/60 dark:border-[#3d3832]/60 hover:border-claude-accent/60 hover:bg-claude-accent-light/20"
+        }`}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdb,.ent,.cif,.mmcif"
+          multiple
+          className="hidden"
+          onChange={(e) => handleFileSelect(e.target.files)}
+        />
+        <FileBox className={`h-8 w-8 mx-auto mb-2 ${dragOver ? "text-claude-accent" : "text-claude-text-muted"}`} />
+        <div className="text-xs font-medium text-claude-text">
+          {dragOver ? "Drop files here…" : "Click or drag PDB / mmCIF files"}
+        </div>
+        <div className="text-[10px] text-claude-text-muted mt-1">
+          Supports .pdb, .ent, .cif, .mmcif — multiple files allowed
+        </div>
+      </div>
+
+      {recentFiles.length > 0 && (
+        <div className="rounded-lg border border-claude-border-light/60 dark:border-[#3d3832]/60 overflow-hidden">
+          <div className="px-2 py-1 bg-claude-bg/60 dark:bg-[#1a1917]/60 border-b border-claude-border-light/40 dark:border-[#3d3832]/40">
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+              Recently loaded ({recentFiles.length})
+            </span>
+          </div>
+          <div className="max-h-32 overflow-y-auto sa-scroll">
+            {recentFiles.map((f, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 text-[10px] hover:bg-claude-accent-light/20 border-b border-claude-border-light/20 dark:border-[#3d3832]/20 last:border-0">
+                <FileBox className="h-3 w-3 text-claude-accent flex-shrink-0" />
+                <span className="font-mono text-claude-text truncate flex-1" title={f.name}>{f.name}</span>
+                <Badge variant="outline" className="h-4 px-1 text-[8px] font-mono bg-claude-accent-light text-claude-accent border-claude-accent/30">
+                  {f.format}
+                </Badge>
+                <span className="text-[9px] text-claude-text-muted whitespace-nowrap">{formatSize(f.size)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <Separator />
+
+      <SectionTitle icon={<Dna className="h-3 w-3 text-claude-accent" />}>Load by PDB ID</SectionTitle>
+      <p className="rounded-lg bg-claude-bg/60 dark:bg-[#1a1917]/60 p-2 text-[10px] leading-relaxed text-claude-text-muted border border-claude-border-light/40 dark:border-[#3d3832]/40">
+        Load any structure from RCSB PDB by its 4-character ID (e.g. 1CBS, 6XR8, 7KQR).
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          value={pdbIdInput}
+          onChange={(e) => setPdbIdInput(e.target.value)}
+          placeholder="e.g. 1CBS"
+          className="h-8 text-xs font-mono uppercase"
+          maxLength={4}
+          onKeyDown={(e) => { if (e.key === "Enter") handleLoadPdbId(); }}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8 text-xs gap-1.5"
+          disabled={busy || pdbIdInput.trim().length !== 4}
+          onClick={handleLoadPdbId}
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Dna className="h-3.5 w-3.5" />}
+          Load
+        </Button>
+      </div>
+
+      <SectionTitle icon={<Dna className="h-3 w-3 text-claude-accent" />}>Load AlphaFold Prediction</SectionTitle>
+      <p className="rounded-lg bg-claude-bg/60 dark:bg-[#1a1917]/60 p-2 text-[10px] leading-relaxed text-claude-text-muted border border-claude-border-light/40 dark:border-[#3d3832]/40">
+        Load a predicted structure from the AlphaFold DB by UniProt accession (e.g. P00520).
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          value={alphafoldId}
+          onChange={(e) => setAlphafoldId(e.target.value)}
+          placeholder="UniProt ID, e.g. P00520"
+          className="h-8 text-xs font-mono"
+          onKeyDown={(e) => { if (e.key === "Enter") handleLoadAlphafold(); }}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8 text-xs gap-1.5"
+          disabled={busy || !alphafoldId.trim()}
+          onClick={handleLoadAlphafold}
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Dna className="h-3.5 w-3.5" />}
+          Load
+        </Button>
+      </div>
+
+      <Separator />
+
+      <SectionTitle icon={<Link2 className="h-3 w-3 text-claude-accent" />}>Load from URL</SectionTitle>
+      <p className="rounded-lg bg-claude-bg/60 dark:bg-[#1a1917]/60 p-2 text-[10px] leading-relaxed text-claude-text-muted border border-claude-border-light/40 dark:border-[#3d3832]/40">
+        Fetch a structure file from any URL. Format is auto-detected from the file extension (.cif → mmCIF, else PDB).
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          placeholder="https://files.rcsb.org/download/1CBS.pdb"
+          className="h-8 text-xs font-mono"
+          onKeyDown={(e) => { if (e.key === "Enter") handleLoadUrl(); }}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8 text-xs gap-1.5"
+          disabled={busy || !urlInput.trim()}
+          onClick={handleLoadUrl}
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+          Fetch
+        </Button>
+      </div>
+
+      <Separator />
+      <div className="text-[10px] text-claude-text-muted leading-relaxed">
+        <Badge variant="outline" className="mr-1 text-claude-accent border-claude-accent/40">Tip</Badge>
+        Uploaded structures are loaded into the same viewer session — you can still use all measurement, interaction, and visualization tools on them. Use Display → Representation to change the visual style.
       </div>
     </div>
   );
