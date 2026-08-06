@@ -417,6 +417,12 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       const data = await res.json();
       if (data.data) {
         const d = data.data;
+        // Check for Python recipe errors (e.g. "chain not found")
+        if (d.error) {
+          setAnalysisSummary(`Error: ${d.error}${d.available_chains ? `\nAvailable chains: ${d.available_chains.join(", ")}` : ""}`);
+          setAnalysisKind(null);
+          return;
+        }
         if (recipe === "hbonds") {
           setAnalysisSummary(
             `Hydrogen bonds: ${d.total_hbonds}` +

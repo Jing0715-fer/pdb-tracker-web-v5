@@ -534,9 +534,9 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   useEffect(() => {
     if (!ready) return;
     const handler = (e: KeyboardEvent) => {
-      // Don't intercept when typing in inputs
+      // Don't intercept when typing in inputs/selects/textareas
       const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
       if (e.key === 'Escape' && measureMode !== 'off') {
         e.preventDefault();
         setMeasureMode('off');
