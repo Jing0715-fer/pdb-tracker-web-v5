@@ -340,7 +340,26 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
 
   // Auto-detect available chains from the active structure's metadata.
   const activeStructure = useAppStore(selectActiveStructure);
-  const availableChains: string[] = activeStructure?.metadata?.chains ?? [];
+  const [fetchedChains, setFetchedChains] = useState<string[]>([]);
+  let availableChains: string[] = activeStructure?.metadata?.chains ?? fetchedChains;
+
+  // If no chains from store metadata, fetch from the metadata API directly.
+  // This makes the chain dropdowns work in the modal context where the store
+  // doesn't have activeStructure metadata set.
+  useEffect(() => {
+    if (!pdbId || activeStructure?.metadata?.chains?.length) return;
+    let cancelled = false;
+    fetch(`/api/analyze/metadata?id=${pdbId}&interfaces=0`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (cancelled || !data) return;
+        const chains = (data.polymers ?? []).flatMap((p: any) => p.chains ?? p.authChains ?? []);
+        if (chains.length > 0) setFetchedChains(chains);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [pdbId, activeStructure?.metadata?.chains?.length]);
+
   useEffect(() => {
     if (availableChains.length === 0) return;
     if (availableChains.length === 1) {
@@ -681,9 +700,45 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
           )}
         </div>
       </div>
+      {/* P4: Inter-chain / Intra-chain toggle */}
+      <div className="flex items-center gap-2 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-2 py-1.5">
+        <Label className="text-[9px] text-claude-text-muted shrink-0">Mode</Label>
+        <button
+          onClick={() => {
+            if (analysisChain1 === analysisChain2) {
+              // Switch to inter-chain: set chain2 to a different chain
+              const other = availableChains.find((c) => c !== analysisChain1);
+              setAnalysisChain2(other ?? analysisChain1);
+            } else {
+              // Switch to intra-chain: set chain2 = chain1
+              setAnalysisChain2(analysisChain1);
+            }
+          }}
+          className="flex items-center gap-1 text-[9px] font-medium"
+          title="Toggle inter-chain / intra-chain mode"
+        >
+          <span className={`px-1.5 py-0.5 rounded ${analysisChain1 !== analysisChain2 ? "bg-sky-500/20 text-sky-600" : "text-claude-text-muted"}`}>Inter</span>
+          <Switch
+            checked={analysisChain1 === analysisChain2}
+            onCheckedChange={(v) => {
+              if (v) {
+                setAnalysisChain2(analysisChain1);
+              } else {
+                const other = availableChains.find((c) => c !== analysisChain1);
+                setAnalysisChain2(other ?? analysisChain1);
+              }
+            }}
+            className="scale-75"
+          />
+          <span className={`px-1.5 py-0.5 rounded ${analysisChain1 === analysisChain2 ? "bg-claude-accent/20 text-claude-accent" : "text-claude-text-muted"}`}>Intra</span>
+        </button>
+        <span className="ml-auto text-[8px] text-claude-text-muted/70">
+          {analysisChain1 === analysisChain2 ? "Same-chain contacts" : "Cross-chain contacts"}
+        </span>
+      </div>
       {analysisChain1 === analysisChain2 && (
         <div className="rounded-md bg-claude-accent-light/30 border border-claude-accent/20 px-2 py-1 text-[9px] text-claude-text-muted">
-          Intra-chain mode (chain {analysisChain1} ↔ itself). Use "All" for same-chain contacts.
+          Intra-chain mode (chain {analysisChain1} ↔ itself). All recipes now support same-chain analysis.
         </div>
       )}
       <div className="grid grid-cols-2 gap-1.5">

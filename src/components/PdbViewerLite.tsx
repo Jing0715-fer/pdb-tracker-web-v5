@@ -27,7 +27,7 @@ import {
   Loader2, ChevronDown, Eye, EyeOff, Layers, Focus,
   Dna, Pill, Droplet, Ruler, Triangle, MousePointerClick, X,
   Sigma, Tag, Copy, Download, Undo2, Crosshair, ClipboardList,
-  RotateCcw, ZoomIn, ZoomOut, Camera, Sun, Moon,
+  RotateCcw, ZoomIn, ZoomOut, Camera, Sun, Moon, FileText,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -374,6 +374,44 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     toast(`Downloaded ${measurements.length} measurements as JSON`, 'success');
   }, [measurements, toast]);
 
+  // P5: Export measurements as a markdown report (added to store reports)
+  const addReport = useAppStore((s) => s.addReport);
+  const handleExportToReport = useCallback(() => {
+    if (measurements.length === 0) return;
+    const lines: string[] = [
+      `# Measurement Report — ${pdbId}`,
+      ``,
+      `**Generated:** ${new Date().toISOString()}`,
+      `**Structure:** ${pdbId}`,
+      `**Total measurements:** ${measurements.length}`,
+      ``,
+      `| # | Type | Label | Value | Timestamp |`,
+      `|---|------|-------|-------|-----------|`,
+    ];
+    measurements.forEach((m, i) => {
+      const ts = new Date(m.ts).toLocaleString();
+      lines.push(`| ${i + 1} | ${m.mode} | ${m.label} | ${m.detail} | ${ts} |`);
+    });
+    lines.push(``);
+    // Summary by type
+    const byType: Record<string, number> = {};
+    measurements.forEach((m) => {
+      byType[m.mode] = (byType[m.mode] || 0) + 1;
+    });
+    lines.push(`## Summary`);
+    Object.entries(byType).forEach(([type, count]) => {
+      lines.push(`- **${type}**: ${count} measurement${count > 1 ? 's' : ''}`);
+    });
+    const markdown = lines.join('\n');
+    addReport({
+      id: `report-${Date.now()}`,
+      title: `Measurements — ${pdbId} (${new Date().toLocaleDateString()})`,
+      markdown,
+      createdAt: Date.now(),
+    });
+    toast(`Added ${measurements.length} measurements to Reports`, 'success');
+  }, [measurements, pdbId, addReport, toast]);
+
   // ─── Viewport control handlers (replace hidden native Molstar buttons) ────
   const [bgDark, setBgDark] = useState(false);
 
@@ -573,6 +611,16 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                   title="Download as JSON"
                 >
                   <Download className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                  onClick={handleExportToReport}
+                  disabled={measurements.length === 0}
+                  title="Export to Reports (markdown)"
+                >
+                  <FileText className="h-3 w-3" />
                 </Button>
                 <Button
                   size="sm"
