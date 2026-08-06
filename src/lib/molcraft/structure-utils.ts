@@ -2227,3 +2227,41 @@ export function computeAverageStructure(
 
   return avg;
 }
+
+/**
+ * Find the 3D coordinates of an atom in a PDB text by chain/resno/resname/atomName.
+ * Returns the first matching ATOM/HETATM record's xyz, or null if not found.
+ * Used by the interaction network to draw distance lines between contacting
+ * atoms (ported from Molcraft).
+ */
+export function findAtomCoord(
+  pdbText: string,
+  opts: {
+    chain?: string;
+    resno?: number;
+    resname?: string;
+    atomName?: string;
+  }
+): { x: number; y: number; z: number } | null {
+  if (!pdbText) return null;
+  const lines = pdbText.split(/\r?\n/);
+  for (const line of lines) {
+    const rec = line.substring(0, 6).trim();
+    if (rec !== "ATOM" && rec !== "HETATM") continue;
+    const atomName = line.substring(12, 16).trim();
+    const resName = line.substring(17, 20).trim();
+    const chain = line.substring(21, 22).trim();
+    const resSeq = parseInt(line.substring(22, 26), 10);
+    if (Number.isNaN(resSeq)) continue;
+    if (opts.atomName && atomName !== opts.atomName) continue;
+    if (opts.resname && resName !== opts.resname) continue;
+    if (typeof opts.resno === "number" && resSeq !== opts.resno) continue;
+    if (opts.chain && chain !== opts.chain) continue;
+    const x = parseFloat(line.substring(30, 38));
+    const y = parseFloat(line.substring(38, 46));
+    const z = parseFloat(line.substring(46, 54));
+    if (Number.isNaN(x) || Number.isNaN(y) || Number.isNaN(z)) continue;
+    return { x, y, z };
+  }
+  return null;
+}

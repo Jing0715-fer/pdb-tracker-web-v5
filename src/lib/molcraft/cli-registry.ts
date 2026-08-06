@@ -1127,9 +1127,9 @@ all_interactions.sort(key=lambda x: x["distance_A"])
 print(json.dumps({
     "chain1": chain1_id, "chain2": chain2_id,
     "total": len(all_interactions),
-    "salt_bridges": {"total_salt_bridges": len(salt_bridges), "salt_bridges": salt_bridges},
-    "hbonds": {"total_hbonds": len(hbonds), "top_residue_pairs": []},
-    "hydrophobic_contacts": {"total_residue_pairs": len(seen_pairs), "total_atom_contacts": len(hydrophobic)},
+    "salt_bridges": len(salt_bridges),
+    "hbonds": len(hbonds),
+    "hydrophobic": len(hydrophobic),
     "interactions": all_interactions,
 }, ensure_ascii=False, indent=2))
 `;

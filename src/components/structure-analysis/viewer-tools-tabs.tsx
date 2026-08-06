@@ -416,11 +416,14 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
             distance_A: b.distance_A,
           })));
         } else if (recipe === "all_interactions") {
-          const hb = d.hbonds?.total_hbonds ?? 0;
-          const sb = d.salt_bridges?.total_salt_bridges ?? 0;
-          const hp = d.hydrophobic_contacts?.total_residue_pairs ?? 0;
+          // Recipe now returns numeric counts (matching Molcraft form):
+          //   d.salt_bridges (number), d.hbonds (number), d.hydrophobic (number)
+          //   d.interactions (array of atom-level contact objects)
+          const hb = typeof d.hbonds === "number" ? d.hbonds : (d.hbonds?.total_hbonds ?? 0);
+          const sb = typeof d.salt_bridges === "number" ? d.salt_bridges : (d.salt_bridges?.total_salt_bridges ?? 0);
+          const hp = typeof d.hydrophobic === "number" ? d.hydrophobic : (d.hydrophobic_contacts?.total_residue_pairs ?? 0);
           setAnalysisSummary(
-            `All interactions:\n  Hydrogen bonds: ${hb}\n  Salt bridges: ${sb}\n  Hydrophobic residue pairs: ${hp}\n  Total atom-level: ${d.total ?? 0}`
+            `All interactions:\n  Hydrogen bonds: ${hb}\n  Salt bridges: ${sb}\n  Hydrophobic: ${hp}\n  Total atom-level: ${d.total ?? 0}`
           );
           setAnalysisRows(d.interactions || []);
         }

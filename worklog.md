@@ -4449,3 +4449,112 @@ Unresolved Risks / Next Steps:
 - Could add a "Compare two structures" view (load 2 PDBs side-by-side).
 - Could add preset measurement targets (CA-CA distances, common angles).
 - Could add a "Copy as image" button to the contacts histogram for sharing.
+
+---
+Task ID: fix-seq-overflow-and-interaction-network
+Agent: main
+Task: Fix sequence viewer overflow in full analysis; update interaction network to Molcraft form; align other analysis per Molcraft.
+
+Project State Assessment:
+- Dev server runs on port 3000. 4GB sandbox OOM-kills next-server during
+  full Structure Analysis 3D rendering (3D viewer + 24 charts). Server stays
+  up for page/table/API usage. Restart:
+  `NODE_OPTIONS=--max-old-space-size=2560 next dev --webpack -p 3000`
+- Prior work intact: PDB-reload bug fix, measurement port, 9 tool tabs,
+  Biopython PATH fix, viewport controls, contacts histogram, Upload tab.
+
+Bugs Found + Fixed:
+
+1. Sequence viewer overflow (src/components/structure-analysis/sequence-viewer.tsx)
+   - BUG: The sequence display used <ScrollArea className="sa-scroll max-h-64">
+     which only handled vertical scrolling. The SequenceRow renders blocks of
+     10 residues in a horizontal flex layout — when the panel is narrow, the
+     residues overflowed the container horizontally with no scrollbar, causing
+     the sequence to spill outside the box (user-reported "sequence溢出框了").
+   - FIX: Replaced <ScrollArea> with a plain <div className="max-h-64 overflow-y-auto overflow-x-auto sa-scroll">
+     and added min-w-max to the inner content div so the horizontal scrollbar
+     appears when the sequence is wider than the container. This matches
+     Molcraft's approach (overflow-x-auto scrollbar-thin on the sequence strip).
+   - Removed unused ScrollArea import.
+
+2. Interaction network not matching Molcraft form
+   (src/components/charts/interaction-network.tsx)
+   - BUG: Our interaction-network.tsx (685 lines) was a custom implementation
+     that did NOT match Molcraft's form. It used a different data structure
+     (InteractionNode/InteractionEdge with x/y/degree) and rendered a
+     force-directed graph layout. The user wanted the Molcraft form: a
+     filterable list of atom-level contacts with click-to-focus-and-draw-line
+     in the 3D viewer.
+   - FIX: Replaced our interaction-network.tsx with a faithful port of
+     Molcraft's version (368 lines). The new version:
+     * Runs the all_interactions recipe (chain1/chain2 inputs + refresh)
+     * Shows filter tabs (all / salt_bridge / hbond / hydrophobic) with counts
+     * Renders a scrollable list of atom-level interactions, each showing:
+       - Type icon + colored badge (amber/sky/emerald)
+       - Residue1(chain) ↔ Residue2(chain) in monospace
+       - Atom1↔Atom2: distance Å badge
+       - "Draw" button that:
+         a. Finds both atoms' xyz coords from PDB text via findAtomCoord
+         b. Clears existing interaction state + measurements + interactionLines
+         c. Shows ball-and-stick via showAtomsForInteraction
+         d. Adds an interactionLine (dashed, colored by type, distance label)
+         e. Focuses camera on midpoint (focusSphere with radius = dist + 8Å)
+     * Info box explaining the 3 interaction types + cutoffs
+   - Import paths adjusted: @/lib/store → @/lib/molcraft/store,
+     @/lib/molstar/measure → @/lib/molcraft/measure,
+     @/lib/structure-utils → @/lib/molcraft/structure-utils.
+   - UI palette uses claude-* tokens to match pdb-tracker theme.
+
+3. all_interactions recipe data shape mismatch
+   (src/lib/molcraft/cli-registry.ts)
+   - BUG: Our all_interactions recipe returned salt_bridges/hbonds/hydrophobic
+     as OBJECTS (e.g. {total_salt_bridges: 20, salt_bridges: [...]}) while
+     Molcraft's InteractionNetwork component expected NUMBERS. The ported
+     InteractionNetwork would show "undefined" counts.
+   - FIX: Changed the recipe's JSON output to return numeric counts matching
+     Molcraft exactly: salt_bridges: len(salt_bridges), hbonds: len(hbonds),
+     hydrophobic: len(hydrophobic). The full atom-level detail is still
+     available in the interactions array. Verified via API: 1CBS returns
+     {total: 272, salt_bridges: 20, hbonds: 100, hydrophobic: 152,
+      interactions: [272 atom-level objects]}.
+   - Also updated viewer-tools-tabs.tsx InteractionsTab to handle both the
+     new numeric shape AND the old object shape (defensive fallback) so the
+     modal's Interactions tab continues working.
+
+4. Added findAtomCoord to structure-utils (src/lib/molcraft/structure-utils.ts)
+   - Ported findAtomCoord from Molcraft's structure-utils. Parses PDB text
+     to find an atom's xyz coordinates by chain/resno/resname/atomName using
+     fixed-column PDB format. Used by the new InteractionNetwork's draw-line
+     feature to get atom coords for the interactionLine overlay.
+
+Other analysis charts: confirmed equivalent to Molcraft. Diffed all 24 chart
+files between our repo and Molcraft — differences are only: import paths
+(@/lib/store → @/lib/molcraft/store), English vs Chinese UI text, and minor
+enhancements (auto-chain-detection). The functional logic (recipe calls,
+data rendering, focus handlers) is identical. No changes needed.
+
+Verification:
+- all_interactions API: returns numeric counts (20/100/152) + 272 interactions.
+- Lint: 0 errors on all 5 changed files.
+- Dev server compiles the Structure Analysis view (sequence viewer + charts
+  render in the DOM before OOM kills the server during full 3D rendering).
+- The sequence viewer fix (overflow-x-auto + min-w-max) is in the source —
+  horizontal scrollbar will now appear when the sequence exceeds panel width.
+
+Stage Summary:
+- Sequence overflow FIXED: horizontal + vertical scrollbars now appear.
+- Interaction network REPLACED with Molcraft's faithful form: filterable
+  list + click-to-draw-line + camera focus. Replaces our custom graph layout.
+- all_interactions recipe data shape ALIGNED with Molcraft (numeric counts).
+- findAtomCoord ported to enable the draw-line feature.
+- All changes confined to structure preview / analysis components. No changes
+  to table/dashboard/eval/weekly views.
+
+Unresolved Risks / Next Steps:
+- Dev server OOM during full Structure Analysis 3D rendering persists (4GB
+  sandbox). The InteractionNetwork + SequenceViewer work in the modal context
+  but full 3D + 24 charts is too heavy for the sandbox.
+- Could port Molcraft's CDR region annotation for the sequence viewer (shows
+  antibody CDR loops L1/L2/L3/H1/H2/H3 with click-to-select).
+- Could add the "Draw all" button to InteractionNetwork (draw all filtered
+  interactions at once instead of one-by-one).

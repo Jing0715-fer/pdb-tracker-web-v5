@@ -19,7 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Dna, ChevronRight } from "lucide-react";
 import {
@@ -183,11 +182,11 @@ export function SequenceViewer() {
       {/* Sequence display */}
       {currentSeq && (
         <div className="rounded-md border border-claude-border bg-claude-bg p-2">
-          <ScrollArea className="sa-scroll max-h-64">
-            <div className="font-mono text-[11px] leading-relaxed">
+          <div className="max-h-64 overflow-y-auto overflow-x-auto sa-scroll">
+            <div className="font-mono text-[11px] leading-relaxed min-w-max">
               <SequenceRow sequence={currentSeq.sequence} chain={currentSeq.chain} onResidueClick={handleResidueClick} onResidueHover={setHoveredIdx} hoveredIdx={hoveredIdx} />
             </div>
-          </ScrollArea>
+          </div>
           {hoveredIdx != null && currentSeq.sequence[hoveredIdx] && (
             <div className="mt-1.5 flex items-center gap-2 border-t border-claude-border pt-1.5 text-[9px]">
               <span className="font-mono font-bold text-claude-accent">
