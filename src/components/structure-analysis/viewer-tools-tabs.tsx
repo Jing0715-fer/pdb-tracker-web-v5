@@ -13,11 +13,11 @@
  * preview any PDB regardless of what's loaded in the full Analysis module.
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Palette, Zap, Download, Upload, Loader2, Trash2, Box,
   Microscope, FlaskConical, ShieldCheck, Atom, Camera, RotateCcw, Copy,
-  FileBox, Link2, Dna, Crosshair,
+  FileBox, Link2, Dna, Crosshair, Sparkles, User, Bot, Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useAppStore, selectActiveStructure } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
@@ -44,6 +45,8 @@ import {
   SNAPSHOT_TYPES,
 } from "@/lib/molcraft/presets";
 import type { LlmCommand, ResidueRef } from "@/lib/molcraft/command-schema";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ============================================================
 // shared helpers
@@ -1713,6 +1716,184 @@ export function UploadTab() {
       <div className="text-[10px] text-claude-text-muted leading-relaxed">
         <Badge variant="outline" className="mr-1 text-claude-accent border-claude-accent/40">Tip</Badge>
         Uploaded structures are loaded into the same viewer session — you can still use all measurement, interaction, and visualization tools on them. Use Display → Representation to change the visual style.
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Modal Chat tab — lightweight chat for the PdbViewerModal
+// ============================================================
+
+export function ModalChatTab({ pdbId }: { pdbId: string }) {
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const chatProvider = useAppStore((s) => s.chatProvider);
+  const toast = useAppStore((s) => s.toast);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  const send = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    const userMsg = { role: "user" as const, content: trimmed };
+    const newMessages = [...messages, userMsg];
+    setMessages([...newMessages, { role: "assistant", content: "" }]);
+    setInput("");
+
+    try {
+      const res = await fetch("/api/llm/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+          context: { loadedStructures: [{ id: pdbId, label: pdbId }] },
+          provider: chatProvider,
+        }),
+      });
+
+      if (!res.ok) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { role: "assistant", content: `❌ Error: HTTP ${res.status}` };
+          return updated;
+        });
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let buffer = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+          for (const evt of events) {
+            const line = evt.trim();
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "chunk") {
+                accumulated += data.text;
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { role: "assistant", content: accumulated };
+                  return updated;
+                });
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      }
+    } catch (err) {
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { role: "assistant", content: `❌ Error: ${err instanceof Error ? err.message : String(err)}` };
+        return updated;
+      });
+    } finally {
+      setSending(false);
+    }
+  }, [messages, sending, pdbId, chatProvider]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send(input);
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto sa-scroll p-2 space-y-2">
+        {messages.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
+            <div className="rounded-full bg-claude-accent-light/40 p-3">
+              <Sparkles className="h-5 w-5 text-claude-accent" />
+            </div>
+            <div>
+              <p className="text-xs font-medium text-claude-text">Ask about {pdbId}</p>
+              <p className="text-[10px] text-claude-text-muted mt-0.5">
+                The AI can answer questions about this structure, suggest analyses, or explain features.
+              </p>
+            </div>
+            <div className="w-full space-y-1 mt-1">
+              {[
+                { icon: "📋", title: "What is this structure?", prompt: `What can you tell me about PDB structure ${pdbId}?` },
+                { icon: "🔬", title: "Suggest analyses", prompt: `What analyses should I run on ${pdbId}?` },
+                { icon: "💡", title: "Explain features", prompt: "What measurement tools are available in this viewer?" },
+              ].map((s) => (
+                <button
+                  key={s.title}
+                  onClick={() => send(s.prompt)}
+                  className="flex w-full items-start gap-2 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-2 py-1.5 text-left hover:border-claude-accent/40 hover:bg-claude-accent-light/20 transition-colors"
+                >
+                  <span className="text-sm shrink-0">{s.icon}</span>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-medium text-claude-text">{s.title}</div>
+                    <div className="text-[9px] text-claude-text-muted truncate">{s.prompt}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          messages.map((m, i) => (
+            <div key={i} className={`flex gap-1.5 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
+              <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${m.role === "user" ? "bg-claude-accent text-white" : "bg-claude-accent-light text-claude-accent border border-claude-accent/30"}`}>
+                {m.role === "user" ? <User className="h-2.5 w-2.5" /> : <Bot className="h-2.5 w-2.5" />}
+              </div>
+              <div className={`flex-1 min-w-0 rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed ${m.role === "user" ? "bg-claude-accent text-white" : "bg-claude-bg dark:bg-[#1a1917] border border-claude-border-light/40 dark:border-[#3d3832]/40 text-claude-text"}`}>
+                {m.role === "user" ? (
+                  <div className="whitespace-pre-wrap">{m.content}</div>
+                ) : (
+                  <div className="sa-chat-markdown">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || "…"}</ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="shrink-0 border-t border-claude-border-light/40 dark:border-[#3d3832]/40 p-2">
+        <div className="relative">
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={`Ask about ${pdbId}…`}
+            className="min-h-[44px] max-h-32 resize-none pr-10 text-[11px] leading-relaxed"
+            rows={2}
+            disabled={sending}
+          />
+          <button
+            onClick={() => send(input)}
+            disabled={!input.trim() || sending}
+            className="absolute bottom-1.5 right-1.5 grid h-7 w-7 place-items-center rounded-md bg-claude-accent text-white hover:bg-claude-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            title="Send (Enter)"
+          >
+            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <div className="mt-1 text-[8px] text-claude-text-muted">
+          Enter to send · Shift+Enter for newline
+        </div>
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ import {
 import {
   X, Loader2, Box, Microscope, PanelLeft, PanelRightClose,
   Activity, FileText, ChevronRight, ExternalLink, Download,
-  Palette, Zap, Atom, Box as BoxIcon, Camera, Upload,
+  Palette, Zap, Atom, Box as BoxIcon, Camera, Upload, MessageSquare,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -80,8 +80,12 @@ const UploadTab = dynamic(
   () => importWithRetry(() => import('@/components/structure-analysis/viewer-tools-tabs').then(m => ({ default: m.UploadTab }))),
   { ssr: false }
 );
+const ModalChatTab = dynamic(
+  () => importWithRetry(() => import('@/components/structure-analysis/viewer-tools-tabs').then(m => ({ default: m.ModalChatTab }))),
+  { ssr: false }
+);
 
-type AnalysisTab = 'info' | 'analysis' | 'display' | 'interactions' | 'viz' | 'volume' | 'export' | 'upload';
+type AnalysisTab = 'info' | 'analysis' | 'display' | 'interactions' | 'viz' | 'volume' | 'export' | 'upload' | 'chat';
 
 interface PdbViewerModalProps {
   pdbId: string | null;
@@ -253,6 +257,12 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                     label="Upload"
                   />
                   <AnalysisTabButton
+                    active={activeTab === 'chat'}
+                    onClick={() => setActiveTab('chat')}
+                    icon={<MessageSquare className="h-3 w-3" />}
+                    label="Chat"
+                  />
+                  <AnalysisTabButton
                     active={activeTab === 'tools'}
                     onClick={() => setActiveTab('tools')}
                     icon={<Microscope className="h-3 w-3" />}
@@ -274,6 +284,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                   {activeTab === 'volume' && <VolumeTab />}
                   {activeTab === 'export' && <ExportTab />}
                   {activeTab === 'upload' && <UploadTab />}
+                  {activeTab === 'chat' && pdbId && <ModalChatTab pdbId={pdbId} />}
                   {activeTab === 'tools' && pdbId && (
                     <ToolsTab
                       pdbId={pdbId}
