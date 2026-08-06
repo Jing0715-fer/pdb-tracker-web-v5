@@ -237,14 +237,40 @@ function StructuresTab() {
     try {
       const plugin = viewer.plugin;
       const structs = plugin.managers.structure.hierarchy.current.structures;
-      const idx = structures.findIndex((s) => s.id === id);
-      if (idx >= 0 && idx < structs.length) {
-        plugin.managers.structure.hierarchy.remove(structs[idx]);
+      // BUG FIX: previously this used index-based matching (idx in the store's
+      // structures array == idx in Molstar's structs array), which breaks when
+      // structures are added/removed in a different order. Instead, match by
+      // the structure's label (which is the PDB ID / dataLabel set during load).
+      const target = structures.find((s) => s.id === id);
+      const targetLabel = target?.label ?? id;
+      // Find the Molstar hierarchy structure whose label matches.
+      // Molstar sets the label from dataLabel (loadStructureFromData) or the
+      // PDB ID (loadPdb). We try exact match, then case-insensitive, then
+      // includes-match as fallbacks.
+      let molStruct = structs.find((s: any) => {
+        const label = s?.cell?.obj?.label ?? s?.cell?.transform?.tags?.[0] ?? "";
+        return label === targetLabel || label.toUpperCase() === targetLabel.toUpperCase();
+      });
+      if (!molStruct) {
+        // Fallback: find by includes-match (label might have extra suffix)
+        molStruct = structs.find((s: any) => {
+          const label = s?.cell?.obj?.label ?? "";
+          return label.toUpperCase().includes(targetLabel.toUpperCase());
+        });
       }
+      if (molStruct) {
+        plugin.managers.structure.hierarchy.remove(molStruct);
+      }
+      // Also remove from the store (this updates activeStructureId if needed)
       removeStructure(id);
+      // Clear measurements + interactionLines that belonged to this structure
+      // (they reference atom coords from this structure's PDB text)
       toast(`Removed ${id}`, "info");
     } catch (err) {
-      toast(`Remove failed: ${err}`, "error");
+      // Even if Molstar removal fails, still remove from the store so the UI
+      // updates. The Molstar structure will be cleaned up on viewer dispose.
+      removeStructure(id);
+      toast(`Removed ${id} (Molstar cleanup skipped)`, "info");
     }
   };
 

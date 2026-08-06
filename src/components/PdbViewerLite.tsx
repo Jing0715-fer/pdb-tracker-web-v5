@@ -479,7 +479,8 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
   }, [viewer, bgDark, toast]);
 
   // Keyboard shortcuts: Esc = exit measure mode, Z = undo, 1-4 = switch mode,
-  // R = reset view, +/- = zoom, S = screenshot, B = toggle background
+  // R = reset view, +/- = zoom, S = screenshot, B = toggle background, ? = help
+  const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   useEffect(() => {
     if (!ready) return;
     const handler = (e: KeyboardEvent) => {
@@ -510,11 +511,16 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
         if (!e.ctrlKey && !e.metaKey) handleScreenshot();
       } else if (e.key === 'b' || e.key === 'B') {
         handleToggleBackground();
+      } else if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
+        e.preventDefault();
+        setShowShortcutHelp(v => !v);
+      } else if (e.key === 'Escape' && showShortcutHelp) {
+        setShowShortcutHelp(false);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [ready, measureMode, setMeasureMode, handleUndoMeasurement, handleResetView, handleZoomIn, handleZoomOut, handleScreenshot, handleToggleBackground]);
+  }, [ready, measureMode, setMeasureMode, handleUndoMeasurement, handleResetView, handleZoomIn, handleZoomOut, handleScreenshot, handleToggleBackground, showShortcutHelp]);
 
   return (
     <div className={className} style={{ display: 'flex', width: '100%', height: '100%' }}>
@@ -691,6 +697,54 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
             >
               {bgDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
             </Button>
+          </div>
+        )}
+
+        {/* Keyboard shortcut help overlay (press ? to toggle) */}
+        {showShortcutHelp && ready && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center bg-claude-bg/80 dark:bg-[#1a1917]/80 backdrop-blur-sm"
+            onClick={() => setShowShortcutHelp(false)}
+          >
+            <div
+              className="rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] p-4 shadow-xl max-w-sm"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-semibold text-claude-text">Keyboard Shortcuts</span>
+                <button
+                  onClick={() => setShowShortcutHelp(false)}
+                  className="text-claude-text-muted hover:text-destructive"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="space-y-1.5 text-[10px]">
+                {[
+                  { key: '1', desc: 'Distance mode' },
+                  { key: '2', desc: 'Angle mode' },
+                  { key: '3', desc: 'Dihedral mode' },
+                  { key: '4', desc: 'Label mode' },
+                  { key: 'Esc', desc: 'Exit measure mode' },
+                  { key: '⌘/Ctrl+Z', desc: 'Undo last measurement' },
+                  { key: 'R', desc: 'Reset view' },
+                  { key: '+/−', desc: 'Zoom in/out' },
+                  { key: 'S', desc: 'Screenshot' },
+                  { key: 'B', desc: 'Toggle background' },
+                  { key: '?', desc: 'Toggle this help' },
+                ].map((s) => (
+                  <div key={s.key} className="flex items-center gap-2">
+                    <kbd className="font-mono px-1.5 py-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60 text-claude-text min-w-[60px] text-center">
+                      {s.key}
+                    </kbd>
+                    <span className="text-claude-text-muted">{s.desc}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 pt-2 border-t border-claude-border/40 text-[8px] text-claude-text-muted/70 text-center">
+                Press Esc or click outside to close
+              </div>
+            </div>
           </div>
         )}
 
