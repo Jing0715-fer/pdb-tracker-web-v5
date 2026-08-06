@@ -5595,3 +5595,37 @@ Code Review Summary (round 4, no bugs found in these areas):
 - Both ChatTabs: AbortError caught and handled gracefully
 
 No remaining bugs found after 4 rounds of code review.
+
+---
+Task ID: 3d-code-review-round-5
+Agent: main
+Task: Deep code review round 5, focus on CSS/accessibility/performance/race conditions.
+
+Bugs Found + Fixed:
+
+Bug 1 — Keyboard shortcuts fire on SELECT dropdowns (PdbViewerLite.tsx):
+- Handler checked INPUT/TEXTAREA/contentEditable but not SELECT
+- Pressing 'R' while interacting with chain dropdowns triggered reset_camera
+- Fix: added SELECT to the tagName check
+
+Bug 2 — InteractionsTab doesn't handle Python recipe errors (viewer-tools-tabs.tsx):
+- Python recipes return { error: 'chain not found' } on failure
+- runDetailedAnalysis didn't check for d.error, tried to access undefined fields
+- Fix: check for d.error before processing, show error + available chains
+
+E2E Test Results:
+- Modal: all 10 tabs + toolbar + viewport controls ✅
+- ? shortcut help overlay opens ✅
+- No console errors ✅
+
+Code Review Summary (round 5, no bugs found in these areas):
+- Race conditions: use-atom-picking has entry guard (500ms) + cleanup
+- DPR handling: measure overlay correctly uses devicePixelRatio
+- Z-index: overlay z-10 < toolbars z-20 < help z-30 (correct)
+- ResizeObserver: properly disconnected in cleanup
+- molstar-viewer: handles load failure + Viewer.create rejection
+- Entity panel: handles 0 chains (hasEntityData check)
+- drawContacts3D: handles missing loci (skipped counter)
+- Keyboard handler: now skips INPUT/TEXTAREA/SELECT/contentEditable
+
+No remaining bugs found after 5 rounds of code review.
