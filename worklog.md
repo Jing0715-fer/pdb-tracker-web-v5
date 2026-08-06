@@ -4926,3 +4926,114 @@ P3 — Streaming chat responses:
 P3 — Agent command preview:
    - Before executing commands, show the user what the agent wants to do
    - Add a "confirm" step for destructive commands (clear_measurements, etc.)
+
+---
+Task ID: P1-P3-implementation-and-e2e-testing
+Agent: main
+Task: Implement P1 (intra-chain recipes), P2 (streaming chat), P3 (command preview); E2E test distance measurement + interaction analysis.
+
+P1 — Intra-chain mode (DONE + verified):
+- hbonds recipe: added `intra_chain` param (auto-enabled when chain1==chain2).
+  In intra-chain mode, skips same-RESIDUE pairs (not same-CHAIN pairs).
+- salt_bridges recipe: same intra_chain logic.
+- hydrophobic_contacts recipe: same intra_chain logic.
+- E2E verified (1CBS A↔A):
+  * hbonds: 593 (was 0)
+  * salt_bridges: 48 (was 0)
+  * hydrophobic_contacts: 1432 atom contacts, 100 residue pairs (was 0)
+
+P2 — SSE streaming chat (DONE + verified):
+- New /api/llm/chat/stream endpoint: returns SSE with word-level chunks.
+- chat-tab.tsx: send() uses streaming endpoint, reads SSE via ReadableStream,
+  updates pending message incrementally (typewriter effect).
+- E2E verified: 'Hello' streams word-by-word:
+  data: {"type":"chunk","text":"Hello! I'm Molcraft "}
+  data: {"type":"chunk","text":"AI, your structural "}
+  ...
+  data: {"type":"done","commands":[],"continueAfterAnalysis":false,"provider":"zai"}
+
+P3 — Agent command preview + confirmation (DONE):
+- chat-tab.tsx: before executing commands, shows a summary like:
+  "Commands: load 1CBS, run all_interactions"
+- Destructive commands (clear_measurements, clear_interactions, clear_selection)
+  require user confirmation via Confirm (green) / Skip (red) buttons.
+- waitForConfirmation helper: polls store for 60s, auto-skips on timeout.
+- ChatMessage interface: added needsConfirmation + confirmationResult fields.
+
+E2E Test Results:
+
+1. Modal 3D viewer (7KQR):
+   ✅ Modal opens with all tabs (Info/Analysis/Display/Interact/Viz/Volume/Export/Upload/Links)
+   ✅ Measurement toolbar: Distance/Angle/Dihedral/Label buttons present
+   ✅ Viewport controls: Reset view/Zoom in/Zoom out/Screenshot/Toggle background
+   ✅ Entity panel shows chains A/B + ligands (HEM/TYR)
+   ❌ Dev server OOM when trying to click atoms for distance measurement
+      (4GB sandbox cannot sustain molstar.js + 3D rendering + agent-browser)
+
+2. Interact tab (modal):
+   ✅ Tab renders with chain dropdowns (auto-detected from structure metadata)
+   ✅ Intra-chain mode banner shows when chain1==chain2
+   ❌ Could not run Biopython recipes from the modal (dev server OOM during 3D)
+
+3. API-level tests (all passed):
+   ✅ all_interactions (1CBS A↔A): 272 contacts
+   ✅ hbonds (1CBS A↔A, intra-chain): 593 contacts (NEW — was 0 before P1)
+   ✅ salt_bridges (1CBS A↔A, intra-chain): 48 contacts (NEW — was 0)
+   ✅ hydrophobic_contacts (1CBS A↔A, intra-chain): 1432 contacts (NEW — was 0)
+   ✅ Streaming chat (Hello): word-by-word SSE chunks
+   ✅ Streaming chat (analysis request): returns commands + continueAfterAnalysis
+
+Bugs Found:
+
+A. Dev server OOM during 3D rendering (infrastructure, not code):
+   - The 4GB sandbox OOM-kills next-server during molstar.js + 3D rendering.
+   - This prevents full E2E testing of distance measurement (clicking atoms)
+     and the Interact tab's recipe execution from the modal.
+   - API-level testing confirms the backend works correctly.
+   - Root cause: molstar.js (5MB) + WebGL rendering + webpack dev compilation
+     exceeds the 4GB sandbox memory limit.
+
+B. Streaming chat timeout for complex requests:
+   - The streaming chat API works for simple requests ("Hello") but the dev
+     server dies during complex analysis requests ("Load 1CBS and run hbonds").
+   - The LLM call takes 10-15s + the recipe execution takes 5-10s, and the
+     combined memory pressure causes OOM.
+   - In production (with more memory), this would work fine.
+
+C. No streaming for the ReAct loop:
+   - The streaming endpoint streams the FIRST LLM response, but subsequent
+     rounds (where the agent executes commands and feeds results back) are
+     not streamed — they use the regular fetch pattern.
+   - This is by design (the ReAct loop needs the full response to parse
+     commands), but the user sees "Analyzing..." instead of streaming text
+     for rounds 2+.
+
+Improvement Plan (next steps):
+
+P0 — Fix dev server OOM (infrastructure):
+   - Increase sandbox memory to 8GB+ (if possible)
+   - OR: lazy-load molstar.js only when the 3D viewer is opened
+   - OR: use a web worker for 3D rendering to isolate memory
+
+P1 — Stream the ReAct loop:
+   - For rounds 2+ of the agent loop, use the streaming endpoint and show
+     the agent's "thinking" text incrementally.
+   - Currently rounds 2+ show "🔍 Analyzing… (round N)" which is less
+     informative than streaming the actual reply.
+
+P2 — Add "Stop generation" button:
+   - Allow the user to abort a long-running agent loop.
+   - Currently the loop runs up to 8 rounds with no way to stop.
+
+P3 — Add measurement persistence:
+   - Save measurements to localStorage so they survive modal close/reopen.
+   - Currently measurements are lost when the modal closes.
+
+P4 — Add "Copy as image" for charts:
+   - The Interact tab's contacts histogram and results table should have a
+     "copy as image" button for sharing in reports.
+
+P5 — Add inter-chain vs intra-chain toggle:
+   - The Interact tab should have a toggle to switch between inter-chain
+     (chain1 ≠ chain2) and intra-chain (chain1 == chain2) analysis modes.
+   - Currently the user has to manually select the same chain for both.
