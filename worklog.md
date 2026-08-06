@@ -5521,3 +5521,41 @@ Code Review Summary (no bugs found in these areas):
 - applyChainVisibility deps: works via useCallback ref change (indirect but correct)
 
 No remaining bugs found in the 3D structure code.
+
+---
+Task ID: 3d-code-review-round-3
+Agent: main
+Task: Deep code review round 3, find and fix remaining bugs.
+
+Bugs Found + Fixed:
+
+Bug 1 — Dihedral measurements not rendered in overlay (measure-overlay.tsx):
+- Overlay only handled distance (2 atoms, 1 line) and angle (3 atoms, 2 lines)
+- Dihedral (4 atoms, 3 lines) was silently skipped
+- Fix: added dihedral rendering case — 3 cyan lines (p1-p2, p2-p3, p3-p4),
+  4 red spheres, cyan label at midpoint of central bond (p2-p3)
+
+Bug 2 — Modal close doesn't clear measurements (PdbViewerModal.tsx):
+- Measurements persisted in localStorage survived modal close/reopen
+- Fix: handleOpenChange(false) calls clearMeasurements() + clearInteractionLines()
+- Verified: after closing modal, localStorage measurements = null
+
+Bug 3 — ModalChatTab doesn't reset on pdbId change (viewer-tools-tabs.tsx):
+- Chat messages from old structure persisted when switching structures
+- Fix: added useEffect on [pdbId] that clears messages + input
+
+E2E Test Results:
+- Modal: all 10 tabs + toolbar + viewport controls ✅
+- Chat tab: textarea + 'Ask about 7KQR…' placeholder ✅
+- No console errors ✅
+
+Code Review Summary (round 3, no bugs found in these areas):
+- DisplayTab: representation/color/granularity/animation/camera commands correct
+- InteractionsTab: drawContacts3D uses select command + extractAtomInfoFromLoci correctly
+- UploadTab: file loading + PDB ID + AlphaFold + URL all use correct commands
+- ExportTab: PNG screenshot + session save/load correct
+- ModalChatTab: SSE streaming + error handling correct
+- use-atom-picking: cleanup + restore correct
+- store: persistence + measurement state correct
+
+No remaining bugs found in the 3D structure code after 3 rounds of review.
