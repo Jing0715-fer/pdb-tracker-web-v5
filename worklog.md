@@ -5559,3 +5559,39 @@ Code Review Summary (round 3, no bugs found in these areas):
 - store: persistence + measurement state correct
 
 No remaining bugs found in the 3D structure code after 3 rounds of review.
+
+---
+Task ID: 3d-code-review-round-4
+Agent: main
+Task: Deep code review round 4, focus on edge cases + error handling + state transitions.
+
+Bugs Found + Fixed:
+
+Bug 1 — ModalChatTab: no abort on unmount/pdbId change (viewer-tools-tabs.tsx):
+- If user closed the modal or switched structures while LLM was streaming,
+  the fetch continued and tried setMessages on unmounted component
+- Fix: added abortRef (AbortController), signal passed to fetch,
+  abort on pdbId change + unmount, AbortError caught gracefully
+
+Bug 2 — Full ChatTab: Stop button doesn't abort current SSE stream (chat-tab.tsx):
+- Stop button set stopRequestedRef=true but the current SSE stream continued
+  until the round completed — user couldn't actually stop mid-stream
+- Fix: added abortRef (AbortController), signal passed to fetch,
+  Stop button calls abortRef.current.abort() immediately,
+  AbortError caught → shows '⏹️ Stopped by user.'
+
+E2E Test Results:
+- Modal opens with all controls ✅
+- Chat tab: textarea + 'Ask about 7KQR…' placeholder ✅
+- No console errors ✅
+
+Code Review Summary (round 4, no bugs found in these areas):
+- Null viewer handling: all measurement/viewport buttons disabled when !viewer
+- Measure overlay: null plugin/camera/viewport handled gracefully
+- use-atom-picking: handles viewer becoming null mid-measurement
+- PdbViewerModal: handles pdbId=null (conditional rendering)
+- ModalChatTab: pdbId change resets messages + aborts in-flight request
+- Full ChatTab: Stop button now aborts current SSE stream immediately
+- Both ChatTabs: AbortError caught and handled gracefully
+
+No remaining bugs found after 4 rounds of code review.
