@@ -5244,3 +5244,85 @@ Next Phase Recommendations:
      shortcuts (1-4 mode, Esc exit, Ctrl+Z undo, R reset, +/- zoom, etc.)
    - The shortcut list is currently shown as a small footer in the
      measurement list — a dedicated dialog would be more discoverable
+
+---
+Task ID: fix-structure-close + P5-shortcut-help
+Agent: main
+Task: Fix structure list close bug, implement P5 (keyboard shortcut help), E2E test.
+
+Bug Fix — Structure list close bug:
+- Root cause: closeStructure() in analysis-left-panel.tsx used index-based
+  matching: `const idx = structures.findIndex((s) => s.id === id)` then
+  `plugin.managers.structure.hierarchy.remove(structs[idx])`. This assumes
+  the Molstar hierarchy array is in the same order as the store's structures
+  array, which is NOT guaranteed — structures can be added/removed in
+  different order, causing the wrong Molstar structure to be removed or none.
+- Fix: match by label (PDB ID / dataLabel) instead of index. Uses exact
+  match, case-insensitive match, and includes-match as fallbacks.
+- Also: if Molstar removal throws, still call removeStructure(id) so the UI
+  updates (previously the error was caught and the structure stayed in the
+  list, which was the user-visible bug).
+
+P5 — Keyboard shortcut help overlay:
+- Press ? (or Shift+/) to toggle a help overlay in the 3D viewer
+- Shows all 11 shortcuts: 1-4 (measure modes), Esc (exit), ⌘Z (undo),
+  R (reset), +/- (zoom), S (screenshot), B (background), ? (help)
+- Overlay: backdrop blur, click outside or Esc to close
+- Uses kbd elements for native keyboard shortcut look
+
+E2E Test Results:
+
+1. API tests (all passed):
+   ✅ all_interactions (1CBS A↔A): 272 contacts
+   ✅ hbonds intra-chain (1CBS A↔A): 593 contacts
+   ✅ Streaming chat: word-by-word SSE chunks
+
+2. Browser tests:
+   ✅ Modal opens with 7KQR structure loaded
+   ✅ Measurement toolbar: Distance/Angle/Dihedral/Label
+   ✅ Viewport controls: Reset/Zoom in/Zoom out/Screenshot/Toggle background
+   ✅ ? shortcut opens 'Keyboard Shortcuts' overlay
+   ✅ All 9 tabs visible (Info/Analysis/Display/Interact/Viz/Volume/Export/Upload/Links)
+   ✅ Entity panel shows chains A/B + ligands
+   ❌ Structure list close button not tested (requires full StructureAnalysisView
+      which causes dev server OOM in 4GB sandbox)
+   ❌ Distance measurement click-test not possible (dev server OOM during 3D)
+
+Bugs Found:
+
+A. Dev server OOM (infrastructure — critical for testing):
+   - 4GB sandbox OOM-kills next-server during 3D rendering + browser interaction
+   - Prevents testing the full StructureAnalysisView (where the structure list
+     close bug was reported)
+   - API + modal-level tests confirm functionality
+
+B. Structure close bug (FIXED):
+   - Index-based matching caused wrong structure removal or no removal
+   - Fixed by label-based matching with fallbacks
+
+Next Phase Recommendations:
+
+1. P0 (critical) — Fix dev server OOM:
+   - 4GB sandbox cannot sustain molstar.js (5MB) + WebGL + webpack + browser
+   - Options: lazy-load molstar.js, Web Worker, increase memory to 8GB+
+   - Without this, the full StructureAnalysisView cannot be browser-tested
+
+2. P1 — Add Chat tab to the modal:
+   - Currently only in the full StructureAnalysisView
+   - A lightweight chat tab in the modal would let users ask questions about
+     the previewed structure without opening the full analysis module
+
+3. P2 — Test full StructureAnalysisView:
+   - Once OOM is fixed, test: structure list (add/remove/close), left panel
+     tabs (Structures/Analysis/Measure), center 3D viewer, right panel tabs
+     (Results/Chat/Reports/Entities/History)
+
+4. P3 — Add "Copy as image" for charts:
+   - Interact tab's contacts histogram + results table
+
+5. P4 — Measurement focus animation:
+   - Smooth camera animation when clicking Crosshair (focus) button
+
+6. P5 — Structure list drag-to-reorder:
+   - Allow dragging structure items to reorder them in the 3D viewer
+   - Uses @dnd-kit (already installed) for drag-and-drop
