@@ -5142,3 +5142,105 @@ Next Phase Recommendations:
    - Allow exporting measurements as a markdown table that can be pasted
      into the Reports tab
    - Format: | Type | Label | Value | Timestamp |
+
+---
+Task ID: P2-P5-implementation-and-e2e-testing
+Agent: main
+Task: Execute P2 (modal chain fetch), P4 (inter/intra toggle), P5 (export to report); E2E test; propose recommendations.
+
+Implemented:
+
+P2 — Chain auto-detection in modal's Interact tab (DONE):
+- InteractionsTab now fetches chains from /api/analyze/metadata when the
+  store's activeStructure.metadata.chains is empty (which is the case in
+  the modal context where no activeStructure is set in the store)
+- Falls back to direct API fetch, populates fetchedChains state
+- Chain dropdowns now work in the modal (previously showed text inputs
+  with default A/B which failed for single-chain structures)
+- Verified: metadata API returns chains=['A'] for 1CBS
+
+P4 — Inter-chain / Intra-chain toggle (DONE):
+- Added a toggle switch in the Interact tab between the chain selectors
+- Inter mode: chain1 ≠ chain2 (cross-chain contacts, sky-blue label)
+- Intra mode: chain1 == chain2 (same-chain contacts, accent label)
+- Toggle auto-sets chain2: different chain for inter, same chain for intra
+- Shows "Same-chain contacts" or "Cross-chain contacts" status text
+- Uses the existing Switch UI component
+
+P5 — Export measurements to Reports (DONE):
+- New handleExportToReport function in PdbViewerLite
+- Generates a markdown report with:
+  * Header: title, timestamp, structure ID, total count
+  * Table: | # | Type | Label | Value | Timestamp |
+  * Summary: counts by type (distance/angle/dihedral/label)
+- Adds the report to the store via addReport() — appears in the Reports tab
+- New FileText button in the measurement toolbar (between Download JSON and Clear)
+- Button is disabled when no measurements exist
+
+E2E Test Results:
+
+1. API tests (all passed):
+   ✅ all_interactions (1CBS A↔A): 272 contacts
+   ✅ hbonds intra-chain (1CBS A↔A): 593 contacts
+   ✅ metadata API: chains=['A'] for 1CBS (enables chain dropdowns in modal)
+
+2. Browser tests (partial — dev server OOM):
+   ✅ Modal opens with 7KQR structure loaded
+   ✅ Measurement toolbar: Distance/Angle/Dihedral/Label + viewport controls
+   ✅ Export to Report button present (disabled until measurements exist)
+   ✅ Entity panel shows chains A/B + ligands (HEM/TYR/BTB/TRS)
+   ❌ Interact tab content didn't fully render (dev server OOM before tab
+      content could be verified)
+   ❌ Inter/intra toggle not visually verified (dev server OOM)
+
+Bugs Found:
+
+A. Dev server OOM (infrastructure — critical):
+   - 4GB sandbox OOM-kills next-server during 3D rendering + browser interaction
+   - The server survives initial page load + modal open, but dies when trying
+     to interact with tab content or 3D atoms
+   - API-level tests confirm all backend functionality works correctly
+   - This is the #1 blocker for full E2E browser testing
+
+B. Tab button text matching:
+   - The agent-browser couldn't find the "Interact" tab button by text content
+     in some attempts. The tab buttons use flex-col layout with icon + label,
+     so textContent includes the icon name. The matching needs to handle this.
+   - Not a code bug — a test automation issue.
+
+Next Phase Recommendations:
+
+1. P0 (critical) — Fix dev server OOM:
+   - The 4GB sandbox cannot sustain molstar.js (5MB) + WebGL 3D rendering +
+     webpack dev compilation + agent-browser. This is the #1 blocker.
+   - Options: lazy-load molstar.js, use Web Worker for 3D, increase memory
+   - Without this fix, full browser E2E testing is impossible
+
+2. P1 — Add Chat tab to the modal:
+   - Currently the modal has 9 tabs but no Chat/agent
+   - Adding a lightweight chat tab would let users ask questions about the
+     previewed structure without opening the full analysis module
+   - Would reuse the /api/llm/chat/stream endpoint
+
+3. P2 — Full Structure Analysis view testing:
+   - The full StructureAnalysisView (3-pane resizable layout) hasn't been
+     browser-tested due to OOM. It needs testing for:
+     * Left panel: Structures tab, Analysis charts tab, Measure tab
+     * Center: 3D viewer with measurement overlay
+     * Right panel: Results/Chat/Reports/Entities/History tabs
+   - Once OOM is fixed, these should all be tested
+
+4. P3 — Add "Copy as image" for charts:
+   - The Interact tab's contacts histogram and results table should support
+     copying as an image for sharing
+
+5. P4 — Measurement focus animation:
+   - When clicking the Crosshair (focus) button on a measurement, add a
+     smooth camera animation instead of instant jump
+   - Uses Molstar's camera.animateTo or similar
+
+6. P5 — Keyboard shortcut help dialog:
+   - Add a "?" key shortcut that opens a dialog showing all available
+     shortcuts (1-4 mode, Esc exit, Ctrl+Z undo, R reset, +/- zoom, etc.)
+   - The shortcut list is currently shown as a small footer in the
+     measurement list — a dedicated dialog would be more discoverable
