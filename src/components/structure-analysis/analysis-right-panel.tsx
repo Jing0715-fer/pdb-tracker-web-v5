@@ -27,6 +27,7 @@ import {
   Beaker,
   Eye,
   EyeOff,
+  BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
+import { ChartRenderer, ALL_CHART_LABELS } from "./chart-renderer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -62,14 +64,29 @@ interface StructureInfo {
   }>;
 }
 
-type RightTab = "reports" | "entities" | "history";
+type RightTab = "results" | "reports" | "entities" | "history";
 
 export function AnalysisRightPanel({ structureInfo }: { structureInfo?: StructureInfo | null }) {
   const [tab, setTab] = useState<RightTab>("reports");
+  const activeAnalysisChart = useAppStore((s) => s.activeAnalysisChart);
+  const setActiveAnalysisChart = useAppStore((s) => s.setActiveAnalysisChart);
   const saveSession = useAppStore((s) => s.saveSession);
   const loadSession = useAppStore((s) => s.loadSession);
   const toast = useAppStore((s) => s.toast);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-switch to Results tab when a chart is clicked in the left panel.
+  // We use a ref + microtask to avoid calling setState synchronously in the
+  // effect body (react-hooks/set-state-in-effect lint rule). When the chart
+  // is closed (activeAnalysisChart → null), don't auto-switch away.
+  const switchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (switchTimerRef.current) clearTimeout(switchTimerRef.current);
+    if (activeAnalysisChart) {
+      switchTimerRef.current = setTimeout(() => setTab("results"), 0);
+    }
+    return () => { if (switchTimerRef.current) clearTimeout(switchTimerRef.current); };
+  }, [activeAnalysisChart]);
 
   // Auto-switch to Entities tab when structure info becomes available
   // and user hasn't manually selected another tab
@@ -110,6 +127,18 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
   return (
     <div className="flex h-full flex-col bg-claude-surface">
       <div className="sa-tab-row shrink-0">
+        <button
+          className={`sa-tab-btn ${tab === "results" ? "sa-tab-active" : ""}`}
+          onClick={() => setTab("results")}
+        >
+          <BarChart3 className="h-3 w-3" />
+          Results
+          {activeAnalysisChart && (
+            <Badge variant="outline" className="ml-0.5 h-3.5 px-1 text-[7px] bg-claude-accent-light text-claude-accent border-claude-accent/30">
+              1
+            </Badge>
+          )}
+        </button>
         <button
           className={`sa-tab-btn ${tab === "reports" ? "sa-tab-active" : ""}`}
           onClick={() => setTab("reports")}
@@ -160,10 +189,61 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
         </div>
       </div>
       <div className="flex-1 min-h-0">
+        {tab === "results" && (
+          activeAnalysisChart ? (
+            <ChartRenderer
+              key={activeAnalysisChart}
+              chartId={activeAnalysisChart}
+              onClose={() => setActiveAnalysisChart(null)}
+            />
+          ) : (
+            <ResultsEmptyState />
+          )
+        )}
         {tab === "reports" && <ReportsTab />}
         {tab === "entities" && <EntitiesTab structureInfo={structureInfo} />}
         {tab === "history" && <HistoryTab />}
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Results Tab — empty state when no chart is active
+// ============================================================
+function ResultsEmptyState() {
+  const recentCharts = useAppStore((s) => s.recentCharts);
+  const setActiveAnalysisChart = useAppStore((s) => s.setActiveAnalysisChart);
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <div className="rounded-full bg-claude-accent-light/40 p-3">
+        <BarChart3 className="h-6 w-6 text-claude-accent" />
+      </div>
+      <div>
+        <p className="text-xs font-medium text-claude-text">No analysis chart selected</p>
+        <p className="text-[10px] text-claude-text-muted mt-0.5 leading-relaxed">
+          Click a chart tile in the left panel (Analysis tab) to view its result here.
+        </p>
+      </div>
+      {recentCharts.length > 0 && (
+        <div className="w-full mt-2">
+          <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted mb-1.5">
+            Recently used
+          </div>
+          <div className="flex flex-wrap gap-1 justify-center">
+            {recentCharts.slice(0, 6).map((id) => (
+              <button
+                key={id}
+                onClick={() => setActiveAnalysisChart(id)}
+                className="sa-chart-tile text-[9px]"
+                style={{ padding: "0.25rem 0.5rem" }}
+              >
+                {ALL_CHART_LABELS[id] ?? id}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

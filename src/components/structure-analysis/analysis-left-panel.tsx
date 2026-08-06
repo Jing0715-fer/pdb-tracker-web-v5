@@ -1285,7 +1285,6 @@ function InteractionVizCard() {
 }
 
 function AnalysisChartsGrid() {
-  const [openChart, setOpenChart] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -1293,10 +1292,16 @@ function AnalysisChartsGrid() {
   const toggleFavoriteChart = useAppStore((s) => s.toggleFavoriteChart);
   const recentCharts = useAppStore((s) => s.recentCharts);
   const addRecentChart = useAppStore((s) => s.addRecentChart);
+  const activeAnalysisChart = useAppStore((s) => s.activeAnalysisChart);
+  const setActiveAnalysisChart = useAppStore((s) => s.setActiveAnalysisChart);
 
   const handleChartClick = (chartId: string) => {
-    setOpenChart(openChart === chartId ? null : chartId);
-    if (openChart !== chartId) {
+    // Toggle: if the same chart is already active, close it; otherwise open it.
+    // The chart result renders in the RIGHT panel (Results tab), not inline here.
+    if (activeAnalysisChart === chartId) {
+      setActiveAnalysisChart(null);
+    } else {
+      setActiveAnalysisChart(chartId);
       addRecentChart(chartId);
     }
   };
@@ -1599,7 +1604,7 @@ function AnalysisChartsGrid() {
                 <button
                   key={favId}
                   onClick={() => handleChartClick(favId)}
-                  className={`sa-chart-tile ${openChart === favId ? "sa-chart-active" : ""}`}
+                  className={`sa-chart-tile ${activeAnalysisChart === favId ? "sa-chart-active" : ""}`}
                   style={{ padding: "0.25rem 0.5rem" }}
                 >
                   <span className="sa-chart-tile-icon">{chart.icon}</span>
@@ -1629,7 +1634,7 @@ function AnalysisChartsGrid() {
                 <button
                   key={recId}
                   onClick={() => handleChartClick(recId)}
-                  className={`sa-chart-tile ${openChart === recId ? "sa-chart-active" : ""}`}
+                  className={`sa-chart-tile ${activeAnalysisChart === recId ? "sa-chart-active" : ""}`}
                   style={{ padding: "0.25rem 0.5rem" }}
                 >
                   <span className="sa-chart-tile-icon">{chart.icon}</span>
@@ -1678,7 +1683,7 @@ function AnalysisChartsGrid() {
                           onClick={() => handleChartClick(c.id)}
                           data-category={cat.title.toLowerCase()}
                           className={`sa-chart-tile ${
-                            openChart === c.id ? "sa-chart-active" : ""
+                            activeAnalysisChart === c.id ? "sa-chart-active" : ""
                           } ${isFav ? "sa-chart-fav" : ""}`}
                         >
                           <span
@@ -1715,77 +1720,24 @@ function AnalysisChartsGrid() {
           </div>
         );
       })}
-      <AnimatePresence mode="wait">
-        {openChart && (
-          <motion.div
-            key={openChart}
-            className="mt-2"
-            initial={{ opacity: 0, height: 0, y: -8 }}
-            animate={{ opacity: 1, height: "auto", y: 0 }}
-            exit={{ opacity: 0, height: 0, y: -8 }}
-            transition={{ duration: 0.25, ease: "easeOut" }}
-            style={{ overflow: "hidden" }}
+      {/* Active chart indicator — the chart result renders in the RIGHT panel
+          (Results tab). Here we just show a small hint when a chart is active. */}
+      {activeAnalysisChart && (
+        <div className="mt-2 rounded-md border border-claude-accent/30 bg-claude-accent-light/30 px-2 py-1.5 text-[9px] text-claude-accent flex items-center gap-1.5">
+          <ChevronRight className="h-3 w-3 animate-pulse" />
+          <span className="font-medium">
+            {ALL_CHART_LABELS[activeAnalysisChart] ?? activeAnalysisChart}
+          </span>
+          <span className="text-claude-text-muted">→ Results panel</span>
+          <button
+            onClick={() => setActiveAnalysisChart(null)}
+            className="ml-auto text-claude-text-muted hover:text-destructive"
+            title="Close chart"
           >
-            <ChartLoader
-              chartId={openChart}
-              onClose={() => setOpenChart(null)}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function ChartLoader({
-  chartId,
-  onClose,
-}: {
-  chartId: string;
-  onClose: () => void;
-}) {
-  const chartLabel = ALL_CHART_LABELS[chartId] ?? chartId;
-  return (
-    <div className="sa-chart-card relative">
-      <button
-        onClick={onClose}
-        className="absolute right-1.5 top-1.5 z-10 grid h-5 w-5 place-items-center rounded text-claude-text-muted hover:bg-claude-accent-light hover:text-claude-text"
-      >
-        <X className="h-3 w-3" />
-      </button>
-      {chartId === "overview" && <StructureOverviewDashboard />}
-      {chartId === "comparison" && <StructureComparisonDashboard />}
-      {chartId === "rama" && <RamachandranPlot />}
-      {chartId === "bfactor" && <BfactorChart />}
-      {chartId === "ss" && <SecondaryStructureChart />}
-      {chartId === "sasa" && <SasaChart />}
-      {chartId === "disulfide" && <DisulfideChart />}
-      {chartId === "aromatic" && <AromaticStackingChart />}
-      {chartId === "water" && <WaterBridgesChart />}
-      {chartId === "metal" && <MetalCoordinationChart />}
-      {chartId === "validation" && <StructureValidationChart />}
-      {chartId === "pocket" && <BindingPocketChart />}
-      {chartId === "ligand" && <LigandInteractionsChart />}
-      {chartId === "oligomer" && <OligomerAnalysisChart />}
-      {chartId === "electrostatic" && <ElectrostaticChart />}
-      {chartId === "contactmap" && <ContactMapChart />}
-      {chartId === "surface" && <SurfaceResiduesChart />}
-      {chartId === "interaction" && <InteractionNetwork />}
-      {chartId === "seqalign" && <SequenceAlignment />}
-      {chartId === "rmsd" && <RmsdMatrix />}
-      {chartId === "druggability" && <DruggabilityChart />}
-      {chartId === "apbs_surface" && <ApbsSurfaceChart />}
-      {chartId === "screening" && <ScreeningChart />}
-      {chartId === "detect_pockets" && <PocketDetectionChart />}
-      {/* Preset manager — save/load chart parameter combinations */}
-      <div className="border-t border-claude-border p-1.5">
-        <PresetManager
-          chartId={chartId}
-          chartLabel={chartLabel}
-          currentParams={{}}
-          onApplyPreset={() => {}}
-        />
-      </div>
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

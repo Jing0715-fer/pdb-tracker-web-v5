@@ -223,6 +223,13 @@ interface AppState {
   recentCharts: string[];
   addRecentChart: (chartId: string) => void;
 
+  // Active analysis chart — when the user clicks a chart tile in the left
+  // panel, the chart's result renders in the RIGHT panel (Results tab) instead
+  // of inline in the narrow left panel. This gives the chart more space and
+  // keeps the left panel as a navigation list.
+  activeAnalysisChart: string | null;
+  setActiveAnalysisChart: (chartId: string | null) => void;
+
   // Chart presets (save/load chart parameter combinations)
   chartPresets: ChartPreset[];
   saveChartPreset: (preset: ChartPreset) => void;
@@ -602,6 +609,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       saveRecentCharts(recent);
       return { recentCharts: recent };
     }),
+
+  activeAnalysisChart: null,
+  setActiveAnalysisChart: (chartId) => set({ activeAnalysisChart: chartId }),
 
   chartPresets: loadChartPresets(),
   saveChartPreset: (preset) =>

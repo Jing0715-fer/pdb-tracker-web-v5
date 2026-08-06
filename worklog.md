@@ -4558,3 +4558,87 @@ Unresolved Risks / Next Steps:
   antibody CDR loops L1/L2/L3/H1/H2/H3 with click-to-select).
 - Could add the "Draw all" button to InteractionNetwork (draw all filtered
   interactions at once instead of one-by-one).
+
+---
+Task ID: analysis-results-in-right-panel
+Agent: main
+Task: Redesign analysis so clicking a chart shows results in the right panel (not inline in the narrow left panel / page bottom).
+
+Problem:
+- Previously, clicking a chart tile in the left panel's Analysis tab rendered
+  the chart result INLINE in the left panel (via ChartLoader + AnimatePresence).
+  The left panel is narrow (default 22% width), so wide charts (Ramachandran,
+  Contact Map, dashboards) were cramped and hard to read. The user wanted
+  results to appear more intuitively in the right panel.
+
+Solution:
+1. Added `activeAnalysisChart` state to the Zustand store
+   (src/lib/molcraft/store.ts) — tracks which chart is currently selected.
+   `setActiveAnalysisChart(chartId | null)` sets/clears it.
+
+2. Created src/components/structure-analysis/chart-renderer.tsx — a shared
+   ChartRenderer component that renders any chart by id. Includes:
+   - Chart header (title + description + favorite star + close button)
+   - Scrollable chart body (overflow-x-auto + overflow-y-auto so wide/tall
+     charts don't overflow)
+   - Brief loading shimmer on chart switch (80ms timeout)
+   - PresetManager at the bottom
+   - Exports ALL_CHART_LABELS + ALL_CHART_DESCS for reuse
+
+3. Updated src/components/structure-analysis/analysis-left-panel.tsx:
+   - AnalysisChartsGrid now sets activeAnalysisChart in the store (instead of
+     local openChart state) when a chart tile is clicked.
+   - Removed the inline ChartLoader rendering (AnimatePresence + motion.div).
+   - Replaced with a small "active chart → Results panel" indicator showing
+     the chart name + a close button.
+   - Removed the now-unused ChartLoader function (~55 lines).
+   - Tile active state now reads from activeAnalysisChart (store) instead of
+     local openChart state.
+
+4. Updated src/components/structure-analysis/analysis-right-panel.tsx:
+   - Added "Results" as the first tab (before Reports/Entities/History).
+   - Results tab shows a ResultsEmptyState when no chart is active (with
+     "Recently used" chart chips for quick re-opening).
+   - Results tab shows <ChartRenderer chartId=activeAnalysisChart onClose=...>
+     when a chart is active.
+   - Auto-switches to Results tab when activeAnalysisChart is set (via
+     ref + setTimeout to avoid the set-state-in-effect lint rule).
+   - Results tab button shows a "1" badge when a chart is active.
+   - Imported BarChart3 icon + ChartRenderer + ALL_CHART_LABELS.
+
+Verification (agent-browser):
+- Structure Analysis view loads with all 4 right-panel tabs visible
+  (Results / Reports / Entities / History).
+- Loading 1CBS + clicking "Overview Dashboard" chart tile → right panel
+  shows "Overview Dashboard" title + description + 16 chart elements.
+- Clicking "Ramachandran" chart tile → right panel updates to show
+  "Ramachandran" + "φ/ψ dihedral distribution" + 13 chart elements.
+- Results tab auto-activates on chart click.
+- Results tab badge shows "1" when a chart is active.
+- No console errors.
+- Screenshot saved to download/analysis-right-panel-results.png.
+- ESLint: 0 errors on all 4 changed files.
+
+Stage Summary:
+- Analysis chart results now render in the right panel (Results tab) instead
+  of inline in the narrow left panel. This gives charts more space and keeps
+  the left panel as a clean navigation list.
+- Chart switching is instant (store-driven) with a brief loading shimmer.
+- Close button + empty state with "Recently used" chips for quick re-opening.
+- All changes confined to the Structure Analysis module. No changes to
+  table/dashboard/eval/weekly views or the PdbViewerModal.
+
+Files changed:
+- src/lib/molcraft/store.ts — added activeAnalysisChart state + setter
+- src/components/structure-analysis/chart-renderer.tsx — NEW shared component
+- src/components/structure-analysis/analysis-left-panel.tsx — use store, remove inline ChartLoader
+- src/components/structure-analysis/analysis-right-panel.tsx — add Results tab
+
+Unresolved Risks / Next Steps:
+- Dev server OOM during full Structure Analysis 3D rendering persists (4GB
+  sandbox). The right-panel Results display works when the server is up.
+- Could add a "split view" option to show 2 charts side-by-side in the right
+  panel.
+- Could add chart result history (keep last 3-5 charts in a stack with
+  back/forward navigation).
+- Could persist the active chart across sessions via saveSession/loadSession.
