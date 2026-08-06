@@ -5671,3 +5671,39 @@ Code Review Summary (round 6, no bugs found in these areas):
 - MeasureTab: now has all 4 measurement types (distance/angle/dihedral/label)
 
 No remaining bugs found after 6 rounds of code review.
+
+---
+Task ID: 3d-code-review-round-7
+Agent: main
+Task: Deep code review round 7, focus on CSS/styling/responsive/accessibility.
+
+Bugs Found + Fixed:
+
+Bug 1 — Entity panel organism/authChains text overflow (PdbViewerLite.tsx):
+- 'truncate' class on organism/authChains didn't work because parent div
+  lacked min-w-0 and overflow-hidden (required for truncate in flex context)
+- Fix: added min-w-0 to entity details container + overflow-hidden to meta div,
+  added truncate to authChains div
+
+Bug 2 — Chat markdown content has no CSS (globals.css):
+- .sa-chat-markdown class was referenced but had no CSS rules
+- Code blocks, tables, lists in chat messages would render unstyled
+- Fix: added comprehensive CSS: p, ul, ol, li, code, pre, strong, em, a,
+  blockquote, table, th, td with margins, padding, overflow-x: auto
+
+E2E Test Results:
+- Modal: all 10 tabs + toolbar + viewport controls ✅
+- Chat tab: CSS compiled and available in stylesheet ✅
+- No console errors ✅
+
+Code Review Summary (round 7, no bugs found in these areas):
+- Dark mode: 27 dark: classes in PdbViewerLite, 28 in viewer-tools-tabs
+- Responsive: modal uses sm:max-w-[95vw], entity panel fixed width
+- Accessibility: title="" on all buttons, DialogTitle sr-only on modal
+- Text overflow: all entity/ligand/measurement labels use truncate
+- Scroll: entity panel + measurement list have overflow-y-auto
+- chart-renderer: all 24 chartIds match, loading shimmer works
+- Viz/Volume/Export tabs: all commands correct
+- MeasureTab: all 4 measurement types (distance/angle/dihedral/label)
+
+No remaining bugs found after 7 rounds of code review.
