@@ -4747,3 +4747,72 @@ Unresolved Risks / Next Steps:
   response — no SSE/streaming support in src/lib/llm.ts).
 - Could add a "stop generation" button to abort long agent loops.
 - Could persist chat messages across sessions (via saveSession/loadSession).
+
+---
+Task ID: merge-remote-and-push
+Agent: main
+Task: Merge remote GitHub changes with local work, resolve conflicts keeping best version, push merged result.
+
+Merge Summary:
+- Remote (origin/main) had 20+ commits with important fixes:
+  * measure-overlay viewport offset fix (lines align with atoms)
+  * pdb-tracker row-click opens 3D preview modal
+  * run/route.ts cleaner VENV_BIN PATH pattern
+  * structure-analysis-view loading overlay
+  * interaction-network Molcraft port updates
+  * Python PATH fix for water bridges
+  * measure.ts port from Molcraft
+  * per-chain visibility fix in commands.ts
+  * various measure overlay alignment fixes
+
+- Local had all the new feature work:
+  * chat/agent tab with provider selection (reuses run center)
+  * right-panel Results tab (charts render in right panel)
+  * PdbViewerLite viewport controls (reset/zoom/screenshot/bg)
+  * PdbViewerModal Upload tab (drag-drop + URL + AlphaFold + PDB ID)
+  * viewer-tools-tabs (Display/Interactions/Viz/Volume/Export)
+  * /api/llm/chat endpoint (agent ReAct loop)
+  * all_interactions recipe numeric counts
+  * store chat state (chatMessages, chatProvider, activeAnalysisChart)
+  * dihedral/label measurement modes
+  * Textarea UI component
+
+Conflict Resolution (kept best version):
+- commands.ts: REMOTE (toggle_component_visibility fix) + LOCAL load_structure_data
+- store.ts: LOCAL (superset — has chat state + dihedral/label + interactionLines)
+- molstar-viewer.tsx: LOCAL (guarded store clear fix + hidden native Molstar buttons + molstar-viewer CSS class)
+- use-atom-picking.ts: LOCAL (dihedral/label support + 500ms entry guard + camera snapshot)
+- interaction-network.tsx: LOCAL (English UI, same Molcraft port logic)
+- measure-overlay.tsx: REMOTE (viewport offset fix — lines align with atoms)
+- PdbViewerLite.tsx: LOCAL (viewport controls + measurement toolbar enhancements)
+- PdbViewerModal.tsx: LOCAL (Upload tab + 9 tabs)
+- analysis-left-panel.tsx: LOCAL (store-driven activeAnalysisChart)
+- analysis-right-panel.tsx: LOCAL (Results + Chat tabs)
+- sequence-viewer.tsx: LOCAL (overflow-x-auto + min-w-max fix)
+- cli-registry.ts: LOCAL (all_interactions numeric counts)
+- structure-analysis-view.tsx: LOCAL + REMOTE (added loading overlay from remote)
+- pdb-tracker.tsx: REMOTE (row-click opens preview fix)
+- run/route.ts: REMOTE (cleaner VENV_BIN pattern)
+
+Verification:
+- All 10 structure analysis tool categories verified present:
+  1. measure.ts (18 function refs) — extractAtomInfoFromLoci, disableFocusBehaviors, etc.
+  2. measure-overlay.tsx (25 refs) — project3DTo2D, drawSphere, drawLine, setPendingAtoms
+  3. interaction-network.tsx (15 refs) — findAtomCoord, setInteractionLines, handleFocusInteraction
+  4. use-atom-picking.ts (15 refs) — extractAtomInfoFromLoci, disableFocusBehaviors, interactionLine
+  5. chat-tab.tsx (32 refs) — ChatTab, send, executeCommand, continueAfterAnalysis
+  6. /api/llm/chat (20 refs) — generateText, SYSTEM_PROMPT, commands
+  7. all_interactions recipe (5 refs) — numeric counts matching Molcraft
+  8. findAtomCoord (1 ref) — ported to structure-utils
+  9. viewer-tools-tabs (6 tabs) — Display/Interactions/Viz/Volume/Export/Upload
+  10. store chat state (11 refs) — chatMessages, chatProvider, activeAnalysisChart
+- ESLint: 0 errors on all merged files.
+- Push: successful — origin/main now at db2204f (merge commit).
+
+Stage Summary:
+- Remote and local histories merged successfully (allow-unrelated-histories).
+- All remote fixes preserved (measure-overlay viewport offset, row-click preview,
+  Python PATH, loading overlay, per-chain visibility).
+- All local features preserved (chat/agent, right-panel results, viewport controls,
+  upload tab, viewer-tools-tabs, dihedral/label measurement, /api/llm/chat).
+- Merged result pushed to github.com/Jing0715-fer/pdb-tracker-web-v5 (main branch).
