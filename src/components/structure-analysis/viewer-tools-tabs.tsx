@@ -798,6 +798,131 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
         </div>
       )}
 
+      {/* Contacts summary chart — type histogram + distance distribution */}
+      {analysisRows.length > 0 && (() => {
+        // Count contacts by type
+        const typeCounts: Record<string, number> = {};
+        const distances: number[] = [];
+        for (const r of analysisRows) {
+          typeCounts[r.type] = (typeCounts[r.type] || 0) + 1;
+          if (typeof r.distance_A === "number") distances.push(r.distance_A);
+        }
+        const typeColors: Record<string, string> = {
+          salt_bridge: "#f59e0b",
+          hbond: "#0ea5e9",
+          hydrophobic: "#10b981",
+        };
+        const typeLabels: Record<string, string> = {
+          salt_bridge: "Salt bridge",
+          hbond: "H-bond",
+          hydrophobic: "Hydrophobic",
+        };
+        const total = analysisRows.length;
+        const maxCount = Math.max(...Object.values(typeCounts), 1);
+
+        // Distance histogram bins (1Å wide, 0-8Å range)
+        const binSize = 0.5;
+        const maxDist = 8;
+        const bins = new Array(Math.ceil(maxDist / binSize)).fill(0);
+        for (const d of distances) {
+          const idx = Math.min(Math.floor(d / binSize), bins.length - 1);
+          bins[idx]++;
+        }
+        const maxBin = Math.max(...bins, 1);
+
+        // Stats
+        const avgDist = distances.length > 0 ? distances.reduce((s, d) => s + d, 0) / distances.length : 0;
+        const minDist = distances.length > 0 ? Math.min(...distances) : 0;
+        const maxDistVal = distances.length > 0 ? Math.max(...distances) : 0;
+
+        return (
+          <div className="rounded-lg border border-claude-border-light/60 dark:border-[#3d3832]/60 overflow-hidden">
+            <div className="px-2 py-1 bg-claude-bg/60 dark:bg-[#1a1917]/60 border-b border-claude-border-light/40 dark:border-[#3d3832]/40">
+              <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+                Contacts Summary
+              </span>
+            </div>
+            <div className="p-2.5 space-y-2.5">
+              {/* Type histogram */}
+              <div>
+                <div className="text-[9px] text-claude-text-muted mb-1">By type</div>
+                <div className="space-y-1">
+                  {Object.entries(typeCounts)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([type, count]) => (
+                      <div key={type} className="flex items-center gap-1.5">
+                        <span className="text-[9px] font-mono text-claude-text w-16 flex-shrink-0 truncate">
+                          {typeLabels[type] || type}
+                        </span>
+                        <div className="flex-1 h-3 bg-claude-bg/60 dark:bg-[#1a1917]/60 rounded-sm overflow-hidden border border-claude-border-light/30 dark:border-[#3d3832]/30">
+                          <div
+                            className="h-full rounded-sm transition-all"
+                            style={{
+                              width: `${(count / maxCount) * 100}%`,
+                              backgroundColor: typeColors[type] || "#6b7280",
+                            }}
+                          />
+                        </div>
+                        <span className="text-[9px] font-mono text-claude-text-muted w-6 text-right">
+                          {count}
+                        </span>
+                        <span className="text-[8px] text-claude-text-muted/70 w-8 text-right">
+                          {((count / total) * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* Distance distribution histogram */}
+              {distances.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[9px] text-claude-text-muted">Distance distribution (Å)</span>
+                    <span className="text-[8px] text-claude-text-muted/70 font-mono">
+                      n={distances.length} · avg={avgDist.toFixed(2)} · {minDist.toFixed(2)}–{maxDistVal.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-px h-12 px-0.5">
+                    {bins.map((count, i) => {
+                      const binStart = (i * binSize).toFixed(1);
+                      const binEnd = ((i + 1) * binSize).toFixed(1);
+                      const isPeak = count === maxBin;
+                      return (
+                        <div
+                          key={i}
+                          className="flex-1 relative group"
+                          title={`${binStart}–${binEnd}Å: ${count} contacts`}
+                        >
+                          <div
+                            className="w-full rounded-t-sm transition-all"
+                            style={{
+                              height: `${Math.max((count / maxBin) * 100, count > 0 ? 8 : 0)}%`,
+                              backgroundColor: isPeak ? "#c96442" : "#c9644299",
+                              minHeight: count > 0 ? "2px" : "0",
+                            }}
+                          />
+                          {isPeak && count > 0 && (
+                            <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[7px] font-mono text-claude-accent">
+                              {count}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between mt-0.5 px-0.5">
+                    <span className="text-[7px] text-claude-text-muted/60 font-mono">0</span>
+                    <span className="text-[7px] text-claude-text-muted/60 font-mono">{(maxDist / 2).toFixed(0)}</span>
+                    <span className="text-[7px] text-claude-text-muted/60 font-mono">{maxDist}+</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 3D contacts visualization — draws interactionLines between contacting
           atoms using the MeasureOverlay canvas. Replaces the stub show_interactions
           command (prebuilt Molstar bundle lacks ComputeContacts). */}

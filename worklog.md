@@ -4338,3 +4338,114 @@ Unresolved Risks / Next Steps:
 - Could add a "Compare two structures" view (load 2 PDBs side-by-side).
 - Could add preset measurement targets (CA-CA distances, common angles).
 - Could add a contacts histogram chart in the Interactions tab (count by type).
+
+---
+Task ID: cron-review-202608060845
+Agent: main
+Task: QA + fix native Molstar UI leak + add custom viewport controls + contacts histogram.
+
+Project State Assessment:
+- Dev server (next dev --webpack) runs on port 3000. The 4GB sandbox OOM-kills
+  next-server during heavy 3D rendering (RSS hits 2.6GB). Server stays up for
+  page/table/API usage but dies during prolonged 3D modal sessions.
+- Prior work confirmed intact: PDB-reload bug fix, unified Box+Loader2 loading,
+  Molcraft measurement port, 9 tool tabs (incl. Upload), Biopython PATH fix,
+  measurement list enhancements, 3D contacts visualization.
+
+QA Findings (bug found):
+- BUG: Native Molstar viewport toolbar buttons were leaking into the modal.
+  The agent-browser snapshot showed buttons "Reset Zoom", "Orient Axes",
+  "Reset Axes", "Load File(s)", "Toggle Controls Panel", "Toggle Full Screen",
+  "Settings / Controls Info", "Illumination", "Augmented/Virtual Reality",
+  "Toggle Selection Mode" — these are Molstar's built-in viewport controls
+  that cluttered the modal and overlapped our custom measurement toolbar.
+  Root cause: the MolstarViewer config had viewportShowControls=true,
+  viewportShowReset=true, etc. AND the container div was missing the
+  `molstar-viewer` CSS class so the existing CSS overrides in globals.css
+  (which target .molstar-viewer .msp-*) were never applied.
+
+Fixes:
+1. molstar-viewer.tsx config: set ALL viewportShow* options to false
+   (viewportShowReset, viewportShowControls, viewportShowToggleFullscreen,
+   viewportShowSettings, viewportShowSelectionMode, viewportShowTrajectoryControls).
+2. molstar-viewer.tsx: added `molstar-viewer` class to the outer container
+   div + `molstar-container` class to the inner containerRef div so the
+   existing CSS overrides take effect.
+3. globals.css: added comprehensive CSS overrides to hide ALL native Molstar
+   viewport toolbar elements (.msp-viewport-controls, .msp-viewport-simple-
+   controls, .msp-viewport-controls-group, .msp-fixed-controls, .msp-controls-
+   row, plus title-attribute selectors for Reset Zoom/Orient Axes/Load File/
+   Toggle/Settings/Selection/Animation/Trajectory/Illumination/Augmented/
+   Screenshot buttons). Also hid .msp-viewport-info (version/FPS badge) and
+   .msp-viewport-powered-by (powered by Molstar link).
+   Verified via agent-browser: the .msp-viewport-controls element is now
+   display:none, 0x0 size. Native "Reset Zoom" button count: 0 (was 1).
+
+Features Added (structure preview only):
+
+1. Custom viewport control toolbar (src/components/PdbViewerLite.tsx)
+   - New top-right overlay toolbar with 5 buttons (replaces the hidden
+     native Molstar buttons):
+     * Reset view (RotateCcw icon) — calls plugin.managers.camera.reset()
+     * Zoom in (ZoomIn icon) — calls canvas3d.camera.zoom(0.8)
+     * Zoom out (ZoomOut icon) — calls canvas3d.camera.zoom(1.25)
+     * Screenshot (Camera icon) — canvas.toBlob → PNG download with
+       pdbId + timestamp filename
+     * Toggle background (Sun/Moon icon) — toggles canvas3d renderer
+       backgroundColor between 0xffffff (light) and 0x1a1917 (dark)
+   - Styled consistent with the measurement toolbar (top-left): same
+     bg-claude-surface/90, border, rounded-lg, shadow-sm, backdrop-blur.
+   - Each button has a title attr with the keyboard shortcut.
+   - Active state: bg toggle button shows accent color when dark mode active.
+
+2. Extended keyboard shortcuts (PdbViewerLite.tsx)
+   - R = reset view
+   - + / = = zoom in
+   - - / _ = zoom out
+   - S = screenshot (only without Ctrl/Cmd to avoid conflict with save)
+   - B = toggle background
+   - All shortcuts disabled when typing in inputs/textareas.
+   - Updated the measurement list's keyboard hint footer to show the new
+     shortcuts: 1-4 mode, Esc exit, ⌘Z undo, R reset, +/- zoom, S shot, B bg.
+
+3. Contacts summary chart in Interactions tab
+   (src/components/structure-analysis/viewer-tools-tabs.tsx)
+   - New "Contacts Summary" panel that appears after running a Biopython
+     recipe that returns atom-level rows. Contains:
+     * Type histogram: horizontal bars for salt_bridge (amber), hbond (sky),
+       hydrophobic (emerald) with count + percentage. Sorted by count desc.
+     * Distance distribution histogram: 16 bins (0.5Å wide, 0-8Å range),
+       vertical bars, peak bin highlighted in accent color with count label
+       above. Shows n, avg, min-max range.
+   - All pure CSS/inline-styles, no chart library dependency.
+   - Renders above the 3D contacts visualization section.
+
+Verification:
+- Modal opens with custom viewport toolbar (Reset/ZoomIn/ZoomOut/Screenshot/Bg)
+  visible in top-right, measurement toolbar (Distance/Angle/Dihedral/Label)
+  in top-left. No errors.
+- Native Molstar buttons hidden: .msp-viewport-controls is display:none,
+  0x0 size. "Reset Zoom" button count: 0.
+- API: all_interactions returns 272 contacts (20 salt bridges, 100 hbonds,
+  152 hydrophobic), distance range 0.00-4.50Å, avg 2.33Å — the histogram
+  will show all 3 types + a distance distribution peaking around 2-3Å.
+- ESLint: 0 errors on all changed files.
+
+Stage Summary:
+- Native Molstar UI chrome fully stripped from the modal — no more cluttered
+  viewport buttons overlapping our custom toolbars.
+- Custom viewport control toolbar (reset/zoom/screenshot/bg) replaces the
+  hidden native buttons, with keyboard shortcuts.
+- Contacts summary chart (type histogram + distance distribution) gives
+  users an at-a-glance overview of interaction analysis results.
+- All changes confined to structure preview (PdbViewerLite, molstar-viewer,
+  viewer-tools-tabs, globals.css). No changes to table/dashboard/eval/weekly.
+
+Unresolved Risks / Next Steps:
+- Dev server OOM during 3D rendering persists (4GB sandbox limit). The CSS
+  changes + config tightening slightly reduced Molstar's memory footprint
+  but the fundamental limit remains.
+- Could add measurement persistence (save/restore across modal sessions).
+- Could add a "Compare two structures" view (load 2 PDBs side-by-side).
+- Could add preset measurement targets (CA-CA distances, common angles).
+- Could add a "Copy as image" button to the contacts histogram for sharing.

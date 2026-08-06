@@ -43,16 +43,17 @@ export function MolstarViewer({ className }: MolstarViewerProps) {
       layoutShowLeftPanel: false,
       collapseLeftPanel: true,
       collapseRightPanel: true,
-      // Viewport controls — keep just the essentials.
-      viewportShowReset: true,
+      // Viewport controls — hide ALL native Molstar viewport buttons.
+      // We render our own measurement toolbar + Display/Export tabs instead.
+      viewportShowReset: false,
       viewportShowScreenshotControls: false,
-      viewportShowControls: true,
+      viewportShowControls: false,
       viewportShowExpand: false,
-      viewportShowToggleFullscreen: true,
-      viewportShowSettings: true,
-      viewportShowSelectionMode: true,
+      viewportShowToggleFullscreen: false,
+      viewportShowSettings: false,
+      viewportShowSelectionMode: false,
       viewportShowAnimation: false,
-      viewportShowTrajectoryControls: true,
+      viewportShowTrajectoryControls: false,
       viewportFocusBehavior: "default",
       // Picking: enable atom-level picking so click-to-measure works.
       pickScale: 1,
@@ -160,11 +161,11 @@ export function MolstarViewer({ className }: MolstarViewerProps) {
   }, [molstar, setViewer, toast]);
 
   return (
-    <div className={className} style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div className={`${className ?? ''} molstar-viewer`} style={{ position: "relative", width: "100%", height: "100%" }}>
       <div className="viewer-backdrop absolute inset-0 -z-10" />
       <div
         ref={containerRef}
-        className="absolute inset-0"
+        className="absolute inset-0 molstar-container"
         style={{ minHeight: 0 }}
       />
       {error && (

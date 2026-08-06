@@ -13475,6 +13475,46 @@ button, a, input, select, [role="button"] {
   display: none;
 }
 
+/* Hide ALL native molstar viewport toolbar buttons (Reset Zoom, Orient Axes,
+   Reset Axes, Load File(s), Toggle Controls, Fullscreen, Settings, Selection,
+   Animation, Trajectory). We render our own measurement toolbar + Display/
+   Export tabs instead — the native buttons clutter the modal and overlap
+   our custom UI. */
+.molstar-viewer .msp-viewport-controls,
+.molstar-viewer .msp-viewport-simple-controls,
+.molstar-viewer .msp-viewport-controls-group,
+.molstar-viewer .msp-fixed-controls,
+.molstar-viewer .msp-layout-standard .msp-layout-main .msp-viewport-controls,
+.molstar-viewer .msp-controls-row,
+.molstar-viewer [class*="msp-button-toggle"][title="Reset Zoom"],
+.molstar-viewer [class*="msp-button-toggle"][title="Orient Axes"],
+.molstar-viewer [class*="msp-button-toggle"][title="Reset Axes"],
+.molstar-viewer [class*="msp-button"][title="Load File(s)"],
+.molstar-viewer [class*="msp-button"][title*="Toggle"],
+.molstar-viewer [class*="msp-button"][title*="Settings"],
+.molstar-viewer [class*="msp-button"][title*="Selection"],
+.molstar-viewer [class*="msp-button"][title*="Animation"],
+.molstar-viewer [class*="msp-button"][title*="Trajectory"],
+.molstar-viewer [class*="msp-button"][title*="Illumination"],
+.molstar-viewer [class*="msp-button"][title*="Augmented"],
+.molstar-viewer [class*="msp-button"][title*="Screenshot"] {
+  display: none !important;
+}
+
+/* Hide the bottom-right Molstar info badge (version / FPS) */
+.molstar-viewer .msp-viewport .msp-viewport-info,
+.molstar-viewer .msp-viewport-info,
+.molstar-viewer [class*="msp-viewport-info"] {
+  display: none !important;
+}
+
+/* Hide the viewport's top-right "Powered by Molstar" link */
+.molstar-viewer .msp-viewport .msp-viewport-powered-by,
+.molstar-viewer [class*="msp-viewport-powered-by"],
+.molstar-viewer [class*="msp-powered-by"] {
+  display: none !important;
+}
+
 /* Ensure the canvas fills the container properly */
 .molstar-viewer .msp-canvas {
   background-color: transparent !important;

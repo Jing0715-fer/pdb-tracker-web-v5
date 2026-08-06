@@ -27,6 +27,7 @@ import {
   Loader2, ChevronDown, Eye, EyeOff, Layers, Focus,
   Dna, Pill, Droplet, Ruler, Triangle, MousePointerClick, X,
   Sigma, Tag, Copy, Download, Undo2, Crosshair, ClipboardList,
+  RotateCcw, ZoomIn, ZoomOut, Camera, Sun, Moon,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -373,7 +374,74 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
     toast(`Downloaded ${measurements.length} measurements as JSON`, 'success');
   }, [measurements, toast]);
 
-  // Keyboard shortcuts: Esc = exit measure mode, Z = undo, 1-4 = switch mode
+  // ─── Viewport control handlers (replace hidden native Molstar buttons) ────
+  const [bgDark, setBgDark] = useState(false);
+
+  const handleResetView = useCallback(() => {
+    if (!viewer) return;
+    try {
+      viewer.plugin.managers.camera.reset();
+      toast('View reset', 'info');
+    } catch { /* ignore */ }
+  }, [viewer, toast]);
+
+  const handleZoomIn = useCallback(() => {
+    if (!viewer) return;
+    try {
+      const cam = (viewer.plugin as any)?.canvas3d?.camera;
+      if (cam?.zoom) cam.zoom(0.8);
+      toast('Zoomed in', 'info');
+    } catch { /* ignore */ }
+  }, [viewer, toast]);
+
+  const handleZoomOut = useCallback(() => {
+    if (!viewer) return;
+    try {
+      const cam = (viewer.plugin as any)?.canvas3d?.camera;
+      if (cam?.zoom) cam.zoom(1.25);
+      toast('Zoomed out', 'info');
+    } catch { /* ignore */ }
+  }, [viewer, toast]);
+
+  const handleScreenshot = useCallback(() => {
+    if (!viewer) return;
+    try {
+      const canvas = (viewer.plugin as any)?.canvas3d;
+      if (canvas?.getCanvas) {
+        const c = canvas.getCanvas() as HTMLCanvasElement;
+        c.toBlob((blob) => {
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `screenshot-${pdbId}-${Date.now()}.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+          toast('Screenshot saved', 'success');
+        }, 'image/png');
+      } else {
+        toast('Screenshot not available', 'error');
+      }
+    } catch (err) {
+      toast('Screenshot failed', 'error');
+    }
+  }, [viewer, pdbId, toast]);
+
+  const handleToggleBackground = useCallback(() => {
+    if (!viewer) return;
+    try {
+      const next = !bgDark;
+      setBgDark(next);
+      const canvas3d = (viewer.plugin as any)?.canvas3d;
+      if (canvas3d?.setProps) {
+        canvas3d.setProps({ renderer: { backgroundColor: next ? 0x1a1917 : 0xffffff } });
+      }
+      toast(`Background: ${next ? 'dark' : 'light'}`, 'info');
+    } catch { /* ignore */ }
+  }, [viewer, bgDark, toast]);
+
+  // Keyboard shortcuts: Esc = exit measure mode, Z = undo, 1-4 = switch mode,
+  // R = reset view, +/- = zoom, S = screenshot, B = toggle background
   useEffect(() => {
     if (!ready) return;
     const handler = (e: KeyboardEvent) => {
@@ -394,11 +462,21 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
         setMeasureMode('dihedral');
       } else if (e.key === '4' && measureMode !== 'label') {
         setMeasureMode('label');
+      } else if (e.key === 'r' || e.key === 'R') {
+        handleResetView();
+      } else if (e.key === '+' || e.key === '=') {
+        handleZoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        handleZoomOut();
+      } else if (e.key === 's' || e.key === 'S') {
+        if (!e.ctrlKey && !e.metaKey) handleScreenshot();
+      } else if (e.key === 'b' || e.key === 'B') {
+        handleToggleBackground();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [ready, measureMode, setMeasureMode, handleUndoMeasurement]);
+  }, [ready, measureMode, setMeasureMode, handleUndoMeasurement, handleResetView, handleZoomIn, handleZoomOut, handleScreenshot, handleToggleBackground]);
 
   return (
     <div className={className} style={{ display: 'flex', width: '100%', height: '100%' }}>
@@ -508,6 +586,63 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
                 </Button>
               </>
             )}
+          </div>
+        )}
+
+        {/* Viewport controls — top-right overlay (replaces hidden native Molstar buttons) */}
+        {ready && (
+          <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 p-1 shadow-sm">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+              onClick={handleResetView}
+              disabled={!viewer}
+              title="Reset view (R)"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+              onClick={handleZoomIn}
+              disabled={!viewer}
+              title="Zoom in (+)"
+            >
+              <ZoomIn className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+              onClick={handleZoomOut}
+              disabled={!viewer}
+              title="Zoom out (-)"
+            >
+              <ZoomOut className="h-3.5 w-3.5" />
+            </Button>
+            <div className="h-4 w-px bg-claude-border/60 dark:bg-[#3d3832]/60 mx-0.5" />
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+              onClick={handleScreenshot}
+              disabled={!viewer}
+              title="Screenshot (S)"
+            >
+              <Camera className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className={`h-7 w-7 p-0 ${bgDark ? 'text-claude-accent' : 'text-claude-text-muted hover:text-claude-accent'}`}
+              onClick={handleToggleBackground}
+              disabled={!viewer}
+              title="Toggle background (B)"
+            >
+              {bgDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+            </Button>
           </div>
         )}
 
@@ -636,10 +771,14 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
               })}
             </div>
             {/* Keyboard shortcut hint */}
-            <div className="px-2 py-1 border-t border-claude-border/40 dark:border-[#3d3832]/40 text-[8px] text-claude-text-muted/70 flex items-center gap-2 flex-wrap">
+            <div className="px-2 py-1 border-t border-claude-border/40 dark:border-[#3d3832]/40 text-[8px] text-claude-text-muted/70 flex items-center gap-1.5 flex-wrap">
               <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">1</kbd>–<kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">4</kbd> mode</span>
               <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">Esc</kbd> exit</span>
               <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">⌘Z</kbd> undo</span>
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">R</kbd> reset</span>
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">+/−</kbd> zoom</span>
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">S</kbd> shot</span>
+              <span><kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/60">B</kbd> bg</span>
             </div>
           </div>
         )}
