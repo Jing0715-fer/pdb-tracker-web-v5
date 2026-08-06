@@ -46,7 +46,7 @@ interface PendingAtom {
 function project3DTo2D(
   point: [number, number, number],
   projectionView: number[] | Float32Array | Float64Array,
-  viewport: { width: number; height: number }
+  viewport: { width: number; height: number; x?: number; y?: number }
 ): { x: number; y: number; visible: boolean } {
   const [px, py, pz] = point;
   // Apply the 4x4 projectionView matrix.
@@ -79,11 +79,11 @@ function project3DTo2D(
   const ndcX = rx / rw;
   const ndcY = ry / rw;
 
-  // Convert NDC to screen pixels.
-  // NDC x: -1 = left, +1 = right → screen x = (ndcX + 1) * 0.5 * width
-  // NDC y: -1 = bottom, +1 = top → screen y = (1 - ndcY) * 0.5 * height
-  const screenX = (ndcX + 1) * 0.5 * viewport.width;
-  const screenY = (1 - ndcY) * 0.5 * viewport.height;
+  // Convert NDC to screen pixels, applying viewport offset.
+  // NDC x: -1 = left, +1 = right → screen x = (ndcX + 1) * 0.5 * width + offsetX
+  // NDC y: -1 = bottom, +1 = top → screen y = (1 - ndcY) * 0.5 * height + offsetY
+  const screenX = (ndcX + 1) * 0.5 * viewport.width + (viewport.x || 0);
+  const screenY = (1 - ndcY) * 0.5 * viewport.height + (viewport.y || 0);
 
   return { x: screenX, y: screenY, visible: true };
 }
@@ -261,7 +261,11 @@ export function MeasureOverlay() {
         return;
       }
 
-      const viewport = { width: vp.width, height: vp.height };
+      // The Molstar viewport (vp) has {x, y, width, height} in CSS pixels
+      // relative to the canvas3d's internal coordinate system. Our overlay
+      // canvas covers the entire MolstarViewer container. We need to offset
+      // the projected coordinates by vp.x and vp.y so lines align with atoms.
+      const viewport = { width: vp.width, height: vp.height, x: vp.x || 0, y: vp.y || 0 };
 
       // Draw completed measurements.
       // NOTE: the current store's `measurements` entries only carry

@@ -19,7 +19,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Microscope, Activity, Box, Sparkles, FileText, Ruler, Triangle } from "lucide-react";
+import { Microscope, Activity, Box, Sparkles, FileText, Ruler, Triangle, Loader2 } from "lucide-react";
 import { AnalysisToolbar } from "./analysis-toolbar";
 import { AnalysisLeftPanel } from "./analysis-left-panel";
 import { AnalysisRightPanel } from "./analysis-right-panel";
@@ -235,6 +235,18 @@ export function StructureAnalysisView() {
     <div className={`sa-viewer absolute inset-0 ${viewerBgDark ? "dark-viewer" : ""} ${measureMode !== "off" ? "sa-picking-mode" : ""}`}>
       <div className="sa-viewer-backdrop" />
       <MolstarViewer className="absolute inset-0" />
+      {/* Loading overlay — shown while the viewer initializes. */}
+      {!ready && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <div className="flex flex-col items-center gap-3 bg-claude-surface/80 dark:bg-[#242220]/80 rounded-lg p-4">
+            <Box className="h-8 w-8 text-claude-accent animate-pulse" />
+            <div className="flex items-center gap-2 text-xs text-claude-text-muted">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>Initializing 3D Viewer...</span>
+            </div>
+          </div>
+        </div>
+      )}
       <ViewerOverlay
         structures={structures}
         activeStructure={activeStructure}

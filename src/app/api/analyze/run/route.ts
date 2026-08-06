@@ -182,15 +182,15 @@ export async function POST(req: NextRequest) {
 
     // Run it.
     try {
-      // Ensure biopython (installed in /home/z/.venv) and pdb2pqr / other
-      // local binaries are resolvable. The dev server's inherited PATH often
-      // does NOT include /home/z/.venv/bin, so `python3` resolves to
-      // /usr/bin/python3 which lacks Biopython → ModuleNotFoundError: Bio.
-      // We prepend both venv and local bin to be safe.
-      const childEnv = {
-        ...process.env,
-        PATH: `/home/z/.venv/bin:/home/z/.local/bin:${process.env.PATH || ''}`,
-      };
+      // Ensure the Python venv (biopython, numpy) AND local binaries are in PATH.
+      // The Next.js server process may inherit a PATH that doesn't include
+      // /home/z/.venv/bin where biopython/numpy are installed.
+      const VENV_BIN = '/home/z/.venv/bin';
+      const EXTRA_PATH = '/home/z/.local/bin';
+      const ENV_PATH = process.env.PATH || '';
+      const pathParts = ENV_PATH.split(':').filter(Boolean);
+      const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
+      const childEnv = { ...process.env, PATH: fullParts.join(':') };
       const { stdout, stderr } = await execFileAsync(
         "python3",
         [scriptPath],
