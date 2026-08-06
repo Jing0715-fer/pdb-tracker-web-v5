@@ -500,6 +500,8 @@ function MeasureTab() {
   const { run, busy } = useRunCommand();
   const [a, setA] = useState<ResidueRef>({ chain: "A", resno: 30, atom: "CA" });
   const [b, setB] = useState<ResidueRef>({ chain: "A", resno: 50, atom: "CA" });
+  const [c, setC] = useState<ResidueRef>({ chain: "A", resno: 70, atom: "CA" });
+  const [d, setD] = useState<ResidueRef>({ chain: "A", resno: 90, atom: "CA" });
   const [labelTarget, setLabelTarget] = useState<ResidueRef>({
     chain: "A",
     resno: 30,
@@ -676,6 +678,47 @@ function MeasureTab() {
           onClick={() => run({ type: "measure_distance", a, b })}
         >
           Measure Distance
+        </Button>
+      </div>
+
+      <div className="my-1 h-px bg-claude-border" />
+
+      {/* ── Manual angle input ── */}
+      <div className="rounded-md border border-claude-border p-2 space-y-1">
+        <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+          Manual Angle
+        </div>
+        <ResidueInput label="Atom A" value={a} onChange={setA} />
+        <ResidueInput label="Atom B (vertex)" value={b} onChange={setB} />
+        <ResidueInput label="Atom C" value={c} onChange={setC} />
+        <Button
+          size="sm"
+          className="h-7 w-full text-[11px]"
+          disabled={busy}
+          onClick={() => run({ type: "measure_angle", a, b, c })}
+        >
+          Measure Angle
+        </Button>
+      </div>
+
+      <div className="my-1 h-px bg-claude-border" />
+
+      {/* ── Manual dihedral input ── */}
+      <div className="rounded-md border border-claude-border p-2 space-y-1">
+        <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+          Manual Dihedral
+        </div>
+        <ResidueInput label="Atom A" value={a} onChange={setA} />
+        <ResidueInput label="Atom B" value={b} onChange={setB} />
+        <ResidueInput label="Atom C" value={c} onChange={setC} />
+        <ResidueInput label="Atom D" value={d} onChange={setD} />
+        <Button
+          size="sm"
+          className="h-7 w-full text-[11px]"
+          disabled={busy}
+          onClick={() => run({ type: "measure_dihedral", a, b, c, d })}
+        >
+          Measure Dihedral
         </Button>
       </div>
 
