@@ -439,9 +439,35 @@ export const useAppStore = create<AppState>((set, get) => ({
       const alignmentHistory = state.alignmentHistory.filter(
         (a) => a.refId !== id && a.mobileId !== id
       );
-      return { structures, activeStructureId, structureFileCache, alignmentHistory };
+      // Clear viz state if it belonged to this structure
+      const clearViz = (viz: unknown) => {
+        if (viz && typeof viz === "object" && "pdbId" in viz) {
+          return (viz as { pdbId: string }).pdbId === id ? null : viz;
+        }
+        return viz;
+      };
+      return {
+        structures,
+        activeStructureId,
+        structureFileCache,
+        alignmentHistory,
+        electrostaticViz: clearViz(state.electrostaticViz) as typeof state.electrostaticViz,
+        druggabilityViz: clearViz(state.druggabilityViz) as typeof state.druggabilityViz,
+        screeningViz: clearViz(state.screeningViz) as typeof state.screeningViz,
+        pocketDetectionViz: clearViz(state.pocketDetectionViz) as typeof state.pocketDetectionViz,
+      };
     }),
-  clearStructures: () => set({ structures: [], activeStructureId: null, structureFileCache: {} }),
+  clearStructures: () =>
+    set({
+      structures: [],
+      activeStructureId: null,
+      structureFileCache: {},
+      alignmentHistory: [],
+      electrostaticViz: null,
+      druggabilityViz: null,
+      screeningViz: null,
+      pocketDetectionViz: null,
+    }),
   setActiveStructure: (id) => set({ activeStructureId: id }),
   renameStructure: (id, label) =>
     set((state) => ({

@@ -27,6 +27,11 @@ export function useRunCommand() {
       if (res.ok) toast(res.detail ?? "Done", "success");
       else toast(res.detail ?? "Failed", "error");
       return res;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logCommand({ type: cmd.type, ok: false, detail: msg });
+      toast(`Command failed: ${msg}`, "error");
+      return { ok: false, detail: msg };
     } finally {
       setBusy(false);
     }
