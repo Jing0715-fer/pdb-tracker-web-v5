@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -119,6 +119,7 @@ export function ChatTab() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
+  const stopRequestedRef = useRef(false);
 
   // Provider list (from run center's /api/llm/providers)
   const [providers, setProviders] = useState<LlmProviderInfo[]>([]);
@@ -173,6 +174,7 @@ export function ChatTab() {
         return;
       }
       sendingRef.current = true;
+      stopRequestedRef.current = false;
 
       const userMsg: ChatMessage = {
         id: `u-${Date.now()}`,
@@ -203,12 +205,25 @@ export function ChatTab() {
         const allAnalysisResults: Array<{ type: string; ok: boolean; detail?: string; data?: unknown }> = [];
 
         for (let round = 0; round < MAX_ROUNDS; round++) {
+          // P1: For rounds 2+, show a brief "continuing analysis" hint before
+          // the streaming text arrives. This is overwritten as soon as the
+          // first SSE chunk arrives (accumulatedReply replaces it).
           if (round > 0) {
             updateMessage(pendingId, {
-              content: `🔍 Analyzing… (round ${round + 1}, executed ${allCommands.length} commands, got ${allAnalysisResults.length} results)`,
+              content: `🔍 Round ${round + 1}: continuing analysis (${allCommands.length} commands executed, ${allAnalysisResults.length} results so far)…`,
               commands: allCommands,
               pending: true,
             });
+          }
+
+          // P2: Check if the user clicked "Stop" — abort the loop early.
+          if (stopRequestedRef.current) {
+            updateMessage(pendingId, {
+              content: `⏹️ Stopped by user after round ${round}.`,
+              commands: allCommands.length > 0 ? allCommands : undefined,
+              pending: false,
+            });
+            break;
           }
 
           // Call the LLM streaming chat endpoint (SSE)
@@ -413,6 +428,7 @@ export function ChatTab() {
         });
       } finally {
         sendingRef.current = false;
+        stopRequestedRef.current = false;
       }
     },
     [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast]
@@ -558,10 +574,19 @@ export function ChatTab() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask the agent to analyze a structure…"
-            className="min-h-[44px] max-h-32 resize-none pr-10 text-[11px] leading-relaxed"
+            className="min-h-[44px] max-h-32 resize-none pr-20 text-[11px] leading-relaxed"
             rows={2}
             disabled={sendingRef.current}
           />
+          {sendingRef.current && (
+            <button
+              onClick={() => { stopRequestedRef.current = true; }}
+              className="absolute bottom-1.5 right-9 grid h-7 w-7 place-items-center rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors"
+              title="Stop generation"
+            >
+              <Square className="h-3 w-3 fill-current" />
+            </button>
+          )}
           <button
             onClick={() => send(input)}
             disabled={!input.trim() || sendingRef.current}

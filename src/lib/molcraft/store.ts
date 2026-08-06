@@ -19,6 +19,8 @@ import type { MolstarViewer, MolstarPlugin } from "./types";
 // ---- localStorage persistence helpers ----
 const STORAGE_KEY_REPORTS = "pdb-tracker:molcraft-reports";
 const STORAGE_KEY_CHAT_PROVIDER = "pdb-tracker:llm-provider:v2";
+const STORAGE_KEY_MEASUREMENTS = "pdb-tracker:measurements:v1";
+const STORAGE_KEY_INTERACTION_LINES = "pdb-tracker:interaction-lines:v1";
 
 function loadFromStorage<T>(key: string): T[] {
   if (typeof window === "undefined") return [];
@@ -516,33 +518,37 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMeasureProgress: (p) => set({ measureProgress: p }),
   pickedAtoms: [],
   setPickedAtoms: (a) => set({ pickedAtoms: a }),
-  measurements: [],
+  measurements: loadMeasurements(),
   addMeasurement: (m) =>
-    set((state) => ({
-      measurements: [
+    set((state) => {
+      const measurements = [
         { id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...m, ts: Date.now() },
         ...state.measurements,
-      ].slice(0, 50),
-    })),
+      ].slice(0, 50);
+      persistMeasurements(measurements);
+      return { measurements };
+    }),
   removeMeasurement: (id) =>
     set((state) => {
-      // Find the measurement to get its linked interactionLine id, then
-      // remove both the measurement entry and its overlay line.
       const target = state.measurements.find((mm) => mm.id === id);
       const lineId = target?.lineId;
-      return {
-        measurements: state.measurements.filter((mm) => mm.id !== id),
-        interactionLines: lineId
-          ? state.interactionLines.filter((l) => l.id !== lineId)
-          : state.interactionLines,
-      };
+      const measurements = state.measurements.filter((mm) => mm.id !== id);
+      const interactionLines = lineId
+        ? state.interactionLines.filter((l) => l.id !== lineId)
+        : state.interactionLines;
+      persistMeasurements(measurements);
+      persistInteractionLines(interactionLines);
+      return { measurements, interactionLines };
     }),
-  clearMeasurements: () => set({ measurements: [] }),
+  clearMeasurements: () => {
+    persistMeasurements([]);
+    set({ measurements: [] });
+  },
 
-  interactionLines: [],
+  interactionLines: loadInteractionLines(),
   addInteractionLine: (line) =>
-    set((state) => ({
-      interactionLines: [
+    set((state) => {
+      const interactionLines = [
         ...state.interactionLines,
         {
           id: line.id ?? `il-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -552,16 +558,22 @@ export const useAppStore = create<AppState>((set, get) => ({
           label: line.label,
           dashed: line.dashed,
         },
-      ],
-    })),
-  setInteractionLines: (lines) =>
-    set({
-      interactionLines: lines.map((line, i) => ({
-        id: `il-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
-        ...line,
-      })),
+      ];
+      persistInteractionLines(interactionLines);
+      return { interactionLines };
     }),
-  clearInteractionLines: () => set({ interactionLines: [] }),
+  setInteractionLines: (lines) => {
+    const interactionLines = lines.map((line, i) => ({
+      id: `il-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+      ...line,
+    }));
+    persistInteractionLines(interactionLines);
+    set({ interactionLines });
+  },
+  clearInteractionLines: () => {
+    persistInteractionLines([]);
+    set({ interactionLines: [] });
+  },
 
   electrostaticViz: null,
   setElectrostaticViz: (v) => set({ electrostaticViz: v }),
@@ -756,5 +768,47 @@ function persistChatProvider(providerId: string): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY_CHAT_PROVIDER, providerId);
+  } catch { /* ignore */ }
+}
+
+// ---- measurement persistence (survive modal close/reopen) ----
+function loadMeasurements(): AppState["measurements"] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_MEASUREMENTS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistMeasurements(measurements: AppState["measurements"]): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Only persist measurements that have atom coords (needed for overlay redraw).
+    // Cap at 50 to avoid localStorage overflow.
+    const toSave = measurements.slice(0, 50).map((m) => ({
+      ...m,
+      // Strip any non-serializable fields
+      atoms: m.atoms?.map((a) => ({ x: a.x, y: a.y, z: a.z, label: a.label })),
+    }));
+    localStorage.setItem(STORAGE_KEY_MEASUREMENTS, JSON.stringify(toSave));
+  } catch { /* ignore quota errors */ }
+}
+
+function loadInteractionLines(): AppState["interactionLines"] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_INTERACTION_LINES);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistInteractionLines(lines: AppState["interactionLines"]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_INTERACTION_LINES, JSON.stringify(lines.slice(0, 100)));
   } catch { /* ignore */ }
 }
