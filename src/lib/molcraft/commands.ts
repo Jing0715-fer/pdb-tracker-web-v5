@@ -517,47 +517,94 @@ export async function executeCommand(
       }
 
       case "toggle_component_visibility": {
-        // Toggle visibility of a chain. Since the default preset creates
-        // "Polymer"/"Ligand"/"Water" components (not per-chain), we toggle
-        // the "Polymer" component directly for single-chain structures.
-        // For multi-chain, we would need per-chain components, but the
-        // tryCreateComponentStatic API is finicky in the prebuilt bundle.
-        // The simplest reliable approach: toggle the whole Polymer component
-        // (which contains all chains). This works for hide/show of the
-        // entire protein structure.
+        // Toggle visibility of a specific chain. Creates a per-chain component
+        // using a MolScript expression (auth_asym_id == chain) and toggles it.
+        // This correctly hides/shows individual chains, NOT the entire Polymer.
         const chain = cmd.component;
         const action = (cmd.action ?? "toggle") as "show" | "hide" | "toggle";
         const structs = getStructures(plugin);
         if (structs.length === 0)
           return { ok: false, detail: "No structures loaded" };
 
-        // Find the Polymer component (tagged "structure-component-static-polymer")
-        let targetComp: any = null;
         try {
+          // First, check if a per-chain component already exists (by tag).
+          // We tag per-chain components with "chain-visibility-{chain}".
+          const chainTag = `chain-visibility-${chain}`;
+          let existingComp: any = null;
           const components = structs[0].components ?? [];
           for (const c of components) {
             const tags = c?.cell?.transform?.tags;
-            const label = c?.cell?.obj?.label;
-            if (
-              (Array.isArray(tags) && tags.includes("structure-component-static-polymer")) ||
-              label === "Polymer"
-            ) {
-              targetComp = c;
+            if (Array.isArray(tags) && tags.includes(chainTag)) {
+              existingComp = c;
               break;
             }
           }
-        } catch { /* ignore */ }
 
-        if (!targetComp)
-          return { ok: false, detail: `No Polymer component found for chain ${chain}` };
+          if (existingComp) {
+            // Toggle the existing per-chain component
+            plugin.managers.structure.hierarchy.toggleVisibility(
+              [existingComp],
+              action === "toggle" ? undefined : action
+            );
+            return { ok: true, detail: `Chain ${chain} (${action})` };
+          }
 
-        // Toggle visibility
-        try {
-          plugin.managers.structure.hierarchy.toggleVisibility(
-            [targetComp],
-            action === "toggle" ? undefined : action
+          // No per-chain component exists yet — create one using a MolScript
+          // expression that selects only atoms in this chain.
+          const data = getFirstStructureData(plugin);
+          if (!data) return { ok: false, detail: "No structure data" };
+
+          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+          if (!Q) {
+            // Fallback: if MolScript Q is not available, toggle the whole
+            // Polymer component (old behavior — less precise but works).
+            let targetComp: any = null;
+            for (const c of components) {
+              const tags = c?.cell?.transform?.tags;
+              const label = c?.cell?.obj?.label;
+              if (
+                (Array.isArray(tags) && tags.includes("structure-component-static-polymer")) ||
+                label === "Polymer"
+              ) {
+                targetComp = c;
+                break;
+              }
+            }
+            if (targetComp) {
+              plugin.managers.structure.hierarchy.toggleVisibility(
+                [targetComp],
+                action === "toggle" ? undefined : action
+              );
+              return { ok: true, detail: `Chain ${chain} (${action}) — whole polymer (fallback)` };
+            }
+            return { ok: false, detail: `No component found for chain ${chain}` };
+          }
+
+          // Build the per-chain MolScript expression
+          const expr = Q.struct.generator.atomGroups({
+            'chain-test': Q.core.rel.eq([
+              Q.struct.atomProperty.macromolecular.auth_asym_id(),
+              chain
+            ])
+          });
+
+          // Create the per-chain component via the plugin's component builder
+          const builder = plugin.builders.structure;
+          const component = await builder.tryCreateComponentFromExpression(
+            data,
+            expr,
+            `Chain ${chain}`,
+            { tags: [chainTag, "structure-component-static-polymer"] }
           );
-          return { ok: true, detail: `Chain ${chain} (${action})` };
+
+          if (component) {
+            plugin.managers.structure.hierarchy.toggleVisibility(
+              [component],
+              action === "toggle" ? undefined : action
+            );
+            return { ok: true, detail: `Chain ${chain} (${action})` };
+          }
+          return { ok: false, detail: `Failed to create component for chain ${chain}` };
         } catch (err) {
           return { ok: false, detail: `Visibility toggle failed: ${err}` };
         }

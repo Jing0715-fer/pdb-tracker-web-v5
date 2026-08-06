@@ -263,9 +263,31 @@ export function MeasureOverlay() {
 
       // The Molstar viewport (vp) has {x, y, width, height} in CSS pixels
       // relative to the canvas3d's internal coordinate system. Our overlay
-      // canvas covers the entire MolstarViewer container. We need to offset
-      // the projected coordinates by vp.x and vp.y so lines align with atoms.
-      const viewport = { width: vp.width, height: vp.height, x: vp.x || 0, y: vp.y || 0 };
+      // canvas covers the entire MolstarViewer container. We need to account
+      // for any offset between the overlay canvas and the Molstar canvas3d.
+      //
+      // The Molstar canvas3d container is a child of the MolstarViewer div.
+      // Its bounding rect gives us the offset we need to add to the projected
+      // coordinates so they align with the actual atoms on screen.
+      const molstarCanvas = plugin.canvas3d?.canvas?.parentElement ?? plugin.canvas3d?.canvas;
+      let molstarOffsetX = 0;
+      let molstarOffsetY = 0;
+      if (molstarCanvas && molstarCanvas !== canvas) {
+        try {
+          const molstarRect = molstarCanvas.getBoundingClientRect?.();
+          if (molstarRect) {
+            molstarOffsetX = molstarRect.left - rect.left;
+            molstarOffsetY = molstarRect.top - rect.top;
+          }
+        } catch { /* ignore */ }
+      }
+
+      const viewport = {
+        width: vp.width,
+        height: vp.height,
+        x: (vp.x || 0) + molstarOffsetX,
+        y: (vp.y || 0) + molstarOffsetY,
+      };
 
       // Draw completed measurements.
       // NOTE: the current store's `measurements` entries only carry

@@ -48,7 +48,7 @@ You can help users analyze protein structures by:
 - Changing visualizations (representations, color themes)
 - Generating reports
 
-When the user asks for an analysis or action, respond with a JSON object (NO markdown fences, just raw JSON):
+CRITICAL: You MUST respond with a JSON object using EXACTLY this format (NO markdown fences, NO "actions" array — use "commands"):
 {
   "reply": "Your explanation to the user (markdown allowed)",
   "commands": [ { "type": "load_pdb", "id": "1CBS" } ],
@@ -56,44 +56,47 @@ When the user asks for an analysis or action, respond with a JSON object (NO mar
   "continueAfterAnalysis": false
 }
 
-Available command types (use these exact type strings):
-- load_pdb: { type: "load_pdb", id: "1CBS" }
-- load_alphafold: { type: "load_alphafold", uniprotId: "P00520" }
-- focus_residue: { type: "focus_residue", chain: "A", resno: 145 }
-- focus_chain: { type: "focus_chain", chain: "A" }
-- focus_ligand: { type: "focus_ligand", compId: "ATP" }
-- reset_camera: { type: "reset_camera" }
-- set_representation: { type: "set_representation", preset: "polymer-and-ligand", structures: "all" }
-- set_color_theme: { type: "set_color_theme", theme: "chain", structures: "all" }
-- set_uniform_color: { type: "set_uniform_color", color: "#c96442", structures: "all" }
-- measure_distance: { type: "measure_distance", a: {chain,resno,atom}, b: {chain,resno,atom} }
-- analyze_metadata: { type: "analyze_metadata", pdbId: "1CBS" }
-- analyze_interface: { type: "analyze_interface", pdbId: "1CBS", assembly: 1 }
-- analyze_run: { type: "analyze_run", pdbId: "1CBS", recipe: "hbonds|salt_bridges|hydrophobic_contacts|all_interactions", params: {chain1:"A",chain2:"B"} }
-- clear_measurements: { type: "clear_measurements" }
-- clear_interactions: { type: "clear_interactions" }
-- clear_selection: { type: "clear_selection" }
+The "commands" field MUST be an array of command objects with these EXACT type strings (do NOT use "load", "selection", "analysis", "camera-focus" — use the exact types below):
+
+- load_pdb: { "type": "load_pdb", "id": "1CBS" }
+- load_alphafold: { "type": "load_alphafold", "uniprotId": "P00520" }
+- focus_residue: { "type": "focus_residue", "chain": "A", "resno": 145 }
+- focus_chain: { "type": "focus_chain", "chain": "A" }
+- focus_ligand: { "type": "focus_ligand", "compId": "ATP" }
+- reset_camera: { "type": "reset_camera" }
+- set_representation: { "type": "set_representation", "preset": "polymer-and-ligand", "structures": "all" }
+- set_color_theme: { "type": "set_color_theme", "theme": "chain", "structures": "all" }
+- set_uniform_color: { "type": "set_uniform_color", "color": "#c96442", "structures": "all" }
+- analyze_metadata: { "type": "analyze_metadata", "pdbId": "1CBS" }
+- analyze_interface: { "type": "analyze_interface", "pdbId": "1CBS", "assembly": 1 }
+- analyze_run: { "type": "analyze_run", "pdbId": "1CBS", "recipe": "hbonds|salt_bridges|hydrophobic_contacts|all_interactions", "params": {"chain1":"A","chain2":"B"} }
+- clear_measurements: { "type": "clear_measurements" }
+- clear_interactions: { "type": "clear_interactions" }
+- clear_selection: { "type": "clear_selection" }
 
 Rules:
 1. Always include a "reply" field with a helpful explanation.
-2. Include "commands" only if the user's request requires an action. For pure questions, omit it.
-3. Set "continueAfterAnalysis": true ONLY if you need the analysis results to continue (the client will run the commands and send results back). For one-shot answers, set false or omit.
-4. Keep replies concise (2-4 sentences). Use markdown for structure (lists, bold).
+2. Include "commands" only if the user's request requires an action. For pure questions, omit it or use empty array [].
+3. Set "continueAfterAnalysis": true ONLY if you need the analysis results to continue.
+4. Keep replies concise (2-4 sentences). Use markdown for structure.
 5. For complex analyses, break them into steps and use continueAfterAnalysis to loop.
+6. NEVER use "actions", "selection", "analysis", "camera-focus" or any non-standard types. ALWAYS use the exact command types listed above.
 
 Chain selection guidance:
-- For interaction analysis (hbonds, salt_bridges, hydrophobic_contacts), chain1 and chain2 can be the SAME chain (e.g. both "A") to find intra-chain contacts. Use all_interactions for the most comprehensive results.
-- Individual recipes (hbonds, salt_bridges, hydrophobic_contacts) only find INTER-chain contacts when chain1 ≠ chain2. For intra-chain analysis, use all_interactions with chain1=chain2.
-- If the structure has only one chain, always use chain1=chain2="A" (or the correct chain id).
-- If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B" (different chains).
-
-If the user's request doesn't require commands, just return { "reply": "..." }.
+- For interaction analysis, chain1 and chain2 can be the SAME chain for intra-chain analysis. All recipes support intra-chain mode (auto-enabled when chain1==chain2).
+- If the structure has only one chain, use chain1=chain2="A".
+- If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B".
+- To analyze protein-ligand interactions, use the chain containing the protein (e.g. "A") for both chain1 and chain2 — the recipes detect ligand contacts automatically.
 
 Available analysis recipes: ramachandran, bfactor, sasa, secondary_structure, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination.
 
-Example:
+Example 1:
 User: "Load 1CBS and analyze its hydrogen bonds"
-Assistant: { "reply": "Loading 1CBS and running hydrogen bond analysis on chain A.", "commands": [ {"type":"load_pdb","id":"1CBS"}, {"type":"analyze_run","pdbId":"1CBS","recipe":"all_interactions","params":{"chain1":"A","chain2":"A"}} ], "continueAfterAnalysis": true }`;
+Assistant: { "reply": "Loading 1CBS and running hydrogen bond analysis on chain A.", "commands": [ {"type":"load_pdb","id":"1CBS"}, {"type":"analyze_run","pdbId":"1CBS","recipe":"all_interactions","params":{"chain1":"A","chain2":"A"}} ], "continueAfterAnalysis": true }
+
+Example 2:
+User: "Load 6LU7 and analyze the ligand binding pocket"
+Assistant: { "reply": "Loading 6LU7 and analyzing the ligand binding pocket.", "commands": [ {"type":"load_pdb","id":"6LU7"}, {"type":"analyze_run","pdbId":"6LU7","recipe":"hbonds","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"salt_bridges","params":{"chain1":"A","chain2":"A"}}, {"type":"focus_ligand","compId":"ligand"} ], "continueAfterAnalysis": true }`;
 
 export async function POST(request: NextRequest) {
   try {
@@ -139,7 +142,7 @@ export async function POST(request: NextRequest) {
 
     // Try to parse the response as JSON (the LLM should return JSON per the
     // system prompt). If parsing fails, wrap the raw text as a plain reply.
-    let parsed: { reply?: string; commands?: unknown[]; captureSnapshot?: boolean; continueAfterAnalysis?: boolean };
+    let parsed: { reply?: string; commands?: unknown[]; actions?: unknown[]; captureSnapshot?: boolean; continueAfterAnalysis?: boolean };
     const raw = r.text.trim();
     try {
       // Strip markdown code fences if present
@@ -149,9 +152,18 @@ export async function POST(request: NextRequest) {
       parsed = { reply: raw };
     }
 
+    // Fallback: if the LLM returned "actions" instead of "commands" (a common
+    // hallucination), convert the actions array to the expected commands format.
+    let commands: unknown[] = [];
+    if (Array.isArray(parsed.commands)) {
+      commands = parsed.commands;
+    } else if (Array.isArray(parsed.actions)) {
+      commands = convertActionsToCommands(parsed.actions);
+    }
+
     return NextResponse.json({
       reply: parsed.reply || raw,
-      commands: Array.isArray(parsed.commands) ? parsed.commands : [],
+      commands,
       captureSnapshot: !!parsed.captureSnapshot,
       continueAfterAnalysis: !!parsed.continueAfterAnalysis,
       provider: r.provider,
@@ -164,6 +176,47 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Fallback converter: if the LLM returns an "actions" array (with types like
+ * "load", "selection", "analysis", "camera-focus") instead of the expected
+ * "commands" array, convert each action to the standard command format.
+ * This handles common LLM hallucinations where it invents its own schema.
+ */
+function convertActionsToCommands(actions: unknown[]): unknown[] {
+  const commands: unknown[] = [];
+  for (const action of actions) {
+    const a = action as Record<string, unknown>;
+    const type = String(a.type || '').toLowerCase();
+    if (type === 'load') {
+      commands.push({ type: 'load_pdb', id: String(a.pdbId || a.id || '') });
+    } else if (type === 'focus' || type === 'camera-focus') {
+      if (a.selector === 'ligand' || a.compId) {
+        commands.push({ type: 'focus_ligand', compId: String(a.compId || 'ligand') });
+      } else if (a.chain) {
+        commands.push({ type: 'focus_chain', chain: String(a.chain) });
+      } else if (a.resno) {
+        commands.push({ type: 'focus_residue', chain: String(a.chain || 'A'), resno: Number(a.resno) });
+      }
+    } else if (type === 'analysis' || type === 'analyze') {
+      const name = String(a.name || a.recipe || '');
+      const recipeMap: Record<string, string> = {
+        'hydrogen-bonds': 'hbonds', 'hbonds': 'hbonds', 'h-bonds': 'hbonds',
+        'salt-bridges': 'salt_bridges', 'salt_bridges': 'salt_bridges',
+        'hydrophobic': 'hydrophobic_contacts', 'hydrophobic-contacts': 'hydrophobic_contacts',
+        'all-interactions': 'all_interactions', 'all_interactions': 'all_interactions',
+      };
+      const recipe = recipeMap[name.toLowerCase()] || name;
+      const pdbId = String(a.pdbId || '');
+      commands.push({ type: 'analyze_run', pdbId, recipe, params: { chain1: 'A', chain2: 'A' } });
+    } else if (type === 'reset' || type === 'reset-camera') {
+      commands.push({ type: 'reset_camera' });
+    } else if (type === 'clear') {
+      commands.push({ type: 'clear_measurements' });
+    }
+  }
+  return commands;
 }
 
 /** Build a single user-prompt string from the conversation history + context. */

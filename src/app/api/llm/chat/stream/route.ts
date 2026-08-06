@@ -35,7 +35,7 @@ You can help users analyze protein structures by:
 - Changing visualizations (representations, color themes)
 - Generating reports
 
-When the user asks for an analysis or action, respond with a JSON object (NO markdown fences, just raw JSON):
+CRITICAL: You MUST respond with a JSON object using EXACTLY this format (NO markdown fences, NO "actions" array — use "commands"):
 {
   "reply": "Your explanation to the user (markdown allowed)",
   "commands": [ { "type": "load_pdb", "id": "1CBS" } ],
@@ -43,7 +43,7 @@ When the user asks for an analysis or action, respond with a JSON object (NO mar
   "continueAfterAnalysis": false
 }
 
-Available command types (use these exact type strings):
+The "commands" field MUST be an array of command objects with these EXACT type strings (do NOT use "load", "selection", "analysis", "camera-focus" — use the exact types below):
 - load_pdb: { type: "load_pdb", id: "1CBS" }
 - load_alphafold: { type: "load_alphafold", uniprotId: "P00520" }
 - focus_residue: { type: "focus_residue", chain: "A", resno: 145 }
@@ -146,7 +146,14 @@ export async function POST(request: NextRequest) {
           }
 
           const replyText = parsed.reply || raw;
-          const commands = Array.isArray(parsed.commands) ? parsed.commands : [];
+          // Fallback: if the LLM returned "actions" instead of "commands",
+          // convert them (handles common LLM hallucinations).
+          let commands: unknown[] = [];
+          if (Array.isArray(parsed.commands)) {
+            commands = parsed.commands;
+          } else if (Array.isArray((parsed as any).actions)) {
+            commands = convertActionsToCommands((parsed as any).actions);
+          }
 
           // Stream the reply text in word-level chunks for a typewriter effect.
           // Split by spaces but keep them, and also split on newlines for markdown.
@@ -223,4 +230,38 @@ function buildUserPrompt(messages: ChatMessage[], context?: ChatContext): string
     `\nRespond with JSON per the system prompt. If the user's request requires loading a structure or running an analysis, include the appropriate commands and set continueAfterAnalysis if you need the results.`
   );
   return parts.join('\n');
+}
+
+/**
+ * Fallback converter: if the LLM returns an "actions" array instead of "commands",
+ * convert each action to the standard command format.
+ */
+function convertActionsToCommands(actions: unknown[]): unknown[] {
+  const commands: unknown[] = [];
+  for (const action of actions) {
+    const a = action as Record<string, unknown>;
+    const type = String(a.type || '').toLowerCase();
+    if (type === 'load') {
+      commands.push({ type: 'load_pdb', id: String(a.pdbId || a.id || '') });
+    } else if (type === 'focus' || type === 'camera-focus') {
+      if (a.selector === 'ligand' || a.compId) {
+        commands.push({ type: 'focus_ligand', compId: String(a.compId || 'ligand') });
+      } else if (a.chain) {
+        commands.push({ type: 'focus_chain', chain: String(a.chain) });
+      }
+    } else if (type === 'analysis' || type === 'analyze') {
+      const name = String(a.name || a.recipe || '');
+      const recipeMap: Record<string, string> = {
+        'hydrogen-bonds': 'hbonds', 'hbonds': 'hbonds',
+        'salt-bridges': 'salt_bridges', 'salt_bridges': 'salt_bridges',
+        'hydrophobic': 'hydrophobic_contacts',
+        'all-interactions': 'all_interactions',
+      };
+      const recipe = recipeMap[name.toLowerCase()] || name;
+      commands.push({ type: 'analyze_run', pdbId: String(a.pdbId || ''), recipe, params: { chain1: 'A', chain2: 'A' } });
+    } else if (type === 'reset' || type === 'reset-camera') {
+      commands.push({ type: 'reset_camera' });
+    }
+  }
+  return commands;
 }
