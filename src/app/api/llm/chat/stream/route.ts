@@ -7,7 +7,10 @@
  * Since src/lib/llm.ts uses CLI providers with --no-stream (no native streaming),
  * we simulate streaming by:
  *   1. Calling generateText to get the full response
- *   2. Parsing the JSON { reply, commands, ... }
+ *   2. Parsing the JSON { reply, commands, ... } (using a robust parser ported
+ *      from Molcraft that handles code fences, unescaped quotes, trailing
+ *      commas, missing braces, and hallucinated field names like "summary"
+ *      instead of "reply" or "actions"/"selectStructure" instead of "commands")
  *   3. Streaming the `reply` text in word-level chunks via SSE
  *   4. Sending the final { commands, continueAfterAnalysis, provider } as a
  *      separate "done" event
@@ -35,37 +38,58 @@ You can help users analyze protein structures by:
 - Changing visualizations (representations, color themes)
 - Generating reports
 
-CRITICAL: You MUST respond with a JSON object using EXACTLY this format (NO markdown fences, NO "actions" array — use "commands"):
+# CRITICAL OUTPUT FORMAT (MUST FOLLOW EXACTLY)
+
+You MUST respond with a SINGLE JSON object — NO markdown fences, NO prose before/after. The JSON MUST have EXACTLY these field names:
+
 {
-  "reply": "Your explanation to the user (markdown allowed)",
-  "commands": [ { "type": "load_pdb", "id": "1CBS" } ],
+  "reply": "Your explanation to the user (markdown allowed). REQUIRED — do not omit, do not rename to 'summary'/'text'/'message'/'finalReport'.",
+  "commands": [ ...command objects... ],
   "captureSnapshot": false,
   "continueAfterAnalysis": false
 }
 
-The "commands" field MUST be an array of command objects with these EXACT type strings (do NOT use "load", "selection", "analysis", "camera-focus" — use the exact types below):
-- load_pdb: { type: "load_pdb", id: "1CBS" }
-- load_alphafold: { type: "load_alphafold", uniprotId: "P00520" }
-- focus_residue: { type: "focus_residue", chain: "A", resno: 145 }
-- focus_chain: { type: "focus_chain", chain: "A" }
-- focus_ligand: { type: "focus_ligand", compId: "ATP" }
-- reset_camera: { type: "reset_camera" }
-- set_representation: { type: "set_representation", preset: "polymer-and-ligand", structures: "all" }
-- set_color_theme: { type: "set_color_theme", theme: "chain", structures: "all" }
-- set_uniform_color: { type: "set_uniform_color", color: "#c96442", structures: "all" }
-- measure_distance: { type: "measure_distance", a: {chain,resno,atom}, b: {chain,resno,atom} }
-- analyze_metadata: { type: "analyze_metadata", pdbId: "1CBS" }
-- analyze_interface: { type: "analyze_interface", pdbId: "1CBS", assembly: 1 }
-- analyze_run: { type: "analyze_run", pdbId: "1CBS", recipe: "hbonds|salt_bridges|hydrophobic_contacts|all_interactions", params: {chain1:"A",chain2:"B"} }
-- clear_measurements: { type: "clear_measurements" }
-- clear_interactions: { type: "clear_interactions" }
-- clear_selection: { type: "clear_selection" }
+## FORBIDDEN — these field names are WRONG (the parser will reject them):
+- ✗ "summary" → use "reply"
+- ✗ "text" → use "reply"
+- ✗ "message" → use "reply"
+- ✗ "finalReport" → use "reply" (put the full report text in reply)
+- ✗ "actions" → use "commands"
+- ✗ "steps" → use "commands"
+- ✗ "tasks" → use "commands"
+
+## FORBIDDEN — these command type strings are WRONG:
+- ✗ "selectStructure" → use "load_pdb" (with "id" field, not "pdbId")
+- ✗ "load" → use "load_pdb"
+- ✗ "showMessage" / "message" → DO NOT include; put the text in "reply" instead
+- ✗ "camera-focus" / "focus" → use "focus_residue" / "focus_chain" / "focus_ligand"
+- ✗ "analysis" / "analyze" → use "analyze_run" (with "recipe" field)
+- ✗ "reset" / "reset-camera" → use "reset_camera"
+
+## ALLOWED command types (use EXACTLY these strings):
+- load_pdb: { "type": "load_pdb", "id": "1CBS" }   ← note: field is "id", NOT "pdbId"
+- load_alphafold: { "type": "load_alphafold", "uniprotId": "P00520" }
+- focus_residue: { "type": "focus_residue", "chain": "A", "resno": 145 }
+- focus_chain: { "type": "focus_chain", "chain": "A" }
+- focus_ligand: { "type": "focus_ligand", "compId": "ATP" }
+- reset_camera: { "type": "reset_camera" }
+- set_representation: { "type": "set_representation", "preset": "polymer-and-ligand", "structures": "all" }
+- set_color_theme: { "type": "set_color_theme", "theme": "chain", "structures": "all" }
+- set_uniform_color: { "type": "set_uniform_color", "color": "#c96442", "structures": "all" }
+- measure_distance: { "type": "measure_distance", "a": {"chain":"A","resno":145,"atom":"CA"}, "b": {"chain":"A","resno":150,"atom":"CA"} }
+- analyze_metadata: { "type": "analyze_metadata", "id": "1CBS" }   ← note: field is "id", NOT "pdbId"
+- analyze_interface: { "type": "analyze_interface", "id": "1CBS", "assembly": 1 }
+- analyze_run: { "type": "analyze_run", "pdbId": "1CBS", "recipe": "hbonds|salt_bridges|hydrophobic_contacts|all_interactions", "params": {"chain1":"A","chain2":"A"} }
+- clear_measurements: { "type": "clear_measurements" }
+- clear_interactions: { "type": "clear_interactions" }
+- clear_selection: { "type": "clear_selection" }
 
 Rules:
-1. Always include a "reply" field with a helpful explanation.
-2. Include "commands" only if the user's request requires an action. For pure questions, omit it.
+1. ALWAYS include a "reply" field (string) with a helpful explanation. NEVER omit it.
+2. Include "commands" only if the user's request requires an action. For pure questions, use [].
 3. Set "continueAfterAnalysis": true ONLY if you need the analysis results to continue.
-4. Keep replies concise (2-4 sentences). Use markdown for structure (lists, bold).
+4. Keep replies concise (2-4 sentences) unless writing a full report. Use markdown for structure.
+5. DO NOT include "showMessage" or "selectStructure" commands — they are not supported.
 
 Chain selection guidance:
 - For interaction analysis, chain1 and chain2 can be the SAME chain for intra-chain analysis.
@@ -73,11 +97,29 @@ Chain selection guidance:
 - If the structure has only one chain, use chain1=chain2="A".
 - If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B".
 
-Available analysis recipes: ramachandran, bfactor, sasa, secondary_structure, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination.
+Available analysis recipes: ramachandran, bfactor, sasa, secondary_structure, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability.
 
-Example:
+# EXAMPLES
+
 User: "Load 1CBS and analyze its hydrogen bonds"
-Assistant: { "reply": "Loading 1CBS and running hydrogen bond analysis on chain A.", "commands": [ {"type":"load_pdb","id":"1CBS"}, {"type":"analyze_run","pdbId":"1CBS","recipe":"all_interactions","params":{"chain1":"A","chain2":"A"}} ], "continueAfterAnalysis": true }`;
+Correct response (EXACTLY this shape):
+{ "reply": "Loading 1CBS and running hydrogen bond analysis on chain A.", "commands": [ {"type":"load_pdb","id":"1CBS"}, {"type":"analyze_run","pdbId":"1CBS","recipe":"hbonds","params":{"chain1":"A","chain2":"A"}} ], "continueAfterAnalysis": true }
+
+User: "Load 6LU7 and analyze the ligand binding pocket — run hydrogen bonds and salt bridges between chain A and the ligand, then focus the camera on the ligand."
+Correct response:
+{ "reply": "Loading 6LU7 (SARS-CoV-2 Mpro) and analyzing the ligand binding pocket. I'll run hydrogen bond and salt bridge analysis between chain A and the bound ligand, then focus the camera on the ligand.", "commands": [ {"type":"load_pdb","id":"6LU7"}, {"type":"analyze_run","pdbId":"6LU7","recipe":"hbonds","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"salt_bridges","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"binding_pocket","params":{"ligandCompId":"N3","radius":8}}, {"type":"focus_ligand","compId":"N3"} ], "continueAfterAnalysis": true }
+
+# ANTI-EXAMPLES (DO NOT DO THESE)
+
+WRONG — using "selectStructure" and "showMessage":
+{ "summary": "...", "commands": [ {"type":"selectStructure","pdbId":"6LU7"}, {"type":"showMessage","text":"..."} ] }
+RIGHT — use "load_pdb" and put the message in "reply":
+{ "reply": "...", "commands": [ {"type":"load_pdb","id":"6LU7"} ] }
+
+WRONG — using "actions" instead of "commands":
+{ "reply": "...", "actions": [ {"type":"load","pdbId":"6LU7"} ] }
+RIGHT:
+{ "reply": "...", "commands": [ {"type":"load_pdb","id":"6LU7"} ] }`;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -135,28 +177,42 @@ export async function POST(request: NextRequest) {
             return;
           }
 
-          // Parse the JSON response
-          let parsed: { reply?: string; commands?: unknown[]; captureSnapshot?: boolean; continueAfterAnalysis?: boolean };
+          // Parse the JSON response using the robust parser (ported from
+          // Molcraft). This handles code fences, unescaped quotes, trailing
+          // commas, missing braces, and hallucinated field names.
           const raw = r.text.trim();
-          try {
-            const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-            parsed = JSON.parse(cleaned);
-          } catch {
-            parsed = { reply: raw };
-          }
+          const parsed = parseLlmPayload(raw);
 
-          const replyText = parsed.reply || raw;
-          // Fallback: if the LLM returned "actions" instead of "commands",
-          // convert them (handles common LLM hallucinations).
+          // Determine the reply text: prefer parsed.reply, fall back to other
+          // common field names the LLM might hallucinate, then to raw text.
+          const replyText =
+            parsed.reply ||
+            (parsed as any).summary ||
+            (parsed as any).text ||
+            (parsed as any).message ||
+            (typeof (parsed as any).finalReport === 'string'
+              ? (parsed as any).finalReport
+              : '') ||
+            raw;
+
+          // Determine the commands array: prefer parsed.commands, fall back to
+          // "actions"/"steps"/"tasks" with conversion.
           let commands: unknown[] = [];
           if (Array.isArray(parsed.commands)) {
             commands = parsed.commands;
           } else if (Array.isArray((parsed as any).actions)) {
             commands = convertActionsToCommands((parsed as any).actions);
+          } else if (Array.isArray((parsed as any).steps)) {
+            commands = convertActionsToCommands((parsed as any).steps);
+          } else if (Array.isArray((parsed as any).tasks)) {
+            commands = convertActionsToCommands((parsed as any).tasks);
           }
 
+          // Sanitize commands: filter out unsupported types (e.g. "showMessage",
+          // "selectStructure" that slipped through) and normalize field names.
+          commands = sanitizeCommands(commands);
+
           // Stream the reply text in word-level chunks for a typewriter effect.
-          // Split by spaces but keep them, and also split on newlines for markdown.
           const tokens = replyText.match(/\S+\s*|\s+/g) || [replyText];
           const CHUNK_SIZE = 3; // words per chunk
           for (let i = 0; i < tokens.length; i += CHUNK_SIZE) {
@@ -227,41 +283,280 @@ function buildUserPrompt(messages: ChatMessage[], context?: ChatContext): string
     parts.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
   }
   parts.push(
-    `\nRespond with JSON per the system prompt. If the user's request requires loading a structure or running an analysis, include the appropriate commands and set continueAfterAnalysis if you need the results.`
+    `\nRespond with a SINGLE JSON object per the system prompt. The object MUST have a "reply" field (string) and a "commands" field (array). Do NOT use "summary", "actions", "selectStructure", or "showMessage" — these are not supported. Use "reply" for any text you want to show the user, and "load_pdb" (with "id" field) to load a structure.`
   );
   return parts.join('\n');
+}
+
+// ============================================================================
+// Robust LLM payload parser (ported from Molcraft's parseLlmPayload).
+// Handles: code fences, unescaped quotes, trailing commas, missing braces,
+// and extracts reply/commands even when the LLM hallucinates field names.
+// ============================================================================
+
+interface ParsedPayload {
+  reply?: string;
+  commands?: unknown[];
+  captureSnapshot?: boolean;
+  continueAfterAnalysis?: boolean;
+  // Allow extra fields the LLM might hallucinate (summary, actions, etc.)
+  [key: string]: unknown;
+}
+
+function parseLlmPayload(raw: string): ParsedPayload {
+  const trimmed = raw.trim();
+
+  // The model may wrap JSON in ```json ... ``` fences or prepend prose.
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonCandidate = fenceMatch
+    ? fenceMatch[1].trim()
+    : extractFirstJsonObject(trimmed);
+
+  if (!jsonCandidate) {
+    // No JSON found — treat the whole thing as a plain chat reply.
+    return { reply: trimmed };
+  }
+
+  // Try parsing the JSON directly first.
+  try {
+    const parsed = JSON.parse(jsonCandidate);
+    if (typeof parsed === 'object' && parsed !== null) {
+      return normalizePayload(parsed);
+    }
+  } catch {
+    // JSON.parse failed — likely due to unescaped quotes inside string values.
+  }
+
+  // Fallback 1: Regex extraction of the reply field.
+  const replyMatch = jsonCandidate.match(
+    /"reply"\s*:\s*"([\s\S]*?)"\s*,\s*"commands"/
+  );
+  if (replyMatch) {
+    let reply = replyMatch[1]
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+    const commandsMatch = jsonCandidate.match(
+      /"commands"\s*:\s*(\[[\s\S]*?\])\s*[,\}]/
+    );
+    let commands: unknown[] = [];
+    if (commandsMatch) {
+      try {
+        commands = JSON.parse(commandsMatch[1]);
+      } catch {
+        // commands array also has issues — leave empty
+      }
+    }
+    const continueMatch = jsonCandidate.match(
+      /"continueAfterAnalysis"\s*:\s*(true|false)/
+    );
+    return {
+      reply,
+      commands,
+      captureSnapshot: false,
+      continueAfterAnalysis: continueMatch ? continueMatch[1] === 'true' : false,
+    };
+  }
+
+  // Fallback 2: Try to repair common LLM JSON mistakes.
+  try {
+    let repaired = jsonCandidate;
+    repaired = repaired.replace(
+      /"(\w+)\s*:\s*(true|false|null|\d+(?:\.\d+)?)"/g,
+      '"$1": $2'
+    );
+    repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+    const openBraces = (repaired.match(/{/g) || []).length;
+    const closeBraces = (repaired.match(/}/g) || []).length;
+    if (openBraces > closeBraces) {
+      repaired += '}'.repeat(openBraces - closeBraces);
+    }
+    const openBrackets = (repaired.match(/\[/g) || []).length;
+    const closeBrackets = (repaired.match(/\]/g) || []).length;
+    if (openBrackets > closeBrackets) {
+      repaired += ']'.repeat(openBrackets - closeBrackets);
+    }
+    const parsed = JSON.parse(repaired);
+    if (typeof parsed === 'object' && parsed !== null) {
+      return normalizePayload(parsed);
+    }
+  } catch {
+    // Repair also failed
+  }
+
+  // Last resort: return the raw text as the reply.
+  console.warn('[parseLlmPayload] All JSON parse attempts failed, returning raw text');
+  return { reply: trimmed };
+}
+
+/** Normalize a parsed object: extract reply from common field names. */
+function normalizePayload(parsed: Record<string, unknown>): ParsedPayload {
+  const reply =
+    typeof parsed.reply === 'string'
+      ? parsed.reply
+      : typeof parsed.summary === 'string'
+      ? parsed.summary
+      : typeof parsed.text === 'string'
+      ? parsed.text
+      : typeof parsed.message === 'string'
+      ? parsed.message
+      : '';
+
+  return {
+    reply,
+    commands: Array.isArray(parsed.commands) ? parsed.commands : [],
+    captureSnapshot: Boolean(parsed.captureSnapshot),
+    continueAfterAnalysis: Boolean(parsed.continueAfterAnalysis),
+    // Preserve extra fields for the caller to inspect (summary, actions, etc.)
+    ...parsed,
+  };
+}
+
+/** Find the first balanced {...} object in a string. */
+function extractFirstJsonObject(s: string): string | null {
+  const start = s.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === '\\') {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+    } else {
+      if (ch === '"') inString = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) return s.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// Command sanitization + action→command conversion.
+// Handles hallucinated type names (selectStructure, showMessage, etc.) and
+// normalizes field names (pdbId → id for load_pdb, etc.).
+// ============================================================================
+
+/** The set of command type strings that executeCommand actually supports. */
+const SUPPORTED_COMMAND_TYPES = new Set([
+  'load_pdb', 'load_alphafold', 'load_emdb', 'load_structure_url', 'load_structure_data',
+  'set_representation', 'set_color_theme', 'set_uniform_color',
+  'focus_residue', 'focus_ligand', 'focus_chain', 'focus_selection', 'reset_camera',
+  'measure_distance', 'measure_angle', 'measure_dihedral', 'label_residue',
+  'show_interactions', 'clear_measurements', 'clear_interactions',
+  'toggle_spin', 'toggle_rock', 'stop_animation',
+  'export_snapshot', 'capture_snapshot',
+  'select', 'clear_selection', 'toggle_component_visibility',
+  'load_volume_url', 'align_structures', 'set_background', 'set_granularity',
+  'analyze_metadata', 'analyze_interface', 'analyze_cli_list', 'analyze_run',
+  'show_electrostatic_surface', 'show_druggable_pocket', 'run_virtual_screening', 'detect_pockets',
+]);
+
+/**
+ * Sanitize a commands array:
+ *  - Drop unsupported types (e.g. "showMessage", "selectStructure" that
+ *    slipped through) — these are not real commands, just LLM hallucinations.
+ *  - Normalize field names (e.g. pdbId → id for load_pdb).
+ *  - Convert known hallucinated types to their correct equivalents.
+ */
+function sanitizeCommands(commands: unknown[]): unknown[] {
+  const result: unknown[] = [];
+  for (const cmd of commands) {
+    if (!cmd || typeof cmd !== 'object') continue;
+    const c = cmd as Record<string, unknown>;
+    const rawType = String(c.type || '').toLowerCase();
+
+    // Convert hallucinated types to correct types
+    let normalized: Record<string, unknown> | null = null;
+    if (rawType === 'selectstructure' || rawType === 'select_structure' || rawType === 'load_structure') {
+      // selectStructure → load_pdb
+      normalized = { type: 'load_pdb', id: String(c.pdbId || c.id || c.pdb_id || '') };
+    } else if (rawType === 'load') {
+      normalized = { type: 'load_pdb', id: String(c.pdbId || c.id || c.pdb_id || '') };
+    } else if (rawType === 'showmessage' || rawType === 'show_message' || rawType === 'message' || rawType === 'log' || rawType === 'notify') {
+      // showMessage → skip (it's just a message, not a command).
+      // The text should already be in the reply field.
+      continue;
+    } else if (rawType === 'focus' || rawType === 'camera-focus' || rawType === 'camera_focus') {
+      if (c.selector === 'ligand' || c.compId) {
+        normalized = { type: 'focus_ligand', compId: String(c.compId || c.ligandId || 'ligand') };
+      } else if (c.resno != null) {
+        normalized = { type: 'focus_residue', chain: String(c.chain || 'A'), resno: Number(c.resno) };
+      } else if (c.chain) {
+        normalized = { type: 'focus_chain', chain: String(c.chain) };
+      } else {
+        normalized = { type: 'reset_camera' };
+      }
+    } else if (rawType === 'analysis' || rawType === 'analyze') {
+      const name = String(c.name || c.recipe || c.analysis || '');
+      const recipeMap: Record<string, string> = {
+        'hydrogen-bonds': 'hbonds', 'hbonds': 'hbonds', 'hydrogen_bonds': 'hbonds',
+        'salt-bridges': 'salt_bridges', 'salt_bridges': 'salt_bridges',
+        'hydrophobic': 'hydrophobic_contacts', 'hydrophobic_contacts': 'hydrophobic_contacts',
+        'all-interactions': 'all_interactions', 'all_interactions': 'all_interactions',
+        'ramachandran': 'ramachandran', 'bfactor': 'bfactor', 'b-factor': 'bfactor',
+        'sasa': 'sasa', 'secondary-structure': 'secondary_structure',
+        'interface-residues': 'interface_residues', 'interface_residues': 'interface_residues',
+        'disulfide-bonds': 'disulfide_bonds', 'disulfide_bonds': 'disulfide_bonds',
+        'aromatic-stacking': 'aromatic_stacking', 'aromatic_stacking': 'aromatic_stacking',
+        'water-bridges': 'water_bridges', 'water_bridges': 'water_bridges',
+        'metal-coordination': 'metal_coordination', 'metal_coordination': 'metal_coordination',
+        'binding-pocket': 'binding_pocket', 'binding_pocket': 'binding_pocket',
+        'druggability': 'druggability', 'entity-analysis': 'entity_analysis',
+        'entity_analysis': 'entity_analysis',
+      };
+      const recipe = recipeMap[name.toLowerCase()] || name;
+      const pdbId = String(c.pdbId || c.id || c.pdb_id || '');
+      const params = (c.params && typeof c.params === 'object') ? c.params : {};
+      normalized = { type: 'analyze_run', pdbId, recipe, params };
+    } else if (rawType === 'reset' || rawType === 'reset-camera' || rawType === 'reset_camera') {
+      normalized = { type: 'reset_camera' };
+    } else if (rawType === 'set-representation' || rawType === 'set_representation') {
+      normalized = { type: 'set_representation', preset: String(c.preset || c.representation || 'polymer-and-ligand'), structures: c.structures || 'all' };
+    } else if (rawType === 'set-color' || rawType === 'set_color_theme' || rawType === 'color') {
+      normalized = { type: 'set_color_theme', theme: String(c.theme || c.color || 'chain'), structures: c.structures || 'all' };
+    } else if (SUPPORTED_COMMAND_TYPES.has(rawType)) {
+      // Already a supported type — but normalize field names if needed.
+      normalized = { ...c };
+      // load_pdb: accept pdbId as alias for id
+      if (rawType === 'load_pdb' && !normalized.id && normalized.pdbId) {
+        normalized.id = normalized.pdbId;
+        delete normalized.pdbId;
+      }
+      // analyze_metadata / analyze_interface: accept pdbId as alias for id
+      if ((rawType === 'analyze_metadata' || rawType === 'analyze_interface') && !normalized.id && normalized.pdbId) {
+        normalized.id = normalized.pdbId;
+        delete normalized.pdbId;
+      }
+    } else {
+      // Unknown type — skip it (don't send unsupported commands to executeCommand)
+      console.warn(`[sanitizeCommands] Dropping unsupported command type: ${rawType}`);
+      continue;
+    }
+
+    if (normalized) {
+      result.push(normalized);
+    }
+  }
+  return result;
 }
 
 /**
  * Fallback converter: if the LLM returns an "actions" array instead of "commands",
  * convert each action to the standard command format.
+ * (Delegates to sanitizeCommands for the heavy lifting.)
  */
 function convertActionsToCommands(actions: unknown[]): unknown[] {
-  const commands: unknown[] = [];
-  for (const action of actions) {
-    const a = action as Record<string, unknown>;
-    const type = String(a.type || '').toLowerCase();
-    if (type === 'load') {
-      commands.push({ type: 'load_pdb', id: String(a.pdbId || a.id || '') });
-    } else if (type === 'focus' || type === 'camera-focus') {
-      if (a.selector === 'ligand' || a.compId) {
-        commands.push({ type: 'focus_ligand', compId: String(a.compId || 'ligand') });
-      } else if (a.chain) {
-        commands.push({ type: 'focus_chain', chain: String(a.chain) });
-      }
-    } else if (type === 'analysis' || type === 'analyze') {
-      const name = String(a.name || a.recipe || '');
-      const recipeMap: Record<string, string> = {
-        'hydrogen-bonds': 'hbonds', 'hbonds': 'hbonds',
-        'salt-bridges': 'salt_bridges', 'salt_bridges': 'salt_bridges',
-        'hydrophobic': 'hydrophobic_contacts',
-        'all-interactions': 'all_interactions',
-      };
-      const recipe = recipeMap[name.toLowerCase()] || name;
-      commands.push({ type: 'analyze_run', pdbId: String(a.pdbId || ''), recipe, params: { chain1: 'A', chain2: 'A' } });
-    } else if (type === 'reset' || type === 'reset-camera') {
-      commands.push({ type: 'reset_camera' });
-    }
-  }
-  return commands;
+  return sanitizeCommands(actions);
 }
