@@ -184,15 +184,19 @@ export async function POST(req: NextRequest) {
     try {
       // Ensure the Python venv (biopython, numpy) AND local binaries are in PATH.
       // The Next.js server process may inherit a PATH that doesn't include
-      // /home/z/.venv/bin where biopython/numpy are installed.
+      // the venv where biopython/numpy are installed.
+      // Cross-platform: Windows uses ';' as PATH separator, Unix uses ':'
       const VENV_BIN = '/home/z/.venv/bin';
       const EXTRA_PATH = '/home/z/.local/bin';
       const ENV_PATH = process.env.PATH || '';
-      const pathParts = ENV_PATH.split(':').filter(Boolean);
+      const PATH_SEP = process.platform === 'win32' ? ';' : ':';
+      const pathParts = ENV_PATH.split(PATH_SEP).filter(Boolean);
       const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
-      const childEnv = { ...process.env, PATH: fullParts.join(':') };
+      const childEnv = { ...process.env, PATH: fullParts.join(PATH_SEP) };
+      // Cross-platform: Windows usually has "python" not "python3"
+      const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
       const { stdout, stderr } = await execFileAsync(
-        "python3",
+        pythonBin,
         [scriptPath],
         { timeout: 45_000, maxBuffer: 10 * 1024 * 1024, env: childEnv }
       );

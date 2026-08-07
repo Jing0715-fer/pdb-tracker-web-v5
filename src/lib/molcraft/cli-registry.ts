@@ -19,14 +19,17 @@ const execFileAsync = promisify(execFile);
 // Ensure /home/z/.local/bin (pdb2pqr, propka) and the Python venv are in PATH
 // for child processes. The Next.js dev server may inherit a PATH that doesn't
 // include the venv where biopython/numpy are installed.
+// Cross-platform: Windows uses ';' as PATH separator, Unix uses ':'
 const VENV_BIN = '/home/z/.venv/bin';
 const EXTRA_PATH = '/home/z/.local/bin';
 const ENV_PATH = process.env.PATH || '';
-// Build the full PATH, ensuring both the venv and extra bin are present
-const pathParts = ENV_PATH.split(':').filter(Boolean);
+const PATH_SEP = process.platform === 'win32' ? ';' : ':';
+const pathParts = ENV_PATH.split(PATH_SEP).filter(Boolean);
 const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
-const FULL_PATH = fullParts.join(':');
+const FULL_PATH = fullParts.join(PATH_SEP);
 const CHILD_ENV = { ...process.env, PATH: FULL_PATH };
+// Cross-platform: Windows uses "where" instead of "which"
+const WHICH_CMD = process.platform === 'win32' ? 'where' : 'which';
 
 export interface CliAdapter {
   id: string;
@@ -46,7 +49,7 @@ export const CLI_ADAPTERS: CliAdapter[] = [
     id: "biopython",
     label: "Biopython",
     category: "python",
-    bin: "python3",
+    bin: process.platform === "win32" ? "python" : "python3",
     probeArgs: ["-c", "import Bio; print(Bio.__version__)"],
     description: "Python 生物信息库 — PDB/mmCIF 解析、距离计算、DSSP、序列操作",
     capabilities: [
@@ -77,7 +80,7 @@ export const CLI_ADAPTERS: CliAdapter[] = [
     id: "freesasa",
     label: "FreeSASA",
     category: "python",
-    bin: "python3",
+    bin: process.platform === "win32" ? "python" : "python3",
     probeArgs: ["-c", "import freesasa; print('ok')"],
     description: "溶剂可及表面积 (SASA) 计算 — 单链 SASA、复合物 SASA、 buried SASA",
     capabilities: [
@@ -90,7 +93,7 @@ export const CLI_ADAPTERS: CliAdapter[] = [
     id: "numpy",
     label: "NumPy",
     category: "python",
-    bin: "python3",
+    bin: process.platform === "win32" ? "python" : "python3",
     probeArgs: ["-c", "import numpy; print(numpy.__version__)"],
     description: "数值计算 — 用于坐标运算、距离矩阵、几何分析",
     capabilities: [
@@ -159,7 +162,7 @@ async function probeOne(adapter: CliAdapter): Promise<CliProbeResult> {
   try {
     if (adapter.category === "binary") {
       try {
-        await execFileAsync("which", [adapter.bin], { timeout: 3000, env: CHILD_ENV });
+        await execFileAsync(WHICH_CMD, [adapter.bin], { timeout: 3000, env: CHILD_ENV });
       } catch {
         return { ...base, error: "binary not in PATH" };
       }
@@ -191,7 +194,7 @@ async function probeOne(adapter: CliAdapter): Promise<CliProbeResult> {
 
     if (adapter.category === "pymol") {
       try {
-        await execFileAsync("which", [adapter.bin], { timeout: 3000, env: CHILD_ENV });
+        await execFileAsync(WHICH_CMD, [adapter.bin], { timeout: 3000, env: CHILD_ENV });
         return { ...base, available: true, version: "ok" };
       } catch {
         return { ...base, error: "pymol not in PATH" };
@@ -3368,7 +3371,7 @@ import math
 import numpy as np
 from Bio.PDB import PDBParser, MMCIFParser
 path1 = r"${inputPath}"
-path2 = "${secondPath}"
+path2 = r"${secondPath}"
 chain1_id = "${chain1}"
 chain2_id = "${chain2}"
 if not path2 or path2 == "":
@@ -3433,7 +3436,7 @@ mean_r = sum(rmsds) / len(rmsds)
 max_r = max(rmsds)
 high_var = [r for r in per_residue if r["rmsd"] > 3.0]
 print(json.dumps({
-    "struct1": path1.rsplit("/", 1)[-1], "struct2": path2.rsplit("/", 1)[-1],
+    "struct1": os.path.basename(path1), "struct2": os.path.basename(path2),
     "chain1": chain1_id, "chain2": chain2_id,
     "common_residues": len(common), "struct1_total": len(ca1), "struct2_total": len(ca2),
     "rmsd_raw_A": round(float(rmsd_raw), 3), "rmsd_aligned_A": round(float(rmsd_aligned), 3),
