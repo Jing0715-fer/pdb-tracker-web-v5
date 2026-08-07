@@ -103,6 +103,18 @@ export const CLI_ADAPTERS: CliAdapter[] = [
     ],
   },
   {
+    id: "scipy",
+    label: "SciPy",
+    category: "python",
+    bin: process.platform === "win32" ? "python" : "python3",
+    probeArgs: ["-c", "import scipy; print(scipy.__version__)"],
+    description: "科学计算 — 用于网格扫描、空间搜索(KDTree)、连通区域标记",
+    capabilities: [
+      "pocket detection (grid + KDTree)",
+      "connected component labeling",
+    ],
+  },
+  {
     id: "pymol",
     label: "PyMOL",
     category: "pymol",
@@ -564,7 +576,7 @@ print(json.dumps({
     label: "氢键检测 (H-bonds, Mills-Dean 几何标准)",
     description:
       "基于 Mills & Dean (1996) 几何标准检测氢键：考虑供体/受体原子类型、距离和角度。参考 ChimeraX 的实现。支持链内分析（chain1==chain2 时自动启用）。",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "chain1", type: "string", required: true, description: "链 1 ID" },
       { name: "chain2", type: "string", required: true, description: "链 2 ID" },
@@ -1947,7 +1959,7 @@ print(json.dumps({
     label: "跨 PDB RMSD 矩阵",
     description:
       "下载多个 PDB 结构，计算链 A 的 CA 原子两两 RMSD（Kabsch 叠合），返回 RMSD 矩阵",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       {
         name: "pdbIds",
@@ -2085,7 +2097,7 @@ print(json.dumps({
     label: "序列对齐驱动的跨 PDB RMSD",
     description:
       "下载多个 PDB，先用序列比对匹配残基，再计算 CA 原子两两 Kabsch 叠合 RMSD（解决残基编号不匹配问题）",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       {
         name: "pdbIds",
@@ -2265,7 +2277,7 @@ print(json.dumps({
     label: "芳香族堆积 (Aromatic Stacking)",
     description:
       "检测两条链之间的 π-π 堆积和阳离子-π 相互作用 (PHE/TYR/TRP/HIS 环中心 < 6Å)",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "chain1", type: "string", required: true, description: "链 1 ID" },
       { name: "chain2", type: "string", required: true, description: "链 2 ID" },
@@ -2602,7 +2614,7 @@ print(json.dumps({
     label: "结构质量验证 (Validation)",
     description:
       "检查结构质量：原子碰撞 (距离 < 1.5Å)、Ramachandran 异常、缺失侧链",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [],
     buildScript: (inputPath) => `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch, PPBuilder
@@ -2695,7 +2707,7 @@ print(json.dumps({
     label: "APBS 静电势 (pdb2pqr + Poisson-Boltzmann)",
     description:
       "计算表面静电势：使用 pdb2pqr 分配 PARSE 力场真实电荷，然后基于 Debye-Hückel 理论的线性化 Poisson-Boltzmann 方程计算每个表面原子的静电势",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "chain", type: "string", required: false, description: "链 ID（可选，默认全部链）" },
       { name: "ionic_strength", type: "number", required: false, description: "离子强度 (mM)，默认 150" },
@@ -2994,7 +3006,7 @@ print(json.dumps({
     label: "结合口袋 (Binding Pocket)",
     description:
       "检测配体周围的结合口袋残基 + 口袋体积估算 + 疏水性/极性分布",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "ligandCompId", type: "string", required: true, description: "配体 3-letter code" },
       { name: "radius", type: "number", required: false, description: "口袋半径 (Å)，默认 8" },
@@ -3074,7 +3086,7 @@ print(json.dumps({
     label: "可药性预测 (Druggability)",
     description:
       "评估结合口袋的可药性：基于口袋体积、疏水性比例、极性比例、电荷分布、深度/封闭度等特征，给出可药性评分和分类",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "ligandCompId", type: "string", required: true, description: "配体 compId (如 N3, REA, HEM)" },
       { name: "radius", type: "number", required: false, description: "口袋半径 (\u00c5)，默认 8" },
@@ -3176,7 +3188,7 @@ print(json.dumps({
     label: "虚拟筛选 (Virtual Screening)",
     description:
       "基于结合口袋的可药性评分，对片段库进行虚拟筛选：评估形状互补、氢键、疏水匹配、电荷互补，返回按预测亲和力排序的命中列表",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "ligandCompId", type: "string", required: true, description: "口袋中心配体 compId" },
       { name: "radius", type: "number", required: false, description: "口袋半径 (Å)，默认 8" },
@@ -3357,7 +3369,7 @@ print(json.dumps({
     label: "跨结构逐残基 RMSD",
     description:
       "计算两个独立 PDB 结构之间（Kabsch 叠合后）的逐残基 Cα 偏差，返回每个残基的 RMSD 值用于热图可视化。需要通过 fileContent + fileContent2 提供两个结构。",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "chain1", type: "string", required: false, description: "结构 1 链 ID，默认 A" },
       { name: "chain2", type: "string", required: false, description: "结构 2 链 ID，默认 A" },
@@ -3453,7 +3465,7 @@ print(json.dumps({
     label: "多口袋检测 (Multi-Pocket Detection)",
     description:
       "自动检测蛋白表面的所有结合口袋：使用网格法扫描蛋白质表面凹陷区域，计算每个口袋的体积、深度、残基组成和可药性评分",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "grid_spacing", type: "number", required: false, description: "网格间距 (Å)，默认 1.5" },
       { name: "probe_radius", type: "number", required: false, description: "探针半径 (Å)，默认 1.4" },
@@ -3853,7 +3865,7 @@ print(json.dumps({
     label: "结构比对并叠合 (CE-like Alignment)",
     description:
       "下载两个 PDB，用序列比对匹配残基，做 Kabsch 最优叠合，输出旋转矩阵+RMSD+匹配残基数。用于替换 Molstar 不可用的 tm-align/superpose。",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "pdbId1", type: "string", required: true, description: "PDB ID 1 (参考)" },
       { name: "pdbId2", type: "string", required: true, description: "PDB ID 2 (移动)" },
@@ -3978,7 +3990,7 @@ print(json.dumps({
     label: "比对并保存变换后坐标 (Save Aligned PDB)",
     description:
       "下载两个 PDB，序列比对+Kabsch 叠合，将结构2所有原子坐标变换后保存为新 PDB 文件，返回文件路径供重新加载到查看器",
-    requires: ["biopython", "numpy"],
+    requires: ["biopython", "numpy", "scipy"],
     params: [
       { name: "pdbId1", type: "string", required: true, description: "PDB ID 1 (参考)" },
       { name: "pdbId2", type: "string", required: true, description: "PDB ID 2 (移动)" },

@@ -54,6 +54,12 @@ const AnalysisSummary = dynamic(
   { ssr: false }
 );
 
+// Lazy-load the full analysis charts grid (same as full analysis view)
+const FullAnalysisTab = dynamic(
+  () => importWithRetry(() => import('@/components/structure-analysis/analysis-left-panel').then(m => ({ default: m.AnalysisTab }))),
+  { ssr: false }
+);
+
 // Lazy-load the viewer tool tabs (Display / Interactions / Viz / Volume / Export).
 // These pull in molcraft commands + presets, so we keep them out of the
 // main bundle until the user clicks the tab.
@@ -283,7 +289,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                     <StructureInfoPanel pdbIdOverride={pdbId} />
                   )}
                   {activeTab === 'analysis' && pdbId && (
-                    <AnalysisSummary pdbId={pdbId} />
+                    <FullAnalysisTab />
                   )}
                   {activeTab === 'display' && <DisplayTab />}
                   {activeTab === 'interactions' && pdbId && <InteractionsTab pdbId={pdbId} />}

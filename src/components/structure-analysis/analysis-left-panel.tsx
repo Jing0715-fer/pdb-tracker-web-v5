@@ -897,7 +897,7 @@ function ResidueInput({
 // ============================================================
 // Analysis Tab
 // ============================================================
-function AnalysisTab() {
+export function AnalysisTab() {
   return (
     <div className="space-y-2 p-2">
       <ActiveStructureSelector />
