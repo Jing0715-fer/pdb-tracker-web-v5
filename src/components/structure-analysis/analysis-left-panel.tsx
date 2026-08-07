@@ -393,15 +393,28 @@ function StructuresTab() {
                   </Label>
                   <Select
                     value={s.style?.representation ?? "cartoon"}
-                    onValueChange={(v) =>
+                    onValueChange={async (v) => {
                       updateStructureStyle(s.id, {
-                        representation: v as LoadedStructure["style"] extends infer T
-                          ? T extends { representation: infer R }
-                            ? R
-                            : never
-                          : never,
-                      })
-                    }
+                        representation: v as any,
+                      });
+                      // Apply to Molstar viewer
+                      if (viewer) {
+                        try {
+                          const presetMap: Record<string, string> = {
+                            cartoon: "polymer-and-ligand",
+                            stick: "atomic-detail",
+                            line: "line",
+                            sphere: "ball-and-stick",
+                            surface: "molecular-surface",
+                          };
+                          await executeCommand(viewer, {
+                            type: "set_representation",
+                            preset: presetMap[v] || v,
+                            structures: "all",
+                          } as any);
+                        } catch { /* ignore */ }
+                      }
+                    }}
                   >
                     <SelectTrigger className="h-7 text-[10px]">
                       <SelectValue />
@@ -424,15 +437,21 @@ function StructuresTab() {
                   </Label>
                   <Select
                     value={s.style?.colorScheme ?? "spectrum"}
-                    onValueChange={(v) =>
+                    onValueChange={async (v) => {
                       updateStructureStyle(s.id, {
-                        colorScheme: v as LoadedStructure["style"] extends infer T
-                          ? T extends { colorScheme: infer R }
-                            ? R
-                            : never
-                          : never,
-                      })
-                    }
+                        colorScheme: v as any,
+                      });
+                      // Apply to Molstar viewer
+                      if (viewer) {
+                        try {
+                          await executeCommand(viewer, {
+                            type: "set_color_theme",
+                            theme: v,
+                            structures: "all",
+                          } as any);
+                        } catch { /* ignore */ }
+                      }
+                    }}
                   >
                     <SelectTrigger className="h-7 text-[10px]">
                       <SelectValue />

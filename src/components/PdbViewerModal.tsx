@@ -292,7 +292,7 @@ export function PdbViewerModal({ pdbId, open, onOpenChange, onOpenInAnalysis }: 
                     <FullAnalysisTab />
                   )}
                   {activeTab === 'display' && <DisplayTab />}
-                  {activeTab === 'interactions' && pdbId && <InteractionsTab pdbId={pdbId} />}
+                  {activeTab === 'interactions' && pdbId && <FullAnalysisTab />}
                   {activeTab === 'viz' && pdbId && <VisualizationTab pdbId={pdbId} />}
                   {activeTab === 'volume' && <VolumeTab />}
                   {activeTab === 'export' && <ExportTab />}

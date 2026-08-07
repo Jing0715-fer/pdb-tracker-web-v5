@@ -682,12 +682,34 @@ export async function executeCommand(
         if (structs.length > 0) {
           try {
             plugin.managers.structure.component.applyPreset([structs[0]], "molecular-surface");
-            await new Promise((r) => setTimeout(r, 200));
-            const comps = structs[0]?.components ?? [];
-            if (comps.length > 0) {
-              plugin.managers.structure.component.updateRepresentationsTheme(comps, {
-                color: "partial-charge",
-              });
+            await new Promise((r) => setTimeout(r, 500));
+            // Find the surface component (created by the molecular-surface preset)
+            // It's typically the last component or tagged with "surface"
+            const allComps = structs[0]?.components ?? [];
+            let surfaceComp = allComps.find((c: any) => {
+              const tags = c?.cell?.transform?.tags;
+              const label = c?.cell?.obj?.label;
+              return (Array.isArray(tags) && (tags.includes("structure-component-static-surface") || tags.includes("surface")))
+                || label === "Surface" || label === "Molecular Surface";
+            });
+            if (!surfaceComp) {
+              // Fallback: use the last component (the one just created by applyPreset)
+              surfaceComp = allComps[allComps.length - 1];
+            }
+            if (surfaceComp) {
+              // Try "partial-charge" first (needs pdb2pqr charges), fall back to "electrostatic",
+              // then "chain" if neither works
+              const themes = ["partial-charge", "electrostatic", "chain"];
+              for (const theme of themes) {
+                try {
+                  plugin.managers.structure.component.updateRepresentationsTheme([surfaceComp], {
+                    color: theme,
+                  });
+                  break; // success — stop trying
+                } catch {
+                  // try next theme
+                }
+              }
             }
           } catch (e) {
             console.warn("[show_electrostatic_surface] representation error:", e);

@@ -583,7 +583,7 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
 
         {/* Measurement toolbar — top-left overlay */}
         {ready && (
-          <div className="absolute top-2 left-2 z-20 flex items-center gap-1 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 p-1 shadow-sm">
+          <div className="absolute top-2 left-2 z-20 flex flex-wrap items-center gap-1 bg-claude-surface/90 dark:bg-[#242220]/90 backdrop-blur-sm rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 p-1 shadow-sm max-w-[calc(100%-20px)]">
             <Button
               size="sm"
               variant={measureMode === 'distance' ? 'default' : 'ghost'}
