@@ -264,7 +264,7 @@ export const ANALYSIS_RECIPES: AnalysisRecipe[] = [
     params: [],
     buildScript: (inputPath) => `${RECIPE_HEADER}
 from collections import Counter
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 try:
     model = next(iter(struct))
 except StopIteration:
@@ -310,7 +310,7 @@ print(json.dumps({
       const pairs = JSON.stringify(params.pairs ?? []);
       return `${RECIPE_HEADER}
 pairs = json.loads('''${pairs}''')
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 def find_atom(struct, chain, resno, atom=None):
     for model in struct:
         if chain not in model:
@@ -376,7 +376,7 @@ print(json.dumps({"atoms": found, "distances": dists}, ensure_ascii=False, inden
       const cutoff = Number(params.cutoff ?? 5.0);
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1 = "${chain1}"
 chain2 = "${chain2}"
 cutoff = ${cutoff}
@@ -450,10 +450,10 @@ from Bio.PDB import PDBParser, ShrakeRupley, MMCIFParser
 # Parse structure
 try:
     parser = PDBParser(QUIET=True)
-    structure = parser.get_structure("s", "${inputPath}")
+    structure = parser.get_structure("s", r"${inputPath}")
 except Exception:
     parser = MMCIFParser(QUIET=True)
-    structure = parser.get_structure("s", "${inputPath}")
+    structure = parser.get_structure("s", r"${inputPath}")
 
 # Compute SASA using Shrake-Rupley algorithm
 sr = ShrakeRupley()
@@ -489,7 +489,7 @@ print(json.dumps({
       const cutoff = Number(params.cutoff ?? 2.5);
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 cutoff = ${cutoff}
 model = next(iter(struct))
 sg_atoms = []
@@ -527,7 +527,7 @@ print(json.dumps({"count": len(bonds), "bonds": bonds, "cutoff": cutoff}, ensure
       const cutoff = Number(params.cutoff ?? 8.0);
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
@@ -596,7 +596,7 @@ from Bio.PDB import NeighborSearch
 import numpy as np
 import math
 
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1_id = "${chain1}"; chain2_id = "${chain2}"
 intra_chain = ${intraChain ? "True" : "False"}  # allow same-chain pairs (auto-enabled when chain1==chain2)
 dist_tolerance = ${distTol}  # added to distance upper bounds
@@ -892,7 +892,7 @@ print(json.dumps({
       const intraChain = params.intra_chain === true || chain1 === chain2;
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
 intra_chain = ${intraChain ? "True" : "False"}
 model = next(iter(struct))
@@ -975,7 +975,7 @@ print(json.dumps({
       const intraChain = params.intra_chain === true || chain1 === chain2;
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
 intra_chain = ${intraChain ? "True" : "False"}
 model = next(iter(struct))
@@ -1039,7 +1039,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import math
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1_id = "${chain1}"; chain2_id = "${chain2}"
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
@@ -1201,7 +1201,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import PPBuilder
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 model = next(iter(struct))
 ppb = PPBuilder()
@@ -1292,7 +1292,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 from collections import defaultdict
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 ligand_id = "${ligandCompId}"
 cutoff = ${cutoff}
 model = next(iter(struct))
@@ -1399,7 +1399,7 @@ print(json.dumps({
 from Bio import pairwise2
 from Bio.PDB import PPBuilder
 from Bio.SeqUtils import seq1
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1_id = "${chain1}"
 chain2_id = "${chain2}"
 model = next(iter(struct))
@@ -1496,7 +1496,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 model = next(iter(struct))
 # Residue charges (approximate, at physiological pH)
@@ -1600,7 +1600,7 @@ print(json.dumps({
 from Bio.SeqUtils import seq1
 from Bio.SeqUtils.IsoelectricPoint import IsoelectricPoint
 from Bio.PDB import PPBuilder
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 model = next(iter(struct))
 ppb = PPBuilder()
@@ -1712,7 +1712,7 @@ print(json.dumps({
       const chain2 = String(params.chain2 ?? "B");
       return `${RECIPE_HEADER}
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1_id = "${chain1}"
 chain2_id = "${chain2}"
 model = next(iter(struct))
@@ -1796,7 +1796,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import PPBuilder
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 model = next(iter(struct))
 ppb = PPBuilder()
@@ -1871,7 +1871,7 @@ print(json.dumps({
       const chain = String(params.chain ?? "");
       return `${RECIPE_HEADER}
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 model = next(iter(struct))
 chain_data = {}
@@ -2274,7 +2274,7 @@ print(json.dumps({
 from Bio.PDB import NeighborSearch
 import numpy as np
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1_id = "${chain1}"; chain2_id = "${chain2}"
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
@@ -2413,7 +2413,7 @@ print(json.dumps({
       const cutoff = Number(params.cutoff ?? 3.5);
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain1_id = "${chain1}"; chain2_id = "${chain2}"; cutoff = ${cutoff}
 model = next(iter(struct))
 # Auto-detect available chains if the specified ones don't exist
@@ -2536,7 +2536,7 @@ print(json.dumps({
       const cutoff = Number(params.cutoff ?? 3.5);
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 cutoff = ${cutoff}
 model = next(iter(struct))
 METALS = {'ZN', 'MG', 'CA', 'MN', 'FE', 'CU', 'NI', 'CO', 'CD', 'NA', 'K', 'MO', 'W'}
@@ -2604,7 +2604,7 @@ print(json.dumps({
     buildScript: (inputPath) => `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch, PPBuilder
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 model = next(iter(struct))
 issues = []
 # 1. Check for clashes (non-bonded atoms < 1.5 Å)
@@ -2710,7 +2710,7 @@ from Bio.PDB import PDBParser
 import subprocess, os, math
 
 # --- Step 1: Run pdb2pqr to assign real forcefield charges ---
-input_pdb = "${inputPath}"
+input_pdb = r"${inputPath}"
 pqr_path = input_pdb.rsplit('.', 1)[0] + "_charged.pqr"
 ff_name = "${ff}"
 pdb2pqr_ok = False
@@ -2726,7 +2726,7 @@ except Exception as e:
     pdb2pqr_log = str(e)[:500]
 
 # --- Step 2: Parse PQR for charges (with fallback) ---
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 model = next(iter(struct))
 
@@ -2890,7 +2890,7 @@ print(json.dumps({
       const threshold = Number(params.threshold ?? 30);
       return `${RECIPE_HEADER}
 from Bio.PDB import ShrakeRupley
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chain}"
 threshold = ${threshold}
 model = next(iter(struct))
@@ -2934,7 +2934,7 @@ print(json.dumps({
     params: [],
     buildScript: (inputPath) => `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 model = next(iter(struct))
 chains = list(model)
 n_chains = len(chains)
@@ -3002,7 +3002,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 import numpy as np
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 ligand_id = "${ligandCompId}"
 radius = ${radius}
 model = next(iter(struct))
@@ -3082,7 +3082,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import numpy as np
 from Bio.PDB import NeighborSearch
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 ligand_id = "${ligandCompId}"
 radius = ${radius}
 model = next(iter(struct))
@@ -3187,7 +3187,7 @@ print(json.dumps({
 import numpy as np
 from Bio.PDB import NeighborSearch
 import math
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 ligand_id = "${ligandCompId}"
 radius = ${radius}
 fragment_set = "${fragmentSet}"
@@ -3367,7 +3367,7 @@ print(json.dumps({
 import math
 import numpy as np
 from Bio.PDB import PDBParser, MMCIFParser
-path1 = "${inputPath}"
+path1 = r"${inputPath}"
 path2 = "${secondPath}"
 chain1_id = "${chain1}"
 chain2_id = "${chain2}"
@@ -3464,7 +3464,7 @@ print(json.dumps({
 import numpy as np
 from Bio.PDB import NeighborSearch
 from scipy.ndimage import label
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 grid_spacing = ${gridSpacing}
 probe_radius = ${probeRadius}
 min_volume = ${minVolume}
@@ -3601,7 +3601,7 @@ from Bio.PDB.MMCIFParser import MMCIFParser
 from Bio.PDB.PDBParser import PDBParser
 import os
 
-path = "${inputPath}"
+path = r"${inputPath}"
 fmt = os.path.splitext(path)[1].lower().lstrip('.')
 
 entities = {}
@@ -3780,7 +3780,7 @@ from Bio.SeqUtils import seq1
 from Bio.Blast import NCBIWWW
 import time
 
-struct = load_structure("${inputPath}")
+struct = load_structure(r"${inputPath}")
 chain_filter = "${chainFilter}"
 evalue_threshold = ${evalue}
 model = next(iter(struct))

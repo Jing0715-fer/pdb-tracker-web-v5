@@ -717,17 +717,7 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       {/* P4: Inter-chain / Intra-chain toggle */}
       <div className="flex items-center gap-2 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-2 py-1.5">
         <Label className="text-[9px] text-claude-text-muted shrink-0">Mode</Label>
-        <button
-          onClick={() => {
-            if (analysisChain1 === analysisChain2) {
-              // Switch to inter-chain: set chain2 to a different chain
-              const other = availableChains.find((c) => c !== analysisChain1);
-              setAnalysisChain2(other ?? analysisChain1);
-            } else {
-              // Switch to intra-chain: set chain2 = chain1
-              setAnalysisChain2(analysisChain1);
-            }
-          }}
+        <div
           className="flex items-center gap-1 text-[9px] font-medium"
           title="Toggle inter-chain / intra-chain mode"
         >
@@ -745,7 +735,7 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
             className="scale-75"
           />
           <span className={`px-1.5 py-0.5 rounded ${analysisChain1 === analysisChain2 ? "bg-claude-accent/20 text-claude-accent" : "text-claude-text-muted"}`}>Intra</span>
-        </button>
+        </div>
         <span className="ml-auto text-[8px] text-claude-text-muted/70">
           {analysisChain1 === analysisChain2 ? "Same-chain contacts" : "Cross-chain contacts"}
         </span>
