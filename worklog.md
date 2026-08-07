@@ -5774,3 +5774,39 @@ Code Review Summary (round 9, no bugs found in these areas):
 - commands.ts toggle_component_visibility: creates per-chain components via MolScript (fixed in round 3)
 
 No remaining bugs found after 9 rounds of code review.
+
+---
+Task ID: fix-hydration-windows-path-apbs
+Agent: main
+Task: Fix 3 user-reported bugs: button-in-button hydration error, Windows path escaping, APBS not responding.
+
+Bug 1 — <button> inside <button> hydration error (viewer-tools-tabs.tsx):
+- The inter/intra chain toggle wrapped a <Switch> (renders <button>) inside
+  a <button> element — invalid HTML, causes React hydration error
+- Error: "In HTML, <button> cannot be a descendant of <button>"
+- Fix: changed the outer <button> to a <div>
+
+Bug 2 — Windows path escaping in Python recipes (cli-registry.ts):
+- On Windows, inputPath contains backslashes (C:\Users\...)
+- Inserted into Python string: load_structure("C:\Users\...")
+- Python interprets \U as Unicode escape → SyntaxError
+- Error: "unicodeescape codec can't decode bytes in position 2-3"
+- Fix: changed ALL 34 occurrences of "${inputPath}" to r"${inputPath}"
+  (Python raw strings don't process backslash escapes)
+
+Bug 3 — APBS not responding (cli-registry.ts):
+- The APBS recipe had input_pdb = "${inputPath}" (non-raw string)
+- Same Windows path SyntaxError prevented the recipe from running
+- Fix: included in the batch raw-string fix above
+
+Note: user also requested:
+1. Unify 3D viewer components (modal + full analysis) — larger architectural task
+2. Improve UI consistency (font sizes, style) — ongoing
+3. Fix full analysis measure window not showing — needs investigation
+These will be addressed in subsequent commits.
+
+E2E Test Results:
+- Modal: all tabs render ✅
+- Interact tab: no hydration errors ✅
+- No console errors ✅
+- all_interactions API: works ✅
