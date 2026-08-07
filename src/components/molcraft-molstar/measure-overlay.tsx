@@ -255,38 +255,57 @@ export function MeasureOverlay() {
       }
       const camera = plugin.canvas3d.camera;
       const pv = camera.projectionView;
-      const vp = camera.viewport;
-      if (!pv || !vp) {
+      if (!pv) {
         rafRef.current = requestAnimationFrame(draw);
         return;
       }
 
-      // The Molstar viewport (vp) has {x, y, width, height} in CSS pixels
-      // relative to the canvas3d's internal coordinate system. Our overlay
-      // canvas covers the entire MolstarViewer container. We need to account
-      // for any offset between the overlay canvas and the Molstar canvas3d.
+      // Use the MOLSTAR CANVAS's rect for the NDC-to-screen conversion.
+      // The projectionView matrix projects 3D world coords to NDC [-1, 1].
+      // We map NDC to the Molstar canvas's CSS pixel space, then adjust
+      // for the offset between the Molstar canvas and the overlay canvas.
       //
-      // The Molstar canvas3d container is a child of the MolstarViewer div.
-      // Its bounding rect gives us the offset we need to add to the projected
-      // coordinates so they align with the actual atoms on screen.
-      const molstarCanvas = plugin.canvas3d?.canvas?.parentElement ?? plugin.canvas3d?.canvas;
-      let molstarOffsetX = 0;
-      let molstarOffsetY = 0;
-      if (molstarCanvas && molstarCanvas !== canvas) {
-        try {
-          const molstarRect = molstarCanvas.getBoundingClientRect?.();
-          if (molstarRect) {
-            molstarOffsetX = molstarRect.left - rect.left;
-            molstarOffsetY = molstarRect.top - rect.top;
+      // ROOT CAUSE of previous misalignment: the Molstar canvas is typically
+      // 1-2px smaller than the overlay canvas (Molstar adds internal borders/
+      // padding). Using the overlay canvas's rect for projection caused a
+      // consistent ~2px offset from the actual atom positions.
+      //
+      // Fix: find the Molstar canvas element (it's the canvas without a
+      // className inside the .molstar-viewer container) and use its rect.
+      // The overlay canvas has class "pointer-events-none absolute inset-0 z-10".
+      let molstarCanvasEl: HTMLCanvasElement | null = null;
+      const molstarViewerDiv = document.querySelector('.molstar-viewer');
+      if (molstarViewerDiv) {
+        const allCanvases = molstarViewerDiv.querySelectorAll('canvas');
+        for (const c of allCanvases) {
+          // The Molstar WebGL canvas has no className (or empty className)
+          if (!c.className || c.className.trim() === '') {
+            molstarCanvasEl = c as HTMLCanvasElement;
+            break;
           }
-        } catch { /* ignore */ }
+        }
+        // Fallback: if no unclassed canvas found, use the first canvas
+        if (!molstarCanvasEl && allCanvases.length > 0) {
+          molstarCanvasEl = allCanvases[0] as HTMLCanvasElement;
+        }
       }
 
+      let projWidth = rect.width;
+      let projHeight = rect.height;
+      let offsetX = 0;
+      let offsetY = 0;
+      if (molstarCanvasEl) {
+        const mRect = molstarCanvasEl.getBoundingClientRect();
+        projWidth = mRect.width;
+        projHeight = mRect.height;
+        offsetX = mRect.left - rect.left;
+        offsetY = mRect.top - rect.top;
+      }
       const viewport = {
-        width: vp.width,
-        height: vp.height,
-        x: (vp.x || 0) + molstarOffsetX,
-        y: (vp.y || 0) + molstarOffsetY,
+        width: projWidth,
+        height: projHeight,
+        x: offsetX,
+        y: offsetY,
       };
 
       // Draw completed measurements.
