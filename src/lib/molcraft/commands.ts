@@ -146,20 +146,35 @@ export async function executeCommand(
       }
 
       case "load_alphafold":
-        await viewer.loadAlphaFoldDb(cmd.uniprotId);
-        return { ok: true, detail: `Loaded AlphaFold ${cmd.uniprotId}` };
+        try {
+          await viewer.loadAlphaFoldDb(cmd.uniprotId);
+          return { ok: true, detail: `Loaded AlphaFold ${cmd.uniprotId}` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, detail: `Failed to load AlphaFold ${cmd.uniprotId}: ${msg}` };
+        }
 
       case "load_emdb":
-        await viewer.loadEmdb(cmd.emdbId, { detail: cmd.detail ?? 3 });
-        return { ok: true, detail: `Loaded EMDB ${cmd.emdbId}` };
+        try {
+          await viewer.loadEmdb(cmd.emdbId, { detail: cmd.detail ?? 3 });
+          return { ok: true, detail: `Loaded EMDB ${cmd.emdbId}` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, detail: `Failed to load EMDB ${cmd.emdbId}: ${msg}` };
+        }
 
       case "load_structure_url":
-        await viewer.loadStructureFromUrl(
-          cmd.url,
-          cmd.format ?? "mmcif",
-          cmd.isBinary ?? false
-        );
-        return { ok: true, detail: `Loaded structure from ${cmd.url}` };
+        try {
+          await viewer.loadStructureFromUrl(
+            cmd.url,
+            cmd.format ?? "mmcif",
+            cmd.isBinary ?? false
+          );
+          return { ok: true, detail: `Loaded structure from ${cmd.url}` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, detail: `Failed to load from URL: ${msg}` };
+        }
 
       case "load_structure_data": {
         // Load a structure from raw text (PDB or mmCIF). Used by the
