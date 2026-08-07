@@ -5741,3 +5741,36 @@ Code Review Summary (round 8, no bugs found in these areas):
 - molstar-viewer: viewer disposed on cleanup, store viewer cleared (guarded)
 
 No remaining bugs found after 8 rounds of code review.
+
+---
+Task ID: 3d-code-review-round-9
+Agent: main
+Task: Deep code review round 9, focus on measure.ts + commands.ts edge cases.
+
+Bugs Found + Fixed:
+
+Bug 1 — load_alphafold/load_emdb/load_structure_url lack try/catch (commands.ts):
+- These commands awaited the viewer method without catching errors
+- If the API call failed (network error, invalid ID), the error propagated unhandled
+- Fix: wrapped each in try/catch, returns {ok:false, detail:'Failed to load...'}
+
+E2E Test Results:
+- Modal: all 10 tabs + toolbar + viewport controls ✅
+- all_interactions API: 272 contacts ✅
+- No console errors ✅
+
+Code Review Summary (round 9, no bugs found in these areas):
+- measure.ts extractAtomInfoFromLoci: handles all loci shapes (getCenter + getFirstLocation fallbacks)
+- measure.ts disableFocusBehaviors: snapshots + restores all props (clickCenterFocus, clickFocus, hoverHighlight)
+- measure.ts showAtomsForInteraction: adds ball-and-stick with tag, cleans up on exit
+- measure.ts clearAllMeasurementsAndFocus: clears measurements + highlights + focus + sidechains
+- measure.ts clearInteractionState: clears sidechains + interaction reps + highlights
+- measure.ts clearSidechainComponents: uses module-level array (safe because only 1 viewer active)
+- commands.ts set_representation: uses applyPreset (Molstar handles invalid presets gracefully)
+- commands.ts set_color_theme: uses updateRepresentationsTheme (Molstar handles invalid themes)
+- commands.ts set_granularity: uses setProps (Molstar handles invalid values)
+- commands.ts toggle_spin/toggle_rock: uses setTrackballAnimate helper
+- commands.ts focus_chain/focus_ligand: use lociFromChain/lociFromResidue with fallbacks
+- commands.ts toggle_component_visibility: creates per-chain components via MolScript (fixed in round 3)
+
+No remaining bugs found after 9 rounds of code review.
