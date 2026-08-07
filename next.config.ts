@@ -46,6 +46,22 @@ const nextConfig: NextConfig = {
       'tailwind-merge',
     ],
   },
+  // File watcher options — prevents HMR from triggering when the SQLite DB
+  // file (db/custom.db) is written to by API routes (e.g. run center jobs,
+  // PDB weekly fetch, seed-demo). Without this, every DB write triggers a
+  // full page reload in dev mode.
+  watchOptions: {
+    ignored: [
+      '**/db/**',
+      '**/dev.log',
+      '**/dev.out.log',
+      '**/.hermes/**',
+      '**/tool-results/**',
+      '**/wiki/**',
+      '**/download/**',
+      '**/upload/**',
+    ],
+  },
   // Webpack config — used when `next dev --webpack` or `next build` is run.
   // We keep webpack (not Turbopack) because the project relies on
   // serverExternalPackages + snapshot tuning that webpack supports natively.
@@ -94,9 +110,9 @@ const nextConfig: NextConfig = {
       config.snapshot = config.snapshot || {};
       config.snapshot.managedPaths = (config.snapshot.managedPaths || []).concat(ignored);
       config.snapshot.immutablePaths = (config.snapshot.immutablePaths || []).concat(ignored);
-      // Note: watchOptions.ignored is intentionally NOT set — Next.js freezes
-      // the watchOptions object in 16.x. snapshot.managedPaths above achieves
-      // the same file-watcher isolation without the readonly assignment error.
+      // Note: watchOptions.ignored is now set at the top level (see above).
+      // Previously Next.js 16 froze the watchOptions object, but top-level
+      // watchOptions.ignored now works correctly in 16.x for non-route files.
     }
     return config;
   },
