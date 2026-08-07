@@ -5810,3 +5810,44 @@ E2E Test Results:
 - Interact tab: no hydration errors ✅
 - No console errors ✅
 - all_interactions API: works ✅
+
+---
+Task ID: windows-path-escaping-complete
+Agent: main
+Task: Complete scan for Windows path escaping issues + real task E2E testing.
+
+Complete Cross-Platform Path Fix:
+
+Round 1 (previous commit): Fixed 34 occurrences of "${inputPath}" → r"${inputPath}"
+
+Round 2 (this commit): Found and fixed 5 additional issues:
+1. path2 = "${secondPath}" → r"${secondPath}" (raw string for second structure path)
+2. path.rsplit("/", 1) → os.path.basename() (cross-platform filename extraction)
+3. ENV_PATH.split(':') → split(PATH_SEP) with process.platform check
+   (Windows uses ';' as PATH separator, Unix uses ':')
+   Applied to: cli-registry.ts + run/route.ts
+4. "which" command → WHICH_CMD ("where" on Windows, "which" on Unix)
+   Applied to: cli-registry.ts probeOne function
+5. "python3" binary → process.platform === 'win32' ? 'python' : 'python3'
+   Applied to: run/route.ts execFile + cli-registry.ts CLI adapter bin names (3 adapters)
+
+Real Task E2E Test Results (on Linux sandbox, verifying fixes don't break Linux):
+- all_interactions (1CBS A↔A): 272 contacts ✅
+- hbonds (1CBS A↔A): 593 ✅
+- salt_bridges (1CBS A↔A): 48 ✅
+- hydrophobic_contacts (1CBS A↔A): 1432 contacts, 100 residue pairs ✅
+- ramachandran (1CBS): 135 residues ✅
+- disulfide_bonds (1CBS): ok ✅
+- Modal: all 10 tabs + toolbar + viewport controls ✅
+- Interact tab: no hydration errors ✅
+- No console errors ✅
+
+Summary of ALL cross-platform fixes:
+- 35 Python raw string paths (34 inputPath + 1 secondPath)
+- 1 os.path.basename() replacement (was rsplit("/", 1))
+- 2 PATH separator fixes (cli-registry + run/route)
+- 2 "which" → WHICH_CMD replacements (cli-registry)
+- 3 "python3" → platform-aware binary name (cli-registry adapters)
+- 1 "python3" → platform-aware binary name (run/route execFile)
+
+No remaining Windows path escaping issues found.
