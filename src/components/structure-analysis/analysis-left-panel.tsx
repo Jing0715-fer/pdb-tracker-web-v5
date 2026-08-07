@@ -48,6 +48,7 @@ import {
   CornerDownLeft,
   Triangle,
   Download,
+  Tag,
   FileJson,
   FileSpreadsheet,
 } from "lucide-react";
@@ -109,7 +110,7 @@ import { ApbsSurfaceChart } from "@/components/charts/apbs-surface-chart";
 import { ScreeningChart } from "@/components/charts/screening-chart";
 import { PocketDetectionChart } from "@/components/charts/pocket-detection-chart";
 
-type TabId = "structures" | "analysis";
+type TabId = "structures" | "measure" | "analysis";
 
 // Chart ID to label mapping (for preset display)
 const ALL_CHART_LABELS: Record<string, string> = {
@@ -170,10 +171,17 @@ export function AnalysisLeftPanel() {
           <Layers className="h-3 w-3" />
           Structures
           {structures.length > 0 && (
-            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px]">
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[10px]">
               {structures.length}
             </Badge>
           )}
+        </button>
+        <button
+          className={`sa-tab-btn ${tab === "measure" ? "sa-tab-active" : ""}`}
+          onClick={() => setTab("measure")}
+        >
+          <Ruler className="h-3 w-3" />
+          Measure
         </button>
         <button
           className={`sa-tab-btn ${tab === "analysis" ? "sa-tab-active" : ""}`}
@@ -186,6 +194,7 @@ export function AnalysisLeftPanel() {
 
       <ScrollArea className="sa-scroll flex-1 min-h-0">
         {tab === "structures" && <StructuresTab />}
+        {tab === "measure" && <MeasureTab />}
         {tab === "analysis" && <AnalysisTab />}
       </ScrollArea>
     </div>
@@ -310,7 +319,7 @@ function StructuresTab() {
                 {s.label}
               </span>
               {s.metadata?.method && (
-                <Badge variant="outline" className="px-1 py-0 text-[8px]">
+                <Badge variant="outline" className="px-1 py-0 text-[10px]">
                   {s.metadata.method}
                 </Badge>
               )}
@@ -344,7 +353,7 @@ function StructuresTab() {
             {isOpen && (
               <div className="mt-1 space-y-2 rounded-md border border-claude-border bg-claude-bg p-2">
                 {s.metadata && (
-                  <div className="grid grid-cols-2 gap-1 text-[9px]">
+                  <div className="grid grid-cols-2 gap-1 text-[11px]">
                     {s.metadata.title && (
                       <div className="col-span-2 truncate text-claude-text-secondary">
                         <span className="font-medium">Title:</span>{" "}
@@ -379,7 +388,7 @@ function StructuresTab() {
                 )}
                 {/* Representation */}
                 <div>
-                  <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+                  <Label className="mb-1 block text-[11px] text-claude-text-secondary">
                     Representation
                   </Label>
                   <Select
@@ -410,7 +419,7 @@ function StructuresTab() {
                 </div>
                 {/* Color scheme */}
                 <div>
-                  <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+                  <Label className="mb-1 block text-[11px] text-claude-text-secondary">
                     Color scheme
                   </Label>
                   <Select
@@ -447,7 +456,7 @@ function StructuresTab() {
                   </Select>
                 </div>
                 {s.alignRmsd != null && (
-                  <div className="rounded bg-claude-accent-light px-1.5 py-1 text-[9px] text-claude-accent">
+                  <div className="rounded bg-claude-accent-light px-1.5 py-1 text-[11px] text-claude-accent">
                     Aligned: RMSD {s.alignRmsd.toFixed(2)} Å
                     {s.alignTmScore != null &&
                       ` · TM ${s.alignTmScore.toFixed(3)}`}
@@ -597,7 +606,7 @@ function MeasureTab() {
           <MousePointerClick className="h-3 w-3" />
           Click-to-Pick Mode
         </div>
-        <p className="text-[9px] text-claude-text-muted leading-relaxed">
+        <p className="text-[11px] text-claude-text-muted leading-relaxed">
           Enable a mode below, then click atoms in the 3D viewer to measure.
         </p>
         <div className="grid grid-cols-2 gap-1">
@@ -631,9 +640,37 @@ function MeasureTab() {
             <Triangle className="h-3 w-3" />
             Angle
           </Button>
+          <Button
+            size="sm"
+            variant={measureMode === "dihedral" ? "default" : "outline"}
+            className={`h-7 text-[10px] gap-1 transition-all duration-150 ${
+              measureMode === "dihedral"
+                ? "bg-claude-accent text-white border-claude-accent shadow-sm shadow-claude-accent/30"
+                : "hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
+            }`}
+            disabled={!viewer}
+            onClick={() => setMeasureMode(measureMode === "dihedral" ? "off" : "dihedral")}
+          >
+            <Sigma className="h-3 w-3" />
+            Dihedral
+          </Button>
+          <Button
+            size="sm"
+            variant={measureMode === "label" ? "default" : "outline"}
+            className={`h-7 text-[10px] gap-1 transition-all duration-150 ${
+              measureMode === "label"
+                ? "bg-claude-accent text-white border-claude-accent shadow-sm shadow-claude-accent/30"
+                : "hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
+            }`}
+            disabled={!viewer}
+            onClick={() => setMeasureMode(measureMode === "label" ? "off" : "label")}
+          >
+            <Tag className="h-3 w-3" />
+            Label
+          </Button>
         </div>
         {isPicking && (
-          <div className="flex items-center gap-1.5 text-[9px] text-claude-accent bg-claude-accent-light/30 rounded px-1.5 py-1 border border-claude-accent/20">
+          <div className="flex items-center gap-1.5 text-[11px] text-claude-accent bg-claude-accent-light/30 rounded px-1.5 py-1 border border-claude-accent/20">
             <span className="relative flex h-1.5 w-1.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-claude-accent opacity-75" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-claude-accent" />
@@ -644,9 +681,9 @@ function MeasureTab() {
             <span className="font-mono font-bold text-claude-accent bg-claude-accent-light/50 rounded px-1 py-0.5 text-[10px]">
               {measureProgress.picked}/{measureProgress.needed}
             </span>
-            <span className="text-claude-text-muted text-[9px]">
+            <span className="text-claude-text-muted text-[11px]">
               {measureProgress.picked === 0
-                ? `click ${measureProgress.needed === 2 ? "2 atoms" : "3 atoms"}`
+                ? `click ${measureProgress.needed} atom${measureProgress.needed > 1 ? "s" : ""}`
                 : measureProgress.picked < measureProgress.needed
                 ? `${measureProgress.needed - measureProgress.picked} more…`
                 : "done"}
@@ -666,7 +703,7 @@ function MeasureTab() {
 
       {/* ── Manual residue input ── */}
       <div className="rounded-md border border-claude-border p-2 space-y-1">
-        <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-secondary">
           Manual Distance
         </div>
         <ResidueInput label="Atom A" value={a} onChange={setA} />
@@ -685,7 +722,7 @@ function MeasureTab() {
 
       {/* ── Manual angle input ── */}
       <div className="rounded-md border border-claude-border p-2 space-y-1">
-        <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-secondary">
           Manual Angle
         </div>
         <ResidueInput label="Atom A" value={a} onChange={setA} />
@@ -705,7 +742,7 @@ function MeasureTab() {
 
       {/* ── Manual dihedral input ── */}
       <div className="rounded-md border border-claude-border p-2 space-y-1">
-        <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-secondary">
           Manual Dihedral
         </div>
         <ResidueInput label="Atom A" value={a} onChange={setA} />
@@ -739,13 +776,13 @@ function MeasureTab() {
       {measurements.length > 0 && (
         <div className="mt-2 rounded-md border border-claude-border bg-claude-bg p-1.5">
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-secondary">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-secondary">
               History ({measurements.length})
             </span>
             <div className="flex items-center gap-0.5">
               <button
                 onClick={handleExportCSV}
-                className="flex items-center gap-0.5 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors px-1 py-0.5 rounded hover:bg-claude-accent-light/40"
+                className="flex items-center gap-0.5 text-[11px] text-claude-text-muted hover:text-claude-accent transition-colors px-1 py-0.5 rounded hover:bg-claude-accent-light/40"
                 title="Export as CSV"
               >
                 <FileSpreadsheet className="h-2.5 w-2.5" />
@@ -753,7 +790,7 @@ function MeasureTab() {
               </button>
               <button
                 onClick={handleExportJSON}
-                className="flex items-center gap-0.5 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors px-1 py-0.5 rounded hover:bg-claude-accent-light/40"
+                className="flex items-center gap-0.5 text-[11px] text-claude-text-muted hover:text-claude-accent transition-colors px-1 py-0.5 rounded hover:bg-claude-accent-light/40"
                 title="Export as JSON"
               >
                 <FileJson className="h-2.5 w-2.5" />
@@ -762,7 +799,7 @@ function MeasureTab() {
               <div className="mx-0.5 h-3 w-px bg-claude-border" />
               <button
                 onClick={handleClearAll}
-                className="flex items-center gap-0.5 text-[9px] text-claude-text-muted hover:text-destructive transition-colors px-1 py-0.5 rounded hover:bg-destructive/10"
+                className="flex items-center gap-0.5 text-[11px] text-claude-text-muted hover:text-destructive transition-colors px-1 py-0.5 rounded hover:bg-destructive/10"
                 title="Clear all measurements"
               >
                 <Trash2 className="h-2.5 w-2.5" />
@@ -778,7 +815,7 @@ function MeasureTab() {
                   animate={{ opacity: 1, height: "auto", x: 0 }}
                   exit={{ opacity: 0, height: 0, x: 8 }}
                   transition={{ duration: 0.18, ease: "easeOut" }}
-                  className="flex items-center gap-1 rounded px-1 py-0.5 text-[9px] hover:bg-claude-accent-light/50 group transition-colors"
+                  className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] hover:bg-claude-accent-light/50 group transition-colors"
                 >
                   <span className="font-mono text-claude-text">{m.label}</span>
                   <span className="ml-auto font-mono text-claude-accent font-semibold">{m.detail}</span>
@@ -800,7 +837,7 @@ function MeasureTab() {
         <div className="mt-2 rounded-md border border-dashed border-claude-border/60 bg-claude-bg/30 p-3 text-center">
           <Ruler className="mx-auto h-4 w-4 text-claude-text-muted/50 mb-1" />
           <p className="text-[10px] text-claude-text-muted">No measurements yet</p>
-          <p className="text-[9px] text-claude-text-muted/70 mt-0.5">
+          <p className="text-[11px] text-claude-text-muted/70 mt-0.5">
             Enable a mode above and click atoms in the 3D viewer
           </p>
         </div>
@@ -888,7 +925,7 @@ function ActiveStructureSelector() {
   }
   return (
     <div className="rounded-md border border-claude-border bg-claude-bg p-1.5">
-      <Label className="mb-1 block text-[9px] text-claude-text-secondary">
+      <Label className="mb-1 block text-[11px] text-claude-text-secondary">
         Analysis target
       </Label>
       <div className="flex flex-wrap gap-1">
@@ -1175,12 +1212,12 @@ function InteractionVizCard() {
         <Zap className="h-3.5 w-3.5 text-claude-accent" />
         Interaction List
         {ligandCompId && (
-          <span className="text-[9px] text-claude-text-muted font-normal ml-0.5">
+          <span className="text-[11px] text-claude-text-muted font-normal ml-0.5">
             ({ligandCompId})
           </span>
         )}
         {contacts.length > 0 && (
-          <Badge variant="secondary" className="ml-auto text-[9px] h-4">
+          <Badge variant="secondary" className="ml-auto text-[11px] h-4">
             {filtered.length}/{contacts.length}
           </Badge>
         )}
@@ -1226,7 +1263,7 @@ function InteractionVizCard() {
                 <button
                   key={type}
                   onClick={() => setFilter(filter === type ? "" : type)}
-                  className={`flex items-center gap-0.5 text-[8px] px-1 py-0.5 rounded border transition-all ${
+                  className={`flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded border transition-all ${
                     filter === type
                       ? "bg-claude-accent text-white border-claude-accent"
                       : "bg-claude-bg/50 text-claude-text-muted border-claude-border/40 hover:bg-claude-accent-light/30"
@@ -1302,26 +1339,26 @@ function InteractionVizCard() {
                 onClick={() => handleFocusContact(c)}
                 onMouseEnter={() => handleHoverContact(c)}
                 onMouseLeave={() => handleHoverLeave()}
-                className="w-full flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] hover:bg-claude-accent-light/40 hover:shadow-sm transition-all group text-left border border-transparent hover:border-claude-accent/20"
+                className="w-full flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] hover:bg-claude-accent-light/40 hover:shadow-sm transition-all group text-left border border-transparent hover:border-claude-accent/20"
                 title={`Click to focus: ${c.residue1} (${c.chain1}) ↔ ${c.residue2} (${c.chain2}) — ${c.distance > 0 ? c.distance.toFixed(1) + 'Å' : 'no distance'}`}
               >
                 <span className="font-mono text-claude-text font-semibold group-hover:text-claude-accent transition-colors">
                   {c.residue2}
                 </span>
-                <span className="text-claude-text-muted text-[8px] group-hover:text-claude-accent/70">
+                <span className="text-claude-text-muted text-[10px] group-hover:text-claude-accent/70">
                   {c.chain2}
                 </span>
-                <span className="text-claude-accent/60 mx-0.5 text-[8px]">←</span>
-                <span className="font-mono text-claude-text-muted text-[8px]">
+                <span className="text-claude-accent/60 mx-0.5 text-[10px]">←</span>
+                <span className="font-mono text-claude-text-muted text-[10px]">
                   {c.residue1}
                 </span>
                 <span className="ml-auto flex items-center gap-1">
                   {c.distance > 0 && (
-                    <span className="font-mono text-claude-text-secondary text-[9px] tabular-nums">
+                    <span className="font-mono text-claude-text-secondary text-[11px] tabular-nums">
                       {c.distance.toFixed(1)}Å
                     </span>
                   )}
-                  <span className={`text-[8px] h-3.5 px-1 rounded border capitalize font-medium ${colorClass}`}>
+                  <span className={`text-[10px] h-3.5 px-1 rounded border capitalize font-medium ${colorClass}`}>
                     {c.type.replace(/_/g, " ").substring(0, 8)}
                   </span>
                 </span>
@@ -1329,7 +1366,7 @@ function InteractionVizCard() {
             );
           })}
           {filtered.length > 100 && (
-            <div className="text-center text-[9px] text-claude-text-muted py-1 border-t border-claude-border/30 mt-1">
+            <div className="text-center text-[11px] text-claude-text-muted py-1 border-t border-claude-border/30 mt-1">
               +{filtered.length - 100} more (use filter to narrow)
             </div>
           )}
@@ -1341,7 +1378,7 @@ function InteractionVizCard() {
         <Button
           size="sm"
           variant="outline"
-          className="w-full h-6 mt-1.5 text-[9px] gap-1"
+          className="w-full h-6 mt-1.5 text-[11px] gap-1"
           onClick={handleClear}
           disabled={!viewer}
         >
@@ -1604,7 +1641,7 @@ function AnalysisChartsGrid() {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <Label className="text-[9px] text-claude-text-secondary shrink-0">
+        <Label className="text-[11px] text-claude-text-secondary shrink-0">
           Charts
         </Label>
         <div className="relative flex-1">
@@ -1616,7 +1653,7 @@ function AnalysisChartsGrid() {
             className="h-6 pl-6 text-[10px]"
           />
         </div>
-        <Badge variant="outline" className="shrink-0 text-[9px]">
+        <Badge variant="outline" className="shrink-0 text-[11px]">
           {totalCharts}
         </Badge>
       </div>
@@ -1661,7 +1698,7 @@ function AnalysisChartsGrid() {
           <div className="sa-cat-header w-full text-claude-accent">
             <Star className="h-3 w-3 fill-claude-accent" />
             Favorites
-            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px] font-normal">
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[10px] font-normal">
               {favoriteCharts.length}
             </Badge>
           </div>
@@ -1691,7 +1728,7 @@ function AnalysisChartsGrid() {
           <div className="sa-cat-header w-full text-claude-text-secondary">
             <Clock className="h-3 w-3" />
             Recent
-            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[8px] font-normal">
+            <Badge variant="outline" className="ml-0.5 px-1 py-0 text-[10px] font-normal">
               {recentCharts.length}
             </Badge>
           </div>
@@ -1728,7 +1765,7 @@ function AnalysisChartsGrid() {
               {cat.title}
               <Badge
                 variant="outline"
-                className="ml-0.5 px-1 py-0 text-[8px] font-normal"
+                className="ml-0.5 px-1 py-0 text-[10px] font-normal"
               >
                 {cat.charts.length}
               </Badge>
@@ -1792,7 +1829,7 @@ function AnalysisChartsGrid() {
       {/* Active chart indicator — the chart result renders in the RIGHT panel
           (Results tab). Here we just show a small hint when a chart is active. */}
       {activeAnalysisChart && (
-        <div className="mt-2 rounded-md border border-claude-accent/30 bg-claude-accent-light/30 px-2 py-1.5 text-[9px] text-claude-accent flex items-center gap-1.5">
+        <div className="mt-2 rounded-md border border-claude-accent/30 bg-claude-accent-light/30 px-2 py-1.5 text-[11px] text-claude-accent flex items-center gap-1.5">
           <ChevronRight className="h-3 w-3 animate-pulse" />
           <span className="font-medium">
             {ALL_CHART_LABELS[activeAnalysisChart] ?? activeAnalysisChart}

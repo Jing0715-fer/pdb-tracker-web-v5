@@ -716,9 +716,9 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       </div>
       {/* P4: Inter-chain / Intra-chain toggle */}
       <div className="flex items-center gap-2 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-2 py-1.5">
-        <Label className="text-[9px] text-claude-text-muted shrink-0">Mode</Label>
+        <Label className="text-[11px] text-claude-text-muted shrink-0">Mode</Label>
         <div
-          className="flex items-center gap-1 text-[9px] font-medium"
+          className="flex items-center gap-1 text-[11px] font-medium"
           title="Toggle inter-chain / intra-chain mode"
         >
           <span className={`px-1.5 py-0.5 rounded ${analysisChain1 !== analysisChain2 ? "bg-sky-500/20 text-sky-600" : "text-claude-text-muted"}`}>Inter</span>
@@ -736,12 +736,12 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
           />
           <span className={`px-1.5 py-0.5 rounded ${analysisChain1 === analysisChain2 ? "bg-claude-accent/20 text-claude-accent" : "text-claude-text-muted"}`}>Intra</span>
         </div>
-        <span className="ml-auto text-[8px] text-claude-text-muted/70">
+        <span className="ml-auto text-[10px] text-claude-text-muted/70">
           {analysisChain1 === analysisChain2 ? "Same-chain contacts" : "Cross-chain contacts"}
         </span>
       </div>
       {analysisChain1 === analysisChain2 && (
-        <div className="rounded-md bg-claude-accent-light/30 border border-claude-accent/20 px-2 py-1 text-[9px] text-claude-text-muted">
+        <div className="rounded-md bg-claude-accent-light/30 border border-claude-accent/20 px-2 py-1 text-[11px] text-claude-text-muted">
           Intra-chain mode (chain {analysisChain1} ↔ itself). All recipes now support same-chain analysis.
         </div>
       )}
@@ -811,7 +811,7 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
             {analysisRows.length > 0 && (
               <button
                 onClick={exportRowsCSV}
-                className="flex items-center gap-1 text-[9px] text-claude-accent hover:text-claude-accent-hover transition-colors"
+                className="flex items-center gap-1 text-[11px] text-claude-accent hover:text-claude-accent-hover transition-colors"
                 title="Copy as CSV"
               >
                 <Copy className="h-2.5 w-2.5" />
@@ -828,13 +828,13 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
       {analysisRows.length > 0 && (
         <div className="rounded-lg border border-claude-border-light/60 dark:border-[#3d3832]/60 overflow-hidden">
           <div className="px-2 py-1 bg-claude-bg/60 dark:bg-[#1a1917]/60 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 flex items-center justify-between">
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-muted">
               Atom-level contacts ({analysisRows.length})
             </span>
-            <span className="text-[8px] text-claude-text-muted/70">click header to sort</span>
+            <span className="text-[10px] text-claude-text-muted/70">click header to sort</span>
           </div>
           <div className="max-h-48 overflow-y-auto sa-scroll">
-            <table className="w-full text-[9px] font-mono">
+            <table className="w-full text-[11px] font-mono">
               <thead className="sticky top-0 bg-claude-surface dark:bg-[#242220] z-10">
                 <tr className="text-claude-text-muted border-b border-claude-border-light/40 dark:border-[#3d3832]/40">
                   <th
@@ -895,7 +895,7 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
               </tbody>
             </table>
             {sortedRows.length > 100 && (
-              <div className="px-2 py-1 text-[8px] text-center text-claude-text-muted bg-claude-bg/40 dark:bg-[#1a1917]/40">
+              <div className="px-2 py-1 text-[10px] text-center text-claude-text-muted bg-claude-bg/40 dark:bg-[#1a1917]/40">
                 Showing first 100 of {sortedRows.length} — use CSV export for full data
               </div>
             )}
@@ -943,20 +943,20 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
         return (
           <div className="rounded-lg border border-claude-border-light/60 dark:border-[#3d3832]/60 overflow-hidden">
             <div className="px-2 py-1 bg-claude-bg/60 dark:bg-[#1a1917]/60 border-b border-claude-border-light/40 dark:border-[#3d3832]/40">
-              <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-muted">
                 Contacts Summary
               </span>
             </div>
             <div className="p-2.5 space-y-2.5">
               {/* Type histogram */}
               <div>
-                <div className="text-[9px] text-claude-text-muted mb-1">By type</div>
+                <div className="text-[11px] text-claude-text-muted mb-1">By type</div>
                 <div className="space-y-1">
                   {Object.entries(typeCounts)
                     .sort(([, a], [, b]) => b - a)
                     .map(([type, count]) => (
                       <div key={type} className="flex items-center gap-1.5">
-                        <span className="text-[9px] font-mono text-claude-text w-16 flex-shrink-0 truncate">
+                        <span className="text-[11px] font-mono text-claude-text w-16 flex-shrink-0 truncate">
                           {typeLabels[type] || type}
                         </span>
                         <div className="flex-1 h-3 bg-claude-bg/60 dark:bg-[#1a1917]/60 rounded-sm overflow-hidden border border-claude-border-light/30 dark:border-[#3d3832]/30">
@@ -968,10 +968,10 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
                             }}
                           />
                         </div>
-                        <span className="text-[9px] font-mono text-claude-text-muted w-6 text-right">
+                        <span className="text-[11px] font-mono text-claude-text-muted w-6 text-right">
                           {count}
                         </span>
-                        <span className="text-[8px] text-claude-text-muted/70 w-8 text-right">
+                        <span className="text-[10px] text-claude-text-muted/70 w-8 text-right">
                           {((count / total) * 100).toFixed(0)}%
                         </span>
                       </div>
@@ -983,8 +983,8 @@ export function InteractionsTab({ pdbId }: { pdbId: string }) {
               {distances.length > 0 && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[9px] text-claude-text-muted">Distance distribution (Å)</span>
-                    <span className="text-[8px] text-claude-text-muted/70 font-mono">
+                    <span className="text-[11px] text-claude-text-muted">Distance distribution (Å)</span>
+                    <span className="text-[10px] text-claude-text-muted/70 font-mono">
                       n={distances.length} · avg={avgDist.toFixed(2)} · {minDist.toFixed(2)}–{maxDistVal.toFixed(2)}
                     </span>
                   </div>
@@ -1617,7 +1617,7 @@ export function UploadTab() {
       {recentFiles.length > 0 && (
         <div className="rounded-lg border border-claude-border-light/60 dark:border-[#3d3832]/60 overflow-hidden">
           <div className="px-2 py-1 bg-claude-bg/60 dark:bg-[#1a1917]/60 border-b border-claude-border-light/40 dark:border-[#3d3832]/40">
-            <span className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-claude-text-muted">
               Recently loaded ({recentFiles.length})
             </span>
           </div>
@@ -1626,10 +1626,10 @@ export function UploadTab() {
               <div key={i} className="flex items-center gap-1.5 px-2 py-1 text-[10px] hover:bg-claude-accent-light/20 border-b border-claude-border-light/20 dark:border-[#3d3832]/20 last:border-0">
                 <FileBox className="h-3 w-3 text-claude-accent flex-shrink-0" />
                 <span className="font-mono text-claude-text truncate flex-1" title={f.name}>{f.name}</span>
-                <Badge variant="outline" className="h-4 px-1 text-[8px] font-mono bg-claude-accent-light text-claude-accent border-claude-accent/30">
+                <Badge variant="outline" className="h-4 px-1 text-[10px] font-mono bg-claude-accent-light text-claude-accent border-claude-accent/30">
                   {f.format}
                 </Badge>
-                <span className="text-[9px] text-claude-text-muted whitespace-nowrap">{formatSize(f.size)}</span>
+                <span className="text-[11px] text-claude-text-muted whitespace-nowrap">{formatSize(f.size)}</span>
               </div>
             ))}
           </div>
@@ -1876,7 +1876,7 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
                   <span className="text-sm shrink-0">{s.icon}</span>
                   <div className="min-w-0">
                     <div className="text-[10px] font-medium text-claude-text">{s.title}</div>
-                    <div className="text-[9px] text-claude-text-muted truncate">{s.prompt}</div>
+                    <div className="text-[11px] text-claude-text-muted truncate">{s.prompt}</div>
                   </div>
                 </button>
               ))}
@@ -1923,7 +1923,7 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
             {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
           </button>
         </div>
-        <div className="mt-1 text-[8px] text-claude-text-muted">
+        <div className="mt-1 text-[10px] text-claude-text-muted">
           Enter to send · Shift+Enter for newline
         </div>
       </div>

@@ -29,6 +29,7 @@ import { ShortcutHelpDialog } from "./shortcut-help-dialog";
 import { AnalysisTour } from "./analysis-tour";
 import { useAtomPicking } from "./use-atom-picking";
 import { MolstarViewer } from "@/components/molcraft-molstar/molstar-viewer";
+import { MeasureOverlay } from "@/components/molcraft-molstar/measure-overlay";
 import {
   useAppStore,
   selectActiveStructure,
@@ -235,6 +236,9 @@ export function StructureAnalysisView() {
     <div className={`sa-viewer absolute inset-0 ${viewerBgDark ? "dark-viewer" : ""} ${measureMode !== "off" ? "sa-picking-mode" : ""}`}>
       <div className="sa-viewer-backdrop" />
       <MolstarViewer className="absolute inset-0" />
+      {/* 2D canvas overlay — draws measurement lines/spheres/labels on
+          top of the 3D viewport. pointer-events:none so clicks pass through. */}
+      <MeasureOverlay />
       {/* Loading overlay — shown while the viewer initializes. */}
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
