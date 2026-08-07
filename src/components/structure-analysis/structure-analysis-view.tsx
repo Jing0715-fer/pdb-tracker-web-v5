@@ -19,7 +19,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Microscope, Activity, Box, Sparkles, FileText, Ruler, Triangle, Loader2 } from "lucide-react";
+import { Microscope, Activity, Box, Sparkles, FileText, Ruler, Triangle, Loader2, Sigma, Tag } from "lucide-react";
 import { AnalysisToolbar } from "./analysis-toolbar";
 import { AnalysisLeftPanel } from "./analysis-left-panel";
 import { AnalysisRightPanel } from "./analysis-right-panel";
@@ -657,12 +657,12 @@ function ViewerOverlay({
             </button>
           )}
         </div>
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           <button
             onClick={() =>
               setMeasureMode(measureMode === "distance" ? "off" : "distance")
             }
-            className={`flex-1 flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
+            className={`flex-1 min-w-[60px] flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
               measureMode === "distance"
                 ? "bg-claude-accent text-white shadow-sm shadow-claude-accent/30"
                 : "bg-claude-surface/80 text-claude-text-muted border border-claude-border/40 hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
@@ -676,7 +676,7 @@ function ViewerOverlay({
             onClick={() =>
               setMeasureMode(measureMode === "angle" ? "off" : "angle")
             }
-            className={`flex-1 flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
+            className={`flex-1 min-w-[60px] flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
               measureMode === "angle"
                 ? "bg-claude-accent text-white shadow-sm shadow-claude-accent/30"
                 : "bg-claude-surface/80 text-claude-text-muted border border-claude-border/40 hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
@@ -685,6 +685,34 @@ function ViewerOverlay({
           >
             <Triangle className="h-2.5 w-2.5" />
             Angle
+          </button>
+          <button
+            onClick={() =>
+              setMeasureMode(measureMode === "dihedral" ? "off" : "dihedral")
+            }
+            className={`flex-1 min-w-[60px] flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
+              measureMode === "dihedral"
+                ? "bg-claude-accent text-white shadow-sm shadow-claude-accent/30"
+                : "bg-claude-surface/80 text-claude-text-muted border border-claude-border/40 hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
+            }`}
+            title="Click-to-pick dihedral measurement (4 atoms)"
+          >
+            <Sigma className="h-2.5 w-2.5" />
+            Dihedral
+          </button>
+          <button
+            onClick={() =>
+              setMeasureMode(measureMode === "label" ? "off" : "label")
+            }
+            className={`flex-1 min-w-[60px] flex items-center justify-center gap-1 h-6 rounded text-[10px] font-medium transition-all ${
+              measureMode === "label"
+                ? "bg-claude-accent text-white shadow-sm shadow-claude-accent/30"
+                : "bg-claude-surface/80 text-claude-text-muted border border-claude-border/40 hover:border-claude-accent/50 hover:bg-claude-accent-light/20"
+            }`}
+            title="Click-to-pick label (1 atom)"
+          >
+            <Tag className="h-2.5 w-2.5" />
+            Label
           </button>
         </div>
         {measureMode !== "off" && (
@@ -699,7 +727,7 @@ function ViewerOverlay({
             </span>
             <span className="text-claude-text-muted text-[9px]">
               {measureProgress.picked === 0
-                ? `click ${measureProgress.needed === 2 ? "2 atoms" : "3 atoms"}`
+                ? `click ${measureProgress.needed} atom${measureProgress.needed > 1 ? "s" : ""}`
                 : measureProgress.picked < measureProgress.needed
                 ? `${measureProgress.needed - measureProgress.picked} more…`
                 : "done"}
