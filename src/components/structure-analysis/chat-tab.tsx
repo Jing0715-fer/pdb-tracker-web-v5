@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -104,6 +104,70 @@ const SUGGESTIONS = [
   },
 ];
 
+/**
+ * Improvement #5: Convert a command object to a human-readable description.
+ * Used in the command preview panel before execution.
+ */
+function describeCommand(cmd: LlmCommand): string {
+  switch (cmd.type) {
+    case "load_pdb": return `Load PDB ${cmd.id}`;
+    case "load_alphafold": return `Load AlphaFold ${cmd.uniprotId}`;
+    case "load_emdb": return `Load EMDB ${cmd.emdbId}`;
+    case "load_structure_url": return `Load structure from URL`;
+    case "load_structure_data": return `Load structure data`;
+    case "set_representation": return `Set representation: ${cmd.preset}`;
+    case "set_color_theme": return `Color by ${cmd.theme}`;
+    case "set_uniform_color": return `Set uniform color ${cmd.color}`;
+    case "focus_residue": return `Focus on residue ${cmd.chain || ""}${cmd.resno || ""}`;
+    case "focus_ligand": return `Focus on ligand ${cmd.compId}`;
+    case "focus_chain": return `Focus on chain ${cmd.chain}`;
+    case "focus_selection": return `Focus on selection`;
+    case "reset_camera": return `Reset camera`;
+    case "measure_distance": return `Measure distance`;
+    case "measure_angle": return `Measure angle`;
+    case "measure_dihedral": return `Measure dihedral`;
+    case "label_residue": return `Label residue`;
+    case "show_interactions": return `Show interactions`;
+    case "clear_measurements": return `Clear measurements`;
+    case "clear_interactions": return `Clear interactions`;
+    case "toggle_spin": return `Toggle spin`;
+    case "toggle_rock": return `Toggle rock`;
+    case "stop_animation": return `Stop animation`;
+    case "export_snapshot": return `Export snapshot`;
+    case "capture_snapshot": return `Capture snapshot${cmd.label ? ": " + cmd.label : ""}`;
+    case "select": return `Select`;
+    case "clear_selection": return `Clear selection`;
+    case "toggle_component_visibility": return `Toggle ${cmd.component} visibility`;
+    case "load_volume_url": return `Load volume`;
+    case "align_structures": return `Align structures`;
+    case "set_background": return `Set background ${cmd.color}`;
+    case "set_granularity": return `Set granularity: ${cmd.granularity}`;
+    case "analyze_metadata": return `Get metadata for ${cmd.id}`;
+    case "analyze_interface": return `Analyze interface (assembly ${cmd.assembly || 1})`;
+    case "analyze_cli_list": return `List available CLI tools`;
+    case "analyze_run": {
+      const p = cmd.params as Record<string, unknown> | undefined;
+      const chainInfo = p?.chain1 && p?.chain2 ? ` (${p.chain1}↔${p.chain2})` : "";
+      return `Run ${cmd.recipe}${chainInfo}`;
+    }
+    case "show_electrostatic_surface": return `Show electrostatic surface`;
+    case "show_druggable_pocket": return `Show druggable pocket (${cmd.ligandCompId})`;
+    case "run_virtual_screening": return `Run virtual screening (${cmd.fragmentSet || "druglike"})`;
+    case "detect_pockets": return `Detect pockets`;
+    default: return cmd.type || "unknown";
+  }
+}
+
+/** Improvement #2: Map an agentStep to a human-readable label + icon. */
+const STEP_LABELS: Record<string, { label: string; icon: typeof Brain }> = {
+  "thinking": { label: "Thinking…", icon: Brain },
+  "calling-llm": { label: "Calling LLM…", icon: Brain },
+  "parsing": { label: "Parsing response…", icon: Cog },
+  "executing": { label: "Executing commands…", icon: Terminal },
+  "done": { label: "Done", icon: Check },
+  "error": { label: "Error", icon: X },
+};
+
 export function ChatTab() {
   const [input, setInput] = useState("");
   const messages = useAppStore((s) => s.chatMessages);
@@ -121,6 +185,27 @@ export function ChatTab() {
   const sendingRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Improvement #3: Retry handler — re-sends the last user message.
+  const handleRetry = useCallback(
+    (retryPrompt: string) => {
+      if (!retryPrompt.trim() || sendingRef.current) return;
+      send(retryPrompt);
+    },
+    // send is defined below via useCallback; we use a ref to avoid stale closure
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  // Improvement #3: Listen for retry events from MessageBubble
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail) handleRetry(detail);
+    };
+    window.addEventListener(RETRY_EVENT, handler);
+    return () => window.removeEventListener(RETRY_EVENT, handler);
+  }, [handleRetry]);
 
   // Abort any in-flight SSE stream on unmount
   useEffect(() => {
@@ -200,6 +285,8 @@ export function ChatTab() {
         content: "",
         ts: Date.now(),
         pending: true,
+        agentStep: "thinking",
+        retryPrompt: trimmed, // Improvement #3: store the prompt for retry
       };
       addMessage(userMsg);
       addMessage(pendingMsg);
@@ -223,6 +310,13 @@ export function ChatTab() {
             updateMessage(pendingId, {
               content: `🔍 Round ${round + 1}: continuing analysis (${allCommands.length} commands executed, ${allAnalysisResults.length} results so far)…`,
               commands: allCommands,
+              pending: true,
+              agentStep: "calling-llm",
+            });
+          } else {
+            // Improvement #2: First round — show "Calling LLM…" step
+            updateMessage(pendingId, {
+              agentStep: "calling-llm",
               pending: true,
             });
           }
@@ -276,9 +370,12 @@ export function ChatTab() {
           }
 
           if (!res || !res.ok) {
+            // Improvement #3: Mark as error so the Retry button shows
             updateMessage(pendingId, {
               content: `❌ LLM call failed: ${lastErr || "unknown error"}`,
               pending: false,
+              agentStep: "error",
+              isError: true,
             });
             break;
           }
@@ -329,9 +426,12 @@ export function ChatTab() {
           }
 
           if (streamError) {
+            // Improvement #3: Mark as error so the Retry button shows
             updateMessage(pendingId, {
               content: `❌ ${streamError}`,
               pending: false,
+              agentStep: "error",
+              isError: true,
             });
             break;
           }
@@ -340,25 +440,15 @@ export function ChatTab() {
 
           // If the LLM requested commands, execute them
           if (commands.length > 0) {
-            // P3: Command preview — show what the agent is about to do
-            const cmdSummary = commands.map((c) => {
-              const cmd = c as LlmCommand;
-              if (cmd.type === "load_pdb") return `load ${cmd.id}`;
-              if (cmd.type === "load_alphafold") return `load AlphaFold ${cmd.uniprotId}`;
-              if (cmd.type === "focus_residue") return `focus ${cmd.chain}${cmd.resno}`;
-              if (cmd.type === "focus_chain") return `focus chain ${cmd.chain}`;
-              if (cmd.type === "focus_ligand") return `focus ligand ${cmd.compId}`;
-              if (cmd.type === "reset_camera") return "reset camera";
-              if (cmd.type === "set_representation") return `set ${cmd.preset}`;
-              if (cmd.type === "set_color_theme") return `color: ${cmd.theme}`;
-              if (cmd.type === "analyze_run") return `run ${cmd.recipe}`;
-              if (cmd.type === "analyze_metadata") return `metadata ${cmd.pdbId}`;
-              if (cmd.type === "measure_distance") return "measure distance";
-              if (cmd.type === "clear_measurements") return "⚠️ clear measurements";
-              if (cmd.type === "clear_interactions") return "⚠️ clear interactions";
-              if (cmd.type === "clear_selection") return "clear selection";
-              return cmd.type;
-            }).join(", ");
+            // Improvement #5: Command preview — show human-readable descriptions
+            // of each command before executing them.
+            const cmdSummary = commands.map((c) => describeCommand(c as LlmCommand)).join(", ");
+
+            // Improvement #2: Switch to "executing" step
+            updateMessage(pendingId, {
+              agentStep: "executing",
+              pending: true,
+            });
 
             // Check for destructive commands (require user confirmation)
             const DESTRUCTIVE_TYPES = ["clear_measurements", "clear_interactions", "clear_selection"];
@@ -387,11 +477,13 @@ export function ChatTab() {
                 break;
               }
             } else {
+              // Improvement #5: Show command preview with human-readable descriptions
               updateMessage(pendingId, {
-                content: `${reply || `⚡ Executing ${commands.length} command(s)…`}\n\n*Commands: ${cmdSummary}*`,
+                content: `${reply || `⚡ Executing ${commands.length} command(s)…`}`,
                 commands: [...allCommands, ...commands],
                 pending: true,
                 provider,
+                agentStep: "executing",
               });
             }
 
@@ -434,6 +526,8 @@ export function ChatTab() {
             commands: allCommands.length > 0 ? allCommands : undefined,
             pending: false,
             provider,
+            agentStep: "done",
+            isError: false,
           });
           break;
         }
@@ -444,11 +538,15 @@ export function ChatTab() {
             content: `⏹️ Stopped by user.`,
             commands: allCommands.length > 0 ? allCommands : undefined,
             pending: false,
+            agentStep: "done",
           });
         } else {
+          // Improvement #3: Mark as error so the Retry button shows
           updateMessage(pendingId, {
             content: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
             pending: false,
+            agentStep: "error",
+            isError: true,
           });
         }
       } finally {
@@ -648,31 +746,64 @@ export function ChatTab() {
 // ============================================================
 // Message bubble
 // ============================================================
+
+/** Improvement #3: Global event bus for retry — the MessageBubble dispatches a
+ *  custom event that the ChatTab listens for, avoiding the need to pass the
+ *  send callback through props or the store. */
+const RETRY_EVENT = "chat-retry";
+function dispatchRetry(prompt: string) {
+  window.dispatchEvent(new CustomEvent(RETRY_EVENT, { detail: prompt }));
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
+  // Improvement #3: Check if any message is currently pending (to disable retry)
+  const sending = useAppStore((s) => s.chatMessages.some((m) => m.pending));
+
+  // Improvement #2: Render the agent step indicator
+  const stepInfo = message.agentStep ? STEP_LABELS[message.agentStep] : null;
+  const showStepIndicator = !isUser && message.pending && stepInfo && message.agentStep !== "done";
+
   return (
     <div className={`flex gap-1.5 ${isUser ? "flex-row-reverse" : ""}`}>
       <div
         className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
           isUser
             ? "bg-claude-accent text-white"
+            : message.isError
+            ? "bg-destructive/20 text-destructive border border-destructive/30"
             : "bg-claude-accent-light text-claude-accent border border-claude-accent/30"
         }`}
       >
-        {isUser ? <User className="h-2.5 w-2.5" /> : <Bot className="h-2.5 w-2.5" />}
+        {isUser ? <User className="h-2.5 w-2.5" /> : message.isError ? <X className="h-2.5 w-2.5" /> : <Bot className="h-2.5 w-2.5" />}
       </div>
       <div
         className={`flex-1 min-w-0 rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed ${
           isUser
             ? "bg-claude-accent text-white"
+            : message.isError
+            ? "bg-destructive/5 dark:bg-destructive/10 border border-destructive/30 text-claude-text"
             : "bg-claude-bg dark:bg-[#1a1917] border border-claude-border-light/40 dark:border-[#3d3832]/40 text-claude-text"
         }`}
       >
         {message.pending && !message.content ? (
+          // Improvement #2: Show step-specific loading indicator
           <div className="flex items-center gap-1.5 text-claude-text-muted">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span className="text-[10px]">Thinking…</span>
+            {stepInfo ? (
+              <>
+                <stepInfo.icon className={`h-3 w-3 ${message.agentStep === "calling-llm" || message.agentStep === "parsing" ? "animate-pulse" : "animate-spin"}`} />
+                <span className="text-[10px] font-medium">{stepInfo.label}</span>
+                {message.agentStep === "calling-llm" && (
+                  <span className="text-[8px] text-claude-text-muted/60 ml-1">(this can take 10-30s)</span>
+                )}
+              </>
+            ) : (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span className="text-[10px]">Thinking…</span>
+              </>
+            )}
           </div>
         ) : (
           <>
@@ -683,6 +814,13 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {message.content || ""}
                 </ReactMarkdown>
+              </div>
+            )}
+            {/* Improvement #2: Inline step indicator while content is streaming */}
+            {showStepIndicator && (
+              <div className="mt-1.5 flex items-center gap-1.5 border-t border-claude-border-light/30 dark:border-[#3d3832]/30 pt-1">
+                <stepInfo.icon className={`h-2.5 w-2.5 text-claude-accent ${message.agentStep === "executing" ? "animate-spin" : "animate-pulse"}`} />
+                <span className="text-[9px] font-medium text-claude-accent">{stepInfo.label}</span>
               </div>
             )}
             {/* P3: Confirmation buttons for destructive commands */}
@@ -705,36 +843,59 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 <span className="text-[8px] text-claude-text-muted ml-auto">Auto-skip in 60s</span>
               </div>
             )}
-            {/* Commands executed by the agent */}
+            {/* Improvement #5: Commands preview with human-readable descriptions */}
             {!isUser && message.commands && Array.isArray(message.commands) && message.commands.length > 0 && !message.needsConfirmation && (
               <div className="mt-1.5 border-t border-claude-border-light/30 dark:border-[#3d3832]/30 pt-1">
-                <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">
-                  Commands ({message.commands.length})
+                <div className="flex items-center gap-1 mb-0.5">
+                  <Terminal className="h-2.5 w-2.5 text-claude-accent" />
+                  <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted">
+                    Commands ({message.commands.length})
+                  </span>
                 </div>
-                <div className="flex flex-wrap gap-0.5">
+                <div className="space-y-0.5">
                   {message.commands.map((cmd, i) => {
-                    const c = cmd as { type?: string; error?: string };
+                    const c = cmd as { type?: string; error?: string; id?: string; recipe?: string; compId?: string; chain?: string; resno?: number; preset?: string; theme?: string };
+                    // Improvement #5: Use human-readable description
+                    const desc = describeCommand(c as unknown as LlmCommand);
                     return (
-                      <Badge
+                      <div
                         key={i}
-                        variant="outline"
-                        className={`text-[8px] font-mono h-3.5 px-1 ${
+                        className={`flex items-center gap-1 rounded px-1 py-0.5 text-[9px] ${
                           c.error
-                            ? "bg-destructive/10 text-destructive border-destructive/30"
-                            : "bg-green-500/10 text-green-600 border-green-500/30"
+                            ? "bg-destructive/10 text-destructive border border-destructive/20"
+                            : "bg-green-500/10 text-green-700 dark:text-green-500 border border-green-500/20"
                         }`}
-                        title={c.error || "executed"}
+                        title={c.error || "executed successfully"}
                       >
-                        {c.type || "unknown"}
-                        {c.error ? " ✗" : " ✓"}
-                      </Badge>
+                        <span className="font-mono text-[8px] opacity-60 shrink-0">{i + 1}.</span>
+                        <span className="truncate flex-1">{desc}</span>
+                        {c.error ? (
+                          <span className="text-[8px] shrink-0">✗</span>
+                        ) : (
+                          <span className="text-[8px] shrink-0">✓</span>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
               </div>
             )}
+            {/* Improvement #3: Retry button for error messages */}
+            {!isUser && message.isError && message.retryPrompt && !sending && (
+              <div className="mt-2 flex items-center gap-2 border-t border-destructive/20 pt-1.5">
+                <button
+                  onClick={() => dispatchRetry(message.retryPrompt!)}
+                  className="flex items-center gap-1 rounded-md bg-claude-accent text-white px-2 py-1 text-[10px] font-medium hover:bg-claude-accent-hover transition-colors"
+                  title="Re-send the last message"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Retry
+                </button>
+                <span className="text-[8px] text-claude-text-muted">Re-send the original request</span>
+              </div>
+            )}
             {/* Provider badge */}
-            {!isUser && message.provider && !message.needsConfirmation && (
+            {!isUser && message.provider && !message.needsConfirmation && !message.isError && (
               <div className="mt-1 text-[8px] text-claude-text-muted/70">
                 via {message.provider}
               </div>

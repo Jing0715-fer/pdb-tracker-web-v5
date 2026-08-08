@@ -20362,3 +20362,84 @@ tr.row-selected.table-row-hover-enhanced:hover td:first-child {
   border: 1px solid rgba(128, 128, 128, 0.2);
   padding: 2px 4px;
 }
+
+/* ── Improvement #2: Chat agent step progress bar ────────────────────── */
+.sa-agent-step-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(201, 100, 66, 0.08);
+  border: 1px solid rgba(201, 100, 66, 0.2);
+  font-size: 9px;
+  font-weight: 500;
+  color: #c96442;
+  animation: sa-step-pulse 1.5s ease-in-out infinite;
+}
+@keyframes sa-step-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+.sa-agent-step-bar.executing {
+  background: rgba(45, 143, 143, 0.08);
+  border-color: rgba(45, 143, 143, 0.2);
+  color: #2d8f8f;
+}
+
+/* ── Improvement #5: Command preview list styling ────────────────────── */
+.sa-command-preview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-family: monospace;
+  transition: background 0.15s;
+}
+.sa-command-preview:hover {
+  background: rgba(201, 100, 66, 0.1);
+}
+.sa-command-preview .cmd-number {
+  font-size: 8px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+.sa-command-preview .cmd-desc {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sa-command-preview .cmd-status {
+  flex-shrink: 0;
+  font-size: 8px;
+}
+
+/* ── Improvement #3: Error message retry button styling ──────────────── */
+.sa-error-bubble {
+  background: rgba(220, 38, 38, 0.05) !important;
+  border-color: rgba(220, 38, 38, 0.3) !important;
+}
+.sa-error-bubble .sa-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #c96442;
+  color: white;
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s;
+}
+.sa-error-bubble .sa-retry-btn:hover {
+  background: #b5563a;
+}
+.sa-error-bubble .sa-retry-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

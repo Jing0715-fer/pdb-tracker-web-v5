@@ -268,6 +268,13 @@ export interface ChatMessage {
   needsConfirmation?: boolean;
   /** P3: The user's confirmation response (true = proceed, false = skip). */
   confirmationResult?: boolean;
+  /** Improvement #2: Current agent step for the progress indicator.
+   *  One of: "thinking" | "calling-llm" | "parsing" | "executing" | "done" | "error" */
+  agentStep?: "thinking" | "calling-llm" | "parsing" | "executing" | "done" | "error";
+  /** Improvement #3: When true, the message is an error and shows a Retry button. */
+  isError?: boolean;
+  /** Improvement #3: The user message text that should be re-sent on retry. */
+  retryPrompt?: string;
 }
 
 export interface ChartPreset {

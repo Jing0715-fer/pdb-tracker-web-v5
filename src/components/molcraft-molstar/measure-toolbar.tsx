@@ -171,11 +171,13 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
     <div
       className={`inline-flex flex-col gap-1 bg-claude-surface/95 dark:bg-[#242220]/95 backdrop-blur-md rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 p-1 shadow-md ${className}`}
       style={{ minWidth: 0 }}
+      role="toolbar"
+      aria-label="Measurement tools"
     >
       {/* Row 1: 4 mode buttons (always in a single row, no wrap) + picking progress + count + actions */}
       <div className="flex items-center gap-1 flex-wrap">
         {/* 4 mode buttons — flex-nowrap ensures all 4 stay on one row */}
-        <div className="flex items-center gap-0.5 flex-nowrap">
+        <div className="flex items-center gap-0.5 flex-nowrap" role="group" aria-label="Measurement modes">
           {MODE_BUTTONS.map(({ mode, Icon, label, title }) => {
             const active = measureMode === mode;
             return (
@@ -184,6 +186,8 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
                 onClick={() => setMeasureMode(active ? 'off' : mode)}
                 disabled={!viewer}
                 title={title}
+                aria-label={title}
+                aria-pressed={active}
                 className={`flex items-center gap-1 h-7 px-2 rounded-md text-[10px] font-medium transition-all whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
                   active
                     ? 'bg-claude-accent text-white shadow-sm shadow-claude-accent/30'
@@ -219,6 +223,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={() => setMeasureMode('off')}
               className="ml-0.5 text-claude-text-muted hover:text-destructive transition-colors"
               title="Cancel picking (Esc)"
+              aria-label="Cancel picking"
             >
               <X className="h-2.5 w-2.5" />
             </button>
@@ -241,6 +246,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={() => setShowList((v) => !v)}
               className="grid h-6 w-6 place-items-center rounded-md text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 transition-colors"
               title={showList ? 'Hide measurements list' : 'Show measurements list'}
+              aria-label={showList ? 'Hide measurements list' : 'Show measurements list'}
             >
               {showList ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             </button>
@@ -248,6 +254,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={handleUndo}
               className="grid h-6 w-6 place-items-center rounded-md text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 transition-colors"
               title="Undo last measurement (Ctrl+Z)"
+              aria-label="Undo last measurement"
             >
               <Undo2 className="h-3 w-3" />
             </button>
@@ -255,6 +262,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={handleCopyCSV}
               className="grid h-6 w-6 place-items-center rounded-md text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 transition-colors"
               title="Copy as CSV"
+              aria-label="Copy measurements as CSV"
             >
               <Copy className="h-3 w-3" />
             </button>
@@ -262,6 +270,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={handleDownloadJSON}
               className="grid h-6 w-6 place-items-center rounded-md text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 transition-colors"
               title="Download as JSON"
+              aria-label="Download measurements as JSON"
             >
               <Download className="h-3 w-3" />
             </button>
@@ -269,6 +278,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={handleExportToReport}
               className="grid h-6 w-6 place-items-center rounded-md text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 transition-colors"
               title="Export to Reports (markdown)"
+              aria-label="Export measurements to report"
             >
               <FileText className="h-3 w-3" />
             </button>
@@ -276,6 +286,7 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
               onClick={handleClearAll}
               className="grid h-6 w-6 place-items-center rounded-md text-claude-text-muted hover:text-destructive hover:bg-destructive/10 transition-colors"
               title="Clear all measurements"
+              aria-label="Clear all measurements"
             >
               <Trash2 className="h-3 w-3" />
             </button>

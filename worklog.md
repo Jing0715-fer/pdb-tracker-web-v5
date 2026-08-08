@@ -5996,3 +5996,104 @@ Stage Summary:
 - Dashboard UI renders correctly
 - 3D viewer UI testing blocked by OOM (environmental issue, not code issue)
 - 7 improvement suggestions documented for future development
+
+---
+Task ID: improvement-implementation-round-1
+Agent: main
+Task: Implement improvement suggestions #2, #3, #4, #5, #7 from previous test results. Test, document, commit and push.
+
+Work Log:
+- Read previous test results and 7 improvement suggestions from worklog
+- Implemented Improvement #2 (Chat Loading State):
+  - Added `agentStep` field to ChatMessage interface in store.ts
+  - Values: "thinking" | "calling-llm" | "parsing" | "executing" | "done" | "error"
+  - Updated chat-tab.tsx send() function to set agentStep at each phase:
+    - Initial: agentStep = "thinking"
+    - Before fetch: agentStep = "calling-llm"
+    - Before command execution: agentStep = "executing"
+    - On success: agentStep = "done"
+    - On error: agentStep = "error"
+  - Added STEP_LABELS map with icon + label for each step
+  - Updated MessageBubble to show step-specific loading indicator:
+    - "Calling LLM…" with Brain icon (animate-pulse) + "(this can take 10-30s)" hint
+    - "Executing commands…" with Terminal icon (animate-spin)
+  - Added inline step indicator while content is streaming
+  - Added CSS animations (sa-step-pulse keyframe)
+
+- Implemented Improvement #3 (Chat Error Recovery):
+  - Added `isError` and `retryPrompt` fields to ChatMessage interface
+  - Stored the original user prompt in retryPrompt on the pending message
+  - Updated all error paths in send() to set isError=true:
+    - LLM call failed (HTTP error)
+    - Stream error (SSE error event)
+    - Catch block (unexpected exception)
+  - Added Retry button in MessageBubble (shows when isError=true && retryPrompt exists && !sending)
+  - Used a global CustomEvent bus (RETRY_EVENT = "chat-retry") to communicate retry from MessageBubble to ChatTab
+  - ChatTab listens for the event and calls send(retryPrompt)
+  - Added error-specific styling: red border, red icon, red background tint
+
+- Implemented Improvement #4 (MeasureToolbar Accessibility):
+  - Added role="toolbar" and aria-label="Measurement tools" to the root container
+  - Added role="group" and aria-label="Measurement modes" to the button group
+  - Added aria-label and aria-pressed attributes to all 4 mode buttons (Distance/Angle/Dihedral/Label)
+  - Added aria-label to all action buttons: cancel picking, toggle list, undo, copy CSV, download JSON, export report, clear all
+
+- Implemented Improvement #5 (Chat Command Preview):
+  - Created describeCommand() function that converts any LlmCommand to a human-readable description:
+    - load_pdb → "Load PDB 6LU7"
+    - analyze_run → "Run hbonds (A↔A)" (includes chain info from params)
+    - focus_ligand → "Focus on ligand N3"
+    - set_representation → "Set representation: polymer-and-ligand"
+    - set_color_theme → "Color by chain"
+    - All 35+ command types covered
+  - Replaced the old cmdSummary (which used terse codes like "load 6LU7", "run hbonds") with full descriptions
+  - Updated MessageBubble command list to show:
+    - Numbered list (1., 2., 3., ...)
+    - Human-readable description (instead of raw type name)
+    - Color-coded status (green ✓ for success, red ✗ for error)
+    - Terminal icon header
+  - Added CSS styling (sa-command-preview class)
+
+- Implemented Improvement #7 (API Warm-up Endpoint):
+  - Created /api/warmup/route.ts
+  - Endpoint sequentially fetches 5 commonly-used API routes to pre-compile them:
+    - /api/llm/providers
+    - /api/entries?limit=1
+    - /api/db-config
+    - /api/activity?limit=1
+    - /api/snapshots
+  - Returns JSON with status + timing for each route
+  - Supports ?route=<id> filter for targeted warm-up
+  - Verified: all 5 routes warmed successfully in ~3s
+
+- Added CSS styles for all new UI elements in globals.css:
+  - .sa-agent-step-bar (progress indicator with pulse animation)
+  - .sa-command-preview (command list items with hover effect)
+  - .sa-error-bubble + .sa-retry-btn (error message + retry button)
+
+Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders |
+| Dashboard UI | ✅ PASS | All tabs, buttons, table visible |
+| Chat API - simple question | ✅ PASS | Returns valid reply, commands=[] |
+| Chat API - load + analyze | ✅ PASS | Returns load_pdb + analyze_run with correct params |
+| Chat API - complex 6LU7 request | ✅ PASS | Returns 5 commands with correct format |
+| Warmup API | ✅ PASS | 5 routes warmed in ~3s, all return 200 |
+| Console errors | ⚠️ Some 502s | API calls fail when server OOM-kills during compilation (environmental) |
+| 3D viewer UI test | ⚠️ BLOCKED | Dev server OOM during Analysis module compilation (environmental, not code issue) |
+
+Code Verification:
+- ChatMessage interface: added agentStep, isError, retryPrompt fields ✓
+- ChatTab send(): sets agentStep at each phase, sets isError on errors ✓
+- MessageBubble: shows step indicator, retry button, human-readable command descriptions ✓
+- MeasureToolbar: all buttons have aria-label and aria-pressed ✓
+- Warmup API: returns valid JSON with timing data ✓
+- CSS: all new styles added to globals.css ✓
+
+Stage Summary:
+- 5 of 7 improvement suggestions implemented (#2, #3, #4, #5, #7)
+- #1 (OOM) and #6 (loading page) are environmental issues requiring infrastructure changes
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly
+- Code changes are backward-compatible (new fields are optional, old behavior preserved)
