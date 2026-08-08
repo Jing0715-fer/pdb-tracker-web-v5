@@ -276,6 +276,10 @@ export interface ChatMessage {
   isError?: boolean;
   /** Improvement #3: The user message text that should be re-sent on retry. */
   retryPrompt?: string;
+  /** Round 3: The specific model name used (e.g. "glm-4.6") for the provider badge. */
+  model?: string;
+  /** Round 3: Total LLM response time in ms (for display in the provider badge). */
+  durationMs?: number;
 }
 
 export interface ChartPreset {

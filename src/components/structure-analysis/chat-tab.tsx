@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -207,6 +207,28 @@ export function ChatTab() {
     return () => window.removeEventListener(RETRY_EVENT, handler);
   }, [handleRetry]);
 
+  // Round 3: Listen for command re-execution events from MessageBubble
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const cmd = (e as CustomEvent<LlmCommand>).detail;
+      if (!cmd || !viewer || sendingRef.current) return;
+      try {
+        const result = await executeCommand(viewer, cmd);
+        toast(
+          result.ok
+            ? `✓ Re-executed: ${describeCommand(cmd)}`
+            : `✗ Failed: ${result.detail || "Unknown error"}`,
+          result.ok ? "success" : "error"
+        );
+        logCommand({ type: cmd.type, ok: result.ok, detail: result.detail });
+      } catch (err) {
+        toast(`✗ Error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    };
+    window.addEventListener(REEXEC_EVENT, handler);
+    return () => window.removeEventListener(REEXEC_EVENT, handler);
+  }, [viewer, toast, logCommand]);
+
   // Abort any in-flight SSE stream on unmount
   useEffect(() => {
     return () => {
@@ -277,7 +299,11 @@ export function ChatTab() {
         lines.push(m.content);
         lines.push("");
       } else {
-        lines.push(`## 🤖 Assistant${m.provider ? ` (${m.provider})` : ""}`);
+        const modelInfo = [m.provider, m.model].filter(Boolean).join(" · ");
+        const durationInfo = m.durationMs != null
+          ? ` · ${m.durationMs < 1000 ? `${m.durationMs}ms` : `${(m.durationMs / 1000).toFixed(1)}s`}`
+          : "";
+        lines.push(`## 🤖 Assistant${modelInfo ? ` (${modelInfo}${durationInfo})` : ""}`);
         lines.push("");
         if (m.content) {
           lines.push(m.content);
@@ -287,11 +313,14 @@ export function ChatTab() {
           lines.push(`**Commands executed (${m.commands.length}):**`);
           lines.push("");
           m.commands.forEach((cmd, i) => {
-            const c = cmd as { type?: string; status?: string; error?: string };
+            const c = cmd as { type?: string; status?: string; error?: string; durationMs?: number };
             const desc = describeCommand(c as unknown as LlmCommand);
             const status = c.status || (c.error ? "error" : "done");
             const icon = status === "error" ? "❌" : status === "done" ? "✅" : "⏳";
-            lines.push(`${i + 1}. ${icon} ${desc}${c.error ? ` — _${c.error}_` : ""}`);
+            const time = c.durationMs != null
+              ? ` (${c.durationMs < 1000 ? `${c.durationMs}ms` : `${(c.durationMs / 1000).toFixed(1)}s`})`
+              : "";
+            lines.push(`${i + 1}. ${icon} ${desc}${time}${c.error ? ` — _${c.error}_` : ""}`);
           });
           lines.push("");
         }
@@ -447,8 +476,10 @@ export function ChatTab() {
           let commands: LlmCommand[] = [];
           let continueAfter = false;
           let provider: string | undefined;
+          let model: string | undefined; // Round 3: model name (e.g. "glm-4.6")
           let streamError: string | null = null;
           let buffer = "";
+          const llmStartTime = Date.now(); // Round 3: track LLM response time
 
           if (reader) {
             while (true) {
@@ -474,6 +505,7 @@ export function ChatTab() {
                     commands = Array.isArray(data.commands) ? data.commands : [];
                     continueAfter = !!data.continueAfterAnalysis;
                     provider = data.provider;
+                    model = data.model; // Round 3: capture model name
                   } else if (data.type === "error") {
                     streamError = data.error;
                   }
@@ -564,9 +596,11 @@ export function ChatTab() {
                 (allCommands[cmdIndex] as Record<string, unknown>).status = "running";
                 updateMessage(pendingId, { commands: [...allCommands] });
 
+                const cmdStartTime = Date.now(); // Round 3: per-command timing
                 try {
                   const result = await executeCommand(viewer, cmd);
                   (allCommands[cmdIndex] as Record<string, unknown>).status = result.ok ? "done" : "error";
+                  (allCommands[cmdIndex] as Record<string, unknown>).durationMs = Date.now() - cmdStartTime;
                   if (!result.ok) {
                     (allCommands[cmdIndex] as Record<string, unknown>).error = result.detail || "Failed";
                   }
@@ -581,6 +615,7 @@ export function ChatTab() {
                   }
                 } catch (err) {
                   (allCommands[cmdIndex] as Record<string, unknown>).status = "error";
+                  (allCommands[cmdIndex] as Record<string, unknown>).durationMs = Date.now() - cmdStartTime;
                   (allCommands[cmdIndex] as Record<string, unknown>).error = err instanceof Error ? err.message : String(err);
                   logCommand({ type: cmd.type, ok: false, detail: "Execution error" });
                 }
@@ -610,6 +645,8 @@ export function ChatTab() {
             commands: allCommands.length > 0 ? allCommands : undefined,
             pending: false,
             provider,
+            model, // Round 3: model name
+            durationMs: Date.now() - llmStartTime, // Round 3: LLM response time
             agentStep: "done",
             isError: false,
           });
@@ -850,11 +887,29 @@ function dispatchRetry(prompt: string) {
   window.dispatchEvent(new CustomEvent(RETRY_EVENT, { detail: prompt }));
 }
 
+/** Round 3: Global event bus for command re-execution. */
+const REEXEC_EVENT = "chat-reexec-command";
+function dispatchReexec(cmd: LlmCommand) {
+  window.dispatchEvent(new CustomEvent(REEXEC_EVENT, { detail: cmd }));
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
   // Improvement #3: Check if any message is currently pending (to disable retry)
   const sending = useAppStore((s) => s.chatMessages.some((m) => m.pending));
+  const [copied, setCopied] = useState(false);
+
+  // Round 3: Copy message content to clipboard
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(message.content || "").then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => { /* ignore */ }
+    );
+  }, [message.content]);
 
   // Improvement #2: Render the agent step indicator
   const stepInfo = message.agentStep ? STEP_LABELS[message.agentStep] : null;
@@ -874,7 +929,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {isUser ? <User className="h-2.5 w-2.5" /> : message.isError ? <X className="h-2.5 w-2.5" /> : <Bot className="h-2.5 w-2.5" />}
       </div>
       <div
-        className={`flex-1 min-w-0 rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed ${
+        className={`group relative flex-1 min-w-0 rounded-lg px-2.5 py-1.5 text-[11px] leading-relaxed ${
           isUser
             ? "bg-claude-accent text-white"
             : message.isError
@@ -910,6 +965,16 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                   {message.content || ""}
                 </ReactMarkdown>
               </div>
+            )}
+            {/* Round 3: Copy button — appears on hover for non-pending messages */}
+            {!message.pending && message.content && (
+              <button
+                onClick={handleCopy}
+                className="absolute top-1 right-1 grid h-5 w-5 place-items-center rounded text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Copy message"
+              >
+                {copied ? <Check className="h-2.5 w-2.5 text-green-600" /> : <Copy className="h-2.5 w-2.5" />}
+              </button>
             )}
             {/* Improvement #2: Inline step indicator while content is streaming */}
             {showStepIndicator && (
@@ -949,7 +1014,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 </div>
                 <div className="space-y-0.5">
                   {message.commands.map((cmd, i) => {
-                    const c = cmd as { type?: string; error?: string; status?: string; id?: string; recipe?: string; compId?: string; chain?: string; resno?: number; preset?: string; theme?: string };
+                    const c = cmd as { type?: string; error?: string; status?: string; durationMs?: number; id?: string; recipe?: string; compId?: string; chain?: string; resno?: number; preset?: string; theme?: string };
                     // Improvement #5: Use human-readable description
                     const desc = describeCommand(c as unknown as LlmCommand);
                     // Improvement #2 (round 2): Real-time status icons
@@ -970,15 +1035,37 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                       : status === "error"
                       ? "bg-destructive/10 text-destructive border-destructive/20"
                       : "bg-green-500/10 text-green-700 dark:text-green-500 border-green-500/20";
+                    // Round 3: Format duration for display
+                    const formatDuration = (ms: number) => {
+                      if (ms < 1000) return `${ms}ms`;
+                      return `${(ms / 1000).toFixed(1)}s`;
+                    };
                     return (
                       <div
                         key={i}
-                        className={`flex items-center gap-1 rounded px-1 py-0.5 text-[9px] border ${statusColor}`}
+                        className={`group/cmd flex items-center gap-1 rounded px-1 py-0.5 text-[9px] border ${statusColor}`}
                         title={c.error || (status === "done" ? "executed successfully" : status)}
                       >
                         <span className="font-mono text-[8px] opacity-60 shrink-0">{i + 1}.</span>
                         <span className="truncate flex-1">{desc}</span>
+                        {/* Round 3: Show execution duration for done/error commands */}
+                        {(status === "done" || status === "error") && c.durationMs != null && (
+                          <span className="flex items-center gap-0.5 text-[7px] font-mono opacity-50 shrink-0" title={`Execution time: ${c.durationMs}ms`}>
+                            <Timer className="h-2 w-2" />
+                            {formatDuration(c.durationMs)}
+                          </span>
+                        )}
                         {statusIcon}
+                        {/* Round 3: Re-execute button — appears on hover for done/error commands */}
+                        {(status === "done" || status === "error") && !sending && (
+                          <button
+                            onClick={() => dispatchReexec(c as unknown as LlmCommand)}
+                            className="grid h-3.5 w-3.5 place-items-center rounded text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/40 opacity-0 group-hover/cmd:opacity-100 transition-opacity shrink-0"
+                            title="Re-execute this command"
+                          >
+                            <Play className="h-2 w-2" />
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -999,10 +1086,21 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 <span className="text-[8px] text-claude-text-muted">Re-send the original request</span>
               </div>
             )}
-            {/* Provider badge */}
+            {/* Provider badge with model + duration (Round 3) */}
             {!isUser && message.provider && !message.needsConfirmation && !message.isError && (
-              <div className="mt-1 text-[8px] text-claude-text-muted/70">
-                via {message.provider}
+              <div className="mt-1 flex items-center gap-1.5 text-[8px] text-claude-text-muted/70">
+                <span>via {message.provider}</span>
+                {message.model && (
+                  <span className="font-mono text-[7px] bg-claude-accent-light/30 text-claude-accent px-1 py-0.5 rounded">
+                    {message.model}
+                  </span>
+                )}
+                {message.durationMs != null && (
+                  <span className="flex items-center gap-0.5 text-[7px] font-mono">
+                    <Timer className="h-2 w-2" />
+                    {message.durationMs < 1000 ? `${message.durationMs}ms` : `${(message.durationMs / 1000).toFixed(1)}s`}
+                  </span>
+                )}
               </div>
             )}
           </>

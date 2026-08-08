@@ -6203,3 +6203,104 @@ Next Round Improvement Suggestions:
 5. **Provider-specific model info** — Show which model was used (e.g., "glm-4.6") in the provider badge
 6. **Chat message copy** — Add a copy button to each message bubble for easy copying
 7. **Command re-execution** — Allow users to re-execute a single command from the command list
+
+---
+Task ID: improvement-implementation-round-3
+Agent: main
+Task: Implement round 3 improvements: command execution timing, provider model info badge, chat message copy button, command re-execution. Test, document, commit and push.
+
+Work Log:
+- Read previous worklog to review the 7 next-step improvement suggestions from round 2
+- Selected 4 improvements to implement this round:
+  1. Command execution timing (#3)
+  2. Provider-specific model info (#5)
+  3. Chat message copy button (#6)
+  4. Command re-execution (#7)
+
+- Added `model` and `durationMs` fields to ChatMessage interface in store.ts:
+  - model: string — the specific model name (e.g. "glm-4.6")
+  - durationMs: number — total LLM response time in ms
+
+- Implemented Command Execution Timing:
+  - Added `const llmStartTime = Date.now()` before the SSE stream reading starts
+  - In the command execution loop, added `const cmdStartTime = Date.now()` before each command
+  - After each command completes (success or error), stored `durationMs` on the command object
+  - In MessageBubble, added a Timer icon + formatted duration display for done/error commands
+  - Duration format: <1000ms shows "123ms", ≥1000ms shows "1.5s"
+  - Duration appears next to the status icon in the command preview
+
+- Implemented Provider Model Info Badge:
+  - Captured `model` from the SSE "done" event: `model = data.model`
+  - Added `model` and `durationMs` to the finalize message updateMessage call
+  - Updated the provider badge in MessageBubble to show:
+    - Provider name: "via zai"
+    - Model badge: "glm-4.6" (in accent-colored pill)
+    - Duration: Timer icon + "2.3s"
+  - Updated the Markdown export to include model + duration in the assistant header
+
+- Implemented Chat Message Copy Button:
+  - Added `copied` state to MessageBubble (shows Check icon for 1.5s after copy)
+  - Added `handleCopy` callback that uses navigator.clipboard.writeText
+  - Added a Copy icon button in the top-right corner of each message bubble
+  - Button uses `opacity-0 group-hover:opacity-100` to appear on hover
+  - Added `group` and `relative` classes to the message bubble container
+  - Only shows for non-pending messages with content
+
+- Implemented Command Re-execution:
+  - Added REEXEC_EVENT = "chat-reexec-command" global event bus
+  - Added dispatchReexec() function that dispatches a CustomEvent with the command
+  - In MessageBubble, added a Play icon button for done/error commands
+  - Button appears on hover (group-hover/cmd:opacity-100)
+  - Disabled when sending is in progress
+  - In ChatTab, added an event listener for REEXEC_EVENT:
+    - Receives the command, calls executeCommand(viewer, cmd)
+    - Shows toast: "✓ Re-executed: Load PDB 6LU7" or "✗ Failed: ..."
+    - Logs the command to the command log
+
+- Updated Markdown Export:
+  - Assistant header now includes model + duration: "## 🤖 Assistant (zai · glm-4.6 · 2.3s)"
+  - Command list includes per-command duration: "1. ✅ Load PDB 6LU7 (123ms)"
+  - Updated the command type cast to include durationMs field
+
+Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (129KB screenshot) |
+| Dashboard UI | ✅ PASS | All tabs, buttons, table visible |
+| Chat API - simple question | ✅ PASS | Returns valid reply, commands=[] |
+| Chat API - load + analyze | ✅ PASS | Returns load_pdb + analyze_run with model="glm-4.6" |
+| Chat API - complex 6LU7 request | ✅ PASS | Returns 5 commands with model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in ~2.4s |
+| Console errors | ⚠️ 502s | API calls fail when server OOM-kills (environmental) |
+| 3D viewer UI test | ⚠️ BLOCKED | Dev server OOM during Analysis module compilation |
+
+Code Verification:
+- store.ts: Added `model?: string` and `durationMs?: number` to ChatMessage ✓
+- chat-tab.tsx: Captures `model` from SSE done event ✓
+- chat-tab.tsx: Tracks `llmStartTime` and `cmdStartTime` for timing ✓
+- chat-tab.tsx: Finalize message includes `model` and `durationMs` ✓
+- chat-tab.tsx: MessageBubble shows model badge + duration in provider badge ✓
+- chat-tab.tsx: MessageBubble shows per-command duration with Timer icon ✓
+- chat-tab.tsx: Copy button with clipboard API + copied state ✓
+- chat-tab.tsx: Re-execution button with Play icon + REEXEC_EVENT bus ✓
+- chat-tab.tsx: Re-execution event listener with toast feedback ✓
+- chat-tab.tsx: Markdown export includes model + duration ✓
+
+Stage Summary:
+- 4 of 7 round-2 suggestions implemented (timing, model info, copy, re-execution)
+- 3 deferred: inline chart visualization (complex), chat search (UI space), message pinning (UX complexity)
+- All API tests pass (chat stream returns model field, warmup works)
+- Dashboard UI renders correctly
+- Chat messages now show: model name, LLM response time, per-command execution time
+- Each message has a copy button (appears on hover)
+- Each completed command has a re-execute button (appears on hover)
+- Markdown export includes all new timing/model information
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Chat message search** — Add a search box to filter chat messages by keyword
+3. **Chat message pinning** — Allow users to pin important assistant messages
+4. **Command history sidebar** — Show a sidebar with all commands executed across all messages
+5. **Chat message editing** — Allow editing and re-sending a previous user message
+6. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+7. **Chat statistics** — Show total commands executed, average response time, etc.
