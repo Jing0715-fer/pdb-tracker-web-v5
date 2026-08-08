@@ -191,6 +191,8 @@ export function ChatTab() {
   const [sortMode, setSortMode] = useState<"default" | "reactions" | "recent">("default");
   // Round 6: Command history sidebar state
   const [showCmdHistory, setShowCmdHistory] = useState(false);
+  // Round 7: Command type quick filter
+  const [cmdTypeFilter, setCmdTypeFilter] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -291,6 +293,7 @@ export function ChatTab() {
   // Round 4: Filter messages by search query
   // Round 5: Pinned messages always appear at the top
   // Round 6: Added filterMode (all/bookmarked/reactions) and sortMode (default/reactions/recent)
+  // Round 7: Added cmdTypeFilter (filter messages containing a specific command type)
   const filteredMessages = useMemo(() => {
     let result = messages;
     // Apply filter mode
@@ -298,6 +301,12 @@ export function ChatTab() {
       result = result.filter((m) => m.bookmarked);
     } else if (filterMode === "reactions") {
       result = result.filter((m) => m.reaction !== undefined);
+    }
+    // Round 7: Apply command type filter
+    if (cmdTypeFilter) {
+      result = result.filter((m) =>
+        m.commands?.some((cmd) => (cmd as { type?: string }).type === cmdTypeFilter)
+      );
     }
     // Apply search query
     if (searchQuery.trim()) {
@@ -331,7 +340,7 @@ export function ChatTab() {
       });
     }
     return sorted;
-  }, [messages, searchQuery, filterMode, sortMode]);
+  }, [messages, searchQuery, filterMode, sortMode, cmdTypeFilter]);
 
   // Round 4: Calculate chat statistics
   const chatStats = useMemo(() => {
@@ -1100,6 +1109,37 @@ export function ChatTab() {
           {(searchQuery || filterMode !== "all") && (
             <div className="mt-1 text-[9px] text-claude-text-muted">
               {filteredMessages.length} of {messages.length} messages {filterMode !== "all" ? `(${filterMode})` : "match"}
+            </div>
+          )}
+          {/* Round 7: Quick filter chips for command types */}
+          {Object.keys(chatStats.commandTypes).length > 0 && (
+            <div className="mt-1 flex items-center gap-0.5 flex-wrap">
+              <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted/70 mr-0.5">Cmd:</span>
+              {Object.entries(chatStats.commandTypes)
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => (
+                  <button
+                    key={type}
+                    onClick={() => setCmdTypeFilter(cmdTypeFilter === type ? null : type)}
+                    className={`px-1 py-0.5 rounded text-[8px] font-mono transition-colors ${
+                      cmdTypeFilter === type
+                        ? "bg-claude-accent text-white"
+                        : "bg-claude-text-muted/10 text-claude-text-muted hover:bg-claude-accent-light/30"
+                    }`}
+                    title={cmdTypeFilter === type ? `Remove filter: ${type}` : `Filter by: ${type} (${count} commands)`}
+                  >
+                    {type} ×{count}
+                  </button>
+                ))}
+              {cmdTypeFilter && (
+                <button
+                  onClick={() => setCmdTypeFilter(null)}
+                  className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
+                  title="Clear command filter"
+                >
+                  ✕ Clear
+                </button>
+              )}
             </div>
           )}
         </div>
