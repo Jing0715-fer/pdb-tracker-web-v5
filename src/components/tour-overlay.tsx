@@ -334,8 +334,13 @@ export function TourOverlay({
       >
         {/* ── Mask layer ─────────────────────────────────────────────── */}
         {isCentered ? (
-          /* Centered mode: full-screen semi-transparent backdrop */
-          <div className="absolute inset-0 bg-black/55" />
+          /* Centered mode: full-screen semi-transparent backdrop.
+             Round 8: Click on backdrop auto-dismisses the tour. */
+          <div
+            className="absolute inset-0 bg-black/55 cursor-pointer"
+            onClick={finishTour}
+            title="Click to skip tour"
+          />
         ) : hasSpotlight && spotlightRect ? (
           /* Spotlight mode: a div sized to the target with a huge box-shadow
              creates a dark mask everywhere EXCEPT the spotlight area. */

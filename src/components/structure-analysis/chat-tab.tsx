@@ -394,6 +394,22 @@ export function ChatTab() {
       thumbsDown,
       bookmarked,
       pinned,
+      // Round 8: Reaction summary — which command types got the most reactions
+      reactedCommands: (() => {
+        const cmdReactions: Record<string, { up: number; down: number }> = {};
+        messages.forEach((m) => {
+          if (m.reaction && Array.isArray(m.commands)) {
+            m.commands.forEach((cmd) => {
+              const c = cmd as { type?: string };
+              const t = String(c.type || "unknown");
+              if (!cmdReactions[t]) cmdReactions[t] = { up: 0, down: 0 };
+              if (m.reaction === "thumbs-up") cmdReactions[t].up++;
+              else if (m.reaction === "thumbs-down") cmdReactions[t].down++;
+            });
+          }
+        });
+        return cmdReactions;
+      })(),
     };
   }, [messages]);
 
@@ -505,6 +521,33 @@ export function ChatTab() {
     URL.revokeObjectURL(url);
     toast(`Exported ${messages.length} messages as Markdown`, "success");
   }, [messages, providerLabel, toast]);
+
+  /** Round 8: Export command history as CSV. */
+  const handleExportCommandCsv = useCallback(() => {
+    if (commandHistory.length === 0) {
+      toast("No commands to export", "error");
+      return;
+    }
+    const header = "timestamp,type,description,status,duration_ms,error\n";
+    const rows = commandHistory.map((cmd) => {
+      const ts = new Date(cmd.messageTs).toISOString();
+      const type = `"${cmd.type.replace(/"/g, '""')}"`;
+      const desc = `"${cmd.desc.replace(/"/g, '""')}"`;
+      const status = cmd.status;
+      const duration = cmd.durationMs ?? "";
+      const error = cmd.error ? `"${cmd.error.replace(/"/g, '""')}"` : "";
+      return `${ts},${type},${desc},${status},${duration},${error}`;
+    });
+    const csv = header + rows.join("\n") + "\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `command-history-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${commandHistory.length} commands as CSV`, "success");
+  }, [commandHistory, toast]);
 
   /**
    * Core send function. Implements the agent ReAct loop:
@@ -1229,6 +1272,31 @@ export function ChatTab() {
               </div>
             </div>
           )}
+          {/* Round 8: Reaction summary — which command types got the most reactions */}
+          {Object.keys(chatStats.reactedCommands).length > 0 && (
+            <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Reactions by Command Type</div>
+              <div className="space-y-0.5">
+                {Object.entries(chatStats.reactedCommands)
+                  .sort((a, b) => (b[1].up + b[1].down) - (a[1].up + a[1].down))
+                  .map(([type, r]) => (
+                    <div key={type} className="flex items-center gap-1 text-[9px]">
+                      <span className="font-mono text-claude-text truncate flex-1">{type}</span>
+                      {r.up > 0 && (
+                        <span className="flex items-center gap-0.5 text-green-600">
+                          <ThumbsUp className="h-2 w-2" />{r.up}
+                        </span>
+                      )}
+                      {r.down > 0 && (
+                        <span className="flex items-center gap-0.5 text-red-600">
+                          <ThumbsDown className="h-2 w-2" />{r.down}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1240,6 +1308,16 @@ export function ChatTab() {
             <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted">
               Command History ({commandHistory.length})
             </span>
+            {commandHistory.length > 0 && (
+              <button
+                onClick={handleExportCommandCsv}
+                className="ml-auto flex items-center gap-0.5 px-1 py-0.5 rounded text-[8px] text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 transition-colors"
+                title="Export command history as CSV"
+              >
+                <Download className="h-2.5 w-2.5" />
+                CSV
+              </button>
+            )}
           </div>
           {commandHistory.length === 0 ? (
             <p className="text-[9px] text-claude-text-muted/60 py-2 text-center">No commands executed yet</p>
