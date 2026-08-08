@@ -6304,3 +6304,114 @@ Next Round Improvement Suggestions:
 5. **Chat message editing** — Allow editing and re-sending a previous user message
 6. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
 7. **Chat statistics** — Show total commands executed, average response time, etc.
+
+---
+Task ID: improvement-implementation-round-4
+Agent: main
+Task: Implement round 4 improvements: chat message search, chat statistics panel, chat message editing. Test, document, commit and push.
+
+Work Log:
+- Read previous worklog to review the 7 next-step improvement suggestions from round 3
+- Selected 3 improvements to implement this round:
+  1. Chat message search (#2)
+  2. Chat statistics panel (#7)
+  3. Chat message editing (#5)
+
+- Implemented Chat Message Search:
+  - Added `searchQuery` and `showSearch` state to ChatTab
+  - Added `filteredMessages` useMemo that filters messages by:
+    - Message content (case-insensitive)
+    - Command type (e.g., "load_pdb", "analyze_run")
+    - Command description (e.g., "Load PDB 6LU7", "Run hbonds")
+  - Added Search icon button in chat header (toggles search bar)
+  - Added collapsible search bar with:
+    - Search input with Search icon
+    - Clear button (X) when query is non-empty
+    - Match count: "3 of 12 messages match"
+  - Added empty state when no messages match: "No messages match 'query'" with clear button
+  - Updated message list to render `filteredMessages` instead of `messages`
+
+- Implemented Chat Statistics Panel:
+  - Added `showStats` state to ChatTab
+  - Added `chatStats` useMemo that calculates:
+    - User message count
+    - Assistant message count
+    - Total commands executed
+    - Success rate (percentage)
+    - Average command execution time (ms)
+    - Average LLM response time (ms)
+    - Command type breakdown (e.g., load_pdb ×3, analyze_run ×5)
+    - Providers used (e.g., zai ×4)
+  - Added BarChart3 icon button in chat header (toggles stats panel)
+  - Added collapsible statistics panel with:
+    - 2-column grid of key metrics
+    - Command type badges (sorted by count, descending)
+    - Provider usage badges
+  - Panel is scrollable (max-h-48) with custom scrollbar
+
+- Implemented Chat Message Editing:
+  - Added `isEditing` and `editContent` state to MessageBubble
+  - Added Pencil icon button on user messages (appears on hover, bottom-right)
+  - When clicked, shows an inline edit form:
+    - Textarea pre-filled with original content
+    - "Save & Re-send" button (accent color)
+    - "Cancel" button (muted color)
+    - Hint: "Enter to save · Esc to cancel"
+  - Keyboard shortcuts:
+    - Enter: Save and re-send
+    - Escape: Cancel edit
+  - On save:
+    - Dispatches EDIT_EVENT with messageId and newContent
+    - ChatTab listener:
+      1. Updates the user message content in the store
+      2. Truncates all messages after the edited one (removes old responses)
+      3. Persists the truncated message list to localStorage
+      4. Calls send(newContent) to re-send as a new agent turn
+      5. Shows toast: "Message edited and re-sent"
+  - Edit button disabled when sending is in progress
+  - Copy button hidden during edit mode
+
+- Added new icon imports: Search, BarChart3, Pencil from lucide-react
+- Added useMemo to React imports
+
+Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (118KB screenshot) |
+| Dashboard UI | ✅ PASS | All tabs, buttons, table visible |
+| Chat API - simple question | ✅ PASS | Returns valid reply, commands=[] |
+| Chat API - load + analyze | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Chat API - complex 6LU7 request | ✅ PASS | Returns 5 commands with model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in ~1.3s |
+| Console errors | ⚠️ ChunkLoadError | Caused by server OOM restarts (environmental) |
+| 3D viewer UI test | ⚠️ BLOCKED | Dev server OOM during Analysis module compilation |
+
+Code Verification:
+- chat-tab.tsx: searchQuery/showSearch/showStats state added ✓
+- chat-tab.tsx: filteredMessages useMemo filters by content + commands ✓
+- chat-tab.tsx: chatStats useMemo calculates 9 statistics ✓
+- chat-tab.tsx: Search bar with input, clear button, match count ✓
+- chat-tab.tsx: Statistics panel with 2-column grid + badges ✓
+- chat-tab.tsx: Edit event bus (EDIT_EVENT) + listener ✓
+- chat-tab.tsx: MessageBubble edit mode with textarea + save/cancel ✓
+- chat-tab.tsx: Edit truncates messages after edited one + re-sends ✓
+- chat-tab.tsx: Keyboard shortcuts (Enter to save, Esc to cancel) ✓
+- chat-tab.tsx: Copy button hidden during edit mode ✓
+
+Stage Summary:
+- 3 of 7 round-3 suggestions implemented (search, statistics, editing)
+- 4 deferred: inline chart visualization (complex), message pinning (UX), command history sidebar (UI space), provider comparison (complex)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly
+- Chat messages can now be searched by keyword (content + command types/descriptions)
+- Chat statistics panel shows real-time metrics (message counts, success rate, avg times, command breakdown)
+- User messages can be edited and re-sent, truncating old responses
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Chat message pinning** — Allow users to pin important assistant messages
+3. **Command history sidebar** — Show a sidebar with all commands executed across all messages
+4. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+5. **Chat bookmarks** — Save specific Q&A pairs for later reference
+6. **Chat message reactions** — Add emoji reactions (👍/👎) to assistant messages for feedback
+7. **Chat export as PDF** — Export the chat conversation as a formatted PDF document

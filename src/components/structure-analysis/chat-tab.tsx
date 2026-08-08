@@ -21,9 +21,9 @@
  *   - Clear chat button
  */
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -181,6 +181,12 @@ export function ChatTab() {
   const toast = useAppStore((s) => s.toast);
   const logCommand = useAppStore((s) => s.logCommand);
 
+  // Round 4: Chat search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+  // Round 4: Chat statistics state
+  const [showStats, setShowStats] = useState(false);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const stopRequestedRef = useRef(false);
@@ -276,6 +282,65 @@ export function ChatTab() {
   const providerLabel = chatProvider === "" || chatProvider === "auto"
     ? "Auto"
     : activeProviderInfo?.label || chatProvider;
+
+  // Round 4: Filter messages by search query
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return messages;
+    const q = searchQuery.toLowerCase();
+    return messages.filter((m) =>
+      m.content?.toLowerCase().includes(q) ||
+      m.commands?.some((cmd) => {
+        const c = cmd as { type?: string };
+        return c.type?.toLowerCase().includes(q) || describeCommand(c as unknown as LlmCommand).toLowerCase().includes(q);
+      })
+    );
+  }, [messages, searchQuery]);
+
+  // Round 4: Calculate chat statistics
+  const chatStats = useMemo(() => {
+    const userMessages = messages.filter((m) => m.role === "user").length;
+    const assistantMessages = messages.filter((m) => m.role === "assistant").length;
+    const allCommands = messages.flatMap((m) => (Array.isArray(m.commands) ? m.commands : []) as Array<Record<string, unknown>>);
+    const totalCommands = allCommands.length;
+    const successfulCommands = allCommands.filter((c) => c.status === "done" || (!c.status && !c.error)).length;
+    const failedCommands = allCommands.filter((c) => c.status === "error" || c.error).length;
+    const commandDurations = allCommands
+      .map((c) => (typeof c.durationMs === "number" ? c.durationMs : null))
+      .filter((d): d is number => d !== null);
+    const avgCommandMs = commandDurations.length > 0
+      ? Math.round(commandDurations.reduce((s, d) => s + d, 0) / commandDurations.length)
+      : 0;
+    const llmDurations = messages
+      .map((m) => (typeof m.durationMs === "number" ? m.durationMs : null))
+      .filter((d): d is number => d !== null);
+    const avgLlmMs = llmDurations.length > 0
+      ? Math.round(llmDurations.reduce((s, d) => s + d, 0) / llmDurations.length)
+      : 0;
+    // Command type breakdown
+    const commandTypes: Record<string, number> = {};
+    allCommands.forEach((c) => {
+      const t = String(c.type || "unknown");
+      commandTypes[t] = (commandTypes[t] || 0) + 1;
+    });
+    // Providers used
+    const providers: Record<string, number> = {};
+    messages.forEach((m) => {
+      if (m.provider) {
+        providers[m.provider] = (providers[m.provider] || 0) + 1;
+      }
+    });
+    return {
+      userMessages,
+      assistantMessages,
+      totalCommands,
+      successfulCommands,
+      failedCommands,
+      avgCommandMs,
+      avgLlmMs,
+      commandTypes,
+      providers,
+    };
+  }, [messages]);
 
   /** Improvement #3 (round 2): Export chat history as Markdown. */
   const handleExportMarkdown = useCallback(() => {
@@ -679,6 +744,33 @@ export function ChatTab() {
     [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast]
   );
 
+  // Round 4: Listen for message edit events from MessageBubble (must be after send is defined)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, newContent } = (e as CustomEvent<{ messageId: string; newContent: string }>).detail;
+      if (!messageId || !newContent || sendingRef.current) return;
+      // Update the user message content in the store
+      updateMessage(messageId, { content: newContent });
+      // Truncate messages after the edited one (remove old responses)
+      const allMsgs = useAppStore.getState().chatMessages;
+      const editIndex = allMsgs.findIndex((m) => m.id === messageId);
+      if (editIndex === -1) return;
+      const keptMsgs = allMsgs.slice(0, editIndex + 1);
+      // Update the store to remove messages after the edited one
+      useAppStore.setState({ chatMessages: keptMsgs });
+      // Persist the updated messages
+      try {
+        const toSave = keptMsgs.filter((m) => !m.pending).slice(-50);
+        localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
+      } catch { /* ignore */ }
+      // Send the edited content as a new agent turn
+      send(newContent);
+      toast("Message edited and re-sent", "info");
+    };
+    window.addEventListener(EDIT_EVENT, handler);
+    return () => window.removeEventListener(EDIT_EVENT, handler);
+  }, [updateMessage, toast, send]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -768,6 +860,24 @@ export function ChatTab() {
               <Button
                 variant="ghost"
                 size="sm"
+                className={`h-7 w-7 p-0 ${showSearch ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={() => { setShowSearch(!showSearch); if (showSearch) setSearchQuery(""); }}
+                title="Search messages"
+              >
+                <Search className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-7 w-7 p-0 ${showStats ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={() => setShowStats(!showStats)}
+                title="Chat statistics"
+              >
+                <BarChart3 className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
                 onClick={handleExportMarkdown}
                 title="Export chat as Markdown"
@@ -787,6 +897,107 @@ export function ChatTab() {
           )}
         </div>
       </div>
+
+      {/* Round 4: Search bar (collapsible) */}
+      {showSearch && messages.length > 0 && (
+        <div className="shrink-0 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-claude-text-muted" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search messages and commands…"
+              className="w-full h-7 pl-7 pr-7 rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-[10px] text-claude-text placeholder:text-claude-text-muted/50 focus:outline-none focus:border-claude-accent/40"
+              autoFocus
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-claude-text-muted hover:text-destructive"
+                title="Clear search"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="mt-1 text-[9px] text-claude-text-muted">
+              {filteredMessages.length} of {messages.length} messages match
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Round 4: Statistics panel (collapsible) */}
+      {showStats && messages.length > 0 && (
+        <div className="shrink-0 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40 max-h-48 overflow-y-auto sa-scroll">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[9px]">
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted">User msgs:</span>
+              <span className="font-mono font-semibold text-claude-text">{chatStats.userMessages}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted">Assistant msgs:</span>
+              <span className="font-mono font-semibold text-claude-text">{chatStats.assistantMessages}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted">Total commands:</span>
+              <span className="font-mono font-semibold text-claude-text">{chatStats.totalCommands}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted">Success rate:</span>
+              <span className="font-mono font-semibold text-green-600">
+                {chatStats.totalCommands > 0
+                  ? `${Math.round((chatStats.successfulCommands / chatStats.totalCommands) * 100)}%`
+                  : "—"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted">Avg cmd time:</span>
+              <span className="font-mono font-semibold text-claude-text">
+                {chatStats.avgCommandMs > 0
+                  ? (chatStats.avgCommandMs < 1000 ? `${chatStats.avgCommandMs}ms` : `${(chatStats.avgCommandMs / 1000).toFixed(1)}s`)
+                  : "—"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted">Avg LLM time:</span>
+              <span className="font-mono font-semibold text-claude-text">
+                {chatStats.avgLlmMs > 0
+                  ? (chatStats.avgLlmMs < 1000 ? `${chatStats.avgLlmMs}ms` : `${(chatStats.avgLlmMs / 1000).toFixed(1)}s`)
+                  : "—"}
+              </span>
+            </div>
+          </div>
+          {Object.keys(chatStats.commandTypes).length > 0 && (
+            <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Command Types</div>
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(chatStats.commandTypes)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([type, count]) => (
+                    <Badge key={type} variant="outline" className="text-[8px] font-mono h-3.5 px-1 bg-claude-accent-light/20 text-claude-accent border-claude-accent/20">
+                      {type} ×{count}
+                    </Badge>
+                  ))}
+              </div>
+            </div>
+          )}
+          {Object.keys(chatStats.providers).length > 0 && (
+            <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Providers</div>
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(chatStats.providers).map(([prov, count]) => (
+                  <Badge key={prov} variant="outline" className="text-[8px] font-mono h-3.5 px-1 bg-claude-text-muted/10 text-claude-text-muted border-claude-border/20">
+                    {prov} ×{count}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto sa-scroll p-2 space-y-2">
@@ -817,8 +1028,21 @@ export function ChatTab() {
               ))}
             </div>
           </div>
+        ) : searchQuery && filteredMessages.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+            <Search className="h-5 w-5 text-claude-text-muted/40" />
+            <p className="text-[10px] text-claude-text-muted">
+              No messages match "{searchQuery}"
+            </p>
+            <button
+              onClick={() => setSearchQuery("")}
+              className="text-[10px] text-claude-accent hover:underline"
+            >
+              Clear search
+            </button>
+          </div>
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} message={m} />)
+          filteredMessages.map((m) => <MessageBubble key={m.id} message={m} />)
         )}
       </div>
 
@@ -893,12 +1117,21 @@ function dispatchReexec(cmd: LlmCommand) {
   window.dispatchEvent(new CustomEvent(REEXEC_EVENT, { detail: cmd }));
 }
 
+/** Round 4: Global event bus for message editing — re-sends an edited user message. */
+const EDIT_EVENT = "chat-edit-message";
+function dispatchEdit(messageId: string, newContent: string) {
+  window.dispatchEvent(new CustomEvent(EDIT_EVENT, { detail: { messageId, newContent } }));
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
   // Improvement #3: Check if any message is currently pending (to disable retry)
   const sending = useAppStore((s) => s.chatMessages.some((m) => m.pending));
   const [copied, setCopied] = useState(false);
+  // Round 4: Editing state for user messages
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(message.content || "");
 
   // Round 3: Copy message content to clipboard
   const handleCopy = useCallback(() => {
@@ -909,6 +1142,23 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       },
       () => { /* ignore */ }
     );
+  }, [message.content]);
+
+  // Round 4: Save edit — dispatch the edit event
+  const handleSaveEdit = useCallback(() => {
+    const trimmed = editContent.trim();
+    if (!trimmed || trimmed === message.content) {
+      setIsEditing(false);
+      return;
+    }
+    dispatchEdit(message.id, trimmed);
+    setIsEditing(false);
+  }, [editContent, message.id, message.content]);
+
+  // Round 4: Cancel edit
+  const handleCancelEdit = useCallback(() => {
+    setEditContent(message.content || "");
+    setIsEditing(false);
   }, [message.content]);
 
   // Improvement #2: Render the agent step indicator
@@ -958,7 +1208,43 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         ) : (
           <>
             {isUser ? (
-              <div className="whitespace-pre-wrap">{message.content}</div>
+              isEditing ? (
+                // Round 4: Edit mode for user messages
+                <div className="space-y-1.5">
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="w-full min-h-[60px] max-h-32 resize-none rounded-md border border-claude-accent/40 bg-claude-surface dark:bg-[#1a1917] px-2 py-1 text-[11px] text-claude-text focus:outline-none focus:border-claude-accent"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSaveEdit(); }
+                      else if (e.key === "Escape") { e.preventDefault(); handleCancelEdit(); }
+                    }}
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={handleSaveEdit}
+                      disabled={!editContent.trim() || editContent.trim() === message.content}
+                      className="flex items-center gap-1 rounded-md bg-claude-accent text-white px-2 py-0.5 text-[9px] font-medium hover:bg-claude-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      title="Save and re-send (Enter)"
+                    >
+                      <Check className="h-2.5 w-2.5" />
+                      Save & Re-send
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      className="flex items-center gap-1 rounded-md bg-claude-text-muted/20 text-claude-text-muted px-2 py-0.5 text-[9px] font-medium hover:bg-claude-text-muted/30 transition-colors"
+                      title="Cancel (Esc)"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                      Cancel
+                    </button>
+                    <span className="text-[8px] text-claude-text-muted ml-auto">Enter to save · Esc to cancel</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap">{message.content}</div>
+              )
             ) : (
               <div className="sa-chat-markdown">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -967,13 +1253,23 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               </div>
             )}
             {/* Round 3: Copy button — appears on hover for non-pending messages */}
-            {!message.pending && message.content && (
+            {!message.pending && message.content && !isEditing && (
               <button
                 onClick={handleCopy}
                 className="absolute top-1 right-1 grid h-5 w-5 place-items-center rounded text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/30 opacity-0 group-hover:opacity-100 transition-opacity"
                 title="Copy message"
               >
                 {copied ? <Check className="h-2.5 w-2.5 text-green-600" /> : <Copy className="h-2.5 w-2.5" />}
+              </button>
+            )}
+            {/* Round 4: Edit button for user messages — appears on hover */}
+            {isUser && !message.pending && !isEditing && !sending && (
+              <button
+                onClick={() => { setEditContent(message.content || ""); setIsEditing(true); }}
+                className="absolute bottom-1 right-1 grid h-5 w-5 place-items-center rounded text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Edit and re-send"
+              >
+                <Pencil className="h-2.5 w-2.5" />
               </button>
             )}
             {/* Improvement #2: Inline step indicator while content is streaming */}
