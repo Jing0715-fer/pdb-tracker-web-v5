@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -284,16 +284,25 @@ export function ChatTab() {
     : activeProviderInfo?.label || chatProvider;
 
   // Round 4: Filter messages by search query
+  // Round 5: Pinned messages always appear at the top
   const filteredMessages = useMemo(() => {
-    if (!searchQuery.trim()) return messages;
-    const q = searchQuery.toLowerCase();
-    return messages.filter((m) =>
-      m.content?.toLowerCase().includes(q) ||
-      m.commands?.some((cmd) => {
-        const c = cmd as { type?: string };
-        return c.type?.toLowerCase().includes(q) || describeCommand(c as unknown as LlmCommand).toLowerCase().includes(q);
-      })
-    );
+    let result = messages;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = messages.filter((m) =>
+        m.content?.toLowerCase().includes(q) ||
+        m.commands?.some((cmd) => {
+          const c = cmd as { type?: string };
+          return c.type?.toLowerCase().includes(q) || describeCommand(c as unknown as LlmCommand).toLowerCase().includes(q);
+        })
+      );
+    }
+    // Sort: pinned messages first, then by original order
+    return [...result].sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return 0;
+    });
   }, [messages, searchQuery]);
 
   // Round 4: Calculate chat statistics
@@ -329,6 +338,11 @@ export function ChatTab() {
         providers[m.provider] = (providers[m.provider] || 0) + 1;
       }
     });
+    // Round 5: Reaction + bookmark + pin counts
+    const thumbsUp = messages.filter((m) => m.reaction === "thumbs-up").length;
+    const thumbsDown = messages.filter((m) => m.reaction === "thumbs-down").length;
+    const bookmarked = messages.filter((m) => m.bookmarked).length;
+    const pinned = messages.filter((m) => m.pinned).length;
     return {
       userMessages,
       assistantMessages,
@@ -339,6 +353,10 @@ export function ChatTab() {
       avgLlmMs,
       commandTypes,
       providers,
+      thumbsUp,
+      thumbsDown,
+      bookmarked,
+      pinned,
     };
   }, [messages]);
 
@@ -391,6 +409,16 @@ export function ChatTab() {
         }
         if (m.isError) {
           lines.push(`> ⚠️ **Error** — click Retry in the chat to re-send this request.`);
+          lines.push("");
+        }
+        // Round 5: Export reaction/pin/bookmark status
+        const meta: string[] = [];
+        if (m.pinned) meta.push("📌 Pinned");
+        if (m.bookmarked) meta.push("🔖 Bookmarked");
+        if (m.reaction === "thumbs-up") meta.push("👍 Liked");
+        if (m.reaction === "thumbs-down") meta.push("👎 Disliked");
+        if (meta.length > 0) {
+          lines.push(`> ${meta.join(" · ")}`);
           lines.push("");
         }
       }
@@ -771,6 +799,51 @@ export function ChatTab() {
     return () => window.removeEventListener(EDIT_EVENT, handler);
   }, [updateMessage, toast, send]);
 
+  // Round 5: Listen for reaction events (👍/👎)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, reaction } = (e as CustomEvent<{ messageId: string; reaction: "thumbs-up" | "thumbs-down" | null }>).detail;
+      if (!messageId) return;
+      updateMessage(messageId, { reaction: reaction ?? undefined });
+    };
+    window.addEventListener(REACTION_EVENT, handler);
+    return () => window.removeEventListener(REACTION_EVENT, handler);
+  }, [updateMessage]);
+
+  // Round 5: Listen for pin events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, pinned } = (e as CustomEvent<{ messageId: string; pinned: boolean }>).detail;
+      if (!messageId) return;
+      // Unpin all other messages first (only one pinned at a time)
+      const allMsgs = useAppStore.getState().chatMessages;
+      const updated = allMsgs.map((m) =>
+        m.id === messageId ? { ...m, pinned } : { ...m, pinned: false }
+      );
+      useAppStore.setState({ chatMessages: updated });
+      // Persist
+      try {
+        const toSave = updated.filter((m) => !m.pending).slice(-50);
+        localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
+      } catch { /* ignore */ }
+      toast(pinned ? "📌 Message pinned to top" : "Message unpinned", "info");
+    };
+    window.addEventListener(PIN_EVENT, handler);
+    return () => window.removeEventListener(PIN_EVENT, handler);
+  }, [toast]);
+
+  // Round 5: Listen for bookmark events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, bookmarked } = (e as CustomEvent<{ messageId: string; bookmarked: boolean }>).detail;
+      if (!messageId) return;
+      updateMessage(messageId, { bookmarked });
+      toast(bookmarked ? "🔖 Message bookmarked" : "Bookmark removed", "info");
+    };
+    window.addEventListener(BOOKMARK_EVENT, handler);
+    return () => window.removeEventListener(BOOKMARK_EVENT, handler);
+  }, [updateMessage, toast]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -969,6 +1042,23 @@ export function ChatTab() {
                   : "—"}
               </span>
             </div>
+            {/* Round 5: Reaction + bookmark + pin stats */}
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted flex items-center gap-0.5">
+                <ThumbsUp className="h-2 w-2 text-green-600" /> / <ThumbsDown className="h-2 w-2 text-red-600" />
+              </span>
+              <span className="font-mono font-semibold text-claude-text">
+                {chatStats.thumbsUp} / {chatStats.thumbsDown}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-claude-text-muted flex items-center gap-0.5">
+                <Pin className="h-2 w-2 text-claude-accent" /> / <Bookmark className="h-2 w-2 text-amber-600" />
+              </span>
+              <span className="font-mono font-semibold text-claude-text">
+                {chatStats.pinned} / {chatStats.bookmarked}
+              </span>
+            </div>
           </div>
           {Object.keys(chatStats.commandTypes).length > 0 && (
             <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
@@ -1121,6 +1211,24 @@ function dispatchReexec(cmd: LlmCommand) {
 const EDIT_EVENT = "chat-edit-message";
 function dispatchEdit(messageId: string, newContent: string) {
   window.dispatchEvent(new CustomEvent(EDIT_EVENT, { detail: { messageId, newContent } }));
+}
+
+/** Round 5: Global event bus for message reactions (👍/👎). */
+const REACTION_EVENT = "chat-reaction";
+function dispatchReaction(messageId: string, reaction: "thumbs-up" | "thumbs-down" | null) {
+  window.dispatchEvent(new CustomEvent(REACTION_EVENT, { detail: { messageId, reaction } }));
+}
+
+/** Round 5: Global event bus for message pinning. */
+const PIN_EVENT = "chat-pin";
+function dispatchPin(messageId: string, pinned: boolean) {
+  window.dispatchEvent(new CustomEvent(PIN_EVENT, { detail: { messageId, pinned } }));
+}
+
+/** Round 5: Global event bus for message bookmarks. */
+const BOOKMARK_EVENT = "chat-bookmark";
+function dispatchBookmark(messageId: string, bookmarked: boolean) {
+  window.dispatchEvent(new CustomEvent(BOOKMARK_EVENT, { detail: { messageId, bookmarked } }));
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
@@ -1395,6 +1503,70 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                   <span className="flex items-center gap-0.5 text-[7px] font-mono">
                     <Timer className="h-2 w-2" />
                     {message.durationMs < 1000 ? `${message.durationMs}ms` : `${(message.durationMs / 1000).toFixed(1)}s`}
+                  </span>
+                )}
+                {/* Round 5: Reaction + Pin + Bookmark buttons for assistant messages */}
+                {!message.pending && (
+                  <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => dispatchReaction(message.id, message.reaction === "thumbs-up" ? null : "thumbs-up")}
+                      className={`grid h-4 w-4 place-items-center rounded transition-colors ${
+                        message.reaction === "thumbs-up"
+                          ? "text-green-600 bg-green-500/10"
+                          : "text-claude-text-muted/50 hover:text-green-600 hover:bg-green-500/10"
+                      }`}
+                      title="Good response"
+                    >
+                      <ThumbsUp className="h-2.5 w-2.5" />
+                    </button>
+                    <button
+                      onClick={() => dispatchReaction(message.id, message.reaction === "thumbs-down" ? null : "thumbs-down")}
+                      className={`grid h-4 w-4 place-items-center rounded transition-colors ${
+                        message.reaction === "thumbs-down"
+                          ? "text-red-600 bg-red-500/10"
+                          : "text-claude-text-muted/50 hover:text-red-600 hover:bg-red-500/10"
+                      }`}
+                      title="Poor response"
+                    >
+                      <ThumbsDown className="h-2.5 w-2.5" />
+                    </button>
+                    <button
+                      onClick={() => dispatchPin(message.id, !message.pinned)}
+                      className={`grid h-4 w-4 place-items-center rounded transition-colors ${
+                        message.pinned
+                          ? "text-claude-accent bg-claude-accent-light/30"
+                          : "text-claude-text-muted/50 hover:text-claude-accent hover:bg-claude-accent-light/30"
+                      }`}
+                      title={message.pinned ? "Unpin from top" : "Pin to top"}
+                    >
+                      <Pin className="h-2.5 w-2.5" />
+                    </button>
+                    <button
+                      onClick={() => dispatchBookmark(message.id, !message.bookmarked)}
+                      className={`grid h-4 w-4 place-items-center rounded transition-colors ${
+                        message.bookmarked
+                          ? "text-amber-600 bg-amber-500/10"
+                          : "text-claude-text-muted/50 hover:text-amber-600 hover:bg-amber-500/10"
+                      }`}
+                      title={message.bookmarked ? "Remove bookmark" : "Bookmark this message"}
+                    >
+                      <Bookmark className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Round 5: Show pinned/bookmarked indicators on the message bubble */}
+            {(message.pinned || message.bookmarked) && !message.pending && (
+              <div className="absolute -top-1.5 -left-1.5 flex items-center gap-0.5">
+                {message.pinned && (
+                  <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-claude-accent text-white shadow-sm" title="Pinned to top">
+                    <Pin className="h-2 w-2" />
+                  </span>
+                )}
+                {message.bookmarked && (
+                  <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-amber-500 text-white shadow-sm" title="Bookmarked">
+                    <Bookmark className="h-2 w-2" />
                   </span>
                 )}
               </div>

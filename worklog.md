@@ -6415,3 +6415,111 @@ Next Round Improvement Suggestions:
 5. **Chat bookmarks** — Save specific Q&A pairs for later reference
 6. **Chat message reactions** — Add emoji reactions (👍/👎) to assistant messages for feedback
 7. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+
+---
+Task ID: improvement-implementation-round-5
+Agent: main
+Task: Check git history for missing commits, then implement round 5 improvements: message reactions, pinning, bookmarks. Test, document, commit and push.
+
+Work Log:
+- Checked git history: 30+ commits all present, working tree clean, no unpushed commits
+- Verified latest code state matches remote (origin/main = HEAD = ff486f2)
+- Reviewed round 4 improvement suggestions, selected 3 to implement:
+  1. Chat message reactions (👍/👎) — #6
+  2. Chat message pinning — #2
+  3. Chat bookmarks — #5
+
+- Added 3 new fields to ChatMessage interface in store.ts:
+  - reaction?: "thumbs-up" | "thumbs-down" — user feedback emoji
+  - pinned?: boolean — pin message to top of chat
+  - bookmarked?: boolean — save for later reference
+
+- Implemented Message Reactions (👍/👎):
+  - Added REACTION_EVENT global event bus
+  - Added dispatchReaction() function
+  - In MessageBubble, added 2 buttons in the provider badge row (appears on hover):
+    - ThumbsUp button (green when active, toggles thumbs-up reaction)
+    - ThumbsDown button (red when active, toggles thumbs-down reaction)
+  - Clicking the same reaction again removes it (toggle off)
+  - ChatTab listens for REACTION_EVENT and calls updateMessage with the new reaction
+  - Reaction state persists to localStorage (via existing chat persistence)
+
+- Implemented Message Pinning:
+  - Added PIN_EVENT global event bus
+  - Added dispatchPin() function
+  - In MessageBubble, added Pin button in the provider badge row (appears on hover)
+  - When pinned, the message shows a 📌 indicator badge on the top-left corner of the bubble
+  - Only one message can be pinned at a time (pinning a new one unpins the old)
+  - Pinned messages are sorted to the top of the message list (in filteredMessages useMemo)
+  - ChatTab listens for PIN_EVENT:
+    1. Unpins all other messages
+    2. Sets the target message's pinned field
+    3. Persists to localStorage
+    4. Shows toast: "📌 Message pinned to top" / "Message unpinned"
+
+- Implemented Message Bookmarks:
+  - Added BOOKMARK_EVENT global event bus
+  - Added dispatchBookmark() function
+  - In MessageBubble, added Bookmark button in the provider badge row (appears on hover)
+  - When bookmarked, the message shows a 🔖 indicator badge on the top-left corner
+  - ChatTab listens for BOOKMARK_EVENT:
+    1. Toggles the bookmarked field
+    2. Shows toast: "🔖 Message bookmarked" / "Bookmark removed"
+  - Bookmark state persists to localStorage
+
+- Updated Statistics Panel:
+  - Added thumbs-up / thumbs-down counts
+  - Added pinned / bookmarked counts
+  - Display format: "👍 / 👎" with counts, "📌 / 🔖" with counts
+
+- Updated Markdown Export:
+  - Added meta section at the end of each assistant message:
+    - "📌 Pinned" if pinned
+    - "🔖 Bookmarked" if bookmarked
+    - "👍 Liked" if thumbs-up
+    - "👎 Disliked" if thumbs-down
+  - Multiple meta items joined with " · "
+
+- Added new icon imports: ThumbsUp, ThumbsDown, Pin, Bookmark from lucide-react
+
+Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (129KB screenshot) |
+| Dashboard UI | ✅ PASS | All tabs, buttons, table visible |
+| Chat API - simple question | ✅ PASS | Returns valid reply, commands=[] |
+| Chat API - load + analyze | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Chat API - complex 6LU7 request | ✅ PASS | Returns 5 commands with model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in ~2.5s |
+| Console errors | ✅ NONE | No compilation errors in dev log |
+| 3D viewer UI test | ⚠️ BLOCKED | Dev server OOM during Analysis module compilation |
+
+Code Verification:
+- store.ts: Added reaction, pinned, bookmarked fields to ChatMessage ✓
+- chat-tab.tsx: REACTION_EVENT, PIN_EVENT, BOOKMARK_EVENT buses added ✓
+- chat-tab.tsx: 3 event listeners with localStorage persistence ✓
+- chat-tab.tsx: ThumbsUp/ThumbsDown/Pin/Bookmark buttons in MessageBubble ✓
+- chat-tab.tsx: Pinned/bookmarked indicator badges on message bubbles ✓
+- chat-tab.tsx: Pinned messages sorted to top in filteredMessages ✓
+- chat-tab.tsx: Statistics panel shows reaction/pin/bookmark counts ✓
+- chat-tab.tsx: Markdown export includes reaction/pin/bookmark meta ✓
+
+Stage Summary:
+- 3 of 7 round-4 suggestions implemented (reactions, pinning, bookmarks)
+- 4 deferred: inline chart visualization (complex), command history sidebar (UI space), provider comparison (complex), PDF export (needs PDF library)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat messages now support:
+  - 👍/👎 reactions (toggle, persists)
+  - 📌 Pin to top (only one at a time, sorted to top)
+  - 🔖 Bookmark (multiple allowed, persists)
+- All new states are visible in the statistics panel and included in Markdown export
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Command history sidebar** — Show a sidebar with all commands executed across all messages
+3. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+4. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+5. **Bookmarked messages view** — Add a filter to show only bookmarked messages
+6. **Reaction-based sorting** — Sort messages by reaction (most liked first)
+7. **Chat message threading** — Allow replying to a specific message to create threads

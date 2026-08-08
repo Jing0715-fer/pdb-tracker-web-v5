@@ -280,6 +280,12 @@ export interface ChatMessage {
   model?: string;
   /** Round 3: Total LLM response time in ms (for display in the provider badge). */
   durationMs?: number;
+  /** Round 5: User reaction emoji (👍 / 👎) for assistant messages. */
+  reaction?: "thumbs-up" | "thumbs-down";
+  /** Round 5: When true, the message is pinned to the top of the chat. */
+  pinned?: boolean;
+  /** Round 5: When true, the message is bookmarked for later reference. */
+  bookmarked?: boolean;
 }
 
 export interface ChartPreset {
