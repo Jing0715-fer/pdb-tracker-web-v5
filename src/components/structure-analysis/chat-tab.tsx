@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -255,6 +255,65 @@ export function ChatTab() {
     ? "Auto"
     : activeProviderInfo?.label || chatProvider;
 
+  /** Improvement #3 (round 2): Export chat history as Markdown. */
+  const handleExportMarkdown = useCallback(() => {
+    if (messages.length === 0) {
+      toast("No messages to export", "error");
+      return;
+    }
+    const lines: string[] = [
+      `# Chat Export — ${new Date().toLocaleString()}`,
+      "",
+      `**Provider:** ${providerLabel}`,
+      `**Messages:** ${messages.length}`,
+      "",
+      "---",
+      "",
+    ];
+    for (const m of messages) {
+      if (m.role === "user") {
+        lines.push(`## 👤 User`);
+        lines.push("");
+        lines.push(m.content);
+        lines.push("");
+      } else {
+        lines.push(`## 🤖 Assistant${m.provider ? ` (${m.provider})` : ""}`);
+        lines.push("");
+        if (m.content) {
+          lines.push(m.content);
+          lines.push("");
+        }
+        if (m.commands && Array.isArray(m.commands) && m.commands.length > 0) {
+          lines.push(`**Commands executed (${m.commands.length}):**`);
+          lines.push("");
+          m.commands.forEach((cmd, i) => {
+            const c = cmd as { type?: string; status?: string; error?: string };
+            const desc = describeCommand(c as unknown as LlmCommand);
+            const status = c.status || (c.error ? "error" : "done");
+            const icon = status === "error" ? "❌" : status === "done" ? "✅" : "⏳";
+            lines.push(`${i + 1}. ${icon} ${desc}${c.error ? ` — _${c.error}_` : ""}`);
+          });
+          lines.push("");
+        }
+        if (m.isError) {
+          lines.push(`> ⚠️ **Error** — click Retry in the chat to re-send this request.`);
+          lines.push("");
+        }
+      }
+      lines.push("---");
+      lines.push("");
+    }
+    const markdown = lines.join("\n");
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chat-export-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${messages.length} messages as Markdown`, "success");
+  }, [messages, providerLabel, toast]);
+
   /**
    * Core send function. Implements the agent ReAct loop:
    * 1. Send user message + history to /api/llm/chat
@@ -478,31 +537,56 @@ export function ChatTab() {
               }
             } else {
               // Improvement #5: Show command preview with human-readable descriptions
+              // Improvement #2 (round 2): Push all commands with "pending" status first
+              const pendingCmds = commands.map((c) => {
+                const cmd = c as LlmCommand;
+                return {
+                  type: cmd.type,
+                  ...("id" in cmd ? { id: cmd.id } : {}),
+                  status: "pending" as const,
+                };
+              });
+              allCommands.push(...pendingCmds);
               updateMessage(pendingId, {
                 content: `${reply || `⚡ Executing ${commands.length} command(s)…`}`,
-                commands: [...allCommands, ...commands],
+                commands: [...allCommands],
                 pending: true,
                 provider,
                 agentStep: "executing",
               });
-            }
 
-            for (const cmd of commands) {
-              try {
-                const result = await executeCommand(viewer, cmd);
-                allCommands.push({ type: cmd.type, ...("id" in cmd ? { id: cmd.id } : {}) });
-                logCommand({ type: cmd.type, ok: result.ok, detail: result.detail });
-                if (cmd.type === "analyze_run" || cmd.type === "analyze_metadata" || cmd.type === "analyze_interface") {
-                  allAnalysisResults.push({
-                    type: cmd.type,
-                    ok: result.ok,
-                    detail: result.detail,
-                    data: (result as { analysisResult?: unknown }).analysisResult,
-                  });
+              // Execute commands one by one, updating status in real-time
+              for (let ci = 0; ci < commands.length; ci++) {
+                const cmd = commands[ci];
+                const cmdIndex = allCommands.length - commands.length + ci;
+
+                // Set this command to "running"
+                (allCommands[cmdIndex] as Record<string, unknown>).status = "running";
+                updateMessage(pendingId, { commands: [...allCommands] });
+
+                try {
+                  const result = await executeCommand(viewer, cmd);
+                  (allCommands[cmdIndex] as Record<string, unknown>).status = result.ok ? "done" : "error";
+                  if (!result.ok) {
+                    (allCommands[cmdIndex] as Record<string, unknown>).error = result.detail || "Failed";
+                  }
+                  logCommand({ type: cmd.type, ok: result.ok, detail: result.detail });
+                  if (cmd.type === "analyze_run" || cmd.type === "analyze_metadata" || cmd.type === "analyze_interface") {
+                    allAnalysisResults.push({
+                      type: cmd.type,
+                      ok: result.ok,
+                      detail: result.detail,
+                      data: (result as { analysisResult?: unknown }).analysisResult,
+                    });
+                  }
+                } catch (err) {
+                  (allCommands[cmdIndex] as Record<string, unknown>).status = "error";
+                  (allCommands[cmdIndex] as Record<string, unknown>).error = err instanceof Error ? err.message : String(err);
+                  logCommand({ type: cmd.type, ok: false, detail: "Execution error" });
                 }
-              } catch (err) {
-                allCommands.push({ type: cmd.type, error: err instanceof Error ? err.message : String(err) });
-                logCommand({ type: cmd.type, ok: false, detail: "Execution error" });
+
+                // Update the message to show the new status
+                updateMessage(pendingId, { commands: [...allCommands] });
               }
             }
           }
@@ -643,15 +727,26 @@ export function ChatTab() {
 
         <div className="ml-auto flex items-center gap-0.5">
           {messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0 text-claude-text-muted hover:text-destructive"
-              onClick={() => { clearChat(); toast("Chat cleared", "info"); }}
-              title="Clear chat"
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                onClick={handleExportMarkdown}
+                title="Export chat as Markdown"
+              >
+                <Download className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-claude-text-muted hover:text-destructive"
+                onClick={() => { clearChat(); toast("Chat cleared", "info"); }}
+                title="Clear chat"
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -854,26 +949,36 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 </div>
                 <div className="space-y-0.5">
                   {message.commands.map((cmd, i) => {
-                    const c = cmd as { type?: string; error?: string; id?: string; recipe?: string; compId?: string; chain?: string; resno?: number; preset?: string; theme?: string };
+                    const c = cmd as { type?: string; error?: string; status?: string; id?: string; recipe?: string; compId?: string; chain?: string; resno?: number; preset?: string; theme?: string };
                     // Improvement #5: Use human-readable description
                     const desc = describeCommand(c as unknown as LlmCommand);
+                    // Improvement #2 (round 2): Real-time status icons
+                    const status = c.status || (c.error ? "error" : "done");
+                    const statusIcon = status === "pending" ? (
+                      <Clock className="h-2.5 w-2.5 text-claude-text-muted/60 shrink-0" />
+                    ) : status === "running" ? (
+                      <Loader2 className="h-2.5 w-2.5 text-claude-accent animate-spin shrink-0" />
+                    ) : status === "error" ? (
+                      <X className="h-2.5 w-2.5 text-destructive shrink-0" />
+                    ) : (
+                      <Check className="h-2.5 w-2.5 text-green-600 shrink-0" />
+                    );
+                    const statusColor = status === "pending"
+                      ? "bg-claude-text-muted/5 text-claude-text-muted border-claude-border/20"
+                      : status === "running"
+                      ? "bg-claude-accent/10 text-claude-accent border-claude-accent/20"
+                      : status === "error"
+                      ? "bg-destructive/10 text-destructive border-destructive/20"
+                      : "bg-green-500/10 text-green-700 dark:text-green-500 border-green-500/20";
                     return (
                       <div
                         key={i}
-                        className={`flex items-center gap-1 rounded px-1 py-0.5 text-[9px] ${
-                          c.error
-                            ? "bg-destructive/10 text-destructive border border-destructive/20"
-                            : "bg-green-500/10 text-green-700 dark:text-green-500 border border-green-500/20"
-                        }`}
-                        title={c.error || "executed successfully"}
+                        className={`flex items-center gap-1 rounded px-1 py-0.5 text-[9px] border ${statusColor}`}
+                        title={c.error || (status === "done" ? "executed successfully" : status)}
                       >
                         <span className="font-mono text-[8px] opacity-60 shrink-0">{i + 1}.</span>
                         <span className="truncate flex-1">{desc}</span>
-                        {c.error ? (
-                          <span className="text-[8px] shrink-0">✗</span>
-                        ) : (
-                          <span className="text-[8px] shrink-0">✓</span>
-                        )}
+                        {statusIcon}
                       </div>
                     );
                   })}

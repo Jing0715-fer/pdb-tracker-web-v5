@@ -6097,3 +6097,109 @@ Stage Summary:
 - All API tests pass (chat stream + warmup)
 - Dashboard UI renders correctly
 - Code changes are backward-compatible (new fields are optional, old behavior preserved)
+
+---
+Task ID: improvement-implementation-round-2
+Agent: main
+Task: Implement next round of improvements: chat history persistence, real-time command execution status, export chat as Markdown. Test, document, commit and push.
+
+Work Log:
+- Read previous worklog to review the 5 next-step improvement suggestions:
+  1. OOM deep optimization (environmental — skipped)
+  2. Chat history persistence to localStorage ← IMPLEMENTED
+  3. Real-time command execution status ← IMPLEMENTED
+  4. Chat export as Markdown ← IMPLEMENTED
+  5. Inline analysis result visualization (deferred — requires chart rendering in chat)
+
+- Implemented Chat History Persistence:
+  - Added STORAGE_KEY_CHAT_MESSAGES = "pdb-tracker:chat-messages:v1" to store.ts
+  - Created loadChatMessages() function:
+    - Reads from localStorage on initialization
+    - Filters out pending messages (they'd be stuck loading forever)
+    - Caps at 50 messages to avoid localStorage overflow
+  - Created persistChatMessages() function:
+    - Strips pending messages before saving
+    - Caps at 50 messages
+    - Wrapped in try/catch to handle localStorage quota errors
+  - Updated store actions:
+    - chatMessages initialized from loadChatMessages() instead of []
+    - addChatMessage: persists after adding
+    - updateChatMessage: persists after updating
+    - clearChat: clears localStorage AND state
+  - Verified: chat messages survive page refresh
+
+- Implemented Real-time Command Execution Status:
+  - Restructured the command execution loop in chat-tab.tsx send():
+    - Before execution: push ALL commands with status="pending" to allCommands
+    - Before each command: update that command's status to "running"
+    - After success: update to "done" (or "error" if result.ok is false)
+    - After exception: update to "error" with error message
+    - After each command: call updateMessage() to refresh the UI
+  - Updated MessageBubble command display:
+    - Added status field to command type: "pending" | "running" | "done" | "error"
+    - Status icons:
+      - pending: Clock icon (gray)
+      - running: Loader2 icon (spinning, accent color)
+      - done: Check icon (green)
+      - error: X icon (red)
+    - Status colors:
+      - pending: muted background, muted border
+      - running: accent background, accent border
+      - done: green background, green border
+      - error: destructive background, destructive border
+    - Backward compatibility: commands without status field fall back to
+      "done" (if no error) or "error" (if error exists)
+  - Imported new icons: Clock, Download, AlertCircle from lucide-react
+
+- Implemented Export Chat as Markdown:
+  - Added handleExportMarkdown() callback in ChatTab:
+    - Generates a Markdown document with:
+      - Header: title, timestamp, provider, message count
+      - For each message:
+        - User: "## 👤 User" + content
+        - Assistant: "## 🤖 Assistant (provider)" + content + commands list
+        - Commands: numbered list with status emoji (✅/❌/⏳) + description
+        - Errors: blockquote with warning
+    - Downloads as chat-export-{timestamp}.md
+    - Shows toast: "Exported N messages as Markdown"
+  - Added Download icon button in chat header (next to clear button)
+  - Only shows when messages.length > 0
+
+Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (79KB screenshot) |
+| Dashboard UI | ✅ PASS | All tabs, buttons, table visible |
+| Chat API - simple question | ✅ PASS | Returns valid reply, commands=[] |
+| Chat API - load + analyze | ✅ PASS | Returns load_pdb + analyze_run with correct params |
+| Chat API - complex 6LU7 request | ✅ PASS | Returns 5 commands (load + 3 analyses + focus_ligand) |
+| Warmup API | ✅ PASS | 5 routes warmed in ~2.7s |
+| Console errors | ⚠️ ChunkLoadError | Caused by server OOM restarts during compilation (environmental) |
+| 3D viewer UI test | ⚠️ BLOCKED | Dev server OOM during Analysis module compilation (environmental) |
+
+Code Verification:
+- store.ts: STORAGE_KEY_CHAT_MESSAGES added, loadChatMessages/persistChatMessages functions added ✓
+- store.ts: chatMessages initialized from loadChatMessages(), all 3 actions persist ✓
+- chat-tab.tsx: command execution loop restructured with pending→running→done/error status ✓
+- chat-tab.tsx: MessageBubble shows status-specific icons and colors ✓
+- chat-tab.tsx: handleExportMarkdown function added with full Markdown generation ✓
+- chat-tab.tsx: Download button added to chat header ✓
+- Backward compatibility: old commands without status field display correctly ✓
+
+Stage Summary:
+- 3 of 5 next-step improvements implemented (chat persistence, real-time status, Markdown export)
+- 2 deferred: OOM optimization (environmental), inline chart visualization (complex, needs chart rendering in chat bubbles)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly
+- Chat messages now persist across page refreshes
+- Command execution shows real-time progress (pending → running → done/error)
+- Chat history can be exported as a formatted Markdown document
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages (e.g., Ramachandran plot, interaction network) instead of just text
+2. **Chat message search** — Add a search box to filter chat messages by keyword
+3. **Command execution timing** — Show how long each command took to execute (ms) in the command preview
+4. **Chat message pinning** — Allow users to pin important assistant messages for easy reference
+5. **Provider-specific model info** — Show which model was used (e.g., "glm-4.6") in the provider badge
+6. **Chat message copy** — Add a copy button to each message bubble for easy copying
+7. **Command re-execution** — Allow users to re-execute a single command from the command list

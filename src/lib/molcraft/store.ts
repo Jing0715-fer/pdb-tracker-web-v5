@@ -21,6 +21,7 @@ const STORAGE_KEY_REPORTS = "pdb-tracker:molcraft-reports";
 const STORAGE_KEY_CHAT_PROVIDER = "pdb-tracker:llm-provider:v2";
 const STORAGE_KEY_MEASUREMENTS = "pdb-tracker:measurements:v1";
 const STORAGE_KEY_INTERACTION_LINES = "pdb-tracker:interaction-lines:v1";
+const STORAGE_KEY_CHAT_MESSAGES = "pdb-tracker:chat-messages:v1";
 
 function loadFromStorage<T>(key: string): T[] {
   if (typeof window === "undefined") return [];
@@ -691,16 +692,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveAnalysisChart: (chartId) => set({ activeAnalysisChart: chartId }),
 
   // Chat / agent conversation state
-  chatMessages: [],
-  addChatMessage: (m) =>
-    set((state) => ({ chatMessages: [...state.chatMessages, m] })),
+  chatMessages: loadChatMessages(),
+  addChatMessage: (m) => {
+    const newMessages = [...get().chatMessages, m];
+    persistChatMessages(newMessages);
+    set({ chatMessages: newMessages });
+  },
   updateChatMessage: (id, patch) =>
-    set((state) => ({
-      chatMessages: state.chatMessages.map((m) =>
+    set((state) => {
+      const newMessages = state.chatMessages.map((m) =>
         m.id === id ? { ...m, ...patch } : m
-      ),
-    })),
-  clearChat: () => set({ chatMessages: [] }),
+      );
+      persistChatMessages(newMessages);
+      return { chatMessages: newMessages };
+    }),
+  clearChat: () => {
+    persistChatMessages([]);
+    set({ chatMessages: [] });
+  },
   chatProvider: loadChatProvider(),
   setChatProvider: (providerId) => {
     persistChatProvider(providerId);
@@ -843,5 +852,29 @@ function persistInteractionLines(lines: AppState["interactionLines"]): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY_INTERACTION_LINES, JSON.stringify(lines.slice(0, 100)));
+  } catch { /* ignore */ }
+}
+
+// ---- chat message persistence (survive page refresh) ----
+function loadChatMessages(): ChatMessage[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CHAT_MESSAGES);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Don't restore pending messages — they'd be stuck in "loading" forever
+    return parsed.filter((m: ChatMessage) => !m.pending).slice(-50);
+  } catch {
+    return [];
+  }
+}
+
+function persistChatMessages(messages: ChatMessage[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Cap at 50 messages, strip pending messages (they're transient)
+    const toSave = messages.filter((m) => !m.pending).slice(-50);
+    localStorage.setItem(STORAGE_KEY_CHAT_MESSAGES, JSON.stringify(toSave));
   } catch { /* ignore */ }
 }
