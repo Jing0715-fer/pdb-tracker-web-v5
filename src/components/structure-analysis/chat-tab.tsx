@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -186,6 +186,11 @@ export function ChatTab() {
   const [showSearch, setShowSearch] = useState(false);
   // Round 4: Chat statistics state
   const [showStats, setShowStats] = useState(false);
+  // Round 6: Filter + sort state
+  const [filterMode, setFilterMode] = useState<"all" | "bookmarked" | "reactions">("all");
+  const [sortMode, setSortMode] = useState<"default" | "reactions" | "recent">("default");
+  // Round 6: Command history sidebar state
+  const [showCmdHistory, setShowCmdHistory] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -285,11 +290,19 @@ export function ChatTab() {
 
   // Round 4: Filter messages by search query
   // Round 5: Pinned messages always appear at the top
+  // Round 6: Added filterMode (all/bookmarked/reactions) and sortMode (default/reactions/recent)
   const filteredMessages = useMemo(() => {
     let result = messages;
+    // Apply filter mode
+    if (filterMode === "bookmarked") {
+      result = result.filter((m) => m.bookmarked);
+    } else if (filterMode === "reactions") {
+      result = result.filter((m) => m.reaction !== undefined);
+    }
+    // Apply search query
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      result = messages.filter((m) =>
+      result = result.filter((m) =>
         m.content?.toLowerCase().includes(q) ||
         m.commands?.some((cmd) => {
           const c = cmd as { type?: string };
@@ -297,13 +310,28 @@ export function ChatTab() {
         })
       );
     }
-    // Sort: pinned messages first, then by original order
-    return [...result].sort((a, b) => {
-      if (a.pinned && !b.pinned) return -1;
-      if (!a.pinned && b.pinned) return 1;
-      return 0;
-    });
-  }, [messages, searchQuery]);
+    // Apply sort mode
+    const sorted = [...result];
+    if (sortMode === "reactions") {
+      // Sort by reaction: thumbs-up first, then thumbs-down, then no reaction
+      sorted.sort((a, b) => {
+        const aScore = a.reaction === "thumbs-up" ? 2 : a.reaction === "thumbs-down" ? 1 : 0;
+        const bScore = b.reaction === "thumbs-up" ? 2 : b.reaction === "thumbs-down" ? 1 : 0;
+        return bScore - aScore;
+      });
+    } else if (sortMode === "recent") {
+      // Sort by timestamp descending (most recent first)
+      sorted.sort((a, b) => b.ts - a.ts);
+    } else {
+      // Default: pinned messages first, then by original order
+      sorted.sort((a, b) => {
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return 0;
+      });
+    }
+    return sorted;
+  }, [messages, searchQuery, filterMode, sortMode]);
 
   // Round 4: Calculate chat statistics
   const chatStats = useMemo(() => {
@@ -358,6 +386,39 @@ export function ChatTab() {
       bookmarked,
       pinned,
     };
+  }, [messages]);
+
+  // Round 6: Build command history list from all messages
+  const commandHistory = useMemo(() => {
+    const history: Array<{
+      messageId: string;
+      messageTs: number;
+      cmdIndex: number;
+      type: string;
+      status: string;
+      durationMs?: number;
+      error?: string;
+      desc: string;
+    }> = [];
+    messages.forEach((m) => {
+      if (Array.isArray(m.commands)) {
+        m.commands.forEach((cmd, i) => {
+          const c = cmd as Record<string, unknown>;
+          history.push({
+            messageId: m.id,
+            messageTs: m.ts,
+            cmdIndex: i,
+            type: String(c.type || "unknown"),
+            status: String(c.status || (c.error ? "error" : "done")),
+            durationMs: typeof c.durationMs === "number" ? c.durationMs : undefined,
+            error: typeof c.error === "string" ? c.error : undefined,
+            desc: describeCommand(c as unknown as LlmCommand),
+          });
+        });
+      }
+    });
+    // Sort by timestamp descending (most recent first)
+    return history.sort((a, b) => b.messageTs - a.messageTs);
   }, [messages]);
 
   /** Improvement #3 (round 2): Export chat history as Markdown. */
@@ -951,6 +1012,15 @@ export function ChatTab() {
               <Button
                 variant="ghost"
                 size="sm"
+                className={`h-7 w-7 p-0 ${showCmdHistory ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={() => setShowCmdHistory(!showCmdHistory)}
+                title="Command history"
+              >
+                <History className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
                 onClick={handleExportMarkdown}
                 title="Export chat as Markdown"
@@ -994,9 +1064,42 @@ export function ChatTab() {
               </button>
             )}
           </div>
-          {searchQuery && (
+          {/* Round 6: Filter + Sort controls */}
+          <div className="mt-1 flex items-center gap-1 flex-wrap">
+            <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted/70">Filter:</span>
+            {(["all", "bookmarked", "reactions"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setFilterMode(mode)}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors ${
+                  filterMode === mode
+                    ? "bg-claude-accent text-white"
+                    : "bg-claude-text-muted/10 text-claude-text-muted hover:bg-claude-accent-light/30"
+                }`}
+                title={mode === "all" ? "Show all messages" : mode === "bookmarked" ? "Show only bookmarked" : "Show only reacted"}
+              >
+                {mode === "all" ? "All" : mode === "bookmarked" ? "🔖 Bookmarked" : "👍👎 Reacted"}
+              </button>
+            ))}
+            <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted/70 ml-2">Sort:</span>
+            {(["default", "reactions", "recent"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setSortMode(mode)}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-colors ${
+                  sortMode === mode
+                    ? "bg-claude-accent text-white"
+                    : "bg-claude-text-muted/10 text-claude-text-muted hover:bg-claude-accent-light/30"
+                }`}
+                title={mode === "default" ? "Pinned first, then chronological" : mode === "reactions" ? "Most liked first" : "Most recent first"}
+              >
+                {mode === "default" ? "Default" : mode === "reactions" ? "👍 Reactions" : "Recent"}
+              </button>
+            ))}
+          </div>
+          {(searchQuery || filterMode !== "all") && (
             <div className="mt-1 text-[9px] text-claude-text-muted">
-              {filteredMessages.length} of {messages.length} messages match
+              {filteredMessages.length} of {messages.length} messages {filterMode !== "all" ? `(${filterMode})` : "match"}
             </div>
           )}
         </div>
@@ -1084,6 +1187,49 @@ export function ChatTab() {
                   </Badge>
                 ))}
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Round 6: Command history sidebar (collapsible) */}
+      {showCmdHistory && messages.length > 0 && (
+        <div className="shrink-0 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40 max-h-56 overflow-y-auto sa-scroll">
+          <div className="flex items-center gap-1 mb-1">
+            <History className="h-3 w-3 text-claude-accent" />
+            <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted">
+              Command History ({commandHistory.length})
+            </span>
+          </div>
+          {commandHistory.length === 0 ? (
+            <p className="text-[9px] text-claude-text-muted/60 py-2 text-center">No commands executed yet</p>
+          ) : (
+            <div className="space-y-0.5">
+              {commandHistory.map((cmd, i) => {
+                const statusIcon = cmd.status === "pending" ? "⏳" : cmd.status === "running" ? "🔄" : cmd.status === "error" ? "❌" : "✅";
+                const time = cmd.durationMs != null
+                  ? (cmd.durationMs < 1000 ? `${cmd.durationMs}ms` : `${(cmd.durationMs / 1000).toFixed(1)}s`)
+                  : "";
+                const timeStr = new Date(cmd.messageTs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                return (
+                  <div
+                    key={`${cmd.messageId}-${cmd.cmdIndex}`}
+                    className={`flex items-center gap-1 rounded px-1 py-0.5 text-[9px] border ${
+                      cmd.status === "error"
+                        ? "bg-destructive/5 text-destructive border-destructive/15"
+                        : cmd.status === "running"
+                        ? "bg-claude-accent/5 text-claude-accent border-claude-accent/15"
+                        : "bg-claude-text-muted/5 text-claude-text border-claude-border/15"
+                    }`}
+                    title={cmd.error || `Executed at ${timeStr}`}
+                  >
+                    <span className="text-[8px] shrink-0">{statusIcon}</span>
+                    <span className="font-mono text-[7px] text-claude-text-muted/60 shrink-0">{timeStr}</span>
+                    <span className="truncate flex-1">{cmd.desc}</span>
+                    {time && <span className="font-mono text-[7px] text-claude-text-muted/50 shrink-0">{time}</span>}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

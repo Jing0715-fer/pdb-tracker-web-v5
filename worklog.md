@@ -6523,3 +6523,102 @@ Next Round Improvement Suggestions:
 5. **Bookmarked messages view** — Add a filter to show only bookmarked messages
 6. **Reaction-based sorting** — Sort messages by reaction (most liked first)
 7. **Chat message threading** — Allow replying to a specific message to create threads
+
+---
+Task ID: improvement-implementation-round-6
+Agent: main
+Task: Check git history, implement round 6 improvements: bookmarked filter view, reaction-based sorting, command history sidebar. Test, document, commit and push.
+
+Work Log:
+- Checked git history: 10 recent commits all present, working tree clean, no unpushed commits, local = origin/main = bb4a9e2
+- Reviewed round 5 improvement suggestions, selected 3 to implement:
+  1. Bookmarked messages filter view (#5)
+  2. Reaction-based sorting (#6)
+  3. Command history sidebar (#2)
+
+- Added Round 6 state variables to ChatTab:
+  - filterMode: "all" | "bookmarked" | "reactions"
+  - sortMode: "default" | "reactions" | "recent"
+  - showCmdHistory: boolean (command history sidebar toggle)
+
+- Implemented Bookmarked Messages Filter:
+  - Added filterMode state with 3 options: All / 🔖 Bookmarked / 👍👎 Reacted
+  - Updated filteredMessages useMemo to apply filterMode:
+    - "all": show all messages (default)
+    - "bookmarked": show only messages with bookmarked=true
+    - "reactions": show only messages with reaction set (thumbs-up or thumbs-down)
+  - Added filter button row in the search bar area:
+    - "All" button (accent when active)
+    - "🔖 Bookmarked" button
+    - "👍👎 Reacted" button
+  - Updated match count display to show filter mode: "3 of 12 messages (bookmarked)"
+
+- Implemented Reaction-Based Sorting:
+  - Added sortMode state with 3 options: Default / 👍 Reactions / Recent
+  - Updated filteredMessages useMemo to apply sortMode:
+    - "default": pinned first, then chronological (existing behavior)
+    - "reactions": thumbs-up first (score=2), then thumbs-down (score=1), then no reaction (score=0)
+    - "recent": most recent first (by timestamp descending)
+  - Added sort button row in the search bar area:
+    - "Default" button
+    - "👍 Reactions" button
+    - "Recent" button
+
+- Implemented Command History Sidebar:
+  - Added showCmdHistory state toggle
+  - Added History icon button in chat header (between Statistics and Export)
+  - Created commandHistory useMemo that:
+    - Iterates all messages, flattening all commands into a single list
+    - For each command, extracts: messageId, messageTs, cmdIndex, type, status, durationMs, error, desc
+    - Sorts by timestamp descending (most recent first)
+  - Added collapsible sidebar panel with:
+    - Header: "Command History (N)" with History icon
+    - Empty state: "No commands executed yet"
+    - Command list with:
+      - Status emoji (⏳/🔄/❌/✅)
+      - Timestamp (HH:MM format)
+      - Human-readable description (via describeCommand)
+      - Execution duration (if available)
+    - Color-coded by status (red for error, accent for running, muted for done)
+    - Scrollable (max-h-56) with custom scrollbar
+
+- Added History icon import from lucide-react
+
+Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (80KB screenshot) |
+| Dashboard UI | ✅ PASS | All tabs, buttons, table visible |
+| Chat API - simple question | ✅ PASS | Returns valid reply, commands=[] |
+| Chat API - load + analyze | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Chat API - complex 6LU7 request | ✅ PASS | Returns 5 commands with model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in ~3.9s |
+| Console errors | ✅ NONE | No compilation errors in dev log |
+
+Code Verification:
+- chat-tab.tsx: filterMode, sortMode, showCmdHistory state added ✓
+- chat-tab.tsx: filteredMessages applies filter + sort modes ✓
+- chat-tab.tsx: Filter buttons (All/Bookmarked/Reacted) in search bar ✓
+- chat-tab.tsx: Sort buttons (Default/Reactions/Recent) in search bar ✓
+- chat-tab.tsx: commandHistory useMemo flattens all commands ✓
+- chat-tab.tsx: Command history sidebar with status icons + timestamps ✓
+- chat-tab.tsx: History icon button in chat header ✓
+
+Stage Summary:
+- 3 of 7 round-5 suggestions implemented (bookmark filter, reaction sort, command history)
+- 4 deferred: inline chart visualization (complex), provider comparison (complex), PDF export (needs library), message threading (complex UX)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat now supports:
+  - Filter by bookmarked or reacted messages
+  - Sort by reactions (most liked first) or recency
+  - Command history sidebar showing all commands across all messages with timestamps
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Command history export** — Export the command history as a CSV file
+6. **Reaction summary in stats** — Show which commands got the most reactions
+7. **Quick filter chips** — Add quick-filter chips for common command types (load_pdb, analyze_run, etc.)
