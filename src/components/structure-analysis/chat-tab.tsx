@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -102,6 +102,57 @@ const SUGGESTIONS = [
     prompt:
       "Load 1CBS, set the representation to ball-and-stick, color by element, then focus on residue ARG30.",
   },
+];
+
+/**
+ * Round 12: Extended chat template library — categorized prompt templates
+ * for common structural biology analysis tasks.
+ */
+interface ChatTemplate {
+  icon: string;
+  title: string;
+  prompt: string;
+  category: string;
+}
+
+const TEMPLATE_LIBRARY: ChatTemplate[] = [
+  // ── Structure Loading ──
+  { icon: "📥", title: "Load PDB", prompt: "Load PDB structure {ID} and show its basic information.", category: "Loading" },
+  { icon: "🧬", title: "Load AlphaFold", prompt: "Load AlphaFold model for UniProt ID {UNIPROT_ID} and analyze its confidence.", category: "Loading" },
+  { icon: "📦", title: "Load EMDB", prompt: "Load EMDB volume {EMDB_ID} at detail level 3.", category: "Loading" },
+
+  // ── Visualization ──
+  { icon: "🎨", title: "Cartoon + Chain", prompt: "Load {ID}, set representation to cartoon, color by chain.", category: "Visualization" },
+  { icon: "⚛️", title: "Ball & Stick", prompt: "Load {ID}, set representation to ball-and-stick, color by element.", category: "Visualization" },
+  { icon: "🌈", title: "Surface + Hydrophobicity", prompt: "Load {ID}, set representation to molecular-surface, color by hydrophobicity.", category: "Visualization" },
+  { icon: "🎯", title: "Focus Residue", prompt: "Load {ID} and focus the camera on residue {CHAIN}{RESNO}.", category: "Visualization" },
+  { icon: "💊", title: "Focus Ligand", prompt: "Load {ID} and focus the camera on ligand {COMPID}.", category: "Visualization" },
+
+  // ── Analysis ──
+  { icon: "📊", title: "Metadata", prompt: "Get metadata for PDB {ID} including resolution, chains, and ligands.", category: "Analysis" },
+  { icon: "🤝", title: "H-bonds", prompt: "Load {ID} and run hydrogen bond analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "⚡", title: "Salt Bridges", prompt: "Load {ID} and run salt bridge analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "💧", title: "Hydrophobic", prompt: "Load {ID} and run hydrophobic contacts analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "🔄", title: "All Interactions", prompt: "Load {ID} and run all_interactions analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "📐", title: "Ramachandran", prompt: "Load {ID} and run Ramachandran analysis to check structure quality.", category: "Analysis" },
+  { icon: "🌡️", title: "B-factor", prompt: "Load {ID} and run B-factor analysis to identify flexible regions.", category: "Analysis" },
+  { icon: "🌐", title: "SASA", prompt: "Load {ID} and run SASA (solvent accessible surface area) analysis.", category: "Analysis" },
+  { icon: "🧩", title: "Secondary Structure", prompt: "Load {ID} and run secondary structure analysis.", category: "Analysis" },
+  { icon: "🔗", title: "Disulfide Bonds", prompt: "Load {ID} and detect all disulfide bonds.", category: "Analysis" },
+  { icon: "⚛️", title: "Aromatic Stacking", prompt: "Load {ID} and detect aromatic stacking interactions.", category: "Analysis" },
+  { icon: "💧", title: "Water Bridges", prompt: "Load {ID} and detect water-bridged hydrogen bonds.", category: "Analysis" },
+
+  // ── Drug Discovery ──
+  { icon: "💊", title: "Binding Pocket", prompt: "Load {ID} and analyze the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
+  { icon: "🎯", title: "Druggability", prompt: "Load {ID} and predict the druggability of the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
+  { icon: "🔍", title: "Detect Pockets", prompt: "Load {ID} and detect all binding pockets on the protein surface.", category: "Drug Discovery" },
+  { icon: "🧪", title: "Virtual Screening", prompt: "Load {ID} and run virtual screening on the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
+  { icon: "⚡", title: "Electrostatic Surface", prompt: "Load {ID} and show the electrostatic surface potential.", category: "Drug Discovery" },
+
+  // ── Comprehensive ──
+  { icon: "📋", title: "Full Report", prompt: "Load {ID} and generate a comprehensive analysis report: metadata, quality, interactions, and binding pocket analysis.", category: "Comprehensive" },
+  { icon: "🔬", title: "Enzyme Analysis", prompt: "Load {ID} (enzyme) and analyze: active site residues, catalytic mechanism, ligand interactions, and generate a report.", category: "Comprehensive" },
+  { icon: "🦠", title: "Antibody Analysis", prompt: "Load {ID} (antibody) and analyze: CDR regions, antigen-binding interface, and paratope characterization.", category: "Comprehensive" },
 ];
 
 /**
@@ -219,6 +270,11 @@ export function ChatTab() {
   const [showCmdHistory, setShowCmdHistory] = useState(false);
   // Round 7: Command type quick filter
   const [cmdTypeFilter, setCmdTypeFilter] = useState<string | null>(null);
+  // Round 12: Template library state
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [templateCategory, setTemplateCategory] = useState<string>("All");
+  // Round 12: Multi-file upload state
+  const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; content: string; format: string }>>([]);
   // Round 11: Drag-and-drop state
   const [isDragging, setIsDragging] = useState(false);
 
@@ -1147,36 +1203,61 @@ export function ChatTab() {
     setIsDragging(false);
     const files = e.dataTransfer.files;
     if (!files || files.length === 0) return;
-    const file = files[0];
-    // Check if it's a PDB file (by extension or MIME type)
-    const name = file.name.toLowerCase();
-    const isPdb = name.endsWith('.pdb') || name.endsWith('.pdb') || name.endsWith('.cif') ||
-                  name.endsWith('.mmcif') || name.endsWith('.ent') ||
-                  file.type === 'chemical/x-pdb' || file.type === 'chemical/x-cif';
-    if (!isPdb) {
-      toast("Please drop a .pdb, .cif, or .ent file", "error");
+
+    // Round 12: Support multiple files
+    const validFiles: File[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const name = file.name.toLowerCase();
+      const isPdb = name.endsWith('.pdb') || name.endsWith('.cif') ||
+                    name.endsWith('.mmcif') || name.endsWith('.ent') ||
+                    file.type === 'chemical/x-pdb' || file.type === 'chemical/x-cif';
+      if (isPdb) validFiles.push(file);
+    }
+
+    if (validFiles.length === 0) {
+      toast("Please drop .pdb, .cif, or .ent files", "error");
       return;
     }
-    // Read the file and send as a load_structure_data command via chat
-    const reader = new FileReader();
-    reader.onload = () => {
-      const content = reader.result as string;
-      const prompt = `I've uploaded a structure file: ${file.name}. Please load it and analyze its structure.`;
-      // Store the file content for the agent to use
+
+    // Read all valid files
+    const readPromises = validFiles.map(file => {
+      return new Promise<{ name: string; content: string; format: string }>((resolve, reject) => {
+        const reader = new FileReader();
+        const name = file.name.toLowerCase();
+        reader.onload = () => {
+          resolve({
+            name: file.name,
+            content: (reader.result as string).slice(0, 500000),
+            format: name.endsWith('.cif') || name.endsWith('.mmcif') ? 'cif' : 'pdb',
+          });
+        };
+        reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+        reader.readAsText(file);
+      });
+    });
+
+    Promise.all(readPromises).then(fileData => {
+      // Add to uploaded files list
+      setUploadedFiles(prev => [...prev, ...fileData]);
+
+      // Store all files in sessionStorage
       try {
-        sessionStorage.setItem('pdb-tracker:uploaded-file', JSON.stringify({
-          name: file.name,
-          content: content.slice(0, 500000), // Cap at 500KB
-          format: name.endsWith('.cif') || name.endsWith('.mmcif') ? 'cif' : 'pdb',
-        }));
+        sessionStorage.setItem('pdb-tracker:uploaded-files', JSON.stringify(fileData));
       } catch { /* ignore quota errors */ }
-      send(prompt);
-      toast(`File "${file.name}" uploaded — analyzing...`, "success");
-    };
-    reader.onerror = () => {
-      toast("Failed to read file", "error");
-    };
-    reader.readAsText(file);
+
+      if (fileData.length === 1) {
+        const f = fileData[0];
+        send(`I've uploaded a structure file: ${f.name}. Please load it and analyze its structure.`);
+        toast(`File "${f.name}" uploaded — analyzing...`, "success");
+      } else {
+        const names = fileData.map(f => f.name).join(", ");
+        send(`I've uploaded ${fileData.length} structure files: ${names}. Please load them and compare their structures.`);
+        toast(`${fileData.length} files uploaded — analyzing...`, "success");
+      }
+    }).catch(err => {
+      toast(err.message || "Failed to read files", "error");
+    });
   }, [send, toast]);
 
   return (
@@ -1658,6 +1739,79 @@ export function ChatTab() {
                 </button>
               ))}
             </div>
+            {/* Round 12: Template library toggle */}
+            <button
+              onClick={() => setShowTemplates(!showTemplates)}
+              className="mt-2 flex items-center gap-1 text-[10px] text-claude-accent hover:underline"
+            >
+              <LayoutGrid className="h-3 w-3" />
+              {showTemplates ? "Hide" : "Show"} template library ({TEMPLATE_LIBRARY.length} templates)
+            </button>
+            {/* Round 12: Template library panel */}
+            {showTemplates && (
+              <div className="w-full mt-1 max-h-48 overflow-y-auto sa-scroll rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/60 dark:bg-[#1a1917]/60 p-1.5">
+                {/* Category filter */}
+                <div className="flex items-center gap-0.5 flex-wrap mb-1.5 pb-1 border-b border-claude-border-light/30 dark:border-[#3d3832]/30">
+                  {["All", ...Array.from(new Set(TEMPLATE_LIBRARY.map(t => t.category)))].map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setTemplateCategory(cat)}
+                      className={`px-1.5 py-0.5 rounded text-[8px] font-medium transition-colors ${
+                        templateCategory === cat
+                          ? "bg-claude-accent text-white"
+                          : "bg-claude-text-muted/10 text-claude-text-muted hover:bg-claude-accent-light/30"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+                {/* Template grid */}
+                <div className="grid grid-cols-2 gap-1">
+                  {TEMPLATE_LIBRARY
+                    .filter(t => templateCategory === "All" || t.category === templateCategory)
+                    .map((t, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          setInput(t.prompt);
+                          inputRef.current?.focus();
+                        }}
+                        className="flex items-start gap-1 rounded px-1.5 py-1 text-left hover:bg-claude-accent-light/30 transition-colors group"
+                        title={t.prompt}
+                      >
+                        <span className="text-xs shrink-0">{t.icon}</span>
+                        <div className="min-w-0">
+                          <div className="text-[9px] font-medium text-claude-text truncate group-hover:text-claude-accent">{t.title}</div>
+                          <div className="text-[7px] text-claude-text-muted truncate">{t.category}</div>
+                        </div>
+                      </button>
+                    ))}
+                </div>
+                {/* Round 12: Uploaded files list */}
+                {uploadedFiles.length > 0 && (
+                  <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
+                    <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">
+                      Uploaded Files ({uploadedFiles.length})
+                    </div>
+                    {uploadedFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-1 text-[9px] py-0.5">
+                        <FileText className="h-2.5 w-2.5 text-claude-accent shrink-0" />
+                        <span className="truncate flex-1 font-mono">{f.name}</span>
+                        <span className="text-[7px] text-claude-text-muted">{f.format}</span>
+                        <button
+                          onClick={() => setUploadedFiles(prev => prev.filter((_, idx) => idx !== i))}
+                          className="text-claude-text-muted hover:text-destructive shrink-0"
+                          title="Remove file"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : searchQuery && filteredMessages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
