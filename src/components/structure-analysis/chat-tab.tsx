@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -365,6 +365,8 @@ export function ChatTab() {
   // Round 17: Translation + sentiment state
   const [translatingId, setTranslatingId] = useState<string | null>(null);
   const [messageSentiment, setMessageSentiment] = useState<Record<string, "positive" | "neutral" | "negative">>({});
+  // Round 18: Summarization state
+  const [summarizing, setSummarizing] = useState(false);
   // Round 14: Voice input language selector
   const [voiceLang, setVoiceLang] = useState(() => {
     try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
@@ -591,6 +593,66 @@ export function ChatTab() {
       setTranslatingId(null);
     }
   }, [chatProvider, updateMessage, toast]);
+
+  // Round 18: Summarize chat conversation
+  const handleSummarize = useCallback(async () => {
+    if (messages.length < 2 || summarizing) return;
+    setSummarizing(true);
+    try {
+      // Build conversation text for summarization
+      const conversationText = messages
+        .filter(m => !m.pending)
+        .map(m => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+        .join("\n\n");
+      const res = await fetch("/api/llm/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "user", content: `Summarize the following chat conversation in bullet points (max 5 key points). Output ONLY the summary:\n\n${conversationText}` },
+          ],
+          provider: chatProvider,
+        }),
+      });
+      if (!res.ok) throw new Error("Summarization failed");
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let summary = "";
+      let buffer = "";
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+          for (const evt of events) {
+            const line = evt.trim();
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "chunk") summary += data.text;
+            } catch { /* ignore */ }
+          }
+        }
+      }
+      if (summary.trim()) {
+        // Add summary as a new assistant message
+        addMessage({
+          id: `a-summary-${Date.now()}`,
+          role: "assistant",
+          content: `📋 **Chat Summary**\n\n${summary.trim()}`,
+          ts: Date.now(),
+          provider: chatProvider,
+        });
+        toast("Chat summary generated", "success");
+      }
+    } catch (err) {
+      toast(`Summarization failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setSummarizing(false);
+    }
+  }, [messages, summarizing, chatProvider, addMessage, toast]);
 
   // Round 10: Detect when user scrolls up — auto-disable auto-scroll
   const handleScroll = useCallback(() => {
@@ -1770,6 +1832,17 @@ export function ChatTab() {
               >
                 <Download className="h-3 w-3" />
               </Button>
+              {/* Round 18: Summarize chat button */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                onClick={handleSummarize}
+                disabled={summarizing || messages.length < 2}
+                title="Summarize chat conversation"
+              >
+                {summarizing ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -2802,6 +2875,55 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                             <pre className="p-2 overflow-x-auto text-[10px] leading-relaxed">
                               <code className={className} {...props}>{children}</code>
                             </pre>
+                          </div>
+                        );
+                      },
+                      // Round 18: URL link preview — render links with external icon
+                      a({ href, children, ...props }: any) {
+                        const isExternal = href && (href.startsWith("http://") || href.startsWith("https://"));
+                        return (
+                          <a
+                            href={href}
+                            target={isExternal ? "_blank" : undefined}
+                            rel={isExternal ? "noopener noreferrer" : undefined}
+                            className="text-claude-accent underline hover:text-claude-accent-hover inline-flex items-center gap-0.5"
+                            {...props}
+                          >
+                            {children}
+                            {isExternal && <ExternalLink className="h-2 w-2 inline shrink-0" />}
+                          </a>
+                        );
+                      },
+                      // Round 18: Code block Run button for Python/JSON
+                      pre({ children, ...props }: any) {
+                        const codeEl = Array.isArray(children) ? children[0] : children;
+                        const codeProps = codeEl?.props || {};
+                        const className = codeProps.className || "";
+                        const match = /language-(\w+)/.exec(className);
+                        const lang = match?.[1];
+                        const codeText = String(codeProps.children || "").replace(/\n$/, "");
+                        const isRunnable = lang === "python" || lang === "json" || lang === "bash";
+                        return (
+                          <div {...props}>
+                            {children}
+                            {isRunnable && (
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(codeText).then(
+                                    () => {
+                                      // Insert into chat input for the user to use
+                                      window.dispatchEvent(new CustomEvent("chat-quick-reply", { detail: `Run this code:\n\`\`\`${lang}\n${codeText}\n\`\`\`` }));
+                                    },
+                                    () => { /* ignore */ }
+                                  );
+                                }}
+                                className="mt-1 flex items-center gap-0.5 text-[8px] text-claude-text-muted hover:text-claude-accent transition-colors"
+                                title="Copy code and send as a chat message"
+                              >
+                                <Play className="h-2 w-2" />
+                                Run in chat
+                              </button>
+                            )}
                           </div>
                         );
                       },
