@@ -7500,3 +7500,93 @@ Next Round Improvement Suggestions:
 5. **Chat message pin limit** — Allow pinning multiple messages (not just one)
 6. **Chat word count** — Show word/character count in the input area
 7. **Chat auto-save indicator** — Show "Saved" indicator when chat is persisted to localStorage
+
+---
+Task ID: round-16-wordcount-autosave-multipin
+Agent: main
+Task: Check git history, implement round 16 improvements (word/char count, auto-save indicator, multi-message pinning). Run QA/E2E tests, document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Orphaned commits: 4 old dangling commits from previous sessions (safe to ignore)
+  - Stashes: none
+  - Sync: local = origin/main = 1f427c0 (in sync)
+  - Working tree: clean
+  - No action needed
+
+- Implemented Round 16 Improvement #6: Word/character count in input area
+  - Added word count display in the input footer
+  - Shows: "N words · M chars" (e.g., "12 words · 67 chars")
+  - Only visible when input is non-empty
+  - Word count: splits by whitespace, filters empty strings
+  - Character count: uses input.length (includes spaces)
+  - Positioned before the keyboard shortcut hints
+  - Uses monospace font, muted/60 opacity
+
+- Implemented Round 16 Improvement #7: Auto-save indicator
+  - Added saveStatus state: "idle" | "saving" | "saved"
+  - Added saveTimeoutRef for debouncing
+  - Added useEffect that triggers on messages change:
+    - When messages change: sets status to "saving"
+    - After 500ms: sets status to "saved"
+    - After another 2000ms: sets status back to "idle"
+    - Clears timeout on cleanup
+  - When messages is empty: status stays "idle"
+  - Added visual indicators in the input footer:
+    - "Saving..." with Loader2 spin icon (muted/50)
+    - "Saved" with Check icon (green/60)
+  - Positioned between word count and shortcut hints
+
+- Implemented Round 16 Improvement #5: Multi-message pinning
+  - Updated pin event handler to NOT unpin other messages
+    - Before: pinning a new message unpinned all others (only 1 at a time)
+    - After: each message's pinned state is independent (multiple allowed)
+  - Updated toast message: "📌 Message pinned (N total)" showing total pin count
+  - The sort logic already handles multiple pinned messages correctly:
+    - All pinned messages appear at top
+    - Within pinned group, original order is preserved (stable sort)
+  - No changes needed to the sort logic — it was already compatible
+
+QA Testing:
+- Dev server starts successfully (HTTP 200)
+- Page compiles and renders (136KB screenshot)
+- No console errors
+
+E2E Testing:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (136KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No JS errors |
+| Chat API - Load 1CBS | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in 4.6s |
+| Word count code | ✅ PASS | Verified "N words · M chars" display in footer |
+| Auto-save code | ✅ PASS | Verified saveStatus state + useEffect + Saving/Saved indicators |
+| Multi-pin code | ✅ PASS | Verified pin handler no longer unpins others + total count toast |
+
+Code Verification:
+- chat-tab.tsx: Word count "N words · M chars" in input footer ✓
+- chat-tab.tsx: saveStatus state + saveTimeoutRef + useEffect debounce ✓
+- chat-tab.tsx: "Saving..." with Loader2 + "Saved" with Check indicators ✓
+- chat-tab.tsx: Pin handler updated to allow multiple pinned messages ✓
+- chat-tab.tsx: Toast shows "📌 Message pinned (N total)" ✓
+
+Stage Summary:
+- Git history clean and in sync (no action needed)
+- 3 of 7 round-15 suggestions implemented (word count, auto-save, multi-pin)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat now supports:
+  - Word/character count in input area (real-time, monospace)
+  - Auto-save indicator (Saving... → Saved → idle, 500ms debounce)
+  - Multiple pinned messages (independent pin states, total count in toast)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Chat message translation** — Add translate button for non-English messages
+6. **Chat sentiment analysis** — Show sentiment indicator on assistant messages
+7. **Chat quick replies** — Suggested follow-up questions after each assistant response

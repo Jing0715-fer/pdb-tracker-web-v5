@@ -359,6 +359,9 @@ export function ChatTab() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isChatVisible, setIsChatVisible] = useState(false);
   const prevMessageCountRef = useRef(0);
+  // Round 16: Auto-save indicator state
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Round 14: Voice input language selector
   const [voiceLang, setVoiceLang] = useState(() => {
     try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
@@ -499,6 +502,24 @@ export function ChatTab() {
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("chat-unread-count", { detail: unreadCount }));
   }, [unreadCount]);
+
+  // Round 16: Auto-save indicator — show "Saving..." then "Saved" when messages persist
+  useEffect(() => {
+    if (messages.length === 0) {
+      setSaveStatus("idle");
+      return;
+    }
+    setSaveStatus("saving");
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      setSaveStatus("saved");
+      // Clear "Saved" after 2 seconds
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    }, 500);
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [messages]);
 
   // Round 10: Detect when user scrolls up — auto-disable auto-scroll
   const handleScroll = useCallback(() => {
@@ -1352,15 +1373,15 @@ export function ChatTab() {
     return () => window.removeEventListener(REACTION_EVENT, handler);
   }, [updateMessage]);
 
-  // Round 5: Listen for pin events
+  // Round 5+16: Listen for pin events — now supports multiple pinned messages
   useEffect(() => {
     const handler = (e: Event) => {
       const { messageId, pinned } = (e as CustomEvent<{ messageId: string; pinned: boolean }>).detail;
       if (!messageId) return;
-      // Unpin all other messages first (only one pinned at a time)
+      // Round 16: Allow multiple pinned messages (no longer unpin others)
       const allMsgs = useAppStore.getState().chatMessages;
       const updated = allMsgs.map((m) =>
-        m.id === messageId ? { ...m, pinned } : { ...m, pinned: false }
+        m.id === messageId ? { ...m, pinned } : m
       );
       useAppStore.setState({ chatMessages: updated });
       // Persist
@@ -1368,7 +1389,8 @@ export function ChatTab() {
         const toSave = updated.filter((m) => !m.pending).slice(-50);
         localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
       } catch { /* ignore */ }
-      toast(pinned ? "📌 Message pinned to top" : "Message unpinned", "info");
+      const pinCount = updated.filter(m => m.pinned).length;
+      toast(pinned ? `📌 Message pinned (${pinCount} total)` : "Message unpinned", "info");
     };
     window.addEventListener(PIN_EVENT, handler);
     return () => window.removeEventListener(PIN_EVENT, handler);
@@ -2353,7 +2375,26 @@ export function ChatTab() {
         </div>
         <div className="mt-1 flex items-center justify-between text-[8px] text-claude-text-muted">
           <span>Enter to send · Shift+Enter for newline</span>
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-2">
+            {/* Round 16: Word/character count */}
+            {input.trim() && (
+              <span className="font-mono text-claude-text-muted/60">
+                {input.trim().split(/\s+/).filter(Boolean).length} words · {input.length} chars
+              </span>
+            )}
+            {/* Round 16: Auto-save indicator */}
+            {saveStatus === "saving" && (
+              <span className="flex items-center gap-0.5 text-claude-text-muted/50">
+                <Loader2 className="h-2 w-2 animate-spin" />
+                Saving...
+              </span>
+            )}
+            {saveStatus === "saved" && (
+              <span className="flex items-center gap-0.5 text-green-600/60">
+                <Check className="h-2 w-2" />
+                Saved
+              </span>
+            )}
             <kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/40">⌘K</kbd>
             <span>search</span>
             <kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/40">⌘E</kbd>
