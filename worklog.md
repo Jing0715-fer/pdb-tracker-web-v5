@@ -7172,3 +7172,123 @@ Next Round Improvement Suggestions:
 5. **Voice input** — Add microphone button for speech-to-text input
 6. **Template favorites** — Allow users to mark favorite templates for quick access
 7. **Template custom save** — Allow users to save their own custom templates
+
+---
+Task ID: round-13-custom-templates-favorites-voice
+Agent: main
+Task: Check git history, implement round 13 improvements (custom templates, favorites, voice input). Run QA/E2E tests, document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Orphaned commits: 3 old dangling commits from previous sessions (safe to ignore)
+  - Stashes: none
+  - Sync: local = origin/main = 8d130c4 (in sync)
+  - Working tree: clean
+  - No action needed
+
+- Implemented Round 13 Improvement #7: Custom template save functionality
+  - Added STORAGE_KEY_CUSTOM_TEMPLATES localStorage key
+  - Created loadCustomTemplates() and saveCustomTemplates() helper functions
+  - Added customTemplates state (initialized from localStorage)
+  - Added showSaveTemplate, newTemplateTitle, newTemplateIcon state
+  - Added handleSaveTemplate callback:
+    - Validates input is non-empty and title is provided
+    - Creates new ChatTemplate with category "Custom"
+    - Appends to customTemplates and persists to localStorage
+    - Shows toast: "Template '{title}' saved"
+  - Added handleDeleteTemplate callback:
+    - Filters out template by title
+    - Updates state and persists
+    - Shows toast: "Template '{title}' deleted"
+  - Added save template form UI:
+    - "Save current prompt as template" dashed button (disabled when input empty)
+    - Form with icon input (2 chars), title input, prompt preview
+    - Save and Cancel buttons
+  - Custom templates appear in the template grid with a delete button (hover)
+
+- Implemented Round 13 Improvement #6: Template favorites
+  - Added STORAGE_KEY_FAVORITE_TEMPLATES localStorage key
+  - Created loadFavoriteTemplates() and saveFavoriteTemplates() helper functions
+  - Added favoriteTemplates state (initialized from localStorage, array of titles)
+  - Added handleToggleFavorite callback:
+    - Toggles title in favoriteTemplates array
+    - Persists to localStorage
+  - Added "★ Favorites" category filter button
+  - Each template has a Star button (hover):
+    - Filled amber when favorited (always visible)
+    - Outline muted when not favorited (appears on hover)
+    - Click toggles favorite state
+  - Favorites filter shows only favorited templates
+
+- Implemented Round 13 Improvement #5: Voice input (speech-to-text)
+  - Added isListening state
+  - Added recognitionRef for SpeechRecognition instance
+  - Created handleVoiceInput callback:
+    - If listening: stops recognition
+    - If not listening: creates SpeechRecognition (webkitSpeechRecognition fallback)
+    - Sets continuous=false, interimResults=true, lang='en-US'
+    - onresult: accumulates final + interim transcripts, updates input
+    - onerror: shows toast with error
+    - onend: sets isListening=false
+    - Shows toast: "Listening... speak now"
+  - Added Mic button in input area (between stop and send buttons):
+    - Red with animate-pulse when listening
+    - Muted with hover effect when not listening
+    - Disabled when sending
+  - Checks for browser support, shows error toast if unsupported
+
+- Updated template library UI:
+  - Template count now includes custom templates: "28 templates (3 custom)"
+  - Category filter includes "★ Favorites" and "Custom" categories
+  - Template grid merges built-in + custom templates
+  - Each template row has: icon+title+category (clickable), Star button (hover), Delete button (custom only)
+  - Max height increased to max-h-56 for more content
+
+- Added new icon imports: Mic, Star, Plus from lucide-react
+
+QA Testing:
+- Dev server starts successfully (HTTP 200)
+- Page compiles and renders (133KB screenshot)
+- No console errors
+
+E2E Testing:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (133KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No JS errors |
+| Chat API - Load 1CBS | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in 4.2s |
+| Custom template code | ✅ PASS | Verified handleSaveTemplate + handleDeleteTemplate + form UI |
+| Favorites code | ✅ PASS | Verified handleToggleFavorite + Star buttons + ★ Favorites filter |
+| Voice input code | ✅ PASS | Verified handleVoiceInput + SpeechRecognition + Mic button |
+
+Code Verification:
+- chat-tab.tsx: loadCustomTemplates/saveCustomTemplates helpers ✓
+- chat-tab.tsx: loadFavoriteTemplates/saveFavoriteTemplates helpers ✓
+- chat-tab.tsx: customTemplates + favoriteTemplates state ✓
+- chat-tab.tsx: handleSaveTemplate + handleDeleteTemplate + handleToggleFavorite ✓
+- chat-tab.tsx: handleVoiceInput with SpeechRecognition API ✓
+- chat-tab.tsx: Save template form with icon/title inputs ✓
+- chat-tab.tsx: Star buttons on each template + ★ Favorites filter ✓
+- chat-tab.tsx: Mic button in input area with animate-pulse when listening ✓
+
+Stage Summary:
+- Git history clean and in sync (no action needed)
+- 3 of 7 round-12 suggestions implemented (custom templates, favorites, voice input)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat now supports:
+  - Custom template save/delete (persisted to localStorage, category "Custom")
+  - Template favorites (star toggle, ★ Favorites filter, persisted)
+  - Voice input via Web Speech API (Mic button, interim results, en-US)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Multi-language voice input** — Add language selector for voice input
+6. **Template import/export** — Import/export custom templates as JSON
+7. **Chat message code blocks** — Add syntax highlighting for code blocks in assistant messages

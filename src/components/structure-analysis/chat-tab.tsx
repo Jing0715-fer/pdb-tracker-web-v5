@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -156,6 +156,47 @@ const TEMPLATE_LIBRARY: ChatTemplate[] = [
 ];
 
 /**
+ * Round 13: Custom template storage helpers (persisted to localStorage).
+ * Users can save their own templates and mark built-in templates as favorites.
+ */
+const STORAGE_KEY_CUSTOM_TEMPLATES = "pdb-tracker:custom-templates:v1";
+const STORAGE_KEY_FAVORITE_TEMPLATES = "pdb-tracker:favorite-templates:v1";
+
+function loadCustomTemplates(): ChatTemplate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CUSTOM_TEMPLATES);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function saveCustomTemplates(templates: ChatTemplate[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_CUSTOM_TEMPLATES, JSON.stringify(templates));
+  } catch { /* ignore */ }
+}
+
+function loadFavoriteTemplates(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_FAVORITE_TEMPLATES);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function saveFavoriteTemplates(titles: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_FAVORITE_TEMPLATES, JSON.stringify(titles));
+  } catch { /* ignore */ }
+}
+
+/**
  * Improvement #5: Convert a command object to a human-readable description.
  * Used in the command preview panel before execution.
  */
@@ -277,6 +318,14 @@ export function ChatTab() {
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; content: string; format: string }>>([]);
   // Round 11: Drag-and-drop state
   const [isDragging, setIsDragging] = useState(false);
+  // Round 13: Custom templates + favorites
+  const [customTemplates, setCustomTemplates] = useState<ChatTemplate[]>(() => loadCustomTemplates());
+  const [favoriteTemplates, setFavoriteTemplates] = useState<string[]>(() => loadFavoriteTemplates());
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [newTemplateTitle, setNewTemplateTitle] = useState("");
+  const [newTemplateIcon, setNewTemplateIcon] = useState("📝");
+  // Round 13: Voice input state
+  const [isListening, setIsListening] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -694,6 +743,97 @@ export function ChatTab() {
     URL.revokeObjectURL(url);
     toast(`Exported ${commandHistory.length} commands as CSV`, "success");
   }, [commandHistory, toast]);
+
+  // Round 13: Save current input as a custom template
+  const handleSaveTemplate = useCallback(() => {
+    const trimmedInput = input.trim();
+    const trimmedTitle = newTemplateTitle.trim();
+    if (!trimmedInput || !trimmedTitle) {
+      toast("Enter a prompt and title to save template", "error");
+      return;
+    }
+    const newTemplate: ChatTemplate = {
+      icon: newTemplateIcon || "📝",
+      title: trimmedTitle,
+      prompt: trimmedInput,
+      category: "Custom",
+    };
+    const updated = [...customTemplates, newTemplate];
+    setCustomTemplates(updated);
+    saveCustomTemplates(updated);
+    setShowSaveTemplate(false);
+    setNewTemplateTitle("");
+    setNewTemplateIcon("📝");
+    toast(`Template "${trimmedTitle}" saved`, "success");
+  }, [input, newTemplateTitle, newTemplateIcon, customTemplates, toast]);
+
+  // Round 13: Delete a custom template
+  const handleDeleteTemplate = useCallback((title: string) => {
+    const updated = customTemplates.filter(t => t.title !== title);
+    setCustomTemplates(updated);
+    saveCustomTemplates(updated);
+    toast(`Template "${title}" deleted`, "info");
+  }, [customTemplates, toast]);
+
+  // Round 13: Toggle favorite for a template
+  const handleToggleFavorite = useCallback((title: string) => {
+    const updated = favoriteTemplates.includes(title)
+      ? favoriteTemplates.filter(t => t !== title)
+      : [...favoriteTemplates, title];
+    setFavoriteTemplates(updated);
+    saveFavoriteTemplates(updated);
+  }, [favoriteTemplates]);
+
+  // Round 13: Voice input via Web Speech API
+  const recognitionRef = useRef<any>(null);
+  const handleVoiceInput = useCallback(() => {
+    if (isListening) {
+      // Stop listening
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsListening(false);
+      return;
+    }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast("Voice input not supported in this browser", "error");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognitionRef.current = recognition;
+    let finalTranscript = '';
+    recognition.onresult = (event: any) => {
+      let interimTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+      // Update input with final + interim
+      if (finalTranscript) {
+        setInput(finalTranscript + (interimTranscript ? ' ' + interimTranscript : ''));
+      } else if (interimTranscript) {
+        setInput(interimTranscript);
+      }
+    };
+    recognition.onerror = (event: any) => {
+      toast(`Voice input error: ${event.error}`, "error");
+      setIsListening(false);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+    recognition.start();
+    setIsListening(true);
+    toast("Listening... speak now", "info");
+  }, [isListening, toast]);
 
   /**
    * Core send function. Implements the agent ReAct loop:
@@ -1745,14 +1885,65 @@ export function ChatTab() {
               className="mt-2 flex items-center gap-1 text-[10px] text-claude-accent hover:underline"
             >
               <LayoutGrid className="h-3 w-3" />
-              {showTemplates ? "Hide" : "Show"} template library ({TEMPLATE_LIBRARY.length} templates)
+              {showTemplates ? "Hide" : "Show"} template library ({TEMPLATE_LIBRARY.length + customTemplates.length} templates{customTemplates.length > 0 ? ` (${customTemplates.length} custom)` : ""})
             </button>
-            {/* Round 12: Template library panel */}
+            {/* Round 12+13: Template library panel with favorites + custom templates */}
             {showTemplates && (
-              <div className="w-full mt-1 max-h-48 overflow-y-auto sa-scroll rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/60 dark:bg-[#1a1917]/60 p-1.5">
+              <div className="w-full mt-1 max-h-56 overflow-y-auto sa-scroll rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/60 dark:bg-[#1a1917]/60 p-1.5">
+                {/* Round 13: Save template form */}
+                {showSaveTemplate ? (
+                  <div className="mb-1.5 p-1.5 rounded border border-claude-accent/30 bg-claude-accent-light/10">
+                    <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-accent mb-1">Save as Template</div>
+                    <div className="flex items-center gap-1 mb-1">
+                      <input
+                        type="text"
+                        value={newTemplateIcon}
+                        onChange={(e) => setNewTemplateIcon(e.target.value)}
+                        className="w-8 h-6 text-center rounded border border-claude-border-light/60 bg-claude-surface dark:bg-[#242220] text-[12px]"
+                        maxLength={2}
+                      />
+                      <input
+                        type="text"
+                        value={newTemplateTitle}
+                        onChange={(e) => setNewTemplateTitle(e.target.value)}
+                        placeholder="Template title..."
+                        className="flex-1 h-6 px-2 rounded border border-claude-border-light/60 bg-claude-surface dark:bg-[#242220] text-[10px] text-claude-text placeholder:text-claude-text-muted/50 focus:outline-none focus:border-claude-accent/40"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="text-[8px] text-claude-text-muted truncate mb-1">Prompt: {input.slice(0, 80)}{input.length > 80 ? "..." : ""}</div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={handleSaveTemplate}
+                        disabled={!input.trim() || !newTemplateTitle.trim()}
+                        className="flex items-center gap-1 rounded bg-claude-accent text-white px-2 py-0.5 text-[9px] font-medium hover:bg-claude-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Check className="h-2.5 w-2.5" />
+                        Save
+                      </button>
+                      <button
+                        onClick={() => { setShowSaveTemplate(false); setNewTemplateTitle(""); }}
+                        className="flex items-center gap-1 rounded bg-claude-text-muted/20 text-claude-text-muted px-2 py-0.5 text-[9px] font-medium hover:bg-claude-text-muted/30 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowSaveTemplate(true)}
+                    disabled={!input.trim()}
+                    className="w-full mb-1.5 flex items-center justify-center gap-1 rounded border border-dashed border-claude-accent/30 text-[9px] text-claude-accent hover:bg-claude-accent-light/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors py-1"
+                    title="Save current input as a custom template"
+                  >
+                    <Plus className="h-2.5 w-2.5" />
+                    Save current prompt as template
+                  </button>
+                )}
                 {/* Category filter */}
                 <div className="flex items-center gap-0.5 flex-wrap mb-1.5 pb-1 border-b border-claude-border-light/30 dark:border-[#3d3832]/30">
-                  {["All", ...Array.from(new Set(TEMPLATE_LIBRARY.map(t => t.category)))].map((cat) => (
+                  {["All", "★ Favorites", ...Array.from(new Set([...TEMPLATE_LIBRARY.map(t => t.category), ...customTemplates.map(t => t.category)]))].map((cat) => (
                     <button
                       key={cat}
                       onClick={() => setTemplateCategory(cat)}
@@ -1766,27 +1957,59 @@ export function ChatTab() {
                     </button>
                   ))}
                 </div>
-                {/* Template grid */}
+                {/* Template grid — includes built-in + custom templates */}
                 <div className="grid grid-cols-2 gap-1">
-                  {TEMPLATE_LIBRARY
-                    .filter(t => templateCategory === "All" || t.category === templateCategory)
-                    .map((t, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setInput(t.prompt);
-                          inputRef.current?.focus();
-                        }}
-                        className="flex items-start gap-1 rounded px-1.5 py-1 text-left hover:bg-claude-accent-light/30 transition-colors group"
-                        title={t.prompt}
-                      >
-                        <span className="text-xs shrink-0">{t.icon}</span>
-                        <div className="min-w-0">
-                          <div className="text-[9px] font-medium text-claude-text truncate group-hover:text-claude-accent">{t.title}</div>
-                          <div className="text-[7px] text-claude-text-muted truncate">{t.category}</div>
+                  {[...TEMPLATE_LIBRARY, ...customTemplates]
+                    .filter(t => {
+                      if (templateCategory === "All") return true;
+                      if (templateCategory === "★ Favorites") return favoriteTemplates.includes(t.title);
+                      return t.category === templateCategory;
+                    })
+                    .map((t, i) => {
+                      const isCustom = customTemplates.includes(t);
+                      const isFav = favoriteTemplates.includes(t.title);
+                      return (
+                        <div
+                          key={`${t.title}-${i}`}
+                          className="flex items-start gap-1 rounded px-1.5 py-1 hover:bg-claude-accent-light/30 transition-colors group relative"
+                        >
+                          <button
+                            onClick={() => {
+                              setInput(t.prompt);
+                              inputRef.current?.focus();
+                            }}
+                            className="flex items-start gap-1 flex-1 min-w-0 text-left"
+                            title={t.prompt}
+                          >
+                            <span className="text-xs shrink-0">{t.icon}</span>
+                            <div className="min-w-0">
+                              <div className="text-[9px] font-medium text-claude-text truncate group-hover:text-claude-accent">{t.title}</div>
+                              <div className="text-[7px] text-claude-text-muted truncate">{t.category}</div>
+                            </div>
+                          </button>
+                          {/* Round 13: Favorite toggle */}
+                          <button
+                            onClick={() => handleToggleFavorite(t.title)}
+                            className={`shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ${
+                              isFav ? "text-amber-500 opacity-100" : "text-claude-text-muted/40 hover:text-amber-500"
+                            }`}
+                            title={isFav ? "Remove from favorites" : "Add to favorites"}
+                          >
+                            <Star className="h-2.5 w-2.5" />
+                          </button>
+                          {/* Round 13: Delete custom template */}
+                          {isCustom && (
+                            <button
+                              onClick={() => handleDeleteTemplate(t.title)}
+                              className="shrink-0 opacity-0 group-hover:opacity-100 text-claude-text-muted/40 hover:text-destructive transition-opacity"
+                              title="Delete custom template"
+                            >
+                              <Trash2 className="h-2.5 w-2.5" />
+                            </button>
+                          )}
                         </div>
-                      </button>
-                    ))}
+                      );
+                    })}
                 </div>
                 {/* Round 12: Uploaded files list */}
                 {uploadedFiles.length > 0 && (
@@ -1881,12 +2104,25 @@ export function ChatTab() {
                   abortRef.current = null;
                 }
               }}
-              className="absolute bottom-1.5 right-9 grid h-7 w-7 place-items-center rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors"
+              className="absolute bottom-1.5 right-[4.5rem] grid h-7 w-7 place-items-center rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors"
               title="Stop generation"
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
           )}
+          {/* Round 13: Voice input button */}
+          <button
+            onClick={handleVoiceInput}
+            disabled={sendingRef.current}
+            className={`absolute bottom-1.5 right-9 grid h-7 w-7 place-items-center rounded-md transition-colors ${
+              isListening
+                ? "bg-red-500 text-white animate-pulse"
+                : "bg-claude-text-muted/20 text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30"
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+            title={isListening ? "Stop voice input" : "Voice input (speak)"}
+          >
+            <Mic className="h-3.5 w-3.5" />
+          </button>
           <button
             onClick={() => send(input)}
             disabled={!input.trim() || sendingRef.current}
