@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -198,6 +198,7 @@ export function ChatTab() {
   const sendingRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null); // Round 10: for markdown toolbar
 
   // Improvement #3: Retry handler — re-sends the last user message.
   const handleRetry = useCallback(
@@ -277,13 +278,67 @@ export function ChatTab() {
     refreshProviders();
   }, [refreshProviders]);
 
-  // Auto-scroll to bottom on new messages
+  // Round 10: Auto-scroll toggle — when off, don't auto-scroll on new messages
+  // (lets the user read old messages without being pulled to the bottom)
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  // Auto-scroll to bottom on new messages (only if autoScroll is enabled)
   useEffect(() => {
+    if (!autoScroll) return;
     const el = scrollRef.current;
     if (el) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
-  }, [messages]);
+  }, [messages, autoScroll]);
+
+  // Round 10: Detect when user scrolls up — auto-disable auto-scroll
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    if (!isAtBottom && autoScroll) {
+      setAutoScroll(false);
+    } else if (isAtBottom && !autoScroll) {
+      setAutoScroll(true);
+    }
+  }, [autoScroll]);
+
+  // Round 10: Sound notifications — play a beep when the agent finishes or errors
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    try {
+      return localStorage.getItem("pdb-tracker:chat-sound") !== "off";
+    } catch { return true; }
+  });
+
+  const playSound = useCallback((type: "done" | "error") => {
+    if (!soundEnabled) return;
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      // Different tones for success vs error
+      oscillator.frequency.value = type === "done" ? 800 : 400;
+      oscillator.type = "sine";
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.3);
+      // Close context after sound finishes
+      setTimeout(() => ctx.close(), 500);
+    } catch { /* ignore audio errors */ }
+  }, [soundEnabled]);
+
+  const toggleSound = useCallback(() => {
+    const newVal = !soundEnabled;
+    setSoundEnabled(newVal);
+    try {
+      localStorage.setItem("pdb-tracker:chat-sound", newVal ? "on" : "off");
+    } catch { /* ignore */ }
+  }, [soundEnabled]);
 
   const activeProviderInfo = providers.find((p) => p.provider === chatProvider);
   const providerLabel = chatProvider === "" || chatProvider === "auto"
@@ -863,6 +918,7 @@ export function ChatTab() {
             agentStep: "done",
             isError: false,
           });
+          playSound("done"); // Round 10: notification sound
           break;
         }
       } catch (err) {
@@ -882,6 +938,7 @@ export function ChatTab() {
             agentStep: "error",
             isError: true,
           });
+          playSound("error"); // Round 10: error notification sound
         }
       } finally {
         abortRef.current = null;
@@ -889,7 +946,7 @@ export function ChatTab() {
         stopRequestedRef.current = false;
       }
     },
-    [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast]
+    [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast, playSound]
   );
 
   // Round 4: Listen for message edit events from MessageBubble (must be after send is defined)
@@ -964,10 +1021,42 @@ export function ChatTab() {
     return () => window.removeEventListener(BOOKMARK_EVENT, handler);
   }, [updateMessage, toast]);
 
+  // Round 10: Insert markdown formatting around selection or at cursor
+  const insertMarkdown = useCallback((before: string, after: string, placeholder: string) => {
+    const el = inputRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selectedText = input.slice(start, end);
+    const insertText = selectedText || placeholder;
+    const newText = input.slice(0, start) + before + insertText + after + input.slice(end);
+    setInput(newText);
+    // Restore cursor position after React updates
+    requestAnimationFrame(() => {
+      if (el) {
+        const newCursorPos = start + before.length + insertText.length + after.length;
+        el.focus();
+        el.setSelectionRange(start + before.length, start + before.length + insertText.length);
+        // If no selection, place cursor between the markers
+        if (!selectedText) {
+          el.setSelectionRange(start + before.length, start + before.length + insertText.length);
+        }
+        void newCursorPos; // suppress unused
+      }
+    });
+  }, [input]);
+
+  // Round 10: Add Ctrl+B and Ctrl+` shortcuts for bold and code
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send(input);
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+      e.preventDefault();
+      insertMarkdown("**", "**", "bold text");
+    } else if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+      e.preventDefault();
+      insertMarkdown("`", "`", "code");
     }
   };
 
@@ -1120,6 +1209,15 @@ export function ChatTab() {
                 title="Export chat as Markdown"
               >
                 <Download className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-7 w-7 p-0 ${soundEnabled ? "text-claude-accent" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={toggleSound}
+                title={soundEnabled ? "Sound on — click to mute" : "Sound off — click to enable"}
+              >
+                {soundEnabled ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
               </Button>
               <Button
                 variant="ghost"
@@ -1415,7 +1513,26 @@ export function ChatTab() {
       )}
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto sa-scroll p-2 space-y-2">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="relative flex-1 min-h-0 overflow-y-auto sa-scroll p-2 space-y-2"
+      >
+        {/* Round 10: Scroll-to-bottom button when auto-scroll is off */}
+        {!autoScroll && messages.length > 0 && (
+          <button
+            onClick={() => {
+              setAutoScroll(true);
+              const el = scrollRef.current;
+              if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+            }}
+            className="sticky bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 rounded-full bg-claude-accent text-white px-3 py-1 text-[9px] font-medium shadow-md hover:bg-claude-accent-hover transition-colors"
+            title="Scroll to bottom and resume auto-scroll"
+          >
+            <ChevronDown className="h-2.5 w-2.5" />
+            New messages ↓
+          </button>
+        )}
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
             <div className="rounded-full bg-claude-accent-light/40 p-3">
@@ -1463,8 +1580,36 @@ export function ChatTab() {
 
       {/* Input */}
       <div className="shrink-0 border-t border-claude-border-light/40 dark:border-[#3d3832]/40 p-2">
+        {/* Round 10: Markdown formatting toolbar */}
+        <div className="flex items-center gap-0.5 mb-1">
+          <button
+            onClick={() => insertMarkdown("**", "**", "bold")}
+            disabled={sendingRef.current}
+            className="grid h-5 w-5 place-items-center rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 disabled:opacity-40 transition-colors"
+            title="Bold (Ctrl+B)"
+          >
+            <Bold className="h-3 w-3" />
+          </button>
+          <button
+            onClick={() => insertMarkdown("`", "`", "code")}
+            disabled={sendingRef.current}
+            className="grid h-5 w-5 place-items-center rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 disabled:opacity-40 transition-colors"
+            title="Inline code (Ctrl+`)"
+          >
+            <Code className="h-3 w-3" />
+          </button>
+          <button
+            onClick={() => insertMarkdown("- ", "", "list item")}
+            disabled={sendingRef.current}
+            className="grid h-5 w-5 place-items-center rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 disabled:opacity-40 transition-colors"
+            title="List item"
+          >
+            <List className="h-3 w-3" />
+          </button>
+        </div>
         <div className="relative">
           <Textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
