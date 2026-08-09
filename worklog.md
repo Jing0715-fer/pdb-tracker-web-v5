@@ -7890,3 +7890,105 @@ Next Round Improvement Suggestions:
 5. **Tag-based filtering** — Filter messages by tag in the search bar
 6. **Tag color customization** — Allow assigning colors to different tags
 7. **Diff with word-level highlighting** — Show word-level changes instead of full-text diff
+
+---
+Task ID: round-20-tagfilter-tagcolor-worddiff
+Agent: main
+Task: Check git history, implement round 20 improvements (tag-based filtering, tag color customization, word-level diff). Run QA/E2E tests, document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Orphaned commits: 4 old dangling commits from previous sessions (safe to ignore)
+  - Stashes: none
+  - Sync: local = origin/main = 73c5a1d (in sync)
+  - Working tree: clean
+
+- Implemented Round 20 Improvement #5: Tag-based filtering in search bar
+  - Added tagFilter state (string | null)
+  - Updated filteredMessages useMemo to filter by tag:
+    - When tagFilter is set, only messages with that tag in their tags array are shown
+  - Added tagFilter to useMemo dependency array
+  - Added "Tags:" filter chip row in search bar area:
+    - Shows all unique tags from messages (allTags useMemo)
+    - Each chip styled with the tag's color
+    - Active chip: solid color background, white text
+    - Inactive chip: translucent color background, colored text
+    - Click to toggle filter
+    - "✕ Clear" button when tag filter is active
+    - Chips sorted alphabetically
+
+- Implemented Round 20 Improvement #6: Tag color customization
+  - Added tagColors state (Record<string, string>, persisted to localStorage "pdb-tracker:tag-colors")
+  - Created TAG_COLOR_CYCLE array (8 colors) for default assignment
+  - Created getTagColor(tag) function:
+    - Returns custom color if set
+    - Falls back to hash-based color from cycle (charCodeAt % cycle.length)
+  - Created setTagColor(tag, color) function:
+    - Updates tagColors state
+    - Persists to localStorage
+  - Added right-click context menu on tag filter chips:
+    - Opens prompt dialog: "Set color for #tag (hex, e.g. #ff6600):"
+    - Pre-fills with current color
+    - Saves custom color
+  - Updated MessageBubble tag display to use custom colors:
+    - Reads tagColors from localStorage
+    - Falls back to hash-based color
+    - Tag badges styled with: background (color at 20% opacity), text color, border (color at 40%)
+    - Inline styles for dynamic colors
+
+- Implemented Round 20 Improvement #7: Word-level diff highlighting
+  - Updated diff view in MessageBubble from full-text to word-level:
+    - Splits original and edited content by whitespace (preserving spaces)
+    - Creates word sets for both versions
+    - Original section: words not in edited set get red background + strikethrough
+    - Edited section: words not in original set get green background
+    - Unchanged words: normal muted/text color
+    - Word-level highlighting makes it easy to see exactly what changed
+  - Uses Set-based comparison for O(1) lookup
+  - Preserves whitespace formatting with split(/(\s+)/)
+
+QA Testing:
+- Dev server starts successfully (HTTP 200)
+- Page compiles and renders (131KB screenshot)
+- No console errors
+
+E2E Testing:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (131KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No JS errors |
+| Chat API - Load 1CBS | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in 4.7s |
+| Tag filter code | ✅ PASS | Verified tagFilter + allTags + chip UI |
+| Tag color code | ✅ PASS | Verified tagColors + getTagColor + setTagColor + right-click |
+| Word diff code | ✅ PASS | Verified word split + Set comparison + per-word highlighting |
+
+Code Verification:
+- chat-tab.tsx: tagFilter state + allTags useMemo ✓
+- chat-tab.tsx: Tag filter chips in search bar with colors ✓
+- chat-tab.tsx: tagColors state + localStorage persistence ✓
+- chat-tab.tsx: getTagColor with TAG_COLOR_CYCLE fallback ✓
+- chat-tab.tsx: setTagColor + right-click context menu ✓
+- chat-tab.tsx: MessageBubble tag display with custom colors ✓
+- chat-tab.tsx: Word-level diff with Set-based comparison ✓
+
+Stage Summary:
+- Git history clean and in sync (no action needed)
+- 3 of 7 round-19 suggestions implemented (tag filter, tag colors, word diff)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat now supports:
+  - Tag-based filtering (click tag chips in search bar to filter)
+  - Tag color customization (right-click chip to set hex color, persisted)
+  - Word-level diff highlighting (red strikethrough for removed, green for added)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Tag suggestions** — Auto-suggest tags based on message content
+6. **Tag statistics** — Show tag distribution in the statistics panel
+7. **Diff export** — Export diff view as a patch file

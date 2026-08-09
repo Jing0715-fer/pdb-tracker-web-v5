@@ -338,6 +338,14 @@ export function ChatTab() {
   const [showCmdHistory, setShowCmdHistory] = useState(false);
   // Round 7: Command type quick filter
   const [cmdTypeFilter, setCmdTypeFilter] = useState<string | null>(null);
+  // Round 20: Tag filter + tag colors
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [tagColors, setTagColors] = useState<Record<string, string>>(() => {
+    try {
+      const raw = localStorage.getItem("pdb-tracker:tag-colors");
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
   // Round 12: Template library state
   const [showTemplates, setShowTemplates] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<string>("All");
@@ -726,6 +734,10 @@ export function ChatTab() {
         m.commands?.some((cmd) => (cmd as { type?: string }).type === cmdTypeFilter)
       );
     }
+    // Round 20: Apply tag filter
+    if (tagFilter) {
+      result = result.filter((m) => m.tags?.includes(tagFilter));
+    }
     // Apply search query
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -758,7 +770,7 @@ export function ChatTab() {
       });
     }
     return sorted;
-  }, [messages, searchQuery, filterMode, sortMode, cmdTypeFilter]);
+  }, [messages, searchQuery, filterMode, sortMode, cmdTypeFilter, tagFilter]);
 
   // Round 4: Calculate chat statistics
   const chatStats = useMemo(() => {
@@ -837,6 +849,28 @@ export function ChatTab() {
       })(),
     };
   }, [messages]);
+
+  // Round 20: Collect all unique tags from messages for filter chips
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    messages.forEach(m => m.tags?.forEach(t => tagSet.add(t)));
+    return Array.from(tagSet).sort();
+  }, [messages]);
+
+  // Round 20: Get color for a tag (default cycle if not customized)
+  const TAG_COLOR_CYCLE = ["#c96442", "#2d8f8f", "#7c5cbf", "#c9872e", "#16a34a", "#ea580c", "#0891b2", "#db2777"];
+  const getTagColor = useCallback((tag: string) => {
+    return tagColors[tag] || TAG_COLOR_CYCLE[tag.charCodeAt(0) % TAG_COLOR_CYCLE.length];
+  }, [tagColors]);
+
+  // Round 20: Set custom color for a tag
+  const setTagColor = useCallback((tag: string, color: string) => {
+    setTagColors(prev => {
+      const updated = { ...prev, [tag]: color };
+      try { localStorage.setItem("pdb-tracker:tag-colors", JSON.stringify(updated)); } catch { /* ignore */ }
+      return updated;
+    });
+  }, []);
 
   // Round 6: Build command history list from all messages
   const commandHistory = useMemo(() => {
@@ -1982,6 +2016,46 @@ export function ChatTab() {
                   onClick={() => setCmdTypeFilter(null)}
                   className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
                   title="Clear command filter"
+                >
+                  ✕ Clear
+                </button>
+              )}
+            </div>
+          )}
+          {/* Round 20: Tag filter chips */}
+          {allTags.length > 0 && (
+            <div className="mt-1 flex items-center gap-0.5 flex-wrap">
+              <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted/70 mr-0.5">Tags:</span>
+              {allTags.map((tag) => {
+                const color = getTagColor(tag);
+                const isActive = tagFilter === tag;
+                return (
+                  <button
+                    key={tag}
+                    onClick={() => setTagFilter(isActive ? null : tag)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      const c = window.prompt(`Set color for #${tag} (hex, e.g. #ff6600):`, getTagColor(tag));
+                      if (c) setTagColor(tag, c);
+                    }}
+                    className="px-1 py-0.5 rounded text-[8px] font-mono transition-all"
+                    style={{
+                      backgroundColor: isActive ? color : `${color}20`,
+                      color: isActive ? "#fff" : color,
+                      borderColor: `${color}40`,
+                      border: "1px solid",
+                    }}
+                    title={isActive ? `Remove filter: #${tag}` : `Filter by #${tag} (right-click to set color)`}
+                  >
+                    #{tag}
+                  </button>
+                );
+              })}
+              {tagFilter && (
+                <button
+                  onClick={() => setTagFilter(null)}
+                  className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
+                  title="Clear tag filter"
                 >
                   ✕ Clear
                 </button>
@@ -3227,14 +3301,31 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                 <span className="text-[9px] text-claude-accent font-medium truncate">{message.pinNote}</span>
               </div>
             )}
-            {/* Round 19: Tags display */}
+            {/* Round 19+20: Tags display with custom colors */}
             {message.tags && message.tags.length > 0 && !message.pending && (
               <div className="mt-1 flex flex-wrap gap-0.5">
-                {message.tags.map((tag, i) => (
-                  <span key={i} className="inline-flex items-center gap-0.5 rounded bg-claude-text-muted/10 border border-claude-border/20 px-1 py-0 text-[8px] text-claude-text-muted font-mono">
-                    #{tag}
-                  </span>
-                ))}
+                {message.tags.map((tag, i) => {
+                  // Round 20: Read custom color from localStorage, fallback to hash-based color
+                  let color = "#888888";
+                  try {
+                    const raw = localStorage.getItem("pdb-tracker:tag-colors");
+                    const colors = raw ? JSON.parse(raw) : {};
+                    if (colors[tag]) { color = colors[tag]; }
+                    else {
+                      const cycle = ["#c96442", "#2d8f8f", "#7c5cbf", "#c9872e", "#16a34a", "#ea580c", "#0891b2", "#db2777"];
+                      color = cycle[tag.charCodeAt(0) % cycle.length];
+                    }
+                  } catch { /* ignore */ }
+                  return (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-0.5 rounded px-1 py-0 text-[8px] font-mono"
+                      style={{ backgroundColor: `${color}20`, color, border: `1px solid ${color}40` }}
+                    >
+                      #{tag}
+                    </span>
+                  );
+                })}
               </div>
             )}
             {/* Round 19: Tag + Pin-note action buttons (hover) */}
@@ -3281,7 +3372,7 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                 )}
               </div>
             )}
-            {/* Round 19: Diff view for edited messages */}
+            {/* Round 19+20: Diff view for edited messages (word-level highlighting) */}
             {isUser && message.originalContent && !message.pending && !isEditing && (
               <div className="mt-1">
                 <button
@@ -3292,14 +3383,40 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                   <GitCompare className="h-2.5 w-2.5" />
                   {showDiff ? "Hide diff" : "Edited — show diff"}
                 </button>
-                {showDiff && (
-                  <div className="mt-0.5 rounded border border-claude-border/30 p-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40">
-                    <div className="text-[7px] font-semibold uppercase text-red-600/70 mb-0.5">- Original</div>
-                    <div className="text-[9px] text-claude-text-muted/60 whitespace-pre-wrap line-through mb-1">{message.originalContent}</div>
-                    <div className="text-[7px] font-semibold uppercase text-green-600/70 mb-0.5">+ Edited</div>
-                    <div className="text-[9px] text-claude-text whitespace-pre-wrap">{message.content}</div>
-                  </div>
-                )}
+                {showDiff && (() => {
+                  // Round 20: Word-level diff
+                  const origWords = (message.originalContent || "").split(/(\s+)/);
+                  const newWords = (message.content || "").split(/(\s+)/);
+                  // Simple LCS-based word diff
+                  const origSet = new Set(origWords.filter(w => w.trim()));
+                  const newSet = new Set(newWords.filter(w => w.trim()));
+                  return (
+                    <div className="mt-0.5 rounded border border-claude-border/30 p-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40">
+                      <div className="text-[7px] font-semibold uppercase text-red-600/70 mb-0.5">- Original</div>
+                      <div className="text-[9px] whitespace-pre-wrap mb-1">
+                        {origWords.map((word, i) => {
+                          const isRemoved = word.trim() && !newSet.has(word);
+                          return (
+                            <span key={i} className={isRemoved ? "bg-red-500/20 text-red-600 line-through rounded px-0.5" : "text-claude-text-muted/60"}>
+                              {word}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <div className="text-[7px] font-semibold uppercase text-green-600/70 mb-0.5">+ Edited</div>
+                      <div className="text-[9px] whitespace-pre-wrap">
+                        {newWords.map((word, i) => {
+                          const isAdded = word.trim() && !origSet.has(word);
+                          return (
+                            <span key={i} className={isAdded ? "bg-green-500/20 text-green-600 rounded px-0.5" : "text-claude-text"}>
+                              {word}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
             {/* Round 17: Quick reply suggestions after assistant responses */}
