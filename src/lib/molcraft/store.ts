@@ -286,6 +286,12 @@ export interface ChatMessage {
   pinned?: boolean;
   /** Round 5: When true, the message is bookmarked for later reference. */
   bookmarked?: boolean;
+  /** Round 19: Custom tags for message categorization (e.g., "important", "bug"). */
+  tags?: string[];
+  /** Round 19: Optional note attached when pinning a message. */
+  pinNote?: string;
+  /** Round 19: Original content before editing (for diff view). */
+  originalContent?: string;
 }
 
 export interface ChartPreset {

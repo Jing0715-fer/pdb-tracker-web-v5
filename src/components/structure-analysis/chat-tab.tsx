@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -1473,8 +1473,14 @@ export function ChatTab() {
     const handler = (e: Event) => {
       const { messageId, newContent } = (e as CustomEvent<{ messageId: string; newContent: string }>).detail;
       if (!messageId || !newContent || sendingRef.current) return;
-      // Update the user message content in the store
-      updateMessage(messageId, { content: newContent });
+      // Round 19: Save original content for diff view before updating
+      const allMsgsBefore = useAppStore.getState().chatMessages;
+      const msgBefore = allMsgsBefore.find(m => m.id === messageId);
+      if (msgBefore && msgBefore.content !== newContent && !msgBefore.originalContent) {
+        updateMessage(messageId, { content: newContent, originalContent: msgBefore.content });
+      } else {
+        updateMessage(messageId, { content: newContent });
+      }
       // Truncate messages after the edited one (remove old responses)
       const allMsgs = useAppStore.getState().chatMessages;
       const editIndex = allMsgs.findIndex((m) => m.id === messageId);
@@ -1539,6 +1545,30 @@ export function ChatTab() {
     };
     window.addEventListener(BOOKMARK_EVENT, handler);
     return () => window.removeEventListener(BOOKMARK_EVENT, handler);
+  }, [updateMessage, toast]);
+
+  // Round 19: Listen for tag events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, tags } = (e as CustomEvent<{ messageId: string; tags: string[] }>).detail;
+      if (!messageId) return;
+      updateMessage(messageId, { tags });
+      toast(tags.length > 0 ? `🏷️ Tagged: ${tags.join(", ")}` : "Tags cleared", "info");
+    };
+    window.addEventListener(TAG_EVENT, handler);
+    return () => window.removeEventListener(TAG_EVENT, handler);
+  }, [updateMessage, toast]);
+
+  // Round 19: Listen for pin-note events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, note } = (e as CustomEvent<{ messageId: string; note: string }>).detail;
+      if (!messageId) return;
+      updateMessage(messageId, { pinNote: note || undefined });
+      toast(note ? `📌 Pin note: ${note}` : "Pin note cleared", "info");
+    };
+    window.addEventListener(PIN_NOTE_EVENT, handler);
+    return () => window.removeEventListener(PIN_NOTE_EVENT, handler);
   }, [updateMessage, toast]);
 
   // Round 10: Insert markdown formatting around selection or at cursor
@@ -2592,6 +2622,18 @@ function dispatchBookmark(messageId: string, bookmarked: boolean) {
   window.dispatchEvent(new CustomEvent(BOOKMARK_EVENT, { detail: { messageId, bookmarked } }));
 }
 
+/** Round 19: Tag management event bus. */
+const TAG_EVENT = "chat-tag";
+function dispatchTag(messageId: string, tags: string[]) {
+  window.dispatchEvent(new CustomEvent(TAG_EVENT, { detail: { messageId, tags } }));
+}
+
+/** Round 19: Pin with note event bus. */
+const PIN_NOTE_EVENT = "chat-pin-note";
+function dispatchPinNote(messageId: string, note: string) {
+  window.dispatchEvent(new CustomEvent(PIN_NOTE_EVENT, { detail: { messageId, note } }));
+}
+
 /**
  * Round 17: Generate contextual quick reply suggestions based on the assistant's message.
  */
@@ -2700,6 +2742,8 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
   const COLLAPSE_THRESHOLD = 500; // characters
   const isLongMessage = !isUser && !message.pending && (message.content || "").length > COLLAPSE_THRESHOLD;
   const [isCollapsed, setIsCollapsed] = useState(true);
+  // Round 19: Diff view state for edited messages
+  const [showDiff, setShowDiff] = useState(false);
   const displayedContent = isLongMessage && isCollapsed
     ? (message.content || "").slice(0, COLLAPSE_THRESHOLD) + "..."
     : message.content || "";
@@ -3161,11 +3205,11 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                 )}
               </div>
             )}
-            {/* Round 5: Show pinned/bookmarked indicators on the message bubble */}
+            {/* Round 5+19: Show pinned/bookmarked indicators + pin note + tags on the message bubble */}
             {(message.pinned || message.bookmarked) && !message.pending && (
               <div className="absolute -top-1.5 -left-1.5 flex items-center gap-0.5">
                 {message.pinned && (
-                  <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-claude-accent text-white shadow-sm" title="Pinned to top">
+                  <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-claude-accent text-white shadow-sm" title={`Pinned to top${message.pinNote ? `: ${message.pinNote}` : ""}`}>
                     <Pin className="h-2 w-2" />
                   </span>
                 )}
@@ -3173,6 +3217,88 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                   <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-amber-500 text-white shadow-sm" title="Bookmarked">
                     <Bookmark className="h-2 w-2" />
                   </span>
+                )}
+              </div>
+            )}
+            {/* Round 19: Pin note display */}
+            {message.pinned && message.pinNote && !message.pending && (
+              <div className="mt-1 flex items-center gap-1 rounded bg-claude-accent/10 border border-claude-accent/20 px-1.5 py-0.5">
+                <Pin className="h-2 w-2 text-claude-accent shrink-0" />
+                <span className="text-[9px] text-claude-accent font-medium truncate">{message.pinNote}</span>
+              </div>
+            )}
+            {/* Round 19: Tags display */}
+            {message.tags && message.tags.length > 0 && !message.pending && (
+              <div className="mt-1 flex flex-wrap gap-0.5">
+                {message.tags.map((tag, i) => (
+                  <span key={i} className="inline-flex items-center gap-0.5 rounded bg-claude-text-muted/10 border border-claude-border/20 px-1 py-0 text-[8px] text-claude-text-muted font-mono">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Round 19: Tag + Pin-note action buttons (hover) */}
+            {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
+              <div className="mt-0.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => {
+                    const tag = window.prompt("Add a tag (single word, no #):");
+                    if (tag && tag.trim()) {
+                      const currentTags = message.tags || [];
+                      const newTag = tag.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "");
+                      if (newTag && !currentTags.includes(newTag)) {
+                        dispatchTag(message.id, [...currentTags, newTag]);
+                      }
+                    }
+                  }}
+                  className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors"
+                  title="Add a tag"
+                >
+                  <Tag className="h-2.5 w-2.5" />
+                  Tag
+                </button>
+                {message.tags && message.tags.length > 0 && (
+                  <button
+                    onClick={() => dispatchTag(message.id, [])}
+                    className="text-[8px] text-claude-text-muted/50 hover:text-destructive transition-colors"
+                    title="Clear all tags"
+                  >
+                    Clear tags
+                  </button>
+                )}
+                {message.pinned && (
+                  <button
+                    onClick={() => {
+                      const note = window.prompt("Edit pin note:", message.pinNote || "");
+                      if (note !== null) dispatchPinNote(message.id, note.trim());
+                    }}
+                    className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors"
+                    title="Edit pin note"
+                  >
+                    <StickyNote className="h-2.5 w-2.5" />
+                    Note
+                  </button>
+                )}
+              </div>
+            )}
+            {/* Round 19: Diff view for edited messages */}
+            {isUser && message.originalContent && !message.pending && !isEditing && (
+              <div className="mt-1">
+                <button
+                  onClick={() => setShowDiff(!showDiff)}
+                  className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors"
+                  title={showDiff ? "Hide diff" : "Show original (diff)"}
+                >
+                  <GitCompare className="h-2.5 w-2.5" />
+                  {showDiff ? "Hide diff" : "Edited — show diff"}
+                </button>
+                {showDiff && (
+                  <div className="mt-0.5 rounded border border-claude-border/30 p-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40">
+                    <div className="text-[7px] font-semibold uppercase text-red-600/70 mb-0.5">- Original</div>
+                    <div className="text-[9px] text-claude-text-muted/60 whitespace-pre-wrap line-through mb-1">{message.originalContent}</div>
+                    <div className="text-[7px] font-semibold uppercase text-green-600/70 mb-0.5">+ Edited</div>
+                    <div className="text-[9px] text-claude-text whitespace-pre-wrap">{message.content}</div>
+                  </div>
                 )}
               </div>
             )}
