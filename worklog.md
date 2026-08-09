@@ -8091,3 +8091,67 @@ Next Round Improvement Suggestions:
 5. **Tag auto-assignment** — Automatically assign suggested tags to new messages
 6. **Tag merge/rename** — Allow merging or renaming existing tags
 7. **Chat message QR code** — Generate QR code for sharing a message
+
+---
+Task ID: bugfix-send-before-initialization
+Agent: main
+Task: Fix critical ReferenceError "Cannot access 'send' before initialization" in ChatTab. Run QA/E2E tests, document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Sync: local = origin/main = cbcb279 (in sync)
+  - Working tree: clean
+
+- Bug Analysis:
+  - Error: "Cannot access 'send' before initialization" at chat-tab.tsx:555
+  - Root cause: The Round 17 quick-reply listener `useEffect` was placed at line 547,
+    referencing `send` in its dependency array. However, `send` is a `useCallback`
+    defined later at line 1174. JavaScript's temporal dead zone (TDZ) prevents
+    accessing a `const` variable before its declaration.
+  - This was introduced in Round 17 when the quick-reply feature was added — the
+    `useEffect` was placed near other state/effect code but before `send` was defined.
+
+- Fix:
+  - Moved the quick-reply listener `useEffect` from line 547 to line 1495
+    (after `send` is defined, right before the edit listener which also depends on `send`)
+  - Added comment: "must be after send is defined"
+  - The edit listener (Round 4) was already correctly placed after `send` — used as reference
+
+- Verification:
+  - Dev server starts successfully (HTTP 200)
+  - Page compiles and renders without errors (137KB screenshot)
+  - Console check: NO "Cannot access 'send' before initialization" error
+  - All 4 tabs visible: Weekly/Evaluation/Literature/Analysis
+  - Chat API works: Returns load_pdb + analyze_run, model="glm-4.6"
+  - Warmup API works: 5 routes warmed in 4.4s
+
+E2E Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (137KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No "Cannot access send" error |
+| Chat API - Load 1CBS | ✅ PASS | Returns load_pdb + analyze_run |
+| Warmup API | ✅ PASS | 5 routes warmed in 4.4s |
+
+Code Verification:
+- chat-tab.tsx: Quick-reply useEffect moved after send definition ✓
+- chat-tab.tsx: No TDZ violation ✓
+- chat-tab.tsx: Comment "must be after send is defined" added ✓
+
+Stage Summary:
+- Critical bug FIXED: "Cannot access 'send' before initialization" error resolved
+- Root cause: useEffect dependency on `send` before its `useCallback` definition (TDZ)
+- Fix: Moved useEffect to after `send` definition (line 1495)
+- All tests pass, no console errors
+- Page renders correctly with full dashboard
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Tag auto-assignment** — Automatically assign suggested tags to new messages
+6. **Tag merge/rename** — Allow merging or renaming existing tags
+7. **Chat message QR code** — Generate QR code for sharing a message

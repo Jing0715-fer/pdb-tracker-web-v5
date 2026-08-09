@@ -544,16 +544,6 @@ export function ChatTab() {
     });
   }, [messages, messageSentiment]);
 
-  // Round 17: Quick reply listener — sends the reply as a new message
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const reply = (e as CustomEvent<string>).detail;
-      if (reply && !sendingRef.current) send(reply);
-    };
-    window.addEventListener("chat-quick-reply", handler);
-    return () => window.removeEventListener("chat-quick-reply", handler);
-  }, [send]);
-
   // Round 17: Translate message via /api/llm/chat/stream
   const handleTranslate = useCallback(async (messageId: string, content: string) => {
     if (!content.trim()) return;
@@ -1501,6 +1491,16 @@ export function ChatTab() {
     },
     [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast, playSound]
   );
+
+  // Round 17: Quick reply listener — sends the reply as a new message (must be after send is defined)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const reply = (e as CustomEvent<string>).detail;
+      if (reply && !sendingRef.current) send(reply);
+    };
+    window.addEventListener("chat-quick-reply", handler);
+    return () => window.removeEventListener("chat-quick-reply", handler);
+  }, [send]);
 
   // Round 4: Listen for message edit events from MessageBubble (must be after send is defined)
   useEffect(() => {
