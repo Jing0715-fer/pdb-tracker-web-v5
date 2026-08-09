@@ -286,6 +286,33 @@ function highlightSearch(text: string, query: string): Array<{ text: string; mat
   return segments.length > 0 ? segments : [{ text, match: false }];
 }
 
+/**
+ * Round 14: Copy button for code blocks in assistant messages.
+ * Shows a Copy icon, changes to Check for 1.5s after copying.
+ */
+function CodeBlockCopyButton({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(code).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => { /* ignore */ }
+    );
+  }, [code]);
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-0.5 text-[8px] text-claude-text-muted hover:text-claude-accent transition-colors"
+      title="Copy code"
+    >
+      {copied ? <Check className="h-2.5 w-2.5 text-green-600" /> : <Copy className="h-2.5 w-2.5" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 export function ChatTab() {
   const [input, setInput] = useState("");
   const messages = useAppStore((s) => s.chatMessages);
@@ -326,6 +353,11 @@ export function ChatTab() {
   const [newTemplateIcon, setNewTemplateIcon] = useState("📝");
   // Round 13: Voice input state
   const [isListening, setIsListening] = useState(false);
+  // Round 14: Voice input language selector
+  const [voiceLang, setVoiceLang] = useState(() => {
+    try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
+    catch { return "en-US"; }
+  });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -784,6 +816,71 @@ export function ChatTab() {
     saveFavoriteTemplates(updated);
   }, [favoriteTemplates]);
 
+  // Round 14: Template import/export
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExportTemplates = useCallback(() => {
+    if (customTemplates.length === 0) {
+      toast("No custom templates to export", "error");
+      return;
+    }
+    const data = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      templates: customTemplates,
+    };
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chat-templates-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${customTemplates.length} custom templates`, "success");
+  }, [customTemplates, toast]);
+
+  const handleImportTemplates = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string);
+        const imported: ChatTemplate[] = Array.isArray(data) ? data : data.templates;
+        if (!Array.isArray(imported)) {
+          toast("Invalid template file format", "error");
+          return;
+        }
+        // Filter valid templates and avoid duplicates by title
+        const existingTitles = new Set(customTemplates.map(t => t.title));
+        const newTemplates = imported
+          .filter(t => t && typeof t.title === "string" && typeof t.prompt === "string")
+          .filter(t => !existingTitles.has(t.title))
+          .map(t => ({
+            icon: typeof t.icon === "string" ? t.icon : "📝",
+            title: t.title,
+            prompt: t.prompt,
+            category: typeof t.category === "string" ? t.category : "Custom",
+          }));
+        if (newTemplates.length === 0) {
+          toast("No new templates to import (all already exist)", "info");
+          return;
+        }
+        const updated = [...customTemplates, ...newTemplates];
+        setCustomTemplates(updated);
+        saveCustomTemplates(updated);
+        toast(`Imported ${newTemplates.length} template(s)`, "success");
+      } catch {
+        toast("Failed to parse JSON file", "error");
+      }
+    };
+    reader.onerror = () => toast("Failed to read file", "error");
+    reader.readAsText(file);
+    // Reset input so the same file can be imported again
+    e.target.value = "";
+  }, [customTemplates, toast]);
+
   // Round 13: Voice input via Web Speech API
   const recognitionRef = useRef<any>(null);
   const handleVoiceInput = useCallback(() => {
@@ -803,7 +900,7 @@ export function ChatTab() {
     const recognition = new SpeechRecognition();
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = voiceLang; // Round 14: configurable language
     recognitionRef.current = recognition;
     let finalTranscript = '';
     recognition.onresult = (event: any) => {
@@ -833,7 +930,7 @@ export function ChatTab() {
     recognition.start();
     setIsListening(true);
     toast("Listening... speak now", "info");
-  }, [isListening, toast]);
+  }, [isListening, toast, voiceLang]);
 
   /**
    * Core send function. Implements the agent ReAct loop:
@@ -1931,15 +2028,41 @@ export function ChatTab() {
                     </div>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => setShowSaveTemplate(true)}
-                    disabled={!input.trim()}
-                    className="w-full mb-1.5 flex items-center justify-center gap-1 rounded border border-dashed border-claude-accent/30 text-[9px] text-claude-accent hover:bg-claude-accent-light/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors py-1"
-                    title="Save current input as a custom template"
-                  >
-                    <Plus className="h-2.5 w-2.5" />
-                    Save current prompt as template
-                  </button>
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <button
+                      onClick={() => setShowSaveTemplate(true)}
+                      disabled={!input.trim()}
+                      className="flex-1 flex items-center justify-center gap-1 rounded border border-dashed border-claude-accent/30 text-[9px] text-claude-accent hover:bg-claude-accent-light/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors py-1"
+                      title="Save current input as a custom template"
+                    >
+                      <Plus className="h-2.5 w-2.5" />
+                      Save as template
+                    </button>
+                    {/* Round 14: Template import/export */}
+                    {customTemplates.length > 0 && (
+                      <button
+                        onClick={handleExportTemplates}
+                        className="flex items-center justify-center gap-1 rounded border border-claude-border-light/40 text-[9px] text-claude-text-muted hover:text-claude-accent hover:border-claude-accent/30 transition-colors px-2 py-1"
+                        title="Export custom templates as JSON"
+                      >
+                        <Download className="h-2.5 w-2.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center justify-center gap-1 rounded border border-claude-border-light/40 text-[9px] text-claude-text-muted hover:text-claude-accent hover:border-claude-accent/30 transition-colors px-2 py-1"
+                      title="Import templates from JSON"
+                    >
+                      <Upload className="h-2.5 w-2.5" />
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={handleImportTemplates}
+                    />
+                  </div>
                 )}
                 {/* Category filter */}
                 <div className="flex items-center gap-0.5 flex-wrap mb-1.5 pb-1 border-b border-claude-border-light/30 dark:border-[#3d3832]/30">
@@ -2104,13 +2227,13 @@ export function ChatTab() {
                   abortRef.current = null;
                 }
               }}
-              className="absolute bottom-1.5 right-[4.5rem] grid h-7 w-7 place-items-center rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors"
+              className="absolute bottom-1.5 right-[7rem] grid h-7 w-7 place-items-center rounded-md bg-destructive text-white hover:bg-destructive/90 transition-colors"
               title="Stop generation"
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
           )}
-          {/* Round 13: Voice input button */}
+          {/* Round 13+14: Voice input button + language selector */}
           <button
             onClick={handleVoiceInput}
             disabled={sendingRef.current}
@@ -2123,6 +2246,26 @@ export function ChatTab() {
           >
             <Mic className="h-3.5 w-3.5" />
           </button>
+          {/* Round 14: Voice language selector */}
+          <select
+            value={voiceLang}
+            onChange={(e) => {
+              setVoiceLang(e.target.value);
+              try { localStorage.setItem("pdb-tracker:voice-lang", e.target.value); } catch { /* ignore */ }
+            }}
+            disabled={isListening || sendingRef.current}
+            className="absolute bottom-1.5 right-[4.5rem] h-7 rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-[8px] text-claude-text focus:outline-none disabled:opacity-40 cursor-pointer px-1"
+            title="Voice input language"
+          >
+            <option value="en-US">🇺🇸 EN</option>
+            <option value="en-GB">🇬🇧 EN</option>
+            <option value="zh-CN">🇨🇳 中文</option>
+            <option value="ja-JP">🇯🇵 日本語</option>
+            <option value="ko-KR">🇰🇷 한국어</option>
+            <option value="es-ES">🇪🇸 Español</option>
+            <option value="fr-FR">🇫🇷 Français</option>
+            <option value="de-DE">🇩🇪 Deutsch</option>
+          </select>
           <button
             onClick={() => send(input)}
             disabled={!input.trim() || sendingRef.current}
@@ -2342,7 +2485,42 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                     )}
                   </div>
                 ) : (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      // Round 14: Enhanced code block rendering with language label + copy button
+                      code({ node, className, children, ...props }: any) {
+                        const match = /language-(\w+)/.exec(className || "");
+                        const codeText = String(children).replace(/\n$/, "");
+                        const isInline = !className && !codeText.includes("\n");
+                        if (isInline) {
+                          return (
+                            <code className="px-1 py-0.5 rounded bg-claude-text-muted/15 text-claude-accent text-[10px] font-mono" {...props}>
+                              {children}
+                            </code>
+                          );
+                        }
+                        return (
+                          <div className="relative group/code my-1.5 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden">
+                            {match && (
+                              <div className="flex items-center justify-between px-2 py-0.5 bg-claude-text-muted/10 border-b border-claude-border-light/30 dark:border-[#3d3832]/30">
+                                <span className="text-[8px] font-mono text-claude-text-muted uppercase">{match[1]}</span>
+                                <CodeBlockCopyButton code={codeText} />
+                              </div>
+                            )}
+                            {!match && (
+                              <div className="absolute top-1 right-1 opacity-0 group-hover/code:opacity-100 transition-opacity">
+                                <CodeBlockCopyButton code={codeText} />
+                              </div>
+                            )}
+                            <pre className="p-2 overflow-x-auto text-[10px] leading-relaxed">
+                              <code className={className} {...props}>{children}</code>
+                            </pre>
+                          </div>
+                        );
+                      },
+                    }}
+                  >
                     {message.content || ""}
                   </ReactMarkdown>
                 )}
