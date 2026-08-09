@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -353,6 +353,12 @@ export function ChatTab() {
   const [newTemplateIcon, setNewTemplateIcon] = useState("📝");
   // Round 13: Voice input state
   const [isListening, setIsListening] = useState(false);
+  // Round 15: Markdown preview + unread badge state
+  const [showPreview, setShowPreview] = useState(false);
+  // Round 15: Unread message count (messages received while chat tab not visible)
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isChatVisible, setIsChatVisible] = useState(false);
+  const prevMessageCountRef = useRef(0);
   // Round 14: Voice input language selector
   const [voiceLang, setVoiceLang] = useState(() => {
     try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
@@ -455,6 +461,44 @@ export function ChatTab() {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages, autoScroll]);
+
+  // Round 15: Track unread messages when chat is not visible
+  // Uses IntersectionObserver to detect if the chat container is visible
+  useEffect(() => {
+    const el = scrollRef.current?.parentElement;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsChatVisible(entry.isIntersecting);
+        if (entry.isIntersecting) {
+          setUnreadCount(0);
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Round 15: Count new assistant messages when not visible
+  useEffect(() => {
+    const currentCount = messages.length;
+    const prevCount = prevMessageCountRef.current;
+    if (currentCount > prevCount && !isChatVisible) {
+      // New messages arrived while chat not visible
+      const newMsgs = messages.slice(prevCount);
+      const newAssistantMsgs = newMsgs.filter(m => m.role === "assistant" && !m.pending);
+      if (newAssistantMsgs.length > 0) {
+        setUnreadCount(c => c + newAssistantMsgs.length);
+      }
+    }
+    prevMessageCountRef.current = currentCount;
+  }, [messages, isChatVisible]);
+
+  // Round 15: Dispatch unread count event for external badge display
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("chat-unread-count", { detail: unreadCount }));
+  }, [unreadCount]);
 
   // Round 10: Detect when user scrolls up — auto-disable auto-scroll
   const handleScroll = useCallback(() => {
@@ -1504,6 +1548,12 @@ export function ChatTab() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Round 15: Unread messages indicator (shown when returning to chat) */}
+      {unreadCount > 0 && isChatVisible && (
+        <div className="absolute top-1 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-full bg-claude-accent text-white px-2 py-0.5 text-[9px] font-medium shadow-md animate-pulse">
+          <span>{unreadCount} new message{unreadCount > 1 ? "s" : ""}</span>
+        </div>
+      )}
       {/* Round 11: Drag-and-drop overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-claude-accent/10 backdrop-blur-sm border-2 border-dashed border-claude-accent rounded-lg pointer-events-none">
@@ -2205,7 +2255,29 @@ export function ChatTab() {
           >
             <List className="h-3 w-3" />
           </button>
+          {/* Round 15: Markdown preview toggle */}
+          <button
+            onClick={() => setShowPreview(!showPreview)}
+            disabled={sendingRef.current || !input.trim()}
+            className={`grid h-5 w-5 place-items-center rounded transition-colors disabled:opacity-40 ${
+              showPreview ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30"
+            }`}
+            title={showPreview ? "Hide preview" : "Show markdown preview"}
+          >
+            {showPreview ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+          </button>
         </div>
+        {/* Round 15: Markdown live preview */}
+        {showPreview && input.trim() && (
+          <div className="mb-1 max-h-32 overflow-y-auto sa-scroll rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/60 dark:bg-[#1a1917]/60 p-1.5">
+            <div className="text-[7px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Preview</div>
+            <div className="sa-chat-markdown text-[10px]">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {input}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
         <div className="relative">
           <Textarea
             ref={inputRef}
@@ -2344,6 +2416,13 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
   // Round 4: Editing state for user messages
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content || "");
+  // Round 15: Long message collapse state
+  const COLLAPSE_THRESHOLD = 500; // characters
+  const isLongMessage = !isUser && !message.pending && (message.content || "").length > COLLAPSE_THRESHOLD;
+  const [isCollapsed, setIsCollapsed] = useState(true);
+  const displayedContent = isLongMessage && isCollapsed
+    ? (message.content || "").slice(0, COLLAPSE_THRESHOLD) + "..."
+    : message.content || "";
 
   // Round 3: Copy message content to clipboard
   const handleCopy = useCallback(() => {
@@ -2478,7 +2557,7 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
               <div className="sa-chat-markdown">
                 {searchQuery.trim() ? (
                   <div className="whitespace-pre-wrap">
-                    {highlightSearch(message.content || "", searchQuery).map((seg, i) =>
+                    {highlightSearch(displayedContent, searchQuery).map((seg, i) =>
                       seg.match
                         ? <mark key={i} className="bg-claude-accent/30 text-claude-accent rounded px-0.5">{seg.text}</mark>
                         : <span key={i}>{seg.text}</span>
@@ -2521,8 +2600,28 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                       },
                     }}
                   >
-                    {message.content || ""}
+                    {displayedContent}
                   </ReactMarkdown>
+                )}
+                {/* Round 15: Show more/less button for long messages */}
+                {isLongMessage && (
+                  <button
+                    onClick={() => setIsCollapsed(!isCollapsed)}
+                    className="mt-1 flex items-center gap-1 text-[9px] text-claude-accent hover:underline"
+                    title={isCollapsed ? "Show full message" : "Collapse message"}
+                  >
+                    {isCollapsed ? (
+                      <>
+                        <ChevronDown className="h-2.5 w-2.5" />
+                        Show more ({(message.content || "").length - COLLAPSE_THRESHOLD} chars hidden)
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="h-2.5 w-2.5" />
+                        Show less
+                      </>
+                    )}
+                  </button>
                 )}
               </div>
             )}
