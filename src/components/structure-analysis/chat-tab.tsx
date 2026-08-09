@@ -2193,6 +2193,30 @@ export function ChatTab() {
               </div>
             </div>
           )}
+          {/* Round 21: Tag statistics */}
+          {allTags.length > 0 && (
+            <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Tags ({allTags.length})</div>
+              <div className="space-y-0.5">
+                {allTags.map(tag => {
+                  const count = messages.filter(m => m.tags?.includes(tag)).length;
+                  const color = getTagColor(tag);
+                  return (
+                    <div key={tag} className="flex items-center gap-1 text-[9px]">
+                      <span
+                        className="inline-flex items-center rounded px-1 py-0 text-[8px] font-mono"
+                        style={{ backgroundColor: `${color}20`, color, border: `1px solid ${color}40` }}
+                      >
+                        #{tag}
+                      </span>
+                      <span className="ml-auto font-mono font-semibold text-claude-text">{count}</span>
+                      <span className="text-[7px] text-claude-text-muted">msg{count > 1 ? "s" : ""}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -3328,7 +3352,7 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                 })}
               </div>
             )}
-            {/* Round 19: Tag + Pin-note action buttons (hover) */}
+            {/* Round 19+21: Tag + Pin-note action buttons with tag suggestions (hover) */}
             {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
               <div className="mt-0.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -3348,6 +3372,38 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                   <Tag className="h-2.5 w-2.5" />
                   Tag
                 </button>
+                {/* Round 21: Auto-suggested tags based on content */}
+                {(() => {
+                  const content = (message.content || "").toLowerCase();
+                  const cmdTypes = (message.commands || [] as unknown[]).map((c: any) => c.type);
+                  const suggestions: string[] = [];
+                  if (cmdTypes.includes("load_pdb")) suggestions.push("loaded");
+                  if (cmdTypes.includes("analyze_run")) suggestions.push("analysis");
+                  if (content.includes("error") || content.includes("fail")) suggestions.push("issue");
+                  if (content.includes("ligand") || content.includes("pocket")) suggestions.push("drug-discovery");
+                  if (content.includes("report") || content.includes("summary")) suggestions.push("report");
+                  if (content.includes("hydrogen bond") || content.includes("hbond")) suggestions.push("interactions");
+                  if (content.includes("ramachandran")) suggestions.push("quality");
+                  if (content.includes("sasa") || content.includes("surface")) suggestions.push("surface");
+                  const currentTags = message.tags || [];
+                  const newSuggestions = suggestions.filter(s => !currentTags.includes(s)).slice(0, 3);
+                  if (newSuggestions.length === 0) return null;
+                  return (
+                    <div className="flex items-center gap-0.5">
+                      <span className="text-[7px] text-claude-text-muted/40">suggested:</span>
+                      {newSuggestions.map(s => (
+                        <button
+                          key={s}
+                          onClick={() => dispatchTag(message.id, [...currentTags, s])}
+                          className="px-1 py-0 rounded text-[7px] text-claude-accent/60 hover:text-claude-accent hover:bg-claude-accent-light/20 transition-colors font-mono"
+                          title={`Add suggested tag: #${s}`}
+                        >
+                          +{s}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {message.tags && message.tags.length > 0 && (
                   <button
                     onClick={() => dispatchTag(message.id, [])}
@@ -3417,6 +3473,28 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                     </div>
                   );
                 })()}
+                {/* Round 21: Export diff as patch file */}
+                {showDiff && (
+                  <button
+                    onClick={() => {
+                      const orig = message.originalContent || "";
+                      const edited = message.content || "";
+                      const patch = `--- original\n+++ edited\n@@ -1 +1 @@\n-${orig}\n+${edited}\n`;
+                      const blob = new Blob([patch], { type: "text/plain;charset=utf-8;" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `message-diff-${message.id}.patch`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="mt-1 flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors"
+                    title="Export diff as patch file"
+                  >
+                    <Download className="h-2.5 w-2.5" />
+                    Export patch
+                  </button>
+                )}
               </div>
             )}
             {/* Round 17: Quick reply suggestions after assistant responses */}
