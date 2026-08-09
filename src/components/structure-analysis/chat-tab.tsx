@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -168,6 +168,32 @@ const STEP_LABELS: Record<string, { label: string; icon: typeof Brain }> = {
   "error": { label: "Error", icon: X },
 };
 
+/**
+ * Round 11: Highlight search matches in text.
+ * Returns an array of text segments with match flags for rendering.
+ */
+function highlightSearch(text: string, query: string): Array<{ text: string; match: boolean }> {
+  if (!query.trim()) return [{ text, match: false }];
+  const q = query.trim();
+  const lowerText = text.toLowerCase();
+  const lowerQ = q.toLowerCase();
+  const segments: Array<{ text: string; match: boolean }> = [];
+  let lastIndex = 0;
+  let idx = lowerText.indexOf(lowerQ);
+  while (idx !== -1) {
+    if (idx > lastIndex) {
+      segments.push({ text: text.slice(lastIndex, idx), match: false });
+    }
+    segments.push({ text: text.slice(idx, idx + q.length), match: true });
+    lastIndex = idx + q.length;
+    idx = lowerText.indexOf(lowerQ, lastIndex);
+  }
+  if (lastIndex < text.length) {
+    segments.push({ text: text.slice(lastIndex), match: false });
+  }
+  return segments.length > 0 ? segments : [{ text, match: false }];
+}
+
 export function ChatTab() {
   const [input, setInput] = useState("");
   const messages = useAppStore((s) => s.chatMessages);
@@ -193,6 +219,8 @@ export function ChatTab() {
   const [showCmdHistory, setShowCmdHistory] = useState(false);
   // Round 7: Command type quick filter
   const [cmdTypeFilter, setCmdTypeFilter] = useState<string | null>(null);
+  // Round 11: Drag-and-drop state
+  const [isDragging, setIsDragging] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -1095,8 +1123,79 @@ export function ChatTab() {
     return () => window.removeEventListener('keydown', handler);
   }, [messages.length, showSearch, showStats, showCmdHistory, handleExportMarkdown]);
 
+  // Round 11: Drag-and-drop file upload handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only set isDragging to false if we're leaving the container (not entering a child)
+    if (e.currentTarget === e.target) {
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    // Check if it's a PDB file (by extension or MIME type)
+    const name = file.name.toLowerCase();
+    const isPdb = name.endsWith('.pdb') || name.endsWith('.pdb') || name.endsWith('.cif') ||
+                  name.endsWith('.mmcif') || name.endsWith('.ent') ||
+                  file.type === 'chemical/x-pdb' || file.type === 'chemical/x-cif';
+    if (!isPdb) {
+      toast("Please drop a .pdb, .cif, or .ent file", "error");
+      return;
+    }
+    // Read the file and send as a load_structure_data command via chat
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = reader.result as string;
+      const prompt = `I've uploaded a structure file: ${file.name}. Please load it and analyze its structure.`;
+      // Store the file content for the agent to use
+      try {
+        sessionStorage.setItem('pdb-tracker:uploaded-file', JSON.stringify({
+          name: file.name,
+          content: content.slice(0, 500000), // Cap at 500KB
+          format: name.endsWith('.cif') || name.endsWith('.mmcif') ? 'cif' : 'pdb',
+        }));
+      } catch { /* ignore quota errors */ }
+      send(prompt);
+      toast(`File "${file.name}" uploaded — analyzing...`, "success");
+    };
+    reader.onerror = () => {
+      toast("Failed to read file", "error");
+    };
+    reader.readAsText(file);
+  }, [send, toast]);
+
   return (
-    <div className="flex h-full flex-col sa-chat-container">
+    <div
+      className="flex h-full flex-col sa-chat-container relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Round 11: Drag-and-drop overlay */}
+      {isDragging && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-claude-accent/10 backdrop-blur-sm border-2 border-dashed border-claude-accent rounded-lg pointer-events-none">
+          <div className="flex flex-col items-center gap-2 text-claude-accent">
+            <Upload className="h-8 w-8" />
+            <span className="text-sm font-semibold">Drop PDB file to load</span>
+            <span className="text-[10px] text-claude-text-muted">.pdb, .cif, .ent supported</span>
+          </div>
+        </div>
+      )}
       {/* Provider selector + clear button */}
       <div className="flex shrink-0 items-center gap-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40">
         <Popover open={providerOpen} onOpenChange={setProviderOpen}>
@@ -1574,7 +1673,7 @@ export function ChatTab() {
             </button>
           </div>
         ) : (
-          filteredMessages.map((m) => <MessageBubble key={m.id} message={m} />)
+          filteredMessages.map((m) => <MessageBubble key={m.id} message={m} searchQuery={searchQuery} />)
         )}
       </div>
 
@@ -1703,7 +1802,7 @@ function dispatchBookmark(messageId: string, bookmarked: boolean) {
   window.dispatchEvent(new CustomEvent(BOOKMARK_EVENT, { detail: { messageId, bookmarked } }));
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; searchQuery?: string }) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
   // Improvement #3: Check if any message is currently pending (to disable retry)
@@ -1768,22 +1867,30 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         }`}
       >
         {message.pending && !message.content ? (
-          // Improvement #2: Show step-specific loading indicator
-          <div className="flex items-center gap-1.5 text-claude-text-muted">
-            {stepInfo ? (
-              <>
-                <stepInfo.icon className={`h-3 w-3 ${message.agentStep === "calling-llm" || message.agentStep === "parsing" ? "animate-pulse" : "animate-spin"}`} />
-                <span className="text-[10px] font-medium">{stepInfo.label}</span>
-                {message.agentStep === "calling-llm" && (
-                  <span className="text-[8px] text-claude-text-muted/60 ml-1">(this can take 10-30s)</span>
-                )}
-              </>
-            ) : (
-              <>
-                <Loader2 className="h-3 w-3 animate-spin" />
-                <span className="text-[10px]">Thinking…</span>
-              </>
-            )}
+          // Round 11: Enhanced typing indicator with animated dots
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5 text-claude-text-muted">
+              {stepInfo ? (
+                <>
+                  <stepInfo.icon className={`h-3 w-3 ${message.agentStep === "calling-llm" || message.agentStep === "parsing" ? "animate-pulse" : "animate-spin"}`} />
+                  <span className="text-[10px] font-medium">{stepInfo.label}</span>
+                  {message.agentStep === "calling-llm" && (
+                    <span className="text-[8px] text-claude-text-muted/60 ml-1">(this can take 10-30s)</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span className="text-[10px]">Thinking…</span>
+                </>
+              )}
+            </div>
+            {/* Round 11: Animated typing dots */}
+            <div className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-claude-accent/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+              <span className="h-1.5 w-1.5 rounded-full bg-claude-accent/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+              <span className="h-1.5 w-1.5 rounded-full bg-claude-accent/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
           </div>
         ) : (
           <>
@@ -1823,13 +1930,32 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                   </div>
                 </div>
               ) : (
-                <div className="whitespace-pre-wrap">{message.content}</div>
+                <div className="whitespace-pre-wrap">
+                  {searchQuery.trim()
+                    ? highlightSearch(message.content || "", searchQuery).map((seg, i) =>
+                        seg.match
+                          ? <mark key={i} className="bg-claude-accent/30 text-claude-accent rounded px-0.5">{seg.text}</mark>
+                          : <span key={i}>{seg.text}</span>
+                      )
+                    : message.content
+                  }
+                </div>
               )
             ) : (
               <div className="sa-chat-markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {message.content || ""}
-                </ReactMarkdown>
+                {searchQuery.trim() ? (
+                  <div className="whitespace-pre-wrap">
+                    {highlightSearch(message.content || "", searchQuery).map((seg, i) =>
+                      seg.match
+                        ? <mark key={i} className="bg-claude-accent/30 text-claude-accent rounded px-0.5">{seg.text}</mark>
+                        : <span key={i}>{seg.text}</span>
+                    )}
+                  </div>
+                ) : (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {message.content || ""}
+                  </ReactMarkdown>
+                )}
               </div>
             )}
             {/* Round 3: Copy button — appears on hover for non-pending messages */}

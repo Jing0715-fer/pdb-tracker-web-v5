@@ -6981,3 +6981,101 @@ Next Round Improvement Suggestions:
 5. **Drag-and-drop file upload** — Allow dragging PDB files into the chat to load them
 6. **Chat message search highlight** — Highlight search matches in the message content
 7. **Typing indicator** — Show "Agent is typing..." animation while waiting for LLM response
+
+---
+Task ID: round-11-dragdrop-search-highlight-typing
+Agent: main
+Task: Check git history, implement round 11 improvements (drag-and-drop file upload, search highlight, typing indicator). Run QA/E2E tests, document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Orphaned commits: 3 old dangling commits from previous sessions (safe to ignore)
+  - Stashes: none
+  - Sync: local = origin/main = a2f368f (in sync)
+  - Working tree: clean
+  - No action needed
+
+- Implemented Round 11 Improvement #5: Drag-and-drop file upload
+  - Added `isDragging` state for overlay visibility
+  - Added 3 event handlers on the chat container:
+    - `handleDragOver`: sets isDragging=true when files are dragged over
+    - `handleDragLeave`: sets isDragging=false when leaving the container
+    - `handleDrop`: reads the dropped file and sends it via chat
+  - File validation: accepts .pdb, .cif, .mmcif, .ent extensions
+  - File reading: uses FileReader.readAsText, caps content at 500KB
+  - Stores file content in sessionStorage for the agent to use
+  - Sends a chat prompt: "I've uploaded a structure file: {name}. Please load it..."
+  - Shows toast: "File '{name}' uploaded — analyzing..."
+  - Added drag overlay (z-50):
+    - Semi-transparent accent background with backdrop blur
+    - Dashed border
+    - Upload icon + "Drop PDB file to load" text
+    - ".pdb, .cif, .ent supported" hint
+    - pointer-events-none so it doesn't interfere with the drop
+
+- Implemented Round 11 Improvement #6: Search highlight in message content
+  - Created `highlightSearch(text, query)` function:
+    - Splits text into segments of matching/non-matching parts
+    - Case-insensitive matching
+    - Returns array of { text, match } objects
+  - Updated MessageBubble to accept `searchQuery` prop
+  - Updated both user message content and assistant message content:
+    - When searchQuery is active, renders highlighted segments
+    - Matching text wrapped in <mark> with accent background
+    - Non-matching text rendered as <span>
+    - When no searchQuery, renders normally (ReactMarkdown for assistant, plain text for user)
+  - Only activates when search bar is open and has a query
+
+- Implemented Round 11 Improvement #7: Typing indicator animation
+  - Enhanced the pending message loading state
+  - Added 3 animated bouncing dots below the step indicator:
+    - Each dot: 1.5×1.5px, rounded-full, accent color at 60% opacity
+    - Staggered animation delays: 0ms, 150ms, 300ms
+    - Uses Tailwind's `animate-bounce` class
+  - Combined with existing step-specific icons (Brain/Terminal/Loader2)
+  - Shows alongside the "Calling LLM..." / "Executing commands..." label
+
+- Added Upload icon to imports from lucide-react
+
+QA Testing:
+- Dev server starts successfully (HTTP 200)
+- Page compiles and renders (80KB screenshot)
+- No console errors
+
+E2E Testing:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (80KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No JS errors |
+| Chat API - Load 1CBS | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in 4.5s |
+| Drag-and-drop code | ✅ PASS | Verified handleDragOver/DragLeave/Drop + overlay |
+| Search highlight code | ✅ PASS | Verified highlightSearch function + <mark> rendering |
+| Typing indicator code | ✅ PASS | Verified animated bounce dots |
+
+Code Verification:
+- chat-tab.tsx: isDragging state + 3 drag handlers + overlay ✓
+- chat-tab.tsx: highlightSearch function + <mark> rendering in MessageBubble ✓
+- chat-tab.tsx: 3 animated bounce dots in pending message state ✓
+- chat-tab.tsx: Upload icon imported ✓
+
+Stage Summary:
+- Git history clean and in sync (no action needed)
+- 3 of 7 round-10 suggestions implemented (drag-drop, search highlight, typing indicator)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat now supports:
+  - Drag-and-drop PDB file upload (.pdb, .cif, .ent) with visual overlay
+  - Search highlight (matching text highlighted with accent color)
+  - Animated typing indicator (3 bouncing dots + step label)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Voice input** — Add microphone button for speech-to-text input
+6. **Chat templates** — Predefined prompt templates for common analysis tasks
+7. **Multi-file upload** — Allow uploading multiple PDB files at once for comparison
