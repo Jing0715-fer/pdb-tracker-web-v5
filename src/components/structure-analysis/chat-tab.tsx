@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -362,6 +362,9 @@ export function ChatTab() {
   // Round 16: Auto-save indicator state
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Round 17: Translation + sentiment state
+  const [translatingId, setTranslatingId] = useState<string | null>(null);
+  const [messageSentiment, setMessageSentiment] = useState<Record<string, "positive" | "neutral" | "negative">>({});
   // Round 14: Voice input language selector
   const [voiceLang, setVoiceLang] = useState(() => {
     try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
@@ -520,6 +523,74 @@ export function ChatTab() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, [messages]);
+
+  // Round 17: Auto-compute sentiment for new assistant messages
+  useEffect(() => {
+    messages.forEach((m) => {
+      if (m.role === "assistant" && !m.pending && m.content && !messageSentiment[m.id]) {
+        const sentiment = analyzeSentiment(m.content);
+        setMessageSentiment(prev => ({ ...prev, [m.id]: sentiment }));
+      }
+    });
+  }, [messages, messageSentiment]);
+
+  // Round 17: Quick reply listener — sends the reply as a new message
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const reply = (e as CustomEvent<string>).detail;
+      if (reply && !sendingRef.current) send(reply);
+    };
+    window.addEventListener("chat-quick-reply", handler);
+    return () => window.removeEventListener("chat-quick-reply", handler);
+  }, [send]);
+
+  // Round 17: Translate message via /api/llm/chat/stream
+  const handleTranslate = useCallback(async (messageId: string, content: string) => {
+    if (!content.trim()) return;
+    setTranslatingId(messageId);
+    try {
+      const res = await fetch("/api/llm/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "user", content: `Translate the following text to English. Output ONLY the translation, no explanation:\n\n${content}` },
+          ],
+          provider: chatProvider,
+        }),
+      });
+      if (!res.ok) throw new Error("Translation failed");
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let translated = "";
+      let buffer = "";
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+          for (const evt of events) {
+            const line = evt.trim();
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "chunk") translated += data.text;
+            } catch { /* ignore */ }
+          }
+        }
+      }
+      if (translated.trim()) {
+        updateMessage(messageId, { content: translated });
+        toast("Message translated to English", "success");
+      }
+    } catch (err) {
+      toast(`Translation failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    } finally {
+      setTranslatingId(null);
+    }
+  }, [chatProvider, updateMessage, toast]);
 
   // Round 10: Detect when user scrolls up — auto-disable auto-scroll
   const handleScroll = useCallback(() => {
@@ -2448,6 +2519,101 @@ function dispatchBookmark(messageId: string, bookmarked: boolean) {
   window.dispatchEvent(new CustomEvent(BOOKMARK_EVENT, { detail: { messageId, bookmarked } }));
 }
 
+/**
+ * Round 17: Generate contextual quick reply suggestions based on the assistant's message.
+ */
+function generateQuickReplies(message: ChatMessage): string[] {
+  const content = (message.content || "").toLowerCase();
+  const commands = (message.commands || []) as Array<{ type?: string; id?: string; recipe?: string }>;
+  const replies: string[] = [];
+
+  // Check what commands were executed
+  const hasLoadPdb = commands.some(c => c.type === "load_pdb");
+  const hasAnalyze = commands.some(c => c.type === "analyze_run");
+  const hasMetadata = commands.some(c => c.type === "analyze_metadata");
+  const pdbId = commands.find(c => c.type === "load_pdb")?.id;
+
+  if (hasLoadPdb && !hasAnalyze) {
+    replies.push("Analyze hydrogen bonds");
+    replies.push("Show Ramachandran plot");
+    replies.push("Run B-factor analysis");
+  }
+  if (hasAnalyze) {
+    const recipes = commands.filter(c => c.type === "analyze_run").map(c => c.recipe);
+    if (recipes.includes("hbonds") && !recipes.includes("salt_bridges")) {
+      replies.push("Also check salt bridges");
+    }
+    if (recipes.includes("hbonds") || recipes.includes("salt_bridges")) {
+      replies.push("Show hydrophobic contacts");
+    }
+    if (!recipes.includes("ramachandran")) {
+      replies.push("Check Ramachandran quality");
+    }
+    if (!recipes.includes("sasa")) {
+      replies.push("Calculate SASA");
+    }
+  }
+  if (hasMetadata && !hasLoadPdb) {
+    replies.push("Load this structure");
+  }
+  // Generic follow-ups
+  if (content.includes("report") || content.includes("summary")) {
+    replies.push("Export as Markdown");
+  }
+  if (content.includes("ligand") || content.includes("pocket")) {
+    replies.push("Analyze druggability");
+    replies.push("Detect all pockets");
+  }
+  // Always-available
+  if (replies.length < 3) {
+    replies.push("Generate full report");
+  }
+  if (replies.length < 4) {
+    replies.push("Set representation to cartoon");
+  }
+
+  return replies.slice(0, 4); // Max 4 suggestions
+}
+
+/** Round 17: Quick reply suggestion chips component. */
+function QuickReplies({ message }: { message: ChatMessage }) {
+  const replies = useMemo(() => generateQuickReplies(message), [message]);
+  const dispatchQuickReply = useCallback((reply: string) => {
+    window.dispatchEvent(new CustomEvent("chat-quick-reply", { detail: reply }));
+  }, []);
+  if (replies.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {replies.map((reply, i) => (
+        <button
+          key={i}
+          onClick={() => dispatchQuickReply(reply)}
+          className="flex items-center gap-0.5 rounded-full border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-2 py-0.5 text-[9px] text-claude-text-muted hover:border-claude-accent/40 hover:bg-claude-accent-light/20 hover:text-claude-accent transition-colors"
+          title={`Send: ${reply}`}
+        >
+          <CornerDownRight className="h-2 w-2" />
+          {reply}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Round 17: Simple sentiment analysis based on keywords.
+ */
+function analyzeSentiment(text: string): "positive" | "neutral" | "negative" {
+  const lower = text.toLowerCase();
+  const positiveWords = ["success", "stable", "good", "excellent", "high quality", "well-defined", "strong", "complete", "found", "detected"];
+  const negativeWords = ["error", "fail", "failed", "missing", "unstable", "poor", "low quality", "cannot", "unable", "not found", "invalid"];
+  let score = 0;
+  positiveWords.forEach(w => { if (lower.includes(w)) score++; });
+  negativeWords.forEach(w => { if (lower.includes(w)) score--; });
+  if (score > 0) return "positive";
+  if (score < 0) return "negative";
+  return "neutral";
+}
+
 function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; searchQuery?: string }) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
@@ -2884,6 +3050,32 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                 {message.bookmarked && (
                   <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-amber-500 text-white shadow-sm" title="Bookmarked">
                     <Bookmark className="h-2 w-2" />
+                  </span>
+                )}
+              </div>
+            )}
+            {/* Round 17: Quick reply suggestions after assistant responses */}
+            {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
+              <QuickReplies message={message} />
+            )}
+            {/* Round 17: Translate + Sentiment buttons */}
+            {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
+              <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => handleTranslate(message.id, message.content || "")}
+                  disabled={translatingId === message.id}
+                  className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors disabled:opacity-40"
+                  title="Translate to English"
+                >
+                  {translatingId === message.id ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Languages className="h-2.5 w-2.5" />}
+                  {translatingId === message.id ? "Translating..." : "Translate"}
+                </button>
+                {/* Round 17: Sentiment indicator */}
+                {messageSentiment[message.id] && (
+                  <span className="flex items-center gap-0.5 text-[8px]" title={`Sentiment: ${messageSentiment[message.id]}`}>
+                    {messageSentiment[message.id] === "positive" && <span className="text-green-600">😊 positive</span>}
+                    {messageSentiment[message.id] === "neutral" && <span className="text-claude-text-muted">😐 neutral</span>}
+                    {messageSentiment[message.id] === "negative" && <span className="text-red-600">😟 negative</span>}
                   </span>
                 )}
               </div>

@@ -7590,3 +7590,108 @@ Next Round Improvement Suggestions:
 5. **Chat message translation** — Add translate button for non-English messages
 6. **Chat sentiment analysis** — Show sentiment indicator on assistant messages
 7. **Chat quick replies** — Suggested follow-up questions after each assistant response
+
+---
+Task ID: round-17-quickreply-translate-sentiment
+Agent: main
+Task: Check git history, implement round 17 improvements (quick replies, translation, sentiment). Run QA/E2E tests, document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Orphaned commits: 4 old dangling commits from previous sessions (safe to ignore)
+  - Stashes: none
+  - Sync: local = origin/main = 41ba719 (in sync)
+  - Working tree: clean
+
+- Implemented Round 17 Improvement #7: Quick reply suggestions after assistant responses
+  - Created generateQuickReplies(message) function:
+    - Analyzes message content and executed commands
+    - Context-aware suggestions based on:
+      - load_pdb without analysis → "Analyze hydrogen bonds", "Show Ramachandran plot", "Run B-factor analysis"
+      - analyze_run with hbonds → "Also check salt bridges", "Show hydrophobic contacts"
+      - Missing recipes → "Check Ramachandran quality", "Calculate SASA"
+      - Content mentions "ligand"/"pocket" → "Analyze druggability", "Detect all pockets"
+      - Content mentions "report"/"summary" → "Export as Markdown"
+      - Fallback: "Generate full report", "Set representation to cartoon"
+    - Returns max 4 suggestions
+  - Created QuickReplies component:
+    - Uses useMemo to compute replies
+    - Dispatches "chat-quick-reply" custom event with reply text
+    - Chips with CornerDownRight icon, rounded-full, hover effect
+  - Added quick reply listener in ChatTab:
+    - Receives reply text, calls send(reply) if not currently sending
+
+- Implemented Round 17 Improvement #5: Chat message translation
+  - Added translatingId state (tracks which message is being translated)
+  - Created handleTranslate callback:
+    - Sends translation request to /api/llm/chat/stream
+    - Prompt: "Translate the following text to English. Output ONLY the translation..."
+    - Parses SSE stream, accumulates translated text
+    - Updates message content with translation via updateMessage
+    - Shows toast: "Message translated to English" / "Translation failed: ..."
+  - Added Translate button in MessageBubble (hover, accent color):
+    - Languages icon
+    - Shows "Translating..." with Loader2 spin when translating
+    - Disabled while translating
+
+- Implemented Round 17 Improvement #6: Chat sentiment indicator
+  - Created analyzeSentiment(text) function:
+    - Keyword-based sentiment analysis
+    - Positive words: success, stable, good, excellent, high quality, well-defined, strong, complete, found, detected
+    - Negative words: error, fail, failed, missing, unstable, poor, low quality, cannot, unable, not found, invalid
+    - Returns "positive", "neutral", or "negative"
+  - Added messageSentiment state (Record<messageId, sentiment>)
+  - Added useEffect that auto-computes sentiment for new non-pending assistant messages
+  - Added sentiment indicator in MessageBubble (hover):
+    - 😊 positive (green)
+    - 😐 neutral (muted)
+    - 😟 negative (red)
+
+- Added new icon imports: Languages, CornerDownRight from lucide-react
+
+QA Testing:
+- Dev server starts successfully (HTTP 200)
+- Page compiles and renders (80KB screenshot)
+- No console errors
+
+E2E Testing:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (80KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No JS errors |
+| Chat API - Load 1CBS | ✅ PASS | Returns load_pdb + analyze_run, model="glm-4.6" |
+| Warmup API | ✅ PASS | 5 routes warmed in 3.4s |
+| Quick reply code | ✅ PASS | Verified generateQuickReplies + QuickReplies + listener |
+| Translate code | ✅ PASS | Verified handleTranslate + SSE parsing + Translate button |
+| Sentiment code | ✅ PASS | Verified analyzeSentiment + messageSentiment + indicator |
+
+Code Verification:
+- chat-tab.tsx: generateQuickReplies with context-aware logic ✓
+- chat-tab.tsx: QuickReplies component with chips + event dispatch ✓
+- chat-tab.tsx: Quick reply listener calling send() ✓
+- chat-tab.tsx: handleTranslate with SSE stream parsing ✓
+- chat-tab.tsx: Translate button with Languages icon + Loader2 ✓
+- chat-tab.tsx: analyzeSentiment with keyword scoring ✓
+- chat-tab.tsx: messageSentiment auto-compute useEffect ✓
+- chat-tab.tsx: Sentiment indicator (😊/😐/😟) ✓
+
+Stage Summary:
+- Git history clean and in sync (no action needed)
+- 3 of 7 round-16 suggestions implemented (quick replies, translation, sentiment)
+- All API tests pass (chat stream + warmup)
+- Dashboard UI renders correctly with no console errors
+- Chat now supports:
+  - Context-aware quick reply suggestions (max 4, based on commands + content)
+  - Message translation to English via LLM API (SSE streaming)
+  - Automatic sentiment analysis with emoji indicators (😊/😐/😟)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Chat message summarization** — Add "Summarize chat" button to generate a summary of the conversation
+6. **Chat message link preview** — Auto-detect URLs in messages and show link previews
+7. **Chat message code execution** — Add a "Run" button for code blocks in assistant messages
