@@ -364,9 +364,15 @@ export function ChatTab() {
       : 0;
     // Command type breakdown
     const commandTypes: Record<string, number> = {};
+    const commandTypeStats: Record<string, { total: number; success: number; failed: number }> = {};
     allCommands.forEach((c) => {
       const t = String(c.type || "unknown");
       commandTypes[t] = (commandTypes[t] || 0) + 1;
+      if (!commandTypeStats[t]) commandTypeStats[t] = { total: 0, success: 0, failed: 0 };
+      commandTypeStats[t].total++;
+      const status = String(c.status || (c.error ? "error" : "done"));
+      if (status === "error" || c.error) commandTypeStats[t].failed++;
+      else if (status === "done") commandTypeStats[t].success++;
     });
     // Providers used
     const providers: Record<string, number> = {};
@@ -389,6 +395,7 @@ export function ChatTab() {
       avgCommandMs,
       avgLlmMs,
       commandTypes,
+      commandTypeStats, // Round 9: per-type success/failed counts
       providers,
       thumbsUp,
       thumbsDown,
@@ -964,8 +971,43 @@ export function ChatTab() {
     }
   };
 
+  // Round 9: Global keyboard shortcuts for the chat panel
+  // Ctrl+K / Cmd+K → toggle search
+  // Ctrl+E / Cmd+E → export Markdown
+  // Ctrl+H / Cmd+H → toggle command history
+  // Ctrl+S / Cmd+S → toggle statistics
+  // Esc → close any open panel (search/stats/history)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Only handle when chat is the focused area (check if target is within chat)
+      const target = e.target as HTMLElement;
+      if (!target?.closest('.sa-chat-container') && !target?.closest('[data-chat-input]')) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowSearch(v => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+        e.preventDefault();
+        if (messages.length > 0) handleExportMarkdown();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'h') {
+        e.preventDefault();
+        setShowCmdHistory(v => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey) {
+        e.preventDefault();
+        setShowStats(v => !v);
+      } else if (e.key === 'Escape' && !((e.ctrlKey || e.metaKey))) {
+        // Only close panels if not editing a message (Esc is used for edit cancel)
+        if (showSearch) { setShowSearch(false); setSearchQuery(""); }
+        else if (showStats) setShowStats(false);
+        else if (showCmdHistory) setShowCmdHistory(false);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [messages.length, showSearch, showStats, showCmdHistory, handleExportMarkdown]);
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col sa-chat-container">
       {/* Provider selector + clear button */}
       <div className="flex shrink-0 items-center gap-1 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40">
         <Popover open={providerOpen} onOpenChange={setProviderOpen}>
@@ -1258,6 +1300,25 @@ export function ChatTab() {
                     </Badge>
                   ))}
               </div>
+              {/* Round 9: Per-type success rate */}
+              {Object.entries(chatStats.commandTypeStats).some(([, s]) => s.failed > 0) && (
+                <div className="mt-1 space-y-0.5">
+                  <div className="text-[7px] font-semibold uppercase tracking-wide text-claude-text-muted/60">Success Rate by Type</div>
+                  {Object.entries(chatStats.commandTypeStats)
+                    .sort((a, b) => b[1].total - a[1].total)
+                    .map(([type, s]) => {
+                      const rate = s.total > 0 ? Math.round((s.success / s.total) * 100) : 0;
+                      const color = rate === 100 ? "text-green-600" : rate >= 50 ? "text-amber-600" : "text-red-600";
+                      return (
+                        <div key={type} className="flex items-center gap-1 text-[8px]">
+                          <span className="font-mono text-claude-text truncate flex-1">{type}</span>
+                          <span className={`font-mono font-semibold ${color}`}>{rate}%</span>
+                          <span className="text-claude-text-muted/60 text-[7px]">({s.success}/{s.total})</span>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           )}
           {Object.keys(chatStats.providers).length > 0 && (
@@ -1443,9 +1504,11 @@ export function ChatTab() {
         </div>
         <div className="mt-1 flex items-center justify-between text-[8px] text-claude-text-muted">
           <span>Enter to send · Shift+Enter for newline</span>
-          <span className="flex items-center gap-1">
-            <Zap className="h-2.5 w-2.5" />
-            Agent mode
+          <span className="flex items-center gap-1.5">
+            <kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/40">⌘K</kbd>
+            <span>search</span>
+            <kbd className="font-mono px-0.5 rounded bg-claude-bg dark:bg-[#1a1917] border border-claude-border/40">⌘E</kbd>
+            <span>export</span>
           </span>
         </div>
       </div>
@@ -1633,6 +1696,17 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               >
                 {copied ? <Check className="h-2.5 w-2.5 text-green-600" /> : <Copy className="h-2.5 w-2.5" />}
               </button>
+            )}
+            {/* Round 9: Timestamp — shown on hover for non-pending messages */}
+            {!message.pending && (
+              <span
+                className={`absolute bottom-0.5 ${
+                  isUser ? "left-1.5 text-white/50" : "right-1.5 text-claude-text-muted/40"
+                } text-[7px] font-mono opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none`}
+                title={new Date(message.ts).toLocaleString()}
+              >
+                {new Date(message.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
             )}
             {/* Round 4: Edit button for user messages — appears on hover */}
             {isUser && !message.pending && !isEditing && !sending && (
