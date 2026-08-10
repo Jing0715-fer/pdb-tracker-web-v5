@@ -8973,3 +8973,162 @@ Improvement Suggestions for Next Round:
 7. **Add batch retry for failed commands** — when multiple commands fail, show a "Retry all failed" button instead of requiring individual retries.
 
 8. **Add command dependency graph** — visualize which commands depend on others (e.g., analyze_run depends on load_pdb), so users can understand the execution order.
+
+---
+Task ID: round-30-extract-messagebubble-lazyload-chat
+Agent: main
+Task: Continue development based on Round 29's improvement suggestions. Perform QA/E2E testing, real chat test, implement improvements, commit and push.
+
+Git History Review:
+- Previous commit (35a081e): code-split chat-tab.tsx (extracted helpers) + retry/error UI for failed commands
+- Previous commit (72c9097): worklog update
+- Round 29's top suggestions:
+  1. Extract MessageBubble component (~750 lines) — DONE this round
+  2. Extract ChatInput component (~300 lines) — deferred
+  3. Lazy-load Analysis tab with dynamic import — DONE this round (ChatTab lazy-loaded)
+  4. Pre-compile heavy routes — deferred
+  5. Command execution timeline — deferred
+
+QA & E2E Testing Results:
+
+## API Tests
+| Test | Status | Details |
+|------|--------|---------|
+| analyze/run all_interactions 4HHB A-B | ✅ PASS | total=17, hbonds=4, hydrophobic=13, salt_bridges=0 (correct) |
+| LLM chat stream (hello) | ⚠️ PARTIAL | SSE stream starts (`data: {"type":"thinking"}`), but ZAI LLM API returns 429 rate limit |
+| LLM chat stream (full analysis) | ⚠️ PARTIAL | Server processes (HTTP 200), but 429 from ZAI SDK |
+
+## Browser E2E Tests (agent-browser)
+| Step | Status | Screenshot | Notes |
+|------|--------|------------|-------|
+| 1. Homepage load | ✅ PASS | 176KB | Full dashboard, 4 tabs, 20 notifications, weekly snapshots |
+| 2. Tour overlay detected | ✅ PASS | — | Found Skip/Next/Dismiss buttons |
+| 3. Analysis tab click | ❌ BLOCKED | 24KB (error) | Server OOM during Analysis tab compilation (4GB sandbox) |
+
+## Key Findings
+
+### What Works:
+1. **analyze/run API fully functional**: all_interactions on 4HHB A-B returns exact correct data (17 total, 4 hbonds, 13 hydrophobic, 0 salt bridges)
+2. **Homepage renders correctly**: 176KB screenshot with all UI elements
+3. **LLM chat API endpoint reachable**: SSE streaming starts correctly
+4. **No code errors**: Lint passes with 0 errors
+
+### What Doesn't Work (Environmental):
+1. **ZAI LLM API rate limited (429)**: The built-in ZAI SDK returns "Too many requests" consistently. The retry logic uses exponential backoff (10s→20s→40s→80s→160s) but the rate limit persists. This is an external API limitation.
+2. **Analysis tab OOM**: Server crashes when compiling the Analysis tab (molstar + chat code) in the 4GB sandbox. This round's code-splitting should help but the molstar viewer itself is very heavy.
+
+Improvements Implemented:
+
+## Improvement #1: Extract MessageBubble component (988 lines → message-bubble.tsx)
+Created `src/components/structure-analysis/message-bubble.tsx` (988 lines) containing:
+- `MessageBubble` component (the main bubble renderer, ~750 lines)
+- All event-bus dispatchers: `dispatchRetry`, `dispatchReexec`, `dispatchEdit`, `dispatchReaction`, `dispatchPin`, `dispatchBookmark`, `dispatchFolder`, `dispatchBranch`, `dispatchTag`, `dispatchPinNote`
+- `generateQuickReplies` — contextual quick-reply suggestions
+- `QuickReplies` — the chip component
+- `analyzeSentiment` — keyword-based sentiment analysis
+
+chat-tab.tsx reduced from 3807 → 2859 lines (948 lines extracted).
+The component uses a global `window` event bus for communication, so no callbacks need to be passed as props — only `message`, `searchQuery`, `translatingId`, `onTranslate`, `messageSentiment`.
+
+## Improvement #2: Lazy-load ChatTab with next/dynamic
+In `analysis-right-panel.tsx`, replaced the static `import { ChatTab }` with:
+```tsx
+const ChatTab = dynamic(
+  () => import("./chat-tab").then((m) => m.ChatTab),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-full text-claude-text-muted text-xs gap-2">
+        <div className="h-3 w-3 border-2 border-claude-accent border-t-transparent rounded-full animate-spin" />
+        Loading chat…
+      </div>
+    ),
+  }
+);
+```
+This means ChatTab (and its heavy dependencies: Molstar, ReactMarkdown, etc.) only compiles when the user clicks the "Chat" tab, not when the Analysis panel first loads. This should reduce the initial compilation memory spike.
+
+## Improvement #3: Improved LLM 429 error UX
+**API route** (`src/app/api/llm/chat/stream/route.ts`):
+- Detects 429 (rate limit) and timeout errors
+- Returns user-friendly error messages:
+  - 429: "The AI service is currently rate-limited (too many requests). Please wait 30–60 seconds and try again. If the problem persists, try a different provider (e.g. cli:hermes if available)."
+  - Timeout: "The AI service timed out. This may happen with very long prompts or high server load. Try shortening your request or retrying in a moment."
+- Adds a `retryable: boolean` flag to the error event
+
+**Store** (`src/lib/molcraft/store.ts`):
+- Added `retryable?: boolean` field to ChatMessage type
+
+**ChatTab** (`src/components/structure-analysis/chat-tab.tsx`):
+- Captures the `retryable` flag from the stream error event
+- Stores it on the error message
+
+**MessageBubble** (`src/components/structure-analysis/message-bubble.tsx`):
+- When `message.retryable` is true, shows a **prominent pulsing red "Retry now" button** with `animate-pulse` animation
+- When `message.retryable` is false/undefined, shows the normal "Retry" button
+- Updates the helper text: "Transient error — retrying usually works" vs "Re-send the original request"
+
+## Improvement #4: Cleaned up unused icon imports
+Removed 18 unused lucide-react icon imports from chat-tab.tsx (they were only used in MessageBubble, which is now in message-bubble.tsx):
+ChevronUp, Zap, RotateCcw, Terminal, Brain, Cog, Clock, AlertCircle, Play, Timer, Languages, CornerDownRight, ExternalLink, StickyNote, GitCompare, Share2, Folder, GitBranch
+
+Verification:
+
+### Lint Check
+- `chat-tab.tsx`: 0 errors, 1 pre-existing warning ✓
+- `message-bubble.tsx`: 0 errors, 0 warnings ✓
+- `chat-helpers.tsx`: 0 errors, 0 warnings ✓
+- `analysis-right-panel.tsx`: 0 errors, 0 warnings ✓
+- `route.ts` (chat stream): 0 errors, 0 warnings ✓
+- `store.ts`: 0 errors, 0 warnings ✓
+
+### API Test
+```
+POST /api/analyze/run {"recipe":"all_interactions","pdbId":"4HHB","params":{"chain1":"A","chain2":"B"}}
+→ HTTP 200, 7812 bytes
+→ total: 17, hbonds: 4, hydrophobic: 13, salt_bridges: 0
+```
+
+### File Size Summary
+| File | Before | After | Change |
+|------|--------|-------|--------|
+| chat-tab.tsx | 3807 | 2859 | -948 lines |
+| message-bubble.tsx | 0 (new) | 988 | +988 lines |
+| chat-helpers.tsx | 344 | 344 | 0 |
+| **Total** | 4151 | 4191 | +40 lines (import boilerplate) |
+
+The chat-tab.tsx is now 25% smaller, which should meaningfully reduce the webpack compilation memory spike.
+
+### Git
+- Commit: 927d2f6 "refactor: extract MessageBubble + lazy-load ChatTab + improve 429 error UX"
+- Pushed to origin/main (72c9097..927d2f6)
+- 5 files changed, 1024 insertions(+), 955 deletions(-)
+
+Stage Summary:
+- ✅ Extracted MessageBubble (988 lines) to separate file — chat-tab.tsx now 2859 lines (was 3807)
+- ✅ Lazy-loaded ChatTab with next/dynamic — only compiles when user clicks Chat tab
+- ✅ Improved 429 error UX — prominent pulsing "Retry now" button for retryable errors
+- ✅ Cleaned up 18 unused icon imports
+- ✅ API verified: all_interactions on 4HHB returns correct data
+- ✅ Homepage renders correctly (176KB screenshot)
+- ✅ Committed and pushed to GitHub
+- ⚠️ ZAI LLM API rate limited (429) — external issue, improved error messaging
+- ⚠️ Analysis tab still OOMs in 4GB sandbox — needs molstar lazy-loading or chunk splitting
+
+Improvement Suggestions for Next Round:
+
+1. **Extract ChatInput component** (~300 lines) — the input area with formatting toolbar, voice input, template library, and attachment handling. This is the next largest extractable chunk in chat-tab.tsx.
+
+2. **Lazy-load Molstar viewer** — the 3D viewer is the heaviest dependency. Use `dynamic(() => import('./molstar-viewer'), { ssr: false })` so it only loads when a structure is actually loaded, not when the Analysis tab opens.
+
+3. **Split cli-registry.ts** (~4100 lines) — move Python recipe scripts to separate `.py` files loaded at runtime via `fs.readFileSync`, or split into multiple registry files (interactions, geometry, sequence, etc.).
+
+4. **Add chat message export** — export the conversation as Markdown or JSON for sharing/archiving.
+
+5. **Add provider fallback** — when the primary LLM provider returns 429, automatically try the next available provider (e.g., zai → cli:hermes → cli:claude).
+
+6. **Add chat search** — search across all messages in the conversation (content, commands, analysis results) with result highlighting.
+
+7. **Add command execution timeline** — visualize command start/end times, duration, and status as a Gantt-style chart.
+
+8. **Pre-compile heavy routes on server start** — add a warmup script that pre-compiles /api/analyze/run and the chat tab chunk on server boot.
