@@ -8251,3 +8251,83 @@ Next Round Improvement Suggestions:
 5. **Chat message QR code** — Generate QR code for sharing a message
 6. **Chat notification desktop** — Show desktop notifications when agent responds
 7. **Chat message scheduling** — Schedule messages to be sent at a later time
+
+---
+Task ID: round-23-desktop-notif-share-realchat
+Agent: main
+Task: Check git history, implement round 23 improvements (desktop notifications, share button). Run QA/E2E/real chat tests. Document, commit and push.
+
+Work Log:
+- Git history check:
+  - Found 1 unpushed junk commit (c5ecb06, binary screenshots + file mode changes)
+  - Reset to origin/main to keep history clean
+  - Sync: local = origin/main = bf308fd (in sync)
+
+- Implemented Round 23 Improvement #6: Desktop notifications for agent responses
+  - Added desktopNotifEnabled state (persisted to localStorage "pdb-tracker:desktop-notif", default: off)
+  - Added useEffect that fires desktop notification when:
+    - desktopNotifEnabled is true
+    - unreadCount > 0 (new messages while chat not visible)
+    - Chat is not visible (isChatVisible is false)
+    - Browser supports Notification API
+    - Notification permission is granted
+  - Notification content:
+    - Title: "Molcraft AI Agent"
+    - Body: First 100 chars of last assistant message + "..."
+    - Icon: /logo.svg
+    - Tag: "chat-response" (prevents duplicate notifications)
+  - Click behavior: Focuses the window and closes the notification
+  - Added Bell icon toggle button in chat header:
+    - Accent color when enabled, muted when disabled
+    - On first enable: requests Notification permission via Notification.requestPermission()
+    - If permission denied: shows error toast
+    - Persists toggle state to localStorage
+    - Toast: "Desktop notifications enabled" / "disabled" / "permission denied"
+
+- Implemented Round 23 Improvement #5: Chat message share button
+  - Added Share2 icon button on assistant messages (hover, next to Translate)
+  - Copies message content to clipboard via navigator.clipboard.writeText
+  - Toast feedback: "Message copied to clipboard" / "Copy failed"
+  - Added toast to MessageBubble via useAppStore selector
+
+- Added new icon imports: Bell, Share2 from lucide-react
+- Added toast selector to MessageBubble component
+
+Real Chat API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| hello | ✅ PASS | model=glm-4.6, 0 commands |
+| Load 1CBS + hbonds | ✅ PASS | 2 commands: load_pdb + analyze_run |
+| 6LU7 complex | ✅ PASS | 5 commands: load_pdb + 3 analyze_run + focus_ligand |
+| Warmup | ✅ PASS | 5 routes in 3.9s |
+
+E2E Tests:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads | ✅ PASS | 79KB screenshot, full dashboard |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No errors at all |
+
+Code Verification:
+- chat-tab.tsx: desktopNotifEnabled state + Notification API useEffect ✓
+- chat-tab.tsx: Bell toggle button with permission request ✓
+- chat-tab.tsx: Share2 button + clipboard copy + toast ✓
+- chat-tab.tsx: toast selector added to MessageBubble ✓
+
+Stage Summary:
+- Git history cleaned (removed junk commit, synced with origin)
+- 2 improvements implemented (desktop notifications, share button)
+- All 4 real chat API tests pass
+- E2E test passes with no console errors
+- Chat now supports:
+  - Desktop notifications (Bell toggle, Notification API, permission request, message preview)
+  - Share button (copies message to clipboard, toast feedback)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Chat message scheduling** — Schedule messages to be sent at a later time
+6. **Chat conversation branches** — Allow branching from any message to explore alternatives
+7. **Chat message bookmark folders** — Organize bookmarks into folders

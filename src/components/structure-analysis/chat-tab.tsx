@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -380,6 +380,11 @@ export function ChatTab() {
     try { return localStorage.getItem("pdb-tracker:auto-tag") !== "off"; }
     catch { return true; }
   });
+  // Round 23: Desktop notification toggle state
+  const [desktopNotifEnabled, setDesktopNotifEnabled] = useState(() => {
+    try { return localStorage.getItem("pdb-tracker:desktop-notif") === "on"; }
+    catch { return false; }
+  });
   // Round 14: Voice input language selector
   const [voiceLang, setVoiceLang] = useState(() => {
     try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
@@ -520,6 +525,26 @@ export function ChatTab() {
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("chat-unread-count", { detail: unreadCount }));
   }, [unreadCount]);
+
+  // Round 23: Desktop notifications when agent responds while chat not visible
+  useEffect(() => {
+    if (!desktopNotifEnabled) return;
+    if (unreadCount > 0 && !isChatVisible && "Notification" in window) {
+      if (Notification.permission === "granted") {
+        const lastAssistant = [...messages].reverse().find(m => m.role === "assistant" && !m.pending);
+        const preview = lastAssistant?.content?.slice(0, 100) || "Response received";
+        const notif = new Notification("Molcraft AI Agent", {
+          body: `${preview}${preview.length >= 100 ? "..." : ""}`,
+          icon: "/logo.svg",
+          tag: "chat-response",
+        });
+        notif.onclick = () => {
+          window.focus();
+          notif.close();
+        };
+      }
+    }
+  }, [unreadCount, isChatVisible, messages, desktopNotifEnabled]);
 
   // Round 16: Auto-save indicator — show "Saving..." then "Saved" when messages persist
   useEffect(() => {
@@ -1989,6 +2014,30 @@ export function ChatTab() {
               >
                 <Tag className="h-3 w-3" />
               </Button>
+              {/* Round 23: Desktop notification toggle */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-7 w-7 p-0 ${desktopNotifEnabled ? "text-claude-accent" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={async () => {
+                  if (!desktopNotifEnabled && "Notification" in window) {
+                    if (Notification.permission !== "granted") {
+                      const perm = await Notification.requestPermission();
+                      if (perm !== "granted") {
+                        toast("Desktop notification permission denied", "error");
+                        return;
+                      }
+                    }
+                  }
+                  const newVal = !desktopNotifEnabled;
+                  setDesktopNotifEnabled(newVal);
+                  try { localStorage.setItem("pdb-tracker:desktop-notif", newVal ? "on" : "off"); } catch { /* ignore */ }
+                  toast(newVal ? "Desktop notifications enabled" : "Desktop notifications disabled", "info");
+                }}
+                title={desktopNotifEnabled ? "Desktop notifications on — click to disable" : "Desktop notifications off — click to enable"}
+              >
+                <Bell className="h-3 w-3" />
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -2932,6 +2981,7 @@ function analyzeSentiment(text: string): "positive" | "neutral" | "negative" {
 function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; searchQuery?: string }) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
+  const toast = useAppStore((s) => s.toast);
   // Improvement #3: Check if any message is currently pending (to disable retry)
   const sending = useAppStore((s) => s.chatMessages.some((m) => m.pending));
   const [copied, setCopied] = useState(false);
@@ -3603,7 +3653,7 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
             {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
               <QuickReplies message={message} />
             )}
-            {/* Round 17: Translate + Sentiment buttons */}
+            {/* Round 17+23: Translate + Sentiment + Share buttons */}
             {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
               <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -3614,6 +3664,21 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                 >
                   {translatingId === message.id ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Languages className="h-2.5 w-2.5" />}
                   {translatingId === message.id ? "Translating..." : "Translate"}
+                </button>
+                {/* Round 23: Share message (copy as markdown) */}
+                <button
+                  onClick={() => {
+                    const text = message.content || "";
+                    navigator.clipboard.writeText(text).then(
+                      () => toast("Message copied to clipboard", "success"),
+                      () => toast("Copy failed", "error"),
+                    );
+                  }}
+                  className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors"
+                  title="Copy message content"
+                >
+                  <Share2 className="h-2.5 w-2.5" />
+                  Share
                 </button>
                 {/* Round 17: Sentiment indicator */}
                 {messageSentiment[message.id] && (
