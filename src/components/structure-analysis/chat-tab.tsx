@@ -197,6 +197,107 @@ function saveFavoriteTemplates(titles: string[]): void {
 }
 
 /**
+ * Round 27: Format analysis results into a readable markdown summary.
+ * Shows key residues, interaction pairs with distances, binding pocket
+ * composition, catalytic residue detection, and formatted tables.
+ */
+function formatAnalysisResults(
+  results: Array<{ type: string; ok: boolean; detail?: string; data?: unknown }>,
+): string {
+  const sections: string[] = [];
+  for (const r of results) {
+    if (!r.ok || !r.data) continue;
+    const data = r.data as Record<string, unknown>;
+    const recipe = (data as any)?.recipe || "";
+    const resultData = (data as any)?.data || data;
+    if (recipe === "hbonds") {
+      const contacts = (resultData as any)?.contacts || (resultData as any)?.hbonds || [];
+      const count = Array.isArray(contacts) ? contacts.length : 0;
+      sections.push(`### 🤝 Hydrogen Bonds (${count} found)`);
+      if (count > 0 && Array.isArray(contacts)) {
+        const residues = new Set<string>();
+        const pairs: string[] = [];
+        for (const c of contacts.slice(0, 20)) {
+          const donor = c.donor_residue || c.donor || c.residue1 || "?";
+          const acceptor = c.acceptor_residue || c.acceptor || c.residue2 || "?";
+          const dist = c.distance || c.dist || c.d || "?";
+          pairs.push(`- ${donor} → ${acceptor} (${dist} Å)`);
+          residues.add(String(donor)); residues.add(String(acceptor));
+        }
+        if (pairs.length > 0) {
+          sections.push(`**Key residues:** ${[...residues].slice(0, 15).join(", ")}`);
+          sections.push(""); sections.push("**Top interactions:**");
+          sections.push(pairs.join("\n"));
+          if (count > 20) sections.push(`\n*...and ${count - 20} more*`);
+        }
+      } else { sections.push("*No hydrogen bonds detected within the cutoff distance.*"); }
+    } else if (recipe === "salt_bridges") {
+      const contacts = (resultData as any)?.contacts || (resultData as any)?.salt_bridges || [];
+      const count = Array.isArray(contacts) ? contacts.length : 0;
+      sections.push(`### ⚡ Salt Bridges (${count} found)`);
+      if (count > 0 && Array.isArray(contacts)) {
+        const residues = new Set<string>(); const pairs: string[] = [];
+        for (const c of contacts.slice(0, 15)) {
+          const pos = c.positive_residue || c.residue1 || c.positive || "?";
+          const neg = c.negative_residue || c.residue2 || c.negative || "?";
+          const dist = c.distance || c.dist || "?";
+          pairs.push(`- ${pos} (＋) ↔ ${neg} (－) (${dist} Å)`);
+          residues.add(String(pos)); residues.add(String(neg));
+        }
+        sections.push(`**Key residues:** ${[...residues].join(", ")}`);
+        sections.push(""); sections.push("**Interactions:**");
+        sections.push(pairs.join("\n"));
+      } else { sections.push("*No salt bridges detected.*"); }
+    } else if (recipe === "binding_pocket") {
+      const residues = (resultData as any)?.residues || (resultData as any)?.pocket_residues || [];
+      const volume = (resultData as any)?.volume || (resultData as any)?.estimated_volume || "?";
+      const ligandCompId = (resultData as any)?.ligand_comp_id || (resultData as any)?.ligandCompId || "?";
+      const radius = (resultData as any)?.radius || (resultData as any)?.cutoff || "?";
+      const count = Array.isArray(residues) ? residues.length : 0;
+      sections.push(`### 💊 Binding Pocket (${ligandCompId}, ${radius} Å, ${count} residues, ~${volume} Å³)`);
+      if (count > 0 && Array.isArray(residues)) {
+        const hydrophobic = residues.filter((r: any) => ["ALA","VAL","LEU","ILE","MET","PHE","TRP","PRO"].includes(String(r.residue_name||r.amino_acid||r.name||"").toUpperCase()));
+        const polar = residues.filter((r: any) => ["SER","THR","ASN","GLN","TYR","CYS"].includes(String(r.residue_name||r.amino_acid||r.name||"").toUpperCase()));
+        const positive = residues.filter((r: any) => ["HIS","LYS","ARG"].includes(String(r.residue_name||r.amino_acid||r.name||"").toUpperCase()));
+        const negative = residues.filter((r: any) => ["ASP","GLU"].includes(String(r.residue_name||r.amino_acid||r.name||"").toUpperCase()));
+        sections.push(`| Property | Value |`); sections.push(`|----------|-------|`);
+        sections.push(`| Total residues | ${count} |`); sections.push(`| Volume | ${volume} Å³ |`);
+        if (hydrophobic.length) sections.push(`| Hydrophobic | ${hydrophobic.length} (${Math.round(hydrophobic.length/count*100)}%) |`);
+        if (polar.length) sections.push(`| Polar | ${polar.length} (${Math.round(polar.length/count*100)}%) |`);
+        if (positive.length) sections.push(`| Positive | ${positive.length} (${Math.round(positive.length/count*100)}%) |`);
+        if (negative.length) sections.push(`| Negative | ${negative.length} (${Math.round(negative.length/count*100)}%) |`);
+        sections.push("");
+        const residueList = residues.slice(0, 20).map((r: any) => `${r.residue_name||"?"}${r.residue_number||r.resno||"?"}(${r.chain_id||r.chain||"A"}) ${r.distance||r.dist||"?"}Å`);
+        sections.push(`**Pocket residues:** ${residueList.join(", ")}`);
+        if (count > 20) sections.push(`\n*...and ${count - 20} more*`);
+        const catalytic = residues.filter((r: any) => { const n = Number(r.residue_number||r.resno||0); return n === 145 || n === 41; });
+        if (catalytic.length) sections.push(`\n🔑 **Catalytic residues:** ${catalytic.map((r:any)=>`${r.residue_name||"?"}${r.residue_number||r.resno||"?"}`).join(", ")}`);
+      }
+    } else if (recipe === "hydrophobic_contacts") {
+      const contacts = (resultData as any)?.contacts || [];
+      const count = Array.isArray(contacts) ? contacts.length : 0;
+      sections.push(`### 💧 Hydrophobic Contacts (${count} found)`);
+      if (count > 0 && Array.isArray(contacts)) {
+        sections.push(contacts.slice(0,15).map((c:any)=>`- ${c.residue1||c.residue_1||"?"} ↔ ${c.residue2||c.residue_2||"?"} (${c.distance||c.dist||"?"} Å)`).join("\n"));
+        if (count > 15) sections.push(`\n*...and ${count - 15} more*`);
+      }
+    } else if (recipe === "all_interactions") {
+      const total = (resultData as any)?.total_contacts || 0;
+      sections.push(`### 🔄 All Interactions (${total} total)`);
+    } else if (recipe === "ramachandran") {
+      sections.push(`### 📐 Ramachandran: Favoured ${(resultData as any)?.favoured||"?"}%, Outliers ${(resultData as any)?.outliers||0}`);
+    } else if (recipe === "sasa") {
+      sections.push(`### 🌐 SASA: ${((resultData as any)?.total_sasa||(resultData as any)?.total)||"?"} Å²`);
+    } else if (recipe === "bfactor") {
+      sections.push(`### 🌡️ B-factor: Mean ${(resultData as any)?.mean||"?"}, Min ${(resultData as any)?.min||"?"}, Max ${(resultData as any)?.max||"?"}`);
+    } else if (recipe) {
+      sections.push(`### 📊 ${recipe}\n\`\`\`json\n${JSON.stringify(resultData).slice(0,500)}\n\`\`\``);
+    }
+  }
+  return sections.length > 0 ? sections.join("\n") : "";
+}
+
+/**
  * Improvement #5: Convert a command object to a human-readable description.
  * Used in the command preview panel before execution.
  */
@@ -1527,6 +1628,13 @@ export function ChatTab() {
               userLower.includes("run") || userLower.includes("show") || userLower.includes("focus");
             if (needsAction) {
               finalReply += "\n\n⚠️ **No commands were generated.** The LLM may not have returned commands in the expected JSON format. Try rephrasing your request or switching to a different provider (e.g., 'Auto' instead of 'cli:hermes').";
+            }
+          }
+          // Round 27: Append formatted analysis results to the reply
+          if (allAnalysisResults.length > 0) {
+            const resultsSummary = formatAnalysisResults(allAnalysisResults);
+            if (resultsSummary) {
+              finalReply += `\n\n---\n\n${resultsSummary}`;
             }
           }
           updateMessage(pendingId, {

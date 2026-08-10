@@ -84,6 +84,13 @@ You MUST respond with a SINGLE JSON object — NO markdown fences, NO prose befo
 - clear_interactions: { "type": "clear_interactions" }
 - clear_selection: { "type": "clear_selection" }
 
+Analysis parameter guidance (use precise cutoffs, NOT 8 Å):
+- H-bonds: {"chain1":"A","chain2":"A","distanceCutoff":3.5}
+- Salt bridges: {"chain1":"A","chain2":"A","cutoff":4.0}
+- Hydrophobic: {"chain1":"A","chain2":"A","cutoff":4.5}
+- Binding pocket: {"ligandCompId":"N3","radius":5.0}
+- Interface: {"chain1":"A","chain2":"B","cutoff":5.0}
+
 Rules:
 1. ALWAYS include a "reply" field (string) with a helpful explanation. NEVER omit it.
 2. Include "commands" only if the user's request requires an action. For pure questions, use [].
