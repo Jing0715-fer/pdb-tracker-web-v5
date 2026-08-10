@@ -472,25 +472,53 @@ const SUPPORTED_COMMAND_TYPES = new Set([
  */
 function sanitizeCommands(commands: unknown[]): unknown[] {
   const result: unknown[] = [];
+
+  // Recipe name map — handles all common hallucinated names
+  const RECIPE_MAP: Record<string, string> = {
+    'hydrogen-bonds': 'hbonds', 'hbonds': 'hbonds', 'hydrogen_bonds': 'hbonds',
+    'run_hbonds': 'hbonds', 'h-bonds': 'hbonds', 'h_bonds': 'hbonds',
+    'salt-bridges': 'salt_bridges', 'salt_bridges': 'salt_bridges',
+    'run_salt_bridges': 'salt_bridges', 'saltbridges': 'salt_bridges',
+    'hydrophobic': 'hydrophobic_contacts', 'hydrophobic_contacts': 'hydrophobic_contacts',
+    'run_hydrophobic': 'hydrophobic_contacts',
+    'all-interactions': 'all_interactions', 'all_interactions': 'all_interactions',
+    'ramachandran': 'ramachandran', 'bfactor': 'bfactor', 'b-factor': 'bfactor',
+    'sasa': 'sasa', 'secondary-structure': 'secondary_structure',
+    'interface-residues': 'interface_residues', 'interface_residues': 'interface_residues',
+    'disulfide-bonds': 'disulfide_bonds', 'disulfide_bonds': 'disulfide_bonds',
+    'aromatic-stacking': 'aromatic_stacking', 'aromatic_stacking': 'aromatic_stacking',
+    'water-bridges': 'water_bridges', 'water_bridges': 'water_bridges',
+    'metal-coordination': 'metal_coordination', 'metal_coordination': 'metal_coordination',
+    'binding-pocket': 'binding_pocket', 'binding_pocket': 'binding_pocket',
+    'druggability': 'druggability', 'entity-analysis': 'entity_analysis',
+    'entity_analysis': 'entity_analysis',
+  };
+
   for (const cmd of commands) {
     if (!cmd || typeof cmd !== 'object') continue;
     const c = cmd as Record<string, unknown>;
-    const rawType = String(c.type || '').toLowerCase();
 
-    // Convert hallucinated types to correct types
+    // ★ CRITICAL: Hermes uses "action" instead of "type" as the field name.
+    // Also handle "name", "command" as alternative field names.
+    const rawType = String(c.type || c.action || c.name || c.command || '').toLowerCase();
+
     let normalized: Record<string, unknown> | null = null;
-    if (rawType === 'selectstructure' || rawType === 'select_structure' || rawType === 'load_structure') {
-      // selectStructure → load_pdb
-      normalized = { type: 'load_pdb', id: String(c.pdbId || c.id || c.pdb_id || '') };
-    } else if (rawType === 'load') {
-      normalized = { type: 'load_pdb', id: String(c.pdbId || c.id || c.pdb_id || '') };
-    } else if (rawType === 'showmessage' || rawType === 'show_message' || rawType === 'message' || rawType === 'log' || rawType === 'notify') {
-      // showMessage → skip (it's just a message, not a command).
-      // The text should already be in the reply field.
+
+    // ── Structure loading ──
+    if (rawType === 'selectstructure' || rawType === 'select_structure' || rawType === 'load_structure' ||
+        rawType === 'load' || rawType === 'load_pdb' || rawType === 'loadpdb') {
+      normalized = { type: 'load_pdb', id: String(c.pdbId || c.id || c.pdb_id || c.pdb || '') };
+    }
+    // ── Message/display commands (skip) ──
+    else if (rawType === 'showmessage' || rawType === 'show_message' || rawType === 'message' ||
+             rawType === 'log' || rawType === 'notify' || rawType === 'show') {
       continue;
-    } else if (rawType === 'focus' || rawType === 'camera-focus' || rawType === 'camera_focus') {
-      if (c.selector === 'ligand' || c.compId) {
-        normalized = { type: 'focus_ligand', compId: String(c.compId || c.ligandId || 'ligand') };
+    }
+    // ── Camera/focus commands ──
+    else if (rawType === 'focus' || rawType === 'camera-focus' || rawType === 'camera_focus' ||
+             rawType === 'focus_camera' || rawType === 'focus-camera' || rawType === 'camera') {
+      if (c.target === 'ligand' || c.selector === 'ligand' || c.compId || c.ligand) {
+        normalized = { type: 'focus_ligand', compId: String(c.compId || c.ligandId || c.ligand || 'ligand') };
       } else if (c.resno != null) {
         normalized = { type: 'focus_residue', chain: String(c.chain || 'A'), resno: Number(c.resno) };
       } else if (c.chain) {
@@ -498,37 +526,71 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
       } else {
         normalized = { type: 'reset_camera' };
       }
-    } else if (rawType === 'analysis' || rawType === 'analyze') {
-      const name = String(c.name || c.recipe || c.analysis || '');
-      const recipeMap: Record<string, string> = {
-        'hydrogen-bonds': 'hbonds', 'hbonds': 'hbonds', 'hydrogen_bonds': 'hbonds',
-        'salt-bridges': 'salt_bridges', 'salt_bridges': 'salt_bridges',
-        'hydrophobic': 'hydrophobic_contacts', 'hydrophobic_contacts': 'hydrophobic_contacts',
-        'all-interactions': 'all_interactions', 'all_interactions': 'all_interactions',
-        'ramachandran': 'ramachandran', 'bfactor': 'bfactor', 'b-factor': 'bfactor',
-        'sasa': 'sasa', 'secondary-structure': 'secondary_structure',
-        'interface-residues': 'interface_residues', 'interface_residues': 'interface_residues',
-        'disulfide-bonds': 'disulfide_bonds', 'disulfide_bonds': 'disulfide_bonds',
-        'aromatic-stacking': 'aromatic_stacking', 'aromatic_stacking': 'aromatic_stacking',
-        'water-bridges': 'water_bridges', 'water_bridges': 'water_bridges',
-        'metal-coordination': 'metal_coordination', 'metal_coordination': 'metal_coordination',
-        'binding-pocket': 'binding_pocket', 'binding_pocket': 'binding_pocket',
-        'druggability': 'druggability', 'entity-analysis': 'entity_analysis',
-        'entity_analysis': 'entity_analysis',
-      };
-      const recipe = recipeMap[name.toLowerCase()] || name;
+    }
+    // ── Analysis commands — handles "run_hbonds", "run_salt_bridges", etc. ──
+    else if (rawType === 'analysis' || rawType === 'analyze' || rawType === 'analyze_run' ||
+             rawType.startsWith('run_') || rawType.startsWith('analyze_')) {
+      // Extract recipe name from various sources
+      let recipeName = '';
+      if (c.recipe) {
+        recipeName = String(c.recipe);
+      } else if (c.name) {
+        recipeName = String(c.name);
+      } else if (rawType.startsWith('run_')) {
+        // "run_hbonds" → "hbonds", "run_salt_bridges" → "salt_bridges"
+        recipeName = rawType.slice(4);
+      } else if (rawType.startsWith('analyze_') && rawType !== 'analyze_run') {
+        // "analyze_metadata" is a separate command type, not a recipe
+        recipeName = rawType.slice(8);
+      } else if (c.analysis) {
+        recipeName = String(c.analysis);
+      }
+
+      const recipe = RECIPE_MAP[recipeName.toLowerCase()] || recipeName;
       const pdbId = String(c.pdbId || c.id || c.pdb_id || '');
-      const params = (c.params && typeof c.params === 'object') ? c.params : {};
+      // Build params from various field names hermes might use
+      const params: Record<string, unknown> = {};
+      if (c.params && typeof c.params === 'object') {
+        Object.assign(params, c.params);
+      }
+      // Hermes uses "selection1"/"selection2" — try to extract chain info
+      if (c.selection1 && typeof c.selection1 === 'string') {
+        const m1 = c.selection1.match(/chain\s+([A-Za-z])/i);
+        if (m1) params.chain1 = m1[1];
+      }
+      if (c.selection2 && typeof c.selection2 === 'string') {
+        const m2 = c.selection2.match(/chain\s+([A-Za-z])/i);
+        if (m2) params.chain2 = m2[1];
+      }
+      // Default chain params if not found
+      if (!params.chain1) params.chain1 = 'A';
+      if (!params.chain2) params.chain2 = 'A';
+      // Handle ligand-related params
+      if (c.ligandCompId) params.ligandCompId = String(c.ligandCompId);
+      if (c.radius) params.radius = Number(c.radius);
+      if (c.distance) params.radius = Number(c.distance); // hermes uses "distance"
+
       normalized = { type: 'analyze_run', pdbId, recipe, params };
-    } else if (rawType === 'reset' || rawType === 'reset-camera' || rawType === 'reset_camera') {
+    }
+    // ── Reset camera ──
+    else if (rawType === 'reset' || rawType === 'reset-camera' || rawType === 'reset_camera') {
       normalized = { type: 'reset_camera' };
-    } else if (rawType === 'set-representation' || rawType === 'set_representation') {
+    }
+    // ── Representation/color ──
+    else if (rawType === 'set-representation' || rawType === 'set_representation' ||
+             rawType === 'representation' || rawType === 'set_representation') {
       normalized = { type: 'set_representation', preset: String(c.preset || c.representation || 'polymer-and-ligand'), structures: c.structures || 'all' };
-    } else if (rawType === 'set-color' || rawType === 'set_color_theme' || rawType === 'color') {
+    } else if (rawType === 'set-color' || rawType === 'set_color_theme' || rawType === 'color' || rawType === 'color_theme') {
       normalized = { type: 'set_color_theme', theme: String(c.theme || c.color || 'chain'), structures: c.structures || 'all' };
-    } else if (SUPPORTED_COMMAND_TYPES.has(rawType)) {
-      // Already a supported type — but normalize field names if needed.
+    }
+    // ── Already supported types ──
+    else if (SUPPORTED_COMMAND_TYPES.has(rawType)) {
       normalized = { ...c };
+      // Ensure "type" field is set (in case hermes used "action")
+      if (!normalized.type && normalized.action) {
+        normalized.type = normalized.action;
+        delete normalized.action;
+      }
       // load_pdb: accept pdbId as alias for id
       if (rawType === 'load_pdb' && !normalized.id && normalized.pdbId) {
         normalized.id = normalized.pdbId;
@@ -539,9 +601,10 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
         normalized.id = normalized.pdbId;
         delete normalized.pdbId;
       }
-    } else {
-      // Unknown type — skip it (don't send unsupported commands to executeCommand)
-      console.warn(`[sanitizeCommands] Dropping unsupported command type: ${rawType}`);
+    }
+    // ── Unknown type — log and skip ──
+    else {
+      console.warn(`[sanitizeCommands] Dropping unsupported command type: ${rawType} (fields: ${Object.keys(c).join(', ')})`);
       continue;
     }
 

@@ -1138,9 +1138,18 @@ async function callAnyLlm(
       }
       try {
         const t0 = Date.now();
+        // ★ CRITICAL: CLI adapters (hermes, claude, codex, etc.) don't have a
+        // separate system-prompt channel — they only accept a single prompt
+        // string via callArgs(). We must PREPEND the system prompt to the
+        // user prompt so the CLI sees the full context (JSON format requirements,
+        // command schema, examples, etc.). Without this, hermes returns plain
+        // text without the expected JSON structure.
+        const fullPrompt = cfg.system
+          ? `${cfg.system}\n\n---\n\n${prompt}`
+          : prompt;
         const text = via === 'wsl'
-          ? await runCliInWsl(adapter, probe.bin, prompt, cfg.model)
-          : await runCli(adapter, probe.bin, prompt, cfg.model);
+          ? await runCliInWsl(adapter, probe.bin, fullPrompt, cfg.model)
+          : await runCli(adapter, probe.bin, fullPrompt, cfg.model);
         return {
           ok: true,
           content: text,
