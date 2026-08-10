@@ -216,11 +216,21 @@ function formatAnalysisResults(
     if (!r.ok || !r.data) continue;
     const data = r.data as Record<string, unknown>;
     const recipe = (data as any)?.recipe || "";
-    const rd = (data as any)?.data || data;
+    // The analysis result is wrapped twice:
+    //   r.data = analysisResult = { kind, recipe, data: <apiResponse> }
+    //   apiResponse = { recipe, ok, pdbId, data: <actual results>, stdout, stderr }
+    // So the actual results live at `data.data.data`. Fall back gracefully
+    // for recipes that return a flat object (no inner `.data`).
+    const outer = (data as any)?.data;
+    const rd =
+      outer && typeof outer === "object" && outer.data && typeof outer.data === "object"
+        ? outer.data
+        : outer || data;
 
     if (recipe === "hbonds") {
-      const bonds = rd?.bonds || [];
-      const count = rd?.count ?? (Array.isArray(bonds) ? bonds.length : 0);
+      // Recipe returns: { total_hbonds, hbonds[], top_residue_pairs[] }
+      const bonds = rd?.hbonds || rd?.bonds || [];
+      const count = rd?.total_hbonds ?? rd?.count ?? (Array.isArray(bonds) ? bonds.length : 0);
       sections.push(`### 🤝 Hydrogen Bonds (${count} found)`);
       if (count > 0 && Array.isArray(bonds)) {
         const residues = new Set<string>();
@@ -234,6 +244,13 @@ function formatAnalysisResults(
         sections.push(""); sections.push("**Top interactions:**");
         sections.push(pairs.join("\n"));
         if (count > 20) sections.push(`\n*...and ${count - 20} more*`);
+        // Top residue pairs (frequency) from the recipe
+        const topPairs = rd?.top_residue_pairs;
+        if (Array.isArray(topPairs) && topPairs.length > 0) {
+          sections.push("");
+          sections.push("**Hotspot residue pairs:**");
+          sections.push(topPairs.slice(0, 8).map((p: any) => `- ${p.pair} (${p.count} contacts)`).join("\n"));
+        }
       } else { sections.push("*No hydrogen bonds detected.*"); }
     }
     else if (recipe === "salt_bridges") {
@@ -264,26 +281,54 @@ function formatAnalysisResults(
       }
     }
     else if (recipe === "all_interactions") {
+      // Recipe returns: { chain1, chain2, total, salt_bridges(count), hbonds(count),
+      //                   hydrophobic(count), interactions[] }
       const total = rd?.total ?? 0;
       const sb = rd?.salt_bridges ?? 0;
       const hb = rd?.hbonds ?? 0;
       const hp = rd?.hydrophobic ?? 0;
-      sections.push(`### 🔄 All Interactions (${total} total)`);
-      sections.push(`| Type | Count |`);
-      sections.push(`|------|-------|`);
-      sections.push(`| H-bonds | ${hb} |`);
-      sections.push(`| Salt bridges | ${sb} |`);
-      sections.push(`| Hydrophobic | ${hp} |`);
-      const interactions = rd?.interactions;
-      if (Array.isArray(interactions) && interactions.length > 0) {
-        sections.push("");
-        sections.push("**Top interactions:**");
-        sections.push(interactions.slice(0, 15).map((c: any) => {
-          const r1 = `${c.resname1||"?"}${c.resno1||"?"}(${c.chain1||"?"})`;
-          const r2 = `${c.resname2||"?"}${c.resno2||"?"}(${c.chain2||"?"})`;
-          return `- ${r1} ↔ ${r2} (${c.distance_A||"?"} Å) [${c.type||"?"}]`;
-        }).join("\n"));
-        if (total > 15) sections.push(`\n*...and ${total - 15} more*`);
+      const chain1 = rd?.chain1 || "?";
+      const chain2 = rd?.chain2 || "?";
+      sections.push(`### 🔄 All Interactions — ${chain1} ↔ ${chain2} (${total} total)`);
+      if (total === 0) {
+        sections.push("*No inter-chain contacts detected within cutoffs.*");
+      } else {
+        sections.push(`| Type | Count | % |`);
+        sections.push(`|------|------|---|`);
+        const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+        sections.push(`| 🤝 H-bonds | ${hb} | ${pct(hb)}% |`);
+        sections.push(`| ⚡ Salt bridges | ${sb} | ${pct(sb)}% |`);
+        sections.push(`| 💧 Hydrophobic | ${hp} | ${pct(hp)}% |`);
+        const interactions = rd?.interactions;
+        if (Array.isArray(interactions) && interactions.length > 0) {
+          sections.push("");
+          sections.push("**Top interactions (sorted by distance):**");
+          sections.push(interactions.slice(0, 20).map((c: any) => {
+            const r1 = `${c.resname1||"?"}${c.resno1||"?"}(${c.chain1||"?"})`;
+            const r2 = `${c.resname2||"?"}${c.resno2||"?"}(${c.chain2||"?"})`;
+            const t = c.type || "?";
+            const icon = t === "hbond" ? "🤝" : t === "salt_bridge" ? "⚡" : t === "hydrophobic" ? "💧" : "•";
+            return `- ${icon} ${r1} ${c.atom1||""} ↔ ${r2} ${c.atom2||""} (${c.distance_A||"?"} Å)`;
+          }).join("\n"));
+          if (total > 20) sections.push(`\n*...and ${total - 20} more*`);
+          // Highlight key residues (appearing in multiple contacts)
+          const residueCounts: Record<string, number> = {};
+          for (const c of interactions) {
+            const r1 = `${c.resname1||"?"}${c.resno1||"?"}(${c.chain1||"?"})`;
+            const r2 = `${c.resname2||"?"}${c.resno2||"?"}(${c.chain2||"?"})`;
+            residueCounts[r1] = (residueCounts[r1] || 0) + 1;
+            residueCounts[r2] = (residueCounts[r2] || 0) + 1;
+          }
+          const hotspots = Object.entries(residueCounts)
+            .filter(([, n]) => n >= 2)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10);
+          if (hotspots.length > 0) {
+            sections.push("");
+            sections.push(`🔑 **Interface hotspots** (≥2 contacts each):`);
+            sections.push(hotspots.map(([r, n]) => `- ${r} — ${n} contacts`).join("\n"));
+          }
+        }
       }
     }
     else if (recipe === "binding_pocket") {

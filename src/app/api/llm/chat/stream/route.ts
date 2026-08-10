@@ -74,7 +74,9 @@ You MUST respond with a SINGLE JSON object — NO markdown fences, NO prose befo
 - focus_ligand: { "type": "focus_ligand", "compId": "ATP" }
 - reset_camera: { "type": "reset_camera" }
 - set_representation: { "type": "set_representation", "preset": "polymer-and-ligand", "structures": "all" }
-- set_color_theme: { "type": "set_color_theme", "theme": "chain", "structures": "all" }
+- set_color_theme: { "type": "set_color_theme", "theme": "chain-id", "structures": "all" }
+  Valid themes: "chain-id", "element-symbol", "residue-name", "sequence-id", "hydrophobicity", "uniform", "polymer-index", "occupancy", "model-index", "structure-index", "entity-id"
+  (aliases like "chain", "element", "residue" are auto-accepted but prefer canonical names)
 - set_uniform_color: { "type": "set_uniform_color", "color": "#c96442", "structures": "all" }
 - measure_distance: { "type": "measure_distance", "a": {"chain":"A","resno":145,"atom":"CA"}, "b": {"chain":"A","resno":150,"atom":"CA"} }
 - analyze_metadata: { "type": "analyze_metadata", "id": "1CBS" }   ← note: field is "id", NOT "pdbId"

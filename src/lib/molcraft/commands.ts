@@ -223,11 +223,30 @@ export async function executeCommand(
         const components = collectComponents(plugin, structures);
         if (components.length === 0)
           return { ok: false, detail: "No components to color" };
-        plugin.managers.structure.component.updateRepresentationsTheme(
-          components,
-          { color: cmd.theme }
-        );
-        return { ok: true, detail: `Color theme: ${cmd.theme}` };
+        // Normalize common LLM-friendly aliases to Molstar's actual color theme names.
+        // Without this, "chain" (commonly emitted by the LLM) is invalid and breaks
+        // the representation, causing the structure to visually disappear.
+        const theme = normalizeColorTheme(cmd.theme);
+        if (!theme) {
+          return {
+            ok: false,
+            detail: `Unknown color theme: "${cmd.theme}". Valid: chain-id, element-symbol, residue-name, sequence-id, hydrophobicity, uniform, polymer-index, occupancy, model-index, structure-index, entity-id`,
+          };
+        }
+        try {
+          plugin.managers.structure.component.updateRepresentationsTheme(
+            components,
+            { color: theme }
+          );
+          return { ok: true, detail: `Color theme: ${theme}` };
+        } catch (err) {
+          // Don't let an invalid theme break the viewer — return ok:false so the
+          // user can see the error but the structure remains visible.
+          return {
+            ok: false,
+            detail: `Failed to apply color theme "${theme}": ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
       }
 
       case "set_uniform_color": {
@@ -1246,6 +1265,83 @@ async function applyCameraAngle(
 function hexToNumber(hex: string): number {
   const clean = hex.replace("#", "");
   return parseInt(clean, 16);
+}
+
+/**
+ * Map LLM-friendly color theme aliases to Molstar's actual built-in color theme
+ * names. Returns `null` if the theme is not recognized.
+ *
+ * Molstar's valid built-in color themes (must match `ColorTheme.BuiltIn`):
+ *   uniform, chain-id, entity-id, entity-source, model-index, structure-index,
+ *   residue-name, element-symbol, sequence-id, hydrophobicity, occupancy,
+ *   uncertainty, polymer-index, operator-hkl, cross-link, trajectory, volume,
+ *   particle, ...
+ *
+ * Common LLM mistakes we accept as aliases:
+ *   "chain"        → "chain-id"
+ *   "element"      → "element-symbol"
+ *   "residue"      → "residue-name"
+ *   "sequence"     → "sequence-id"
+ *   "hydrophobic"  → "hydrophobicity"
+ *   "entity"       → "entity-id"
+ *   "model"        → "model-index"
+ *   "structure"    → "structure-index"
+ *   "polymer"      → "polymer-index"
+ *
+ * Passing an unrecognized theme (e.g. raw "chain") into
+ * `updateRepresentationsTheme` breaks the representation and the structure
+ * visually disappears, so we explicitly validate here.
+ */
+function normalizeColorTheme(theme: string | undefined): string | null {
+  if (!theme || typeof theme !== "string") return null;
+  const t = theme.trim().toLowerCase().replace(/[\s_-]+/g, "-");
+
+  // Direct canonical match.
+  const CANONICAL = new Set([
+    "uniform", "chain-id", "entity-id", "entity-source", "model-index",
+    "structure-index", "residue-name", "element-symbol", "sequence-id",
+    "hydrophobicity", "occupancy", "uncertainty", "polymer-index",
+    "operator-hkl", "cross-link", "trajectory", "volume", "particle",
+  ]);
+  if (CANONICAL.has(t)) return t;
+
+  // Alias map.
+  const ALIASES: Record<string, string> = {
+    "chain": "chain-id",
+    "chainid": "chain-id",
+    "by-chain": "chain-id",
+    "bychain": "chain-id",
+    "colorbychain": "chain-id",
+    "element": "element-symbol",
+    "by-element": "element-symbol",
+    "byelement": "element-symbol",
+    "colorbyelement": "element-symbol",
+    "residue": "residue-name",
+    "residue-name": "residue-name",
+    "by-residue": "residue-name",
+    "byresidue": "residue-name",
+    "amino-acid": "residue-name",
+    "aminoacid": "residue-name",
+    "sequence": "sequence-id",
+    "by-sequence": "sequence-id",
+    "bysequence": "sequence-id",
+    "seq": "sequence-id",
+    "seqid": "sequence-id",
+    "hydrophobic": "hydrophobicity",
+    "hydrophobicity": "hydrophobicity",
+    "by-hydrophobicity": "hydrophobicity",
+    "entity": "entity-id",
+    "model": "model-index",
+    "structure": "structure-index",
+    "polymer": "polymer-index",
+    "bfactor": "bfactor",
+    "b-factor": "bfactor",
+    "occupancy": "occupancy",
+    "uncertainty": "uncertainty",
+  };
+  if (ALIASES[t]) return ALIASES[t];
+
+  return null;
 }
 
 /** Human-readable Chinese label for a residue category. */
