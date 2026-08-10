@@ -581,7 +581,23 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
     // ── Representation/color ──
     else if (rawType === 'set-representation' || rawType === 'set_representation' ||
              rawType === 'representation' || rawType === 'set_representation') {
-      normalized = { type: 'set_representation', preset: String(c.preset || c.representation || 'polymer-and-ligand'), structures: c.structures || 'all' };
+      // Normalize preset names — LLMs often use short forms like "cartoon"
+      // but Molstar expects "polymer-cartoon", "polymer-and-ligand", etc.
+      const PRESET_MAP: Record<string, string> = {
+        'cartoon': 'polymer-cartoon',
+        'ball-and-stick': 'atomic-detail',
+        'ball_stick': 'atomic-detail',
+        'ballandstick': 'atomic-detail',
+        'stick': 'atomic-detail',
+        'surface': 'molecular-surface',
+        'spacefill': 'spacefill',
+        'space-filling': 'spacefill',
+        'wireframe': 'polymer-cartoon',
+        'line': 'polymer-cartoon',
+      };
+      const rawPreset = String(c.preset || c.representation || 'polymer-and-ligand').toLowerCase();
+      const preset = PRESET_MAP[rawPreset] || rawPreset;
+      normalized = { type: 'set_representation', preset, structures: c.structures || 'all' };
     } else if (rawType === 'set-color' || rawType === 'set_color_theme' || rawType === 'color' || rawType === 'color_theme') {
       normalized = { type: 'set_color_theme', theme: String(c.theme || c.color || 'chain'), structures: c.structures || 'all' };
     }
