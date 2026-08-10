@@ -1446,8 +1446,13 @@ async function callOpenai(prompt: string, system?: string, model?: string): Prom
 async function callZai(prompt: string, system?: string, model?: string): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const MAX_RETRIES = 5;
-  const BASE_DELAY = 10_000; // 10s initial backoff for 429 errors
+  // Round 31: Reduced from 5 retries (10s+20s+40s+80s+160s = 310s total) to 2 retries
+  // (5s + 10s = 15s total). The old 310s backoff exceeded the 60-90s request timeout,
+  // preventing the provider fallback in callAnyLlm from ever trying the next provider.
+  // With 15s max backoff, if ZAI is still rate-limited, callAnyLlm will fall back to
+  // cli:hermes, cli:claude, etc. much faster.
+  const MAX_RETRIES = 2;
+  const BASE_DELAY = 5_000; // 5s initial backoff for 429 errors
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       const resp = await zai.chat.completions.create({
@@ -1461,14 +1466,14 @@ async function callZai(prompt: string, system?: string, model?: string): Promise
     } catch (err: any) {
       const is429 = err?.message?.includes('429') || err?.message?.includes('Too many');
       if (is429 && attempt < MAX_RETRIES - 1) {
-        const delay = BASE_DELAY * Math.pow(2, attempt); // 10s, 20s, 40s, 80s, 160s
+        const delay = BASE_DELAY * Math.pow(2, attempt); // 5s, 10s
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
       throw err;
     }
   }
-  throw new Error('callZai: max retries exceeded');
+  throw new Error('callZai: max retries exceeded (429 rate limit)');
 }
 
 // ─── llmComplete (legacy interface used by pdb-weekly/literature-daily/target-eval) ─

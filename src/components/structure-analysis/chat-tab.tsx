@@ -923,6 +923,46 @@ export function ChatTab() {
     toast(`Exported ${messages.length} messages as Markdown`, "success");
   }, [messages, providerLabel, toast]);
 
+  /** Round 31: Export chat as JSON (full data for re-import). */
+  const handleExportJson = useCallback(() => {
+    if (messages.length === 0) {
+      toast("No messages to export", "error");
+      return;
+    }
+    const exportData = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      provider: providerLabel,
+      messageCount: messages.length,
+      messages: messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        ts: m.ts,
+        provider: m.provider,
+        model: m.model,
+        durationMs: m.durationMs,
+        commands: m.commands,
+        isError: m.isError,
+        retryable: m.retryable,
+        pinned: m.pinned,
+        bookmarked: m.bookmarked,
+        reaction: m.reaction,
+        tags: m.tags,
+        agentStep: m.agentStep,
+      })),
+    };
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chat-export-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${messages.length} messages as JSON`, "success");
+  }, [messages, providerLabel, toast]);
+
   /** Round 8: Export command history as CSV. */
   const handleExportCommandCsv = useCallback(() => {
     if (commandHistory.length === 0) {
@@ -1950,15 +1990,41 @@ export function ChatTab() {
               >
                 <History className="h-3 w-3" />
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
-                onClick={handleExportMarkdown}
-                title="Export chat as Markdown"
-              >
-                <Download className="h-3 w-3" />
-              </Button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                    title="Export chat"
+                  >
+                    <Download className="h-3 w-3" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-44 p-1" align="end">
+                  <button
+                    onClick={handleExportMarkdown}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[10px] text-claude-text hover:bg-claude-accent-light/30 transition-colors"
+                  >
+                    <FileText className="h-3 w-3 text-claude-accent" />
+                    Export as Markdown
+                  </button>
+                  <button
+                    onClick={handleExportJson}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[10px] text-claude-text hover:bg-claude-accent-light/30 transition-colors"
+                  >
+                    <Code className="h-3 w-3 text-claude-accent" />
+                    Export as JSON
+                  </button>
+                  <button
+                    onClick={handleExportCommandCsv}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[10px] text-claude-text hover:bg-claude-accent-light/30 transition-colors"
+                  >
+                    <History className="h-3 w-3 text-claude-accent" />
+                    Export commands CSV
+                  </button>
+                </PopoverContent>
+              </Popover>
               {/* Round 18: Summarize chat button */}
               <Button
                 variant="ghost"
