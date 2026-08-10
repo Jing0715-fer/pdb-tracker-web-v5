@@ -1447,8 +1447,7 @@ export function ChatTab() {
               const pendingCmds = commands.map((c) => {
                 const cmd = c as LlmCommand;
                 return {
-                  type: cmd.type,
-                  ...("id" in cmd ? { id: cmd.id } : {}),
+                  ...cmd, // Copy ALL fields (type, id, recipe, compId, params, pdbId, etc.)
                   status: "pending" as const,
                 };
               });

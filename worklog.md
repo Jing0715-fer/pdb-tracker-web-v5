@@ -8633,3 +8633,54 @@ The user reported that the chat loads 6LU7 but doesn't output complete analysis 
 6. **Add analysis result display in chat** — When analyze_run succeeds, display the result data (e.g., hydrogen bond count, residue list) in the chat message, not just "✓ done".
 
 7. **Pre-compile Chat tab on server start** — Add a warm-up step that pre-compiles the Chat tab chunk on server start to avoid OOM during user navigation.
+
+---
+Task ID: bugfix-command-preview-undefined-fields
+Agent: main
+Task: Fix "Run undefined" and "Focus on ligand undefined" display bug in command preview.
+
+Bug Analysis:
+- User reported: Commands show "Run undefined" instead of "Run hbonds (A↔A)" and "Focus on ligand undefined" instead of "Focus on ligand N3"
+- Root cause: The `pendingCmds` mapping in the command execution loop only copied `type` and `id` fields from the original LlmCommand, dropping `recipe`, `compId`, `params`, `pdbId`, and other important fields.
+- When `describeCommand()` tried to access `cmd.recipe` or `cmd.compId`, they were `undefined`, resulting in "Run undefined" and "Focus on ligand undefined".
+
+Fix:
+- Changed `pendingCmds` to use spread operator `...cmd` to copy ALL fields from the original LlmCommand
+- This preserves `recipe`, `compId`, `params`, `pdbId`, `uniprotId`, `emdbId`, `preset`, `theme`, `color`, `chain`, `resno`, `ligandCompId`, etc.
+- The `status: "pending"` field is still added after the spread
+
+Before:
+```typescript
+return {
+  type: cmd.type,
+  ...("id" in cmd ? { id: cmd.id } : {}),
+  status: "pending" as const,
+};
+```
+
+After:
+```typescript
+return {
+  ...cmd, // Copy ALL fields
+  status: "pending" as const,
+};
+```
+
+API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| 6LU7 + hbonds | ✅ PASS | 2 commands: load_pdb(id=6LU7), analyze_run(recipe=hbonds) |
+| Warmup | ✅ PASS | 5 routes in 3.9s |
+
+E2E Tests:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads | ✅ PASS | 80KB screenshot, full dashboard |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No errors |
+
+Stage Summary:
+- Bug FIXED: "Run undefined" and "Focus on ligand undefined" display issue resolved
+- Root cause: pendingCmds only copied type+id, dropping recipe/compId/params
+- Fix: Use spread operator to copy ALL fields from original command
+- All API tests pass, E2E test passes with no console errors
