@@ -1486,6 +1486,11 @@ export function ChatTab() {
                       data: (result as { analysisResult?: unknown }).analysisResult,
                     });
                   }
+                  // Round 26: After load_pdb, wait 2s for structure to fully load
+                  // before executing subsequent commands (analyze_run, focus_ligand, etc.)
+                  if (cmd.type === "load_pdb" && result.ok && ci < commands.length - 1) {
+                    await new Promise(r => setTimeout(r, 2000));
+                  }
                 } catch (err) {
                   (allCommands[cmdIndex] as Record<string, unknown>).status = "error";
                   (allCommands[cmdIndex] as Record<string, unknown>).durationMs = Date.now() - cmdStartTime;
@@ -1513,8 +1518,19 @@ export function ChatTab() {
           }
 
           // Done — finalize the message
+          // Round 26: If LLM returned no commands but user's request mentions
+          // loading/analysis keywords, add a helpful note
+          let finalReply = reply || "Done.";
+          if (commands.length === 0 && allCommands.length === 0) {
+            const userLower = trimmed.toLowerCase();
+            const needsAction = userLower.includes("load") || userLower.includes("analyze") ||
+              userLower.includes("run") || userLower.includes("show") || userLower.includes("focus");
+            if (needsAction) {
+              finalReply += "\n\n⚠️ **No commands were generated.** The LLM may not have returned commands in the expected JSON format. Try rephrasing your request or switching to a different provider (e.g., 'Auto' instead of 'cli:hermes').";
+            }
+          }
           updateMessage(pendingId, {
-            content: reply || "Done.",
+            content: finalReply,
             commands: allCommands.length > 0 ? allCommands : undefined,
             pending: false,
             provider,

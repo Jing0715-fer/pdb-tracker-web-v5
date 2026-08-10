@@ -8684,3 +8684,39 @@ Stage Summary:
 - Root cause: pendingCmds only copied type+id, dropping recipe/compId/params
 - Fix: Use spread operator to copy ALL fields from original command
 - All API tests pass, E2E test passes with no console errors
+
+---
+Task ID: round-26-no-commands-warning-load-delay
+Agent: main
+Task: Fix issue where LLM returns no commands (hermes provider) and structure not loaded before analyze_run.
+
+Issues Found:
+1. When using cli:hermes provider, the LLM may return text without a valid JSON `commands` array, causing the chat to show the LLM reply but NO commands executed.
+2. When load_pdb and analyze_run are in the same command batch, the analyze_run may fail because the structure hasn't finished loading yet.
+
+Fixes:
+1. Added warning when LLM returns no commands but user's request contains action keywords (load, analyze, run, show, focus):
+   - Shows: "⚠️ No commands were generated. The LLM may not have returned commands in the expected JSON format. Try rephrasing your request or switching to a different provider (e.g., 'Auto' instead of 'cli:hermes')."
+   - Helps users understand why no analysis was performed
+
+2. Added 2-second delay after load_pdb command before executing subsequent commands:
+   - Gives the Molstar viewer time to fully load the structure
+   - Prevents analyze_run from failing due to missing structure
+   - Only delays when load_pdb is not the last command in the batch
+
+API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| 6LU7 + hbonds | ✅ PASS | 2 commands: load_pdb(6LU7), analyze_run(hbonds) |
+| Warmup | ✅ PASS | 5 routes in 0.8s |
+
+E2E Tests:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads | ✅ PASS | 108KB screenshot, full dashboard |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No errors |
+
+Code Verification:
+- chat-tab.tsx: Warning when no commands generated but action keywords present ✓
+- chat-tab.tsx: 2s delay after load_pdb before subsequent commands ✓
