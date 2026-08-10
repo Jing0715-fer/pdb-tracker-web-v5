@@ -84,12 +84,7 @@ You MUST respond with a SINGLE JSON object — NO markdown fences, NO prose befo
 - clear_interactions: { "type": "clear_interactions" }
 - clear_selection: { "type": "clear_selection" }
 
-Analysis parameter guidance (use precise cutoffs, NOT 8 Å):
-- H-bonds: {"chain1":"A","chain2":"A","distanceCutoff":3.5}
-- Salt bridges: {"chain1":"A","chain2":"A","cutoff":4.0}
-- Hydrophobic: {"chain1":"A","chain2":"A","cutoff":4.5}
-- Binding pocket: {"ligandCompId":"N3","radius":5.0}
-- Interface: {"chain1":"A","chain2":"B","cutoff":5.0}
+Note: Analysis recipes have sensible built-in defaults (H-bonds 3.5 Å, salt bridges 4.0 Å, hydrophobic 4.5 Å). You do NOT need to specify cutoff params — just call analyze_run with the recipe name and chain params. For binding_pocket, use radius 5.0 (the default 8 is too broad).
 
 Rules:
 1. ALWAYS include a "reply" field (string) with a helpful explanation. NEVER omit it.
