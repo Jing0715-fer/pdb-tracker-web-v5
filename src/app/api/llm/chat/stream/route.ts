@@ -176,7 +176,16 @@ export async function POST(request: NextRequest) {
           });
 
           if (!r.ok) {
-            send({ type: 'error', error: r.error || 'LLM call failed', provider: r.provider });
+            // Improve error messaging for common failure modes
+            let errorMsg = r.error || 'LLM call failed';
+            const is429 = errorMsg.includes('429') || errorMsg.includes('Too many');
+            const isTimeout = errorMsg.includes('timeout') || errorMsg.includes('deadline exceeded');
+            if (is429) {
+              errorMsg = 'The AI service is currently rate-limited (too many requests). Please wait 30–60 seconds and try again. If the problem persists, try a different provider (e.g. cli:hermes if available).';
+            } else if (isTimeout) {
+              errorMsg = 'The AI service timed out. This may happen with very long prompts or high server load. Try shortening your request or retrying in a moment.';
+            }
+            send({ type: 'error', error: errorMsg, provider: r.provider, retryable: is429 || isTimeout });
             controller.close();
             return;
           }

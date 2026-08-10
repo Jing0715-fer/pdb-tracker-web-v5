@@ -9,6 +9,7 @@
  * panel was removed (we reuse pdb-tracker-web-v4's LLM system).
  */
 import { useState, useMemo, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import {
   FileText,
   History,
@@ -37,9 +38,25 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
 import { ChartRenderer, ALL_CHART_LABELS } from "./chart-renderer";
-import { ChatTab } from "./chat-tab";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+// Lazy-load ChatTab (and its heavy dependencies: Molstar, ReactMarkdown, etc.)
+// to avoid OOM during webpack compilation in the 4GB sandbox. The chat panel
+// is only needed when the user clicks the "Chat" tab, so deferring its
+// compilation until then keeps the rest of the Analysis panel fast.
+const ChatTab = dynamic(
+  () => import("./chat-tab").then((m) => m.ChatTab),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-full text-claude-text-muted text-xs gap-2">
+        <div className="h-3 w-3 border-2 border-claude-accent border-t-transparent rounded-full animate-spin" />
+        Loading chat…
+      </div>
+    ),
+  }
+);
 
 interface StructureInfo {
   pdbId: string;
