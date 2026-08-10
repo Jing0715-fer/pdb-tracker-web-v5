@@ -8155,3 +8155,99 @@ Next Round Improvement Suggestions:
 5. **Tag auto-assignment** — Automatically assign suggested tags to new messages
 6. **Tag merge/rename** — Allow merging or renaming existing tags
 7. **Chat message QR code** — Generate QR code for sharing a message
+
+---
+Task ID: round-22-autotag-tagmanagement-realchat
+Agent: main
+Task: Check git history, implement round 22 improvements (tag auto-assignment, tag merge/rename/delete). Run QA/E2E tests including real chat test. Document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Sync: local = origin/main = bba4035 (in sync)
+  - Working tree: clean
+
+- Implemented Round 22 Improvement #5: Tag auto-assignment for new messages
+  - Added autoTagEnabled state (persisted to localStorage "pdb-tracker:auto-tag", default: on)
+  - Added useEffect that auto-assigns tags to new assistant messages:
+    - Only runs when autoTagEnabled is true
+    - Only assigns to messages with no existing tags
+    - Same keyword + command analysis as tag suggestions:
+      - load_pdb → "loaded"
+      - analyze_run → "analysis"
+      - "error"/"fail" → "issue"
+      - "ligand"/"pocket" → "drug-discovery"
+      - "report"/"summary" → "report"
+    - Max 3 auto-assigned tags per message
+  - Added Tag icon toggle button in chat header:
+    - Accent color when enabled, muted when disabled
+    - Click toggles auto-tag on/off
+    - Persists to localStorage
+    - Toast: "Auto-tag enabled" / "Auto-tag disabled"
+
+- Implemented Round 22 Improvement #6: Tag merge/rename functionality
+  - Added handleRenameTag(oldTag, newTag) callback:
+    - Sanitizes new tag name (lowercase, alphanumeric + hyphen/underscore)
+    - Iterates all messages, replaces old tag with new
+    - If new tag already exists on a message, removes old (merge behavior)
+    - Updates store + persists to localStorage
+    - Toast: "🏷️ Renamed #old → #new (N messages)"
+  - Added rename button (Pencil icon) in tag statistics section:
+    - Hover to reveal
+    - Opens prompt dialog pre-filled with current tag name
+    - Only renames if new name differs
+
+- Implemented Round 22 Improvement #7: Tag delete from all messages
+  - Added handleDeleteTag(tag) callback:
+    - Iterates all messages, removes the tag from each
+    - Updates store + persists to localStorage
+    - Toast: "🏷️ Deleted #tag from N messages"
+  - Added delete button (Trash2 icon) in tag statistics section:
+    - Hover to reveal
+    - Shows confirm dialog: "Delete tag #tag from all N messages?"
+    - Only deletes on confirm
+
+- Updated tag statistics section with group/tag hover for rename/delete buttons
+
+Real Chat API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| hello | ✅ PASS | Reply received, 0 commands, model=glm-4.6 |
+| Load 1CBS + analyze hbonds | ✅ PASS | 2 commands: load_pdb + analyze_run, continueAfterAnalysis=true |
+| 6LU7 ligand binding pocket | ✅ PASS | 5 commands: load_pdb ✅, hbonds ✅, salt_bridges ✅, focus_ligand ✅ |
+| Warmup API | ✅ PASS | 5 routes warmed in 4.2s |
+
+E2E Tests:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads | ✅ PASS | 131KB screenshot, full dashboard |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No "Cannot access send" or other errors |
+| Send-before-init fix | ✅ VERIFIED | [send] dependency at line 1528, send defined at 1189 |
+
+Code Verification:
+- chat-tab.tsx: autoTagEnabled state + auto-tag useEffect ✓
+- chat-tab.tsx: Tag toggle button in header ✓
+- chat-tab.tsx: handleRenameTag with merge behavior ✓
+- chat-tab.tsx: handleDeleteTag with confirm dialog ✓
+- chat-tab.tsx: Rename (Pencil) + Delete (Trash2) buttons in tag stats ✓
+
+Stage Summary:
+- Git history clean and in sync
+- 3 improvements implemented (auto-tag, rename, delete)
+- All 4 real chat API tests pass
+- E2E test passes with no console errors
+- Send-before-init fix verified working
+- Chat now supports:
+  - Auto-tag assignment for new messages (toggleable, keyword-based)
+  - Tag rename across all messages (with merge if target exists)
+  - Tag deletion from all messages (with confirmation)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Chat message QR code** — Generate QR code for sharing a message
+6. **Chat notification desktop** — Show desktop notifications when agent responds
+7. **Chat message scheduling** — Schedule messages to be sent at a later time

@@ -375,6 +375,11 @@ export function ChatTab() {
   const [messageSentiment, setMessageSentiment] = useState<Record<string, "positive" | "neutral" | "negative">>({});
   // Round 18: Summarization state
   const [summarizing, setSummarizing] = useState(false);
+  // Round 22: Auto-tag toggle state
+  const [autoTagEnabled, setAutoTagEnabled] = useState(() => {
+    try { return localStorage.getItem("pdb-tracker:auto-tag") !== "off"; }
+    catch { return true; }
+  });
   // Round 14: Voice input language selector
   const [voiceLang, setVoiceLang] = useState(() => {
     try { return localStorage.getItem("pdb-tracker:voice-lang") || "en-US"; }
@@ -543,6 +548,26 @@ export function ChatTab() {
       }
     });
   }, [messages, messageSentiment]);
+
+  // Round 22: Auto-assign suggested tags to new assistant messages
+  useEffect(() => {
+    if (!autoTagEnabled) return;
+    messages.forEach((m) => {
+      if (m.role === "assistant" && !m.pending && m.content && (!m.tags || m.tags.length === 0)) {
+        const content = m.content.toLowerCase();
+        const cmdTypes = (m.commands || [] as unknown[]).map((c: any) => c.type);
+        const autoTags: string[] = [];
+        if (cmdTypes.includes("load_pdb")) autoTags.push("loaded");
+        if (cmdTypes.includes("analyze_run")) autoTags.push("analysis");
+        if (content.includes("error") || content.includes("fail")) autoTags.push("issue");
+        if (content.includes("ligand") || content.includes("pocket")) autoTags.push("drug-discovery");
+        if (content.includes("report") || content.includes("summary")) autoTags.push("report");
+        if (autoTags.length > 0) {
+          updateMessage(m.id, { tags: autoTags.slice(0, 3) });
+        }
+      }
+    });
+  }, [messages, updateMessage, autoTagEnabled]);
 
   // Round 17: Translate message via /api/llm/chat/stream
   const handleTranslate = useCallback(async (messageId: string, content: string) => {
@@ -1593,6 +1618,49 @@ export function ChatTab() {
     return () => window.removeEventListener(TAG_EVENT, handler);
   }, [updateMessage, toast]);
 
+  // Round 22: Rename a tag across all messages
+  const handleRenameTag = useCallback((oldTag: string, newTag: string) => {
+    const sanitized = newTag.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "");
+    if (!sanitized || sanitized === oldTag) return;
+    const allMsgs = useAppStore.getState().chatMessages;
+    let count = 0;
+    const updated = allMsgs.map((m) => {
+      if (m.tags && m.tags.includes(oldTag)) {
+        const newTags = m.tags.includes(sanitized)
+          ? m.tags.filter(t => t !== oldTag) // merge: remove old if new already exists
+          : m.tags.map(t => t === oldTag ? sanitized : t);
+        count++;
+        return { ...m, tags: newTags };
+      }
+      return m;
+    });
+    useAppStore.setState({ chatMessages: updated });
+    try {
+      const toSave = updated.filter((m) => !m.pending).slice(-50);
+      localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
+    } catch { /* ignore */ }
+    toast(`🏷️ Renamed #${oldTag} → #${sanitized} (${count} messages)`, "success");
+  }, [toast]);
+
+  // Round 22: Delete a tag from all messages
+  const handleDeleteTag = useCallback((tag: string) => {
+    const allMsgs = useAppStore.getState().chatMessages;
+    let count = 0;
+    const updated = allMsgs.map((m) => {
+      if (m.tags && m.tags.includes(tag)) {
+        count++;
+        return { ...m, tags: m.tags.filter(t => t !== tag) };
+      }
+      return m;
+    });
+    useAppStore.setState({ chatMessages: updated });
+    try {
+      const toSave = updated.filter((m) => !m.pending).slice(-50);
+      localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
+    } catch { /* ignore */ }
+    toast(`🏷️ Deleted #${tag} from ${count} messages`, "info");
+  }, [toast]);
+
   // Round 19: Listen for pin-note events
   useEffect(() => {
     const handler = (e: Event) => {
@@ -1910,6 +1978,20 @@ export function ChatTab() {
               <Button
                 variant="ghost"
                 size="sm"
+                className={`h-7 w-7 p-0 ${autoTagEnabled ? "text-claude-accent" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={() => {
+                  const newVal = !autoTagEnabled;
+                  setAutoTagEnabled(newVal);
+                  try { localStorage.setItem("pdb-tracker:auto-tag", newVal ? "on" : "off"); } catch { /* ignore */ }
+                  toast(newVal ? "Auto-tag enabled" : "Auto-tag disabled", "info");
+                }}
+                title={autoTagEnabled ? "Auto-tag on — click to disable" : "Auto-tag off — click to enable"}
+              >
+                <Tag className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 className={`h-7 w-7 p-0 ${soundEnabled ? "text-claude-accent" : "text-claude-text-muted hover:text-claude-accent"}`}
                 onClick={toggleSound}
                 title={soundEnabled ? "Sound on — click to mute" : "Sound off — click to enable"}
@@ -2193,7 +2275,7 @@ export function ChatTab() {
               </div>
             </div>
           )}
-          {/* Round 21: Tag statistics */}
+          {/* Round 21+22: Tag statistics with rename/delete */}
           {allTags.length > 0 && (
             <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
               <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Tags ({allTags.length})</div>
@@ -2202,7 +2284,7 @@ export function ChatTab() {
                   const count = messages.filter(m => m.tags?.includes(tag)).length;
                   const color = getTagColor(tag);
                   return (
-                    <div key={tag} className="flex items-center gap-1 text-[9px]">
+                    <div key={tag} className="flex items-center gap-1 text-[9px] group/tag">
                       <span
                         className="inline-flex items-center rounded px-1 py-0 text-[8px] font-mono"
                         style={{ backgroundColor: `${color}20`, color, border: `1px solid ${color}40` }}
@@ -2211,6 +2293,26 @@ export function ChatTab() {
                       </span>
                       <span className="ml-auto font-mono font-semibold text-claude-text">{count}</span>
                       <span className="text-[7px] text-claude-text-muted">msg{count > 1 ? "s" : ""}</span>
+                      {/* Round 22: Rename/delete tag buttons */}
+                      <button
+                        onClick={() => {
+                          const newName = window.prompt(`Rename tag #${tag} to:`, tag);
+                          if (newName && newName.trim() && newName !== tag) handleRenameTag(tag, newName);
+                        }}
+                        className="opacity-0 group-hover/tag:opacity-100 text-claude-text-muted/40 hover:text-claude-accent transition-opacity"
+                        title="Rename tag"
+                      >
+                        <Pencil className="h-2 w-2" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete tag #${tag} from all ${count} messages?`)) handleDeleteTag(tag);
+                        }}
+                        className="opacity-0 group-hover/tag:opacity-100 text-claude-text-muted/40 hover:text-destructive transition-opacity"
+                        title="Delete tag from all messages"
+                      >
+                        <Trash2 className="h-2 w-2" />
+                      </button>
                     </div>
                   );
                 })}
