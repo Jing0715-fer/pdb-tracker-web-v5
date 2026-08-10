@@ -8331,3 +8331,80 @@ Next Round Improvement Suggestions:
 5. **Chat message scheduling** — Schedule messages to be sent at a later time
 6. **Chat conversation branches** — Allow branching from any message to explore alternatives
 7. **Chat message bookmark folders** — Organize bookmarks into folders
+
+---
+Task ID: round-24-bookmark-folders-realchat
+Agent: main
+Task: Check git history, implement round 24 improvements (bookmark folders). Run QA/E2E/real chat tests. Document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Sync: local = origin/main = 11eed1c (in sync)
+  - Working tree: clean
+
+- Implemented Round 24 Improvement #7: Bookmark folders for organization
+  - Added `bookmarkFolder?: string` field to ChatMessage interface in store.ts
+  - Added FOLDER_EVENT global event bus + dispatchFolder function
+  - Added folder event listener in ChatTab:
+    - Updates message with bookmarkFolder field
+    - Shows toast: "📁 Moved to folder: {folder}" / "Removed from folder"
+  - Added folderFilter state (string | null)
+  - Updated filteredMessages useMemo to filter by bookmark folder:
+    - When folderFilter is set, only shows bookmarked messages with that folder
+  - Added allBookmarkFolders useMemo to collect unique folder names
+  - Added "Folders:" filter chip row in search bar:
+    - Amber-colored chips for each folder (📁 folder name)
+    - Active chip: solid amber background, white text
+    - Inactive chip: translucent amber background, amber text
+    - Click to toggle filter
+    - "✕ Clear" button when folder filter is active
+  - Added "Folder" button on bookmarked messages (hover):
+    - Folder icon + current folder name (or "Folder" if unset)
+    - Opens prompt dialog to set/change folder
+    - Empty string removes the folder assignment
+    - Only shows on bookmarked messages
+  - Folders persist to localStorage via existing chat persistence
+
+- Added Folder icon to imports from lucide-react
+
+Real Chat API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| hello | ✅ PASS | model=glm-4.6, 0 commands |
+| Load 1CBS + hbonds | ✅ PASS | 2 commands: load_pdb + analyze_run |
+| 6LU7 complex | ✅ PASS | 5 commands: load_pdb + 3×analyze_run + focus_ligand |
+| Warmup | ✅ PASS | 5 routes in 3.7s |
+
+E2E Tests:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads | ✅ PASS | 102KB screenshot, full dashboard |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No errors at all |
+
+Code Verification:
+- store.ts: bookmarkFolder field added to ChatMessage ✓
+- chat-tab.tsx: FOLDER_EVENT + dispatchFolder + listener ✓
+- chat-tab.tsx: folderFilter state + allBookmarkFolders useMemo ✓
+- chat-tab.tsx: Folder filter chips in search bar (amber) ✓
+- chat-tab.tsx: Folder button on bookmarked messages ✓
+- chat-tab.tsx: Folder icon imported ✓
+
+Stage Summary:
+- Git history clean and in sync
+- 1 improvement implemented (bookmark folders)
+- All 4 real chat API tests pass
+- E2E test passes with no console errors
+- Chat now supports:
+  - Bookmark folders (assign folder via prompt, filter by folder, amber chips)
+  - Folder button on bookmarked messages (hover, change/remove folder)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Chat conversation branches** — Allow branching from any message to explore alternatives
+6. **Chat message scheduling** — Schedule messages to be sent at a later time
+7. **Bookmark folder statistics** — Show folder distribution in the statistics panel

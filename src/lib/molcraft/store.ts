@@ -292,6 +292,8 @@ export interface ChatMessage {
   pinNote?: string;
   /** Round 19: Original content before editing (for diff view). */
   originalContent?: string;
+  /** Round 24: Bookmark folder name for organization. */
+  bookmarkFolder?: string;
 }
 
 export interface ChartPreset {

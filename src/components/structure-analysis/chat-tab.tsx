@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -346,6 +346,8 @@ export function ChatTab() {
       return raw ? JSON.parse(raw) : {};
     } catch { return {}; }
   });
+  // Round 24: Bookmark folder filter
+  const [folderFilter, setFolderFilter] = useState<string | null>(null);
   // Round 12: Template library state
   const [showTemplates, setShowTemplates] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<string>("All");
@@ -778,6 +780,10 @@ export function ChatTab() {
     if (tagFilter) {
       result = result.filter((m) => m.tags?.includes(tagFilter));
     }
+    // Round 24: Apply bookmark folder filter
+    if (folderFilter) {
+      result = result.filter((m) => m.bookmarked && m.bookmarkFolder === folderFilter);
+    }
     // Apply search query
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -810,7 +816,7 @@ export function ChatTab() {
       });
     }
     return sorted;
-  }, [messages, searchQuery, filterMode, sortMode, cmdTypeFilter, tagFilter]);
+  }, [messages, searchQuery, filterMode, sortMode, cmdTypeFilter, tagFilter, folderFilter]);
 
   // Round 4: Calculate chat statistics
   const chatStats = useMemo(() => {
@@ -895,6 +901,13 @@ export function ChatTab() {
     const tagSet = new Set<string>();
     messages.forEach(m => m.tags?.forEach(t => tagSet.add(t)));
     return Array.from(tagSet).sort();
+  }, [messages]);
+
+  // Round 24: Collect all bookmark folders
+  const allBookmarkFolders = useMemo(() => {
+    const folderSet = new Set<string>();
+    messages.forEach(m => { if (m.bookmarked && m.bookmarkFolder) folderSet.add(m.bookmarkFolder); });
+    return Array.from(folderSet).sort();
   }, [messages]);
 
   // Round 20: Get color for a tag (default cycle if not customized)
@@ -1631,6 +1644,18 @@ export function ChatTab() {
     return () => window.removeEventListener(BOOKMARK_EVENT, handler);
   }, [updateMessage, toast]);
 
+  // Round 24: Listen for bookmark folder events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId, folder } = (e as CustomEvent<{ messageId: string; folder: string | undefined }>).detail;
+      if (!messageId) return;
+      updateMessage(messageId, { bookmarkFolder: folder });
+      toast(folder ? `📁 Moved to folder: ${folder}` : "Removed from folder", "info");
+    };
+    window.addEventListener(FOLDER_EVENT, handler);
+    return () => window.removeEventListener(FOLDER_EVENT, handler);
+  }, [updateMessage, toast]);
+
   // Round 19: Listen for tag events
   useEffect(() => {
     const handler = (e: Event) => {
@@ -2187,6 +2212,35 @@ export function ChatTab() {
                   onClick={() => setTagFilter(null)}
                   className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
                   title="Clear tag filter"
+                >
+                  ✕ Clear
+                </button>
+              )}
+            </div>
+          )}
+          {/* Round 24: Bookmark folder filter chips */}
+          {allBookmarkFolders.length > 0 && (
+            <div className="mt-1 flex items-center gap-0.5 flex-wrap">
+              <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted/70 mr-0.5">Folders:</span>
+              {allBookmarkFolders.map((folder) => (
+                <button
+                  key={folder}
+                  onClick={() => setFolderFilter(folderFilter === folder ? null : folder)}
+                  className={`px-1 py-0.5 rounded text-[8px] font-mono transition-colors ${
+                    folderFilter === folder
+                      ? "bg-amber-500 text-white"
+                      : "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                  }`}
+                  title={folderFilter === folder ? `Remove filter: ${folder}` : `Filter by folder: ${folder}`}
+                >
+                  📁 {folder}
+                </button>
+              ))}
+              {folderFilter && (
+                <button
+                  onClick={() => setFolderFilter(null)}
+                  className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
+                  title="Clear folder filter"
                 >
                   ✕ Clear
                 </button>
@@ -2869,6 +2923,12 @@ function dispatchPin(messageId: string, pinned: boolean) {
 const BOOKMARK_EVENT = "chat-bookmark";
 function dispatchBookmark(messageId: string, bookmarked: boolean) {
   window.dispatchEvent(new CustomEvent(BOOKMARK_EVENT, { detail: { messageId, bookmarked } }));
+}
+
+/** Round 24: Bookmark folder event bus. */
+const FOLDER_EVENT = "chat-bookmark-folder";
+function dispatchFolder(messageId: string, folder: string | undefined) {
+  window.dispatchEvent(new CustomEvent(FOLDER_EVENT, { detail: { messageId, folder } }));
 }
 
 /** Round 19: Tag management event bus. */
@@ -3576,6 +3636,20 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                   >
                     <StickyNote className="h-2.5 w-2.5" />
                     Note
+                  </button>
+                )}
+                {/* Round 24: Move to bookmark folder */}
+                {message.bookmarked && (
+                  <button
+                    onClick={() => {
+                      const folder = window.prompt("Move to folder (empty to remove):", message.bookmarkFolder || "");
+                      if (folder !== null) dispatchFolder(message.id, folder.trim() || undefined);
+                    }}
+                    className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-amber-600 transition-colors"
+                    title={message.bookmarkFolder ? `Folder: ${message.bookmarkFolder} (click to change)` : "Move to folder"}
+                  >
+                    <Folder className="h-2.5 w-2.5" />
+                    {message.bookmarkFolder || "Folder"}
                   </button>
                 )}
               </div>
