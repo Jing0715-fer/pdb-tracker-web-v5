@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, ChevronUp, RefreshCw, Zap, Check, X, Square, RotateCcw, Terminal, Brain, Cog, Clock, Download, AlertCircle, Copy, Play, Timer, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Languages, CornerDownRight, ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder, GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -1656,6 +1656,37 @@ export function ChatTab() {
     return () => window.removeEventListener(FOLDER_EVENT, handler);
   }, [updateMessage, toast]);
 
+  // Round 25: Listen for branch events — saves current conversation and starts fresh
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { messageId } = (e as CustomEvent<{ messageId: string }>).detail;
+      if (!messageId) return;
+      const allMsgs = useAppStore.getState().chatMessages;
+      const branchIndex = allMsgs.findIndex(m => m.id === messageId);
+      if (branchIndex === -1) return;
+      // Save current conversation as a named branch
+      const branchName = `Branch ${new Date().toLocaleTimeString()}`;
+      try {
+        const branches = JSON.parse(localStorage.getItem("pdb-tracker:chat-branches") || "[]");
+        branches.push({
+          name: branchName,
+          messages: allMsgs.slice(0, branchIndex + 1).filter(m => !m.pending),
+          createdAt: Date.now(),
+        });
+        localStorage.setItem("pdb-tracker:chat-branches", JSON.stringify(branches.slice(-10))); // Keep last 10
+      } catch { /* ignore */ }
+      // Truncate to the branched message + clear its response
+      const keptMsgs = allMsgs.slice(0, branchIndex + 1);
+      useAppStore.setState({ chatMessages: keptMsgs });
+      try {
+        localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(keptMsgs.filter(m => !m.pending).slice(-50)));
+      } catch { /* ignore */ }
+      toast(`🌿 Branched from message ${branchIndex + 1} — "${branchName}" saved`, "success");
+    };
+    window.addEventListener(BRANCH_EVENT, handler);
+    return () => window.removeEventListener(BRANCH_EVENT, handler);
+  }, [toast]);
+
   // Round 19: Listen for tag events
   useEffect(() => {
     const handler = (e: Event) => {
@@ -2422,6 +2453,26 @@ export function ChatTab() {
               </div>
             </div>
           )}
+          {/* Round 25: Bookmark folder statistics */}
+          {allBookmarkFolders.length > 0 && (
+            <div className="mt-1.5 pt-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30">
+              <div className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted mb-0.5">Bookmark Folders ({allBookmarkFolders.length})</div>
+              <div className="space-y-0.5">
+                {allBookmarkFolders.map(folder => {
+                  const count = messages.filter(m => m.bookmarked && m.bookmarkFolder === folder).length;
+                  return (
+                    <div key={folder} className="flex items-center gap-1 text-[9px]">
+                      <span className="inline-flex items-center rounded px-1 py-0 text-[8px] font-mono bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                        📁 {folder}
+                      </span>
+                      <span className="ml-auto font-mono font-semibold text-claude-text">{count}</span>
+                      <span className="text-[7px] text-claude-text-muted">msg{count > 1 ? "s" : ""}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2929,6 +2980,12 @@ function dispatchBookmark(messageId: string, bookmarked: boolean) {
 const FOLDER_EVENT = "chat-bookmark-folder";
 function dispatchFolder(messageId: string, folder: string | undefined) {
   window.dispatchEvent(new CustomEvent(FOLDER_EVENT, { detail: { messageId, folder } }));
+}
+
+/** Round 25: Conversation branch event bus. */
+const BRANCH_EVENT = "chat-branch";
+function dispatchBranch(messageId: string) {
+  window.dispatchEvent(new CustomEvent(BRANCH_EVENT, { detail: { messageId } }));
 }
 
 /** Round 19: Tag management event bus. */
@@ -3652,6 +3709,15 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
                     {message.bookmarkFolder || "Folder"}
                   </button>
                 )}
+                {/* Round 25: Branch conversation from this message */}
+                <button
+                  onClick={() => dispatchBranch(message.id)}
+                  className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-green-600 transition-colors"
+                  title="Branch conversation from here (saves current + starts fresh)"
+                >
+                  <GitBranch className="h-2.5 w-2.5" />
+                  Branch
+                </button>
               </div>
             )}
             {/* Round 19+20: Diff view for edited messages (word-level highlighting) */}

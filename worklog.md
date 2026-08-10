@@ -8408,3 +8408,82 @@ Next Round Improvement Suggestions:
 5. **Chat conversation branches** — Allow branching from any message to explore alternatives
 6. **Chat message scheduling** — Schedule messages to be sent at a later time
 7. **Bookmark folder statistics** — Show folder distribution in the statistics panel
+
+---
+Task ID: round-25-folderstats-branches-realchat
+Agent: main
+Task: Check git history, implement round 25 improvements (bookmark folder statistics, conversation branches). Run QA/E2E/real chat tests. Document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Sync: local = origin/main = 3bd6ba2 (in sync)
+  - Working tree: clean
+
+- Implemented Round 25 Improvement #7: Bookmark folder statistics in stats panel
+  - Added "Bookmark Folders (N)" section in the statistics panel
+  - Shows after the "Tags" section
+  - Only visible when allBookmarkFolders.length > 0
+  - For each folder:
+    - Amber-colored 📁 folder badge
+    - Message count (e.g., "3 msgs")
+    - Right-aligned count with mono font
+  - Sorted alphabetically (from allBookmarkFolders)
+
+- Implemented Round 25 Improvement #5: Chat conversation branches
+  - Added BRANCH_EVENT global event bus + dispatchBranch function
+  - Added branch event listener in ChatTab:
+    - Finds the message to branch from
+    - Saves current conversation (up to and including the branched message) to localStorage as a named branch
+    - Branch name: "Branch {timestamp}" (e.g., "Branch 14:30:05")
+    - Stores up to 10 branches in "pdb-tracker:chat-branches"
+    - Truncates the conversation to just the branched message (removes everything after)
+    - Persists truncated conversation to localStorage
+    - Toast: "🌿 Branched from message N — 'Branch HH:MM:SS' saved"
+  - Added "Branch" button on assistant messages (hover):
+    - GitBranch icon + "Branch" text
+    - Green hover color
+    - Title: "Branch conversation from here (saves current + starts fresh)"
+    - Click triggers the branch event
+
+- Added GitBranch icon to imports from lucide-react
+
+Real Chat API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| hello | ✅ PASS | model=glm-4.6, 0 commands |
+| Load 1CBS + hbonds | ✅ PASS | 2 commands: load_pdb + analyze_run |
+| 6LU7 complex | ✅ PASS | 5 commands: load_pdb + 3×analyze_run + focus_ligand |
+| Warmup | ✅ PASS | 5 routes in 4.5s |
+
+E2E Tests:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads | ✅ PASS | 135KB screenshot, full dashboard |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No errors at all |
+
+Code Verification:
+- chat-tab.tsx: Bookmark folder statistics in stats panel ✓
+- chat-tab.tsx: BRANCH_EVENT + dispatchBranch + listener ✓
+- chat-tab.tsx: Branch button (GitBranch icon) on assistant messages ✓
+- chat-tab.tsx: Branch saves to localStorage + truncates conversation ✓
+- chat-tab.tsx: GitBranch icon imported ✓
+
+Stage Summary:
+- Git history clean and in sync
+- 2 improvements implemented (folder stats, conversation branches)
+- All 4 real chat API tests pass
+- E2E test passes with no console errors
+- Chat now supports:
+  - Bookmark folder statistics (count per folder in stats panel)
+  - Conversation branches (save current + start fresh from any message)
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Branch restore** — Allow restoring a previously saved branch
+6. **Chat message scheduling** — Schedule messages to be sent at a later time
+7. **Chat conversation export/import** — Export full conversation as JSON and import back
