@@ -8487,3 +8487,81 @@ Next Round Improvement Suggestions:
 5. **Branch restore** — Allow restoring a previously saved branch
 6. **Chat message scheduling** — Schedule messages to be sent at a later time
 7. **Chat conversation export/import** — Export full conversation as JSON and import back
+
+---
+Task ID: bugfix-translatingId-not-defined
+Agent: main
+Task: Fix critical ReferenceError "translatingId is not defined" in MessageBubble. Run QA/E2E/real chat tests. Document, commit and push.
+
+Work Log:
+- Git history check:
+  - Branches: only main and remotes/origin/main (clean)
+  - Sync: local = origin/main = 865b517 (in sync)
+  - Working tree: clean
+
+- Bug Analysis:
+  - Error: "translatingId is not defined" at chat-tab.tsx:3735
+  - Root cause: `translatingId`, `handleTranslate`, and `messageSentiment` are defined
+    in the `ChatTab` component but used in the `MessageBubble` component, which is a
+    separate function component that doesn't have access to those variables.
+  - This was introduced when the Translate button (Round 17) and sentiment indicator
+    were added to MessageBubble without passing the required state/callbacks as props.
+
+- Fix:
+  - Updated MessageBubble props to accept: `translatingId`, `onTranslate`, `messageSentiment`
+  - Updated the MessageBubble call in ChatTab to pass these as props:
+    ```tsx
+    <MessageBubble
+      key={m.id}
+      message={m}
+      searchQuery={searchQuery}
+      translatingId={translatingId}
+      onTranslate={handleTranslate}
+      messageSentiment={messageSentiment}
+    />
+    ```
+  - Updated the Translate button onClick to use `onTranslate` instead of `handleTranslate`
+  - The `translatingId` and `messageSentiment` references in MessageBubble now work
+    because they're passed as props from ChatTab
+
+- Verification:
+  - Dev server starts successfully (HTTP 200)
+  - Page compiles and renders without errors (99KB screenshot)
+  - Console check: NO "translatingId is not defined" error
+  - All 4 tabs visible: Weekly/Evaluation/Literature/Analysis
+
+Real Chat API Tests:
+| Test | Status | Details |
+|------|--------|---------|
+| hello | ✅ PASS | model=glm-4.6, 0 commands |
+| Load 1CBS + hbonds | ✅ PASS | 2 commands: load_pdb + analyze_run |
+| 6LU7 complex | ✅ PASS | 5 commands: load_pdb + 3×analyze_run + focus_ligand |
+| Warmup | ✅ PASS | 5 routes in 3.7s |
+
+E2E Test Results:
+| Test | Status | Notes |
+|------|--------|-------|
+| Page loads (HTTP 200) | ✅ PASS | Dashboard renders (99KB screenshot) |
+| All tabs visible | ✅ PASS | Weekly/Evaluation/Literature/Analysis |
+| Console errors | ✅ NONE | No "translatingId not defined" error |
+
+Code Verification:
+- chat-tab.tsx: MessageBubble props updated with translatingId, onTranslate, messageSentiment ✓
+- chat-tab.tsx: MessageBubble call passes props from ChatTab ✓
+- chat-tab.tsx: Translate button uses onTranslate instead of handleTranslate ✓
+
+Stage Summary:
+- Critical bug FIXED: "translatingId is not defined" error resolved
+- Root cause: ChatTab-scoped variables used in MessageBubble without prop passing
+- Fix: Pass translatingId, onTranslate, messageSentiment as props from ChatTab to MessageBubble
+- All 4 real chat API tests pass
+- E2E test passes with no console errors
+
+Next Round Improvement Suggestions:
+1. **Inline analysis result visualization** — Display analysis result charts inline in chat messages
+2. **Provider comparison mode** — Send the same prompt to multiple providers and compare responses
+3. **Chat export as PDF** — Export the chat conversation as a formatted PDF document
+4. **Chat message threading** — Allow replying to a specific message to create threads
+5. **Branch restore** — Allow restoring a previously saved branch
+6. **Chat message scheduling** — Schedule messages to be sent at a later time
+7. **Chat conversation export/import** — Export full conversation as JSON and import back

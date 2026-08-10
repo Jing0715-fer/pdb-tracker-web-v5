@@ -2773,7 +2773,16 @@ export function ChatTab() {
             </button>
           </div>
         ) : (
-          filteredMessages.map((m) => <MessageBubble key={m.id} message={m} searchQuery={searchQuery} />)
+          filteredMessages.map((m) => (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              searchQuery={searchQuery}
+              translatingId={translatingId}
+              onTranslate={handleTranslate}
+              messageSentiment={messageSentiment}
+            />
+          ))
         )}
       </div>
 
@@ -3095,7 +3104,19 @@ function analyzeSentiment(text: string): "positive" | "neutral" | "negative" {
   return "neutral";
 }
 
-function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; searchQuery?: string }) {
+function MessageBubble({
+  message,
+  searchQuery = "",
+  translatingId,
+  onTranslate,
+  messageSentiment,
+}: {
+  message: ChatMessage;
+  searchQuery?: string;
+  translatingId: string | null;
+  onTranslate: (messageId: string, content: string) => void;
+  messageSentiment: Record<string, "positive" | "neutral" | "negative">;
+}) {
   const isUser = message.role === "user";
   const updateMessage = useAppStore((s) => s.updateChatMessage);
   const toast = useAppStore((s) => s.toast);
@@ -3797,7 +3818,7 @@ function MessageBubble({ message, searchQuery = "" }: { message: ChatMessage; se
             {!isUser && !message.pending && !message.needsConfirmation && !message.isError && message.content && (
               <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
-                  onClick={() => handleTranslate(message.id, message.content || "")}
+                  onClick={() => onTranslate(message.id, message.content || "")}
                   disabled={translatingId === message.id}
                   className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/50 hover:text-claude-accent transition-colors disabled:opacity-40"
                   title="Translate to English"
