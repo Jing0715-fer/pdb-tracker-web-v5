@@ -1321,6 +1321,8 @@ export function SettingsRunPanel({
   useEffect(() => { if (open) Promise.resolve().then(() => loadDbPath()); }, [open, loadDbPath]);
   const [evalGenerateReport, setEvalGenerateReport] = useState(true);
   const [evalSaveReportFile, setEvalSaveReportFile] = useState(true);
+  // Round 36: Toggle for structural analysis (binding pocket, interactions, druggability, virtual screening)
+  const [evalSkipStructureAnalysis, setEvalSkipStructureAnalysis] = useState(false);
 
   // ③ Weekly report state
   const [weeklyWindow, setWeeklyWindow] = useState<{ weekId: string; reportDate: string; startDate: string; endDate: string } | null>(null);
@@ -1605,6 +1607,7 @@ export function SettingsRunPanel({
           maxLitCount: evalMaxLitCount,
           generateReport: evalGenerateReport,
           saveReportFile: evalSaveReportFile,
+          skipStructureAnalysis: evalSkipStructureAnalysis,
           llm: llmBody(),
         });
       } else {
@@ -1621,6 +1624,7 @@ export function SettingsRunPanel({
           maxLitCount: evalMaxLitCount,
           generateReport: evalGenerateReport,
           saveReportFile: evalSaveReportFile,
+          skipStructureAnalysis: evalSkipStructureAnalysis,
           llm: llmBody(),
         });
       }
@@ -1659,6 +1663,7 @@ export function SettingsRunPanel({
       isBatch,
       generateReport: evalGenerateReport,
       saveReportFile: evalSaveReportFile,
+      skipStructureAnalysis: evalSkipStructureAnalysis,
       llm: llmBody(),
     });
   };
@@ -2403,6 +2408,10 @@ export function SettingsRunPanel({
                   <label className={`flex items-center gap-2 text-xs cursor-pointer ${evalGenerateReport ? 'text-muted-foreground' : 'text-muted-foreground/40 pointer-events-none'}`}>
                     <Switch checked={evalSaveReportFile} onCheckedChange={setEvalSaveReportFile} disabled={!evalGenerateReport} className="scale-90" />
                     {locale === 'zh' ? '保存为 LLM-Wiki 文件' : 'Save to LLM-Wiki file'}
+                  </label>
+                  <label className={`flex items-center gap-2 text-xs cursor-pointer ${evalGenerateReport ? 'text-muted-foreground' : 'text-muted-foreground/40 pointer-events-none'}`} title={locale === 'zh' ? '跳过结构分析（结合口袋、互作、可药性、虚拟筛选）以加快报告生成' : 'Skip structural analysis (binding pocket, interactions, druggability, virtual screening) for faster report generation'}>
+                    <Switch checked={evalSkipStructureAnalysis} onCheckedChange={setEvalSkipStructureAnalysis} disabled={!evalGenerateReport} className="scale-90" />
+                    {locale === 'zh' ? '跳过结构分析' : 'Skip structure analysis'}
                   </label>
                 </div>
                 <RunHistoryPanel moduleKey="eval" refreshKey={evalRunCount} limit={5} />

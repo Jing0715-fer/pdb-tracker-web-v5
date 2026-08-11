@@ -269,6 +269,8 @@ export async function POST(req: Request) {
   const maxLitCount = Math.max(0, Math.min(200, Number(body.maxLitCount ?? 20)));
   const generateReport = body.generateReport !== false;
   const saveReportFile = body.saveReportFile !== false;
+  // Round 36: Allow opting out of structural analysis for faster report generation
+  const skipStructureAnalysis = !!body.skipStructureAnalysis;
   const isBatch = !!body.isBatch && targets.length > 1;
   // Default to hermes CLI (no z-ai — this app must run without z-ai-web-dev-sdk).
   const provider = body.llm?.provider || 'cli:hermes';
@@ -1045,14 +1047,17 @@ ${overlapSummary}${crossLitBlock}
           emit({ stage: 'llm-report', level: 'info', message: `已附加 ${litInfo.count} 篇 PubMed 文献（按 IF 降序）到 LLM 上下文`, progress: 65 });
         }
 
-        // ── Round 34/35: Run structural analysis on the top PDB for the report ──
+        // ── Round 34/35/36: Run structural analysis on the top PDB for the report ──
         // Use the Analysis module's recipes (binding_pocket, all_interactions,
-        // hbonds, druggability) to generate structural insights that enrich
-        // the LLM report.
+        // hbonds, druggability, virtual_screening) to generate structural insights
+        // that enrich the LLM report.
         // Round 35: Now uses automatic chain detection and ligand detection
         // instead of hardcoded A/B chains.
+        // Round 36: Added virtual_screening recipe + skipStructureAnalysis toggle.
         let structureAnalyses: StructureAnalysisData | undefined;
-        try {
+        if (skipStructureAnalysis) {
+          emit({ stage: 'llm-report', level: 'info', message: `跳过结构分析（用户选择 skipStructureAnalysis）`, progress: 65 });
+        } else try {
           // Pick the top PDB (highest resolution X-ray structure, or first available)
           const topPdb = pdbDetails
             .filter(e => (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON'))
@@ -1082,6 +1087,8 @@ ${overlapSummary}${crossLitBlock}
               recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
               // Round 35: Also run the druggability recipe
               recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId, radius: 5.0 } });
+              // Round 36: Also run the virtual_screening recipe for fragment hit ranking
+              recipesToRun.push({ recipeId: 'virtual_screening', params: { ligandCompId, radius: 5.0, fragment_set: 'druglike' } });
             }
 
             const results = await runMultipleAnalyses(topPdb.pdbId, recipesToRun);
@@ -1185,7 +1192,29 @@ ${overlapSummary}${crossLitBlock}
               };
             }
 
-            emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${structureAnalyses.bindingPocket ? `口袋 ${structureAnalyses.bindingPocket.residueCount} 残基` : ''} ${structureAnalyses.allInteractions ? `互作 ${structureAnalyses.allInteractions.total} 个` : ''} ${structureAnalyses.hbonds ? `氢键 ${structureAnalyses.hbonds.total} 个` : ''} ${structureAnalyses.druggability ? `可药性 ${structureAnalyses.druggability.score}/10` : ''}`, progress: 65 });
+            // Round 36: Parse virtual_screening result
+            const vsRaw = results['virtual_screening'] as any;
+            if (vsRaw && vsRaw.data) {
+              const vs = vsRaw.data;
+              const hits = vs.ranked_hits || [];
+              structureAnalyses.virtualScreening = {
+                pocketScore: vs.pocket_score || 0,
+                fragmentsScreened: vs.num_fragments_screened || 0,
+                topHits: hits.slice(0, 5).map((h: any) => ({
+                  name: h.name || '?',
+                  smiles: h.smiles || '',
+                  mw: h.mw || 0,
+                  logp: h.logp || 0,
+                  affinityKcalMol: h.affinity_kcal_mol || 0,
+                  ki_uM: h.ki_uM || 0,
+                  score: h.score || 0,
+                  rationale: h.rationale || '',
+                })),
+                bestKi_uM: vs.best_ki_uM || 0,
+              };
+            }
+
+            emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${structureAnalyses.bindingPocket ? `口袋 ${structureAnalyses.bindingPocket.residueCount} 残基` : ''} ${structureAnalyses.allInteractions ? `互作 ${structureAnalyses.allInteractions.total} 个` : ''} ${structureAnalyses.hbonds ? `氢键 ${structureAnalyses.hbonds.total} 个` : ''} ${structureAnalyses.druggability ? `可药性 ${structureAnalyses.druggability.score}/10` : ''} ${structureAnalyses.virtualScreening ? `虚拟筛选 ${structureAnalyses.virtualScreening.topHits.length} 命中` : ''}`, progress: 65 });
           }
         } catch (err) {
           // Structural analysis is optional — don't fail the report if it errors
@@ -1736,6 +1765,94 @@ ${overlapSummary}${crossLitBlock}
                 const bLiteratureInfo = bLitInfo.count > 0
                   ? `共 ${bLitInfo.count} 篇相关文献（按期刊影响因子降序，已截取前 ${bLitInfo.count} 篇；摘要截取 200 字）：\n\n${bLitInfo.text}`
                   : '（无 PubMed 文献数据 — PubMedArticle 表为空或这些 PDB 结构无对应文献）';
+
+                // Round 36: Run structural analysis for batch targets too
+                let bStructureAnalyses: StructureAnalysisData | undefined;
+                if (!skipStructureAnalysis) {
+                  try {
+                    const bTopPdb = bPdbDetails
+                      .filter(e => (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON'))
+                      .sort((a, b) => (a.resolution || 99) - (b.resolution || 99))[0]
+                      || bPdbDetails[0];
+                    if (bTopPdb) {
+                      emit({ stage: `batch-${bi}-llm`, level: 'info', message: `[Target ${bi + 1}] 对重点结构 ${bTopPdb.pdbId} 运行结构分析…`, progress: 52 });
+                      const { chain1: bc1, chain2: bc2 } = await pickAnalysisChains(bTopPdb.pdbId);
+                      let bLigand = await detectPrimaryLigand(bTopPdb.pdbId);
+                      if (!bLigand) {
+                        const bLigStr = typeof bTopPdb.ligands === 'string' ? bTopPdb.ligands : '';
+                        bLigand = bLigStr.split(/[;,\s]+/).filter(Boolean)[0];
+                      }
+                      const bRecipes: Array<{ recipeId: string; params?: Record<string, unknown> }> = [
+                        { recipeId: 'all_interactions', params: { chain1: bc1, chain2: bc2 } },
+                        { recipeId: 'hbonds', params: { chain1: bc1, chain2: bc1 } },
+                      ];
+                      if (bLigand) {
+                        bRecipes.push({ recipeId: 'binding_pocket', params: { ligandCompId: bLigand, radius: 5.0 } });
+                        bRecipes.push({ recipeId: 'druggability', params: { ligandCompId: bLigand, radius: 5.0 } });
+                      }
+                      const bResults = await runMultipleAnalyses(bTopPdb.pdbId, bRecipes);
+                      bStructureAnalyses = { pdbId: bTopPdb.pdbId };
+                      const bpR = bResults['binding_pocket'] as any;
+                      if (bpR?.data) {
+                        const bp = bpR.data; const residues = bp.residues || [];
+                        bStructureAnalyses.bindingPocket = {
+                          ligand: bp.ligand || bLigand || 'unknown',
+                          radius: bp.radius_A || bp.radius || 5.0,
+                          residueCount: bp.pocket_residue_count || residues.length,
+                          volume: bp.estimated_volume_A3 || bp.estimated_volume || '?',
+                          composition: bp.composition || {},
+                          topResidues: residues.slice(0, 15).map((r: any) => `${r.resname || '?'}${r.resno || r.residue_number || '?'}(${r.chain || r.chain_id || '?'})`),
+                          catalyticResidues: residues.filter((r: any) => [41, 145].includes(Number(r.resno || r.residue_number || 0))).map((r: any) => `${r.resname || '?'}${r.resno || r.residue_number || '?'}`),
+                        };
+                      }
+                      const aiR = bResults['all_interactions'] as any;
+                      if (aiR?.data) {
+                        const ai = aiR.data; const interactions = ai.interactions || [];
+                        const rc: Record<string, number> = {};
+                        for (const c of interactions) {
+                          const r1 = `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'})`;
+                          const r2 = `${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`;
+                          rc[r1] = (rc[r1] || 0) + 1; rc[r2] = (rc[r2] || 0) + 1;
+                        }
+                        bStructureAnalyses.allInteractions = {
+                          chain1: ai.chain1 || bc1, chain2: ai.chain2 || bc2,
+                          total: ai.total || 0, hbonds: ai.hbonds || 0,
+                          saltBridges: ai.salt_bridges || 0, hydrophobic: ai.hydrophobic || 0,
+                          topContacts: interactions.slice(0, 10).map((c: any) => ({
+                            pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ↔ ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`,
+                            distance: c.distance_A || 0, type: c.type || 'unknown',
+                          })),
+                          hotspots: Object.entries(rc).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([residue, contacts]) => ({ residue, contacts })),
+                        };
+                      }
+                      const hbR = bResults['hbonds'] as any;
+                      if (hbR?.data) {
+                        const hb = hbR.data; const bonds = hb.hbonds || hb.bonds || [];
+                        bStructureAnalyses.hbonds = {
+                          total: hb.total_hbonds || hb.count || bonds.length,
+                          topPairs: bonds.slice(0, 10).map((c: any) => ({
+                            pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ${c.atom1 || ''} → ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'}) ${c.atom2 || ''}`,
+                            distance: c.distance_A || 0,
+                          })),
+                        };
+                      }
+                      const dgR = bResults['druggability'] as any;
+                      if (dgR?.data) {
+                        const drug = dgR.data; const ds = drug.druggability_score || 0;
+                        const cls = drug.classification || 'unknown';
+                        const catMap: Record<string, string> = { 'highly_druggable': '高', 'druggable': '中', 'moderately_druggable': '中低', 'difficult': '低' };
+                        bStructureAnalyses.druggability = {
+                          score: Math.round(ds / 10), category: catMap[cls] || cls,
+                          rationale: `口袋体积 ${drug.pocket_volume_A3 || '?'} Å³; 疏水 ${drug.hydrophobic_pct || 0}% / 极性 ${drug.polar_pct || 0}% / 电荷 ${drug.charged_pct || 0}%; 分类: ${cls}`,
+                        };
+                      }
+                      emit({ stage: `batch-${bi}-llm`, level: 'success', message: `[Target ${bi + 1}] 结构分析完成: ${bStructureAnalyses.bindingPocket ? `口袋 ${bStructureAnalyses.bindingPocket.residueCount} 残基` : ''} ${bStructureAnalyses.allInteractions ? `互作 ${bStructureAnalyses.allInteractions.total} 个` : ''}`, progress: 54 });
+                    }
+                  } catch (err) {
+                    emit({ stage: `batch-${bi}-llm`, level: 'warn', message: `[Target ${bi + 1}] 结构分析跳过: ${err instanceof Error ? err.message.slice(0, 60) : String(err).slice(0, 60)}`, progress: 54 });
+                  }
+                }
+
                 const bReportData = {
                   uniprot: bUid,
                   entryName: bInfo.entryName,
@@ -1753,11 +1870,12 @@ ${overlapSummary}${crossLitBlock}
                   blastTable: bBlastTable,
                   literatureInfo: bLiteratureInfo,
                   literatureCount: bLitInfo.count,
+                  structureAnalyses: bStructureAnalyses, // Round 36: batch structural analysis
                 };
-                const chapters: ReportChapterKey[] = [
-                  'summary', 'function', 'topology', 'pdb_analysis',
-                  'feasibility', 'experimental', 'references', 'conclusion',
-                ];
+                // Round 36: Include structure_analysis chapter for batch targets when data exists
+                const chapters: ReportChapterKey[] = bStructureAnalyses
+                  ? ['summary', 'function', 'topology', 'pdb_analysis', 'structure_analysis', 'feasibility', 'experimental', 'references', 'conclusion']
+                  : ['summary', 'function', 'topology', 'pdb_analysis', 'feasibility', 'experimental', 'references', 'conclusion'];
                 const chapterContents: Record<string, string> = {};
                 let perChapterOkCount = 0;
                 let perChapterFailCount = 0;

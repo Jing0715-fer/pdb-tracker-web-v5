@@ -72,6 +72,22 @@ export interface StructureAnalysisData {
     category: string;
     rationale: string;
   };
+  /** Round 36: Virtual screening results — ranked fragment hits. */
+  virtualScreening?: {
+    pocketScore: number;
+    fragmentsScreened: number;
+    topHits: Array<{
+      name: string;
+      smiles: string;
+      mw: number;
+      logp: number;
+      affinityKcalMol: number;
+      ki_uM: number;
+      score: number;
+      rationale: string;
+    }>;
+    bestKi_uM: number;
+  };
 }
 
 export function buildReportSystemPrompt(): string {
@@ -474,6 +490,16 @@ ${sa.hbonds.topPairs.map(p => `  - ${p.pair} (${p.distance} Å)`).join('\n')}
 - 评分: ${sa.druggability.score}/10
 - 分类: ${sa.druggability.category}
 - 依据: ${sa.druggability.rationale}
+
+`;
+        }
+        if (sa.virtualScreening) {
+          const vs = sa.virtualScreening;
+          analysisContext += `### 虚拟筛选结果（${vs.fragmentsScreened} 个片段筛选）
+- 口袋评分: ${vs.pocketScore}
+- 最佳 Ki: ${vs.bestKi_uM} μM
+- Top 5 命中片段:
+${vs.topHits.map((h, i) => `  ${i + 1}. ${h.name} (MW ${h.mw}, logP ${h.logp}) — Ki ${h.ki_uM} μM, 亲和力 ${h.affinityKcalMol} kcal/mol — ${h.rationale}`).join('\n')}
 
 `;
         }
