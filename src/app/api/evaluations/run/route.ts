@@ -1084,14 +1084,37 @@ ${overlapSummary}${crossLitBlock}
               const { chain1, chain2 } = await pickAnalysisChains(topPdb.pdbId);
               emit({ stage: 'llm-report', level: 'info', message: `检测到链: ${chain1}${chain1 !== chain2 ? ', ' + chain2 : ' (单链，链内分析)'}`, progress: 64 });
 
-              // Round 35: Auto-detect the primary ligand by parsing the PDB file
+              // Round 35/41: Auto-detect the primary ligand by parsing the PDB file.
+              // Round 41: If PDB parsing finds no valid ligand (or only ions), fall back
+              // to the RCSB API ligand list with ion filtering applied.
               let ligandCompId = await detectPrimaryLigand(topPdb.pdbId);
               if (!ligandCompId) {
+                // Round 41: Fall back to RCSB ligand list, but filter out ions
                 const ligandStr = typeof topPdb.ligands === 'string' ? topPdb.ligands : '';
-                ligandCompId = ligandStr.split(/[;,\s]+/).filter(Boolean)[0];
+                const rcsbLigands = ligandStr.split(/[;,\s]+/).filter(Boolean);
+                // Ion blocklist (same as recipe-runner.ts ION_BLOCKLIST)
+                const ION_BLOCKLIST = new Set([
+                  "SO4", "PO4", "SEP", "TPO", "PTR", "CSO",
+                  "MG", "ZN", "CA", "FE", "CU", "MN", "NI", "CO", "CD", "HG", "PB",
+                  "NA", "CL", "K", "LI", "RB", "CS", "BA", "SR", "BR", "I", "F",
+                  "GOL", "PEG", "EDO", "DMS", "ACT", "FMT", "CIT", "MAL", "FUM", "SUC",
+                  "MES", "TRS", "HEPES", "PIPES", "MOPS", "EPE",
+                  "DOD", "EOH", "MBO", "MRD", "PG4", "PGE",
+                  "ACY", "AZI", "BH3", "BEN", "BME", "BOG",
+                  "C2E", "CAC", "CHX", "DAH", "DIO", "DPG", "DTT",
+                  "LDA", "LMT", "LMG", "OLC", "OLE", "PCW", "PEU", "PLM", "PGV",
+                  "MSE",
+                ]);
+                // Find the first non-ion ligand from RCSB
+                ligandCompId = rcsbLigands.find(l => !ION_BLOCKLIST.has(l.toUpperCase())) || null;
+                if (ligandCompId) {
+                  emit({ stage: 'llm-report', level: 'info', message: `配体来自 RCSB 元数据: ${ligandCompId}`, progress: 64 });
+                }
               }
               if (ligandCompId) {
                 emit({ stage: 'llm-report', level: 'info', message: `检测到配体: ${ligandCompId}`, progress: 64 });
+              } else {
+                emit({ stage: 'llm-report', level: 'warn', message: `未检测到有效配体（所有 HETATM 均为离子/缓冲液）`, progress: 64 });
               }
 
               // Round 40: For single-chain structures (chain1===chain2), skip
@@ -1239,6 +1262,38 @@ ${overlapSummary}${crossLitBlock}
                 structureAnalyses = sa;
                 analysisSucceeded = true;
                 emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${sa.bindingPocket ? `口袋 ${sa.bindingPocket.residueCount} 残基` : ''} ${sa.allInteractions ? `互作 ${sa.allInteractions.total} 个` : ''} ${sa.hbonds ? `氢键 ${sa.hbonds.total} 个` : ''} ${sa.druggability ? `可药性 ${sa.druggability.score}/10` : ''} ${sa.virtualScreening ? `虚拟筛选 ${sa.virtualScreening.topHits.length} 命中` : ''}`, progress: 65 });
+                // Round 41: Emit a structured analysis summary event for UI display
+                emit({
+                  stage: 'structure-analysis-summary',
+                  level: 'success',
+                  message: '结构分析摘要',
+                  progress: 65,
+                  analysisSummary: {
+                    pdbId: sa.pdbId,
+                    bindingPocket: sa.bindingPocket ? {
+                      ligand: sa.bindingPocket.ligand,
+                      residueCount: sa.bindingPocket.residueCount,
+                      volume: sa.bindingPocket.volume,
+                    } : null,
+                    allInteractions: sa.allInteractions ? {
+                      chains: `${sa.allInteractions.chain1}↔${sa.allInteractions.chain2}`,
+                      total: sa.allInteractions.total,
+                      hbonds: sa.allInteractions.hbonds,
+                      saltBridges: sa.allInteractions.saltBridges,
+                      hydrophobic: sa.allInteractions.hydrophobic,
+                    } : null,
+                    hbonds: sa.hbonds ? { total: sa.hbonds.total } : null,
+                    druggability: sa.druggability ? {
+                      score: sa.druggability.score,
+                      category: sa.druggability.category,
+                    } : null,
+                    virtualScreening: sa.virtualScreening ? {
+                      fragmentsScreened: sa.virtualScreening.fragmentsScreened,
+                      topHit: sa.virtualScreening.topHits[0]?.name || null,
+                      bestKi_uM: sa.virtualScreening.bestKi_uM,
+                    } : null,
+                  },
+                });
               } else if (pdbIdx < candidatePdbs.length - 1) {
                 emit({ stage: 'llm-report', level: 'warn', message: `${topPdb.pdbId} 结构分析无有效结果，将尝试下一个 PDB…`, progress: 64 });
               } else {
