@@ -2179,13 +2179,14 @@ ${overlapSummary}${crossLitBlock}
 
 function labelOf(k: ReportChapterKey): string {
   return ({
-    summary:     '执行摘要',
-    function:    '蛋白功能与生物学背景',
-    topology:    '序列与拓扑结构',
-    pdb_analysis:'现有 PDB 结构分析',
-    feasibility: '结构解析可行性评估',
-    experimental:'实验方案',
-    references:  '重要参考文献',
-    conclusion:  '总结',
+    summary:           '执行摘要',
+    function:          '蛋白功能与生物学背景',
+    topology:          '序列与拓扑结构',
+    pdb_analysis:      '现有 PDB 结构分析',
+    structure_analysis:'结构活性位点分析',
+    feasibility:       '结构解析可行性评估',
+    experimental:      '实验方案',
+    references:        '重要参考文献',
+    conclusion:        '总结',
   } as Record<ReportChapterKey, string>)[k];
 }

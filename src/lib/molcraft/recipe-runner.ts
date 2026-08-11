@@ -25,6 +25,8 @@ const PDB_CACHE_DIR = join(TMP_DIR, "pdb");
 
 const PDB_URL = (id: string) =>
   `https://files.rcsb.org/download/${id.toUpperCase()}.pdb`;
+const CIF_URL = (id: string) =>
+  `https://files.rcsb.org/download/${id.toUpperCase()}.cif`;
 
 // ── In-memory result cache (Round 35) ────────────────────────────────────────
 // Key: `${pdbId}:${recipeId}:${JSON.stringify(params)}`
@@ -76,23 +78,68 @@ export async function detectChains(pdbId: string): Promise<ChainInfo[]> {
   const inputPath = await ensurePdbCached(pdbId);
   const content = await readFile(inputPath, "utf-8");
   const lines = content.split("\n");
+  const isCif = inputPath.endsWith(".cif");
 
   const chainMap = new Map<string, { atoms: number; residues: Set<string>; hasCA: boolean }>();
 
-  for (const line of lines) {
-    if (!line.startsWith("ATOM") && !line.startsWith("HETATM")) continue;
-    // PDB format: columns 1-6 = record name, 22 = chain ID (1-indexed)
-    // In JS string indexing (0-indexed), chain ID is at position 21
-    const chainId = line[21] || "?";
-    const entry = chainMap.get(chainId) || { atoms: 0, residues: new Set<string>(), hasCA: false };
-    entry.atoms++;
-    // Residue sequence number is at columns 23-26 (1-indexed) = positions 22-25
-    const resSeq = line.substring(22, 26).trim();
-    if (resSeq) entry.residues.add(resSeq);
-    // Check for CA atom (protein backbone) at columns 13-16
-    const atomName = line.substring(12, 16).trim();
-    if (atomName === "CA") entry.hasCA = true;
-    chainMap.set(chainId, entry);
+  if (isCif) {
+    // mmCIF format: parse atom_site loop
+    // Lines look like: ATOM 1 N MET A 1 11.104 6.223 -5.378 1.00 35.76 N N
+    // or: HETATM 1234 FE HEM A 1 11.104 6.223 -5.378 1.00 35.76 FE HEM
+    // The chain is typically the 5th column (auth_asym_id) in the atom_site loop
+    let inAtomSite = false;
+    let chainCol = -1;
+    let resSeqCol = -1;
+    let atomNameCol = -1;
+    let groupPdbCol = -1;
+    for (const line of lines) {
+      if (line.startsWith("_atom_site.")) {
+        if (line.includes("auth_asym_id")) chainCol = line.indexOf("auth_asym_id");
+        // We'll parse columns by splitting
+        continue;
+      }
+      if (line.startsWith("loop_")) {
+        inAtomSite = false;
+        continue;
+      }
+      // Detect start of atom_site loop
+      if (line.includes("_atom_site.group_PDB")) {
+        inAtomSite = true;
+        // Parse column headers
+        const headers = lines.slice(lines.indexOf(line)).filter(l => l.startsWith("_atom_site.")).map(l => l.trim());
+        chainCol = headers.findIndex(h => h.includes("auth_asym_id"));
+        resSeqCol = headers.findIndex(h => h.includes("auth_seq_id"));
+        atomNameCol = headers.findIndex(h => h.includes("label_atom_id"));
+        groupPdbCol = headers.findIndex(h => h.includes("group_PDB"));
+        continue;
+      }
+      if (inAtomSite && line.trim() && !line.startsWith("_") && !line.startsWith("#")) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length > Math.max(chainCol, resSeqCol, atomNameCol)) {
+          const chainId = cols[chainCol >= 0 ? chainCol : 1] || "?";
+          const entry = chainMap.get(chainId) || { atoms: 0, residues: new Set<string>(), hasCA: false };
+          entry.atoms++;
+          const resSeq = cols[resSeqCol >= 0 ? resSeqCol : 3];
+          if (resSeq) entry.residues.add(resSeq);
+          const atomName = cols[atomNameCol >= 0 ? atomNameCol : 2];
+          if (atomName === "CA") entry.hasCA = true;
+          chainMap.set(chainId, entry);
+        }
+      }
+    }
+  } else {
+    // PDB format
+    for (const line of lines) {
+      if (!line.startsWith("ATOM") && !line.startsWith("HETATM")) continue;
+      const chainId = line[21] || "?";
+      const entry = chainMap.get(chainId) || { atoms: 0, residues: new Set<string>(), hasCA: false };
+      entry.atoms++;
+      const resSeq = line.substring(22, 26).trim();
+      if (resSeq) entry.residues.add(resSeq);
+      const atomName = line.substring(12, 16).trim();
+      if (atomName === "CA") entry.hasCA = true;
+      chainMap.set(chainId, entry);
+    }
   }
 
   const chains: ChainInfo[] = [];
@@ -101,11 +148,10 @@ export async function detectChains(pdbId: string): Promise<ChainInfo[]> {
       chainId,
       atomCount: info.atoms,
       residueCount: info.residues.size,
-      isPolymer: info.hasCA, // chains with CA atoms are polymers (protein/nucleic acid)
+      isPolymer: info.hasCA,
     });
   }
 
-  // Sort by atom count descending (largest chains first)
   chains.sort((a, b) => b.atomCount - a.atomCount);
   return chains;
 }
@@ -152,6 +198,7 @@ export async function detectPrimaryLigand(pdbId: string): Promise<string | null>
     const inputPath = await ensurePdbCached(pdbId);
     const content = await readFile(inputPath, "utf-8");
     const lines = content.split("\n");
+    const isCif = inputPath.endsWith(".cif");
 
     // Priority list of biologically-relevant ligands (common cofactors/substrates)
     const PRIORITY_LIGANDS = new Set([
@@ -166,11 +213,36 @@ export async function detectPrimaryLigand(pdbId: string): Promise<string | null>
     const hetatmCounts = new Map<string, number>();
     const WATER_CODES = new Set(["HOH", "WAT", "DOD"]);
 
-    for (const line of lines) {
-      if (!line.startsWith("HETATM")) continue;
-      const compId = line.substring(17, 20).trim();
-      if (!compId || WATER_CODES.has(compId)) continue;
-      hetatmCounts.set(compId, (hetatmCounts.get(compId) || 0) + 1);
+    if (isCif) {
+      // mmCIF format: parse atom_site loop for HETATM records
+      let inAtomSite = false;
+      let compIdCol = -1;
+      let groupPdbCol = -1;
+      for (const line of lines) {
+        if (line.includes("_atom_site.group_PDB")) {
+          inAtomSite = true;
+          const headers = lines.slice(lines.indexOf(line)).filter(l => l.startsWith("_atom_site.")).map(l => l.trim());
+          compIdCol = headers.findIndex(h => h.includes("auth_comp_id"));
+          groupPdbCol = headers.findIndex(h => h.includes("group_PDB"));
+          continue;
+        }
+        if (inAtomSite && line.trim() && !line.startsWith("_") && !line.startsWith("#")) {
+          const cols = line.trim().split(/\s+/);
+          const group = groupPdbCol >= 0 ? cols[groupPdbCol] : cols[0];
+          if (group !== "HETATM") continue;
+          const compId = compIdCol >= 0 ? cols[compIdCol] : cols[3];
+          if (!compId || WATER_CODES.has(compId)) continue;
+          hetatmCounts.set(compId, (hetatmCounts.get(compId) || 0) + 1);
+        }
+      }
+    } else {
+      // PDB format
+      for (const line of lines) {
+        if (!line.startsWith("HETATM")) continue;
+        const compId = line.substring(17, 20).trim();
+        if (!compId || WATER_CODES.has(compId)) continue;
+        hetatmCounts.set(compId, (hetatmCounts.get(compId) || 0) + 1);
+      }
     }
 
     // First check for priority ligands
@@ -196,24 +268,55 @@ export async function detectPrimaryLigand(pdbId: string): Promise<string | null>
 /**
  * Ensure a PDB file is downloaded to the cache. Returns the local file path.
  * If the file is already cached, returns immediately.
+ * Round 38: Falls back to mmCIF format if PDB format returns 404 (some newer
+ * structures are only available as mmCIF).
  */
 async function ensurePdbCached(pdbId: string): Promise<string> {
   const id = pdbId.toLowerCase();
-  const path = join(PDB_CACHE_DIR, `pdb${id}.ent`);
+  const pdbPath = join(PDB_CACHE_DIR, `pdb${id}.ent`);
+  const cifPath = join(PDB_CACHE_DIR, `${id}.cif`);
   try {
-    await access(path);
-    return path; // already cached
+    await access(pdbPath);
+    return pdbPath; // PDB already cached
   } catch {
-    // not cached — download it
+    // PDB not cached — try downloading
+  }
+  // Also check if CIF is cached (from a previous fallback)
+  try {
+    await access(cifPath);
+    return cifPath;
+  } catch {
+    // CIF not cached either
   }
   await mkdir(PDB_CACHE_DIR, { recursive: true });
-  const res = await fetch(PDB_URL(id));
-  if (!res.ok) {
-    throw new Error(`Failed to download PDB ${pdbId}: HTTP ${res.status}`);
+
+  // Try PDB format first
+  try {
+    const res = await fetch(PDB_URL(id));
+    if (res.ok) {
+      const content = await res.text();
+      // Verify it's actually PDB format (starts with ATOM/HETATM/HEADER)
+      if (content.length > 100 && /^(ATOM|HETATM|HEADER|REMARK)/m.test(content)) {
+        await writeFile(pdbPath, content, "utf-8");
+        return pdbPath;
+      }
+    }
+  } catch {
+    // PDB download failed — try CIF
   }
-  const content = await res.text();
-  await writeFile(path, content, "utf-8");
-  return path;
+
+  // Fall back to mmCIF format
+  // Note: Biopython can parse mmCIF, but the recipe scripts use PDBParser.
+  // We download the CIF but recipes may fail — this is a best-effort approach.
+  // The /api/analyze/run route has its own download logic that handles this
+  // more robustly with format conversion.
+  const res = await fetch(CIF_URL(id));
+  if (res.ok) {
+    const content = await res.text();
+    await writeFile(cifPath, content, "utf-8");
+    return cifPath;
+  }
+  throw new Error(`Failed to download PDB ${pdbId}: HTTP ${res.status} (tried both .pdb and .cif)`);
 }
 
 /**
