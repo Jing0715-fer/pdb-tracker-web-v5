@@ -1058,166 +1058,193 @@ ${overlapSummary}${crossLitBlock}
         if (skipStructureAnalysis) {
           emit({ stage: 'llm-report', level: 'info', message: `跳过结构分析（用户选择 skipStructureAnalysis）`, progress: 65 });
         } else try {
-          // Pick the top PDB (highest resolution X-ray structure, or first available)
-          const topPdb = pdbDetails
+          // Round 38/39: Try multiple PDBs until we get non-empty structural analysis.
+          // Sort by resolution (best first), try up to 3 PDBs.
+          const candidatePdbs = pdbDetails
             .filter(e => (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON'))
-            .sort((a, b) => (a.resolution || 99) - (b.resolution || 99))[0]
-            || pdbDetails[0];
+            .sort((a, b) => (a.resolution || 99) - (b.resolution || 99))
+            .slice(0, 3);
+          if (candidatePdbs.length === 0 && pdbDetails.length > 0) {
+            candidatePdbs.push(pdbDetails[0]);
+          }
 
-          if (topPdb) {
-            emit({ stage: 'llm-report', level: 'info', message: `正在对重点结构 ${topPdb.pdbId} 运行结构分析（结合口袋、互作、氢键、可药性）…`, progress: 64 });
+          let analysisSucceeded = false;
+          for (let pdbIdx = 0; pdbIdx < candidatePdbs.length && !analysisSucceeded; pdbIdx++) {
+            const topPdb = candidatePdbs[pdbIdx];
+            if (!topPdb) continue;
 
-            // Round 35: Auto-detect chain IDs by parsing the PDB file
-            const { chain1, chain2 } = await pickAnalysisChains(topPdb.pdbId);
-            emit({ stage: 'llm-report', level: 'info', message: `检测到链: ${chain1}${chain1 !== chain2 ? ', ' + chain2 : ' (单链，链内分析)'}`, progress: 64 });
-
-            // Round 35: Auto-detect the primary ligand by parsing the PDB file
-            // Falls back to the ligand string from RCSB if detection fails
-            let ligandCompId = await detectPrimaryLigand(topPdb.pdbId);
-            if (!ligandCompId) {
-              const ligandStr = typeof topPdb.ligands === 'string' ? topPdb.ligands : '';
-              ligandCompId = ligandStr.split(/[;,\s]+/).filter(Boolean)[0];
+            if (pdbIdx > 0) {
+              emit({ stage: 'llm-report', level: 'info', message: `上一个 PDB 结构分析无有效结果，尝试第 ${pdbIdx + 1} 个结构: ${topPdb.pdbId}…`, progress: 64 });
+            } else {
+              emit({ stage: 'llm-report', level: 'info', message: `正在对重点结构 ${topPdb.pdbId} 运行结构分析（结合口袋、互作、氢键、可药性、虚拟筛选）…`, progress: 64 });
             }
 
-            const recipesToRun: Array<{ recipeId: string; params?: Record<string, unknown> }> = [
-              { recipeId: 'all_interactions', params: { chain1, chain2 } },
-              { recipeId: 'hbonds', params: { chain1, chain2: chain1 } },
-            ];
-            if (ligandCompId) {
-              recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
-              // Round 35: Also run the druggability recipe
-              recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId, radius: 5.0 } });
-              // Round 36: Also run the virtual_screening recipe for fragment hit ranking
-              recipesToRun.push({ recipeId: 'virtual_screening', params: { ligandCompId, radius: 5.0, fragment_set: 'druglike' } });
-            }
+            try {
+              // Round 35: Auto-detect chain IDs by parsing the PDB file
+              const { chain1, chain2 } = await pickAnalysisChains(topPdb.pdbId);
+              emit({ stage: 'llm-report', level: 'info', message: `检测到链: ${chain1}${chain1 !== chain2 ? ', ' + chain2 : ' (单链，链内分析)'}`, progress: 64 });
 
-            const { results, cacheHits, cacheMisses } = await runMultipleAnalysesWithCacheInfo(topPdb.pdbId, recipesToRun);
-            if (cacheHits > 0) {
-              emit({ stage: 'llm-report', level: 'info', message: `结构分析: ${cacheHits} 个结果来自缓存, ${cacheMisses} 个新计算`, progress: 64 });
-            }
-
-            // Build the StructureAnalysisData object
-            structureAnalyses = {
-              pdbId: topPdb.pdbId,
-            };
-
-            // Parse binding_pocket result
-            const bpRaw = results['binding_pocket'] as any;
-            if (bpRaw && bpRaw.data) {
-              const bp = bpRaw.data;
-              const residues = bp.residues || [];
-              structureAnalyses.bindingPocket = {
-                ligand: bp.ligand || ligandCompId || 'unknown',
-                radius: bp.radius_A || bp.radius || 5.0,
-                residueCount: bp.pocket_residue_count || residues.length,
-                volume: bp.estimated_volume_A3 || bp.estimated_volume || '?',
-                composition: bp.composition || {},
-                topResidues: residues.slice(0, 15).map((r: any) =>
-                  `${r.resname || '?'}${r.resno || r.residue_number || '?'}(${r.chain || r.chain_id || '?'})`
-                ),
-                catalyticResidues: residues
-                  .filter((r: any) => [41, 145].includes(Number(r.resno || r.residue_number || 0)))
-                  .map((r: any) => `${r.resname || '?'}${r.resno || r.residue_number || '?'}`),
-              };
-            }
-
-            // Parse all_interactions result
-            const aiRaw = results['all_interactions'] as any;
-            if (aiRaw && aiRaw.data) {
-              const ai = aiRaw.data;
-              const interactions = ai.interactions || [];
-              const residueCounts: Record<string, number> = {};
-              for (const c of interactions) {
-                const r1 = `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'})`;
-                const r2 = `${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`;
-                residueCounts[r1] = (residueCounts[r1] || 0) + 1;
-                residueCounts[r2] = (residueCounts[r2] || 0) + 1;
+              // Round 35: Auto-detect the primary ligand by parsing the PDB file
+              let ligandCompId = await detectPrimaryLigand(topPdb.pdbId);
+              if (!ligandCompId) {
+                const ligandStr = typeof topPdb.ligands === 'string' ? topPdb.ligands : '';
+                ligandCompId = ligandStr.split(/[;,\s]+/).filter(Boolean)[0];
               }
-              structureAnalyses.allInteractions = {
-                chain1: ai.chain1 || chain1,
-                chain2: ai.chain2 || chain2,
-                total: ai.total || 0,
-                hbonds: ai.hbonds || 0,
-                saltBridges: ai.salt_bridges || 0,
-                hydrophobic: ai.hydrophobic || 0,
-                topContacts: interactions.slice(0, 10).map((c: any) => ({
-                  pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ↔ ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`,
-                  distance: c.distance_A || 0,
-                  type: c.type || 'unknown',
-                })),
-                hotspots: Object.entries(residueCounts)
-                  .filter(([, n]) => n >= 2)
-                  .sort((a, b) => b[1] - a[1])
-                  .slice(0, 10)
-                  .map(([residue, contacts]) => ({ residue, contacts })),
-              };
-            }
+              if (ligandCompId) {
+                emit({ stage: 'llm-report', level: 'info', message: `检测到配体: ${ligandCompId}`, progress: 64 });
+              }
 
-            // Parse hbonds result
-            const hbRaw = results['hbonds'] as any;
-            if (hbRaw && hbRaw.data) {
-              const hb = hbRaw.data;
-              const bonds = hb.hbonds || hb.bonds || [];
-              structureAnalyses.hbonds = {
-                total: hb.total_hbonds || hb.count || bonds.length,
-                topPairs: bonds.slice(0, 10).map((c: any) => ({
-                  pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ${c.atom1 || ''} → ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'}) ${c.atom2 || ''}`,
-                  distance: c.distance_A || 0,
-                })),
-              };
-            }
+              const recipesToRun: Array<{ recipeId: string; params?: Record<string, unknown> }> = [
+                { recipeId: 'all_interactions', params: { chain1, chain2 } },
+                { recipeId: 'hbonds', params: { chain1, chain2: chain1 } },
+              ];
+              if (ligandCompId) {
+                recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
+                recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId, radius: 5.0 } });
+                recipesToRun.push({ recipeId: 'virtual_screening', params: { ligandCompId, radius: 5.0, fragment_set: 'druglike' } });
+              }
 
-            // Round 35: Parse druggability result
-            const drugRaw = results['druggability'] as any;
-            if (drugRaw && drugRaw.data) {
-              const drug = drugRaw.data;
-              const drugScore = drug.druggability_score || 0;
-              const classification = drug.classification || 'unknown';
-              // Map Chinese category labels
-              const categoryMap: Record<string, string> = {
-                'highly_druggable': '高（高度可成药）',
-                'druggable': '中（可成药）',
-                'moderately_druggable': '中低（中度可成药）',
-                'difficult': '低（成药困难）',
-              };
-              const breakdown = drug.score_breakdown || {};
-              structureAnalyses.druggability = {
-                score: Math.round(drugScore / 10), // Normalize 0-100 to 0-10
-                category: categoryMap[classification] || classification,
-                rationale: [
-                  `口袋体积 ${drug.pocket_volume_A3 || '?'} Å³`,
-                  `疏水 ${drug.hydrophobic_pct || 0}% / 极性 ${drug.polar_pct || 0}% / 电荷 ${drug.charged_pct || 0}%`,
-                  `分类: ${classification}`,
-                  breakdown.volume ? `体积评分 ${breakdown.volume}` : '',
-                  breakdown.hydrophobicity ? `疏水性评分 ${breakdown.hydrophobicity}` : '',
-                  breakdown.polarity ? `极性评分 ${breakdown.polarity}` : '',
-                ].filter(Boolean).join('; '),
-              };
-            }
+              const { results, cacheHits, cacheMisses } = await runMultipleAnalysesWithCacheInfo(topPdb.pdbId, recipesToRun);
+              if (cacheHits > 0) {
+                emit({ stage: 'llm-report', level: 'info', message: `结构分析: ${cacheHits} 个结果来自缓存, ${cacheMisses} 个新计算`, progress: 64 });
+              }
 
-            // Round 36: Parse virtual_screening result
-            const vsRaw = results['virtual_screening'] as any;
-            if (vsRaw && vsRaw.data) {
-              const vs = vsRaw.data;
-              const hits = vs.ranked_hits || [];
-              structureAnalyses.virtualScreening = {
-                pocketScore: vs.pocket_score || 0,
-                fragmentsScreened: vs.num_fragments_screened || 0,
-                topHits: hits.slice(0, 5).map((h: any) => ({
-                  name: h.name || '?',
-                  smiles: h.smiles || '',
-                  mw: h.mw || 0,
-                  logp: h.logp || 0,
-                  affinityKcalMol: h.affinity_kcal_mol || 0,
-                  ki_uM: h.ki_uM || 0,
-                  score: h.score || 0,
-                  rationale: h.rationale || '',
-                })),
-                bestKi_uM: vs.best_ki_uM || 0,
-              };
-            }
+              // Build the StructureAnalysisData object
+              const sa: StructureAnalysisData = { pdbId: topPdb.pdbId };
 
-            emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${structureAnalyses.bindingPocket ? `口袋 ${structureAnalyses.bindingPocket.residueCount} 残基` : ''} ${structureAnalyses.allInteractions ? `互作 ${structureAnalyses.allInteractions.total} 个` : ''} ${structureAnalyses.hbonds ? `氢键 ${structureAnalyses.hbonds.total} 个` : ''} ${structureAnalyses.druggability ? `可药性 ${structureAnalyses.druggability.score}/10` : ''} ${structureAnalyses.virtualScreening ? `虚拟筛选 ${structureAnalyses.virtualScreening.topHits.length} 命中` : ''}`, progress: 65 });
+              // Parse binding_pocket result
+              const bpRaw = results['binding_pocket'] as any;
+              if (bpRaw && bpRaw.data) {
+                const bp = bpRaw.data;
+                const residues = bp.residues || [];
+                sa.bindingPocket = {
+                  ligand: bp.ligand || ligandCompId || 'unknown',
+                  radius: bp.radius_A || bp.radius || 5.0,
+                  residueCount: bp.pocket_residue_count || residues.length,
+                  volume: bp.estimated_volume_A3 || bp.estimated_volume || '?',
+                  composition: bp.composition || {},
+                  topResidues: residues.slice(0, 15).map((r: any) =>
+                    `${r.resname || '?'}${r.resno || r.residue_number || '?'}(${r.chain || r.chain_id || '?'})`
+                  ),
+                  catalyticResidues: residues
+                    .filter((r: any) => [41, 145].includes(Number(r.resno || r.residue_number || 0)))
+                    .map((r: any) => `${r.resname || '?'}${r.resno || r.residue_number || '?'}`),
+                };
+              }
+
+              // Parse all_interactions result
+              const aiRaw = results['all_interactions'] as any;
+              if (aiRaw && aiRaw.data) {
+                const ai = aiRaw.data;
+                const interactions = ai.interactions || [];
+                const residueCounts: Record<string, number> = {};
+                for (const c of interactions) {
+                  const r1 = `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'})`;
+                  const r2 = `${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`;
+                  residueCounts[r1] = (residueCounts[r1] || 0) + 1;
+                  residueCounts[r2] = (residueCounts[r2] || 0) + 1;
+                }
+                sa.allInteractions = {
+                  chain1: ai.chain1 || chain1,
+                  chain2: ai.chain2 || chain2,
+                  total: ai.total || 0,
+                  hbonds: ai.hbonds || 0,
+                  saltBridges: ai.salt_bridges || 0,
+                  hydrophobic: ai.hydrophobic || 0,
+                  topContacts: interactions.slice(0, 10).map((c: any) => ({
+                    pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ↔ ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`,
+                    distance: c.distance_A || 0,
+                    type: c.type || 'unknown',
+                  })),
+                  hotspots: Object.entries(residueCounts)
+                    .filter(([, n]) => n >= 2)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 10)
+                    .map(([residue, contacts]) => ({ residue, contacts })),
+                };
+              }
+
+              // Parse hbonds result
+              const hbRaw = results['hbonds'] as any;
+              if (hbRaw && hbRaw.data) {
+                const hb = hbRaw.data;
+                const bonds = hb.hbonds || hb.bonds || [];
+                sa.hbonds = {
+                  total: hb.total_hbonds || hb.count || bonds.length,
+                  topPairs: bonds.slice(0, 10).map((c: any) => ({
+                    pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ${c.atom1 || ''} → ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'}) ${c.atom2 || ''}`,
+                    distance: c.distance_A || 0,
+                  })),
+                };
+              }
+
+              // Parse druggability result
+              const drugRaw = results['druggability'] as any;
+              if (drugRaw && drugRaw.data) {
+                const drug = drugRaw.data;
+                const drugScore = drug.druggability_score || 0;
+                const classification = drug.classification || 'unknown';
+                const catMap: Record<string, string> = {
+                  'highly_druggable': '高（高度可成药）',
+                  'druggable': '中（可成药）',
+                  'moderately_druggable': '中低（中度可成药）',
+                  'difficult': '低（成药困难）',
+                };
+                const breakdown = drug.score_breakdown || {};
+                sa.druggability = {
+                  score: Math.round(drugScore / 10),
+                  category: catMap[classification] || classification,
+                  rationale: [
+                    `口袋体积 ${drug.pocket_volume_A3 || '?'} Å³`,
+                    `疏水 ${drug.hydrophobic_pct || 0}% / 极性 ${drug.polar_pct || 0}% / 电荷 ${drug.charged_pct || 0}%`,
+                    `分类: ${classification}`,
+                    breakdown.volume ? `体积评分 ${breakdown.volume}` : '',
+                    breakdown.hydrophobicity ? `疏水性评分 ${breakdown.hydrophobicity}` : '',
+                    breakdown.polarity ? `极性评分 ${breakdown.polarity}` : '',
+                  ].filter(Boolean).join('; '),
+                };
+              }
+
+              // Parse virtual_screening result
+              const vsRaw = results['virtual_screening'] as any;
+              if (vsRaw && vsRaw.data) {
+                const vs = vsRaw.data;
+                const hits = vs.ranked_hits || [];
+                sa.virtualScreening = {
+                  pocketScore: vs.pocket_score || 0,
+                  fragmentsScreened: vs.num_fragments_screened || 0,
+                  topHits: hits.slice(0, 5).map((h: any) => ({
+                    name: h.name || '?',
+                    smiles: h.smiles || '',
+                    mw: h.mw || 0,
+                    logp: h.logp || 0,
+                    affinityKcalMol: h.affinity_kcal_mol || 0,
+                    ki_uM: h.ki_uM || 0,
+                    score: h.score || 0,
+                    rationale: h.rationale || '',
+                  })),
+                  bestKi_uM: vs.best_ki_uM || 0,
+                };
+              }
+
+              // Check if we got any meaningful data
+              const hasData = sa.bindingPocket || sa.allInteractions || sa.hbonds || sa.druggability || sa.virtualScreening;
+              if (hasData) {
+                structureAnalyses = sa;
+                analysisSucceeded = true;
+                emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${sa.bindingPocket ? `口袋 ${sa.bindingPocket.residueCount} 残基` : ''} ${sa.allInteractions ? `互作 ${sa.allInteractions.total} 个` : ''} ${sa.hbonds ? `氢键 ${sa.hbonds.total} 个` : ''} ${sa.druggability ? `可药性 ${sa.druggability.score}/10` : ''} ${sa.virtualScreening ? `虚拟筛选 ${sa.virtualScreening.topHits.length} 命中` : ''}`, progress: 65 });
+              } else if (pdbIdx < candidatePdbs.length - 1) {
+                emit({ stage: 'llm-report', level: 'warn', message: `${topPdb.pdbId} 结构分析无有效结果，将尝试下一个 PDB…`, progress: 64 });
+              } else {
+                emit({ stage: 'llm-report', level: 'warn', message: `所有 ${candidatePdbs.length} 个 PDB 结构分析均无有效结果`, progress: 65 });
+              }
+            } catch (pdbErr) {
+              if (pdbIdx < candidatePdbs.length - 1) {
+                emit({ stage: 'llm-report', level: 'warn', message: `${topPdb.pdbId} 结构分析失败: ${pdbErr instanceof Error ? pdbErr.message.slice(0, 60) : String(pdbErr).slice(0, 60)}，将尝试下一个 PDB…`, progress: 64 });
+              } else {
+                throw pdbErr; // Re-throw on the last PDB to trigger the outer catch
+              }
+            }
           }
         } catch (err) {
           // Structural analysis is optional — don't fail the report if it errors
