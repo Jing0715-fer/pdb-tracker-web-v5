@@ -258,6 +258,8 @@ interface AppState {
   saveCurrentSession: () => void;
   /** Round 45: Toggle the pinned state of a chat session (pinned sessions sort to top). */
   toggleChatSessionPin: (id: string) => void;
+  /** Round 47: Set tags on a chat session for categorization. */
+  setChatSessionTags: (id: string, tags: string[]) => void;
 
   // Chart presets (save/load chart parameter combinations)
   chartPresets: ChartPreset[];
@@ -323,6 +325,8 @@ export interface ChatSession {
   provider?: string;
   /** Round 45: When true, the session is pinned to the top of the session list. */
   pinned?: boolean;
+  /** Round 47: User-defined tags for session categorization (e.g., "kinase", "hemoglobin"). */
+  tags?: string[];
 }
 
 export interface ChartPreset {
@@ -871,6 +875,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     persistChatSessions(sorted);
     set({ chatSessions: sorted });
+  },
+
+  // Round 47: Set tags on a chat session
+  setChatSessionTags: (id, tags) => {
+    const sessions = get().chatSessions.map((s) =>
+      s.id === id ? { ...s, tags, updatedAt: Date.now() } : s
+    );
+    persistChatSessions(sessions);
+    set({ chatSessions: sessions });
   },
 
   chartPresets: loadChartPresets(),

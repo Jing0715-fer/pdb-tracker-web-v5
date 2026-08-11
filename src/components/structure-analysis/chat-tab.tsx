@@ -222,6 +222,7 @@ export function ChatTab() {
   const deleteChatSession = useAppStore((s) => s.deleteChatSession);
   const renameChatSession = useAppStore((s) => s.renameChatSession);
   const toggleChatSessionPin = useAppStore((s) => s.toggleChatSessionPin);
+  const setChatSessionTags = useAppStore((s) => s.setChatSessionTags);
   const saveCurrentSession = useAppStore((s) => s.saveCurrentSession);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
@@ -2318,6 +2319,7 @@ export function ChatTab() {
                   if (!sessionSearch.trim()) return true;
                   const q = sessionSearch.toLowerCase();
                   return s.title.toLowerCase().includes(q) ||
+                    s.tags?.some(t => t.toLowerCase().includes(q)) ||
                     s.messages.some((m: any) => m.content?.toLowerCase().includes(q));
                 })
                 .map((s) => (
@@ -2343,6 +2345,19 @@ export function ChatTab() {
                     <div className="text-[7px] text-claude-text-muted/60">
                       {s.messages.length} msgs · {new Date(s.updatedAt).toLocaleDateString()} {new Date(s.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </div>
+                    {/* Round 47: Session tags */}
+                    {s.tags && s.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-0.5 mt-0.5">
+                        {s.tags.slice(0, 3).map((tag) => (
+                          <span key={tag} className="px-1 py-0 rounded text-[7px] bg-claude-accent-light/30 text-claude-accent font-medium">
+                            {tag}
+                          </span>
+                        ))}
+                        {s.tags.length > 3 && (
+                          <span className="text-[7px] text-claude-text-muted/50">+{s.tags.length - 3}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {/* Pin button */}
                   <button
@@ -2359,6 +2374,27 @@ export function ChatTab() {
                     title={s.pinned ? "Unpin session" : "Pin session to top"}
                   >
                     <Pin className={`h-2 w-2 ${s.pinned ? "fill-current" : ""}`} />
+                  </button>
+                  {/* Round 47: Tag button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const currentTags = s.tags?.join(", ") || "";
+                      const input = window.prompt("Edit tags (comma-separated):", currentTags);
+                      if (input !== null) {
+                        const newTags = input.split(",").map(t => t.trim()).filter(Boolean);
+                        setChatSessionTags(s.id, newTags);
+                        toast(newTags.length > 0 ? `Tags updated: ${newTags.join(", ")}` : "Tags cleared", "info");
+                      }
+                    }}
+                    className={`grid h-4 w-4 place-items-center rounded transition-opacity shrink-0 ${
+                      s.tags && s.tags.length > 0
+                        ? "text-claude-accent opacity-100"
+                        : "text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/40 opacity-0 group-hover/sess:opacity-100"
+                    }`}
+                    title="Edit tags"
+                  >
+                    <Tag className="h-2 w-2" />
                   </button>
                   {/* Rename button */}
                   <button

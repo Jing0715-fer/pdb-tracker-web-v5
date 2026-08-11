@@ -83,6 +83,7 @@ import {
   Clock,
   FilePlus2,
   FolderOpen,
+  Code,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DbSetupWizard, type DbStatus } from '@/components/db-setup-wizard';
@@ -845,6 +846,75 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
                 title={zh ? '导出为 CSV' : 'Export as CSV'}
               >
                 <FileText className="h-3 w-3" />
+              </button>
+              {/* Round 47: Markdown export */}
+              <button
+                onClick={() => {
+                  const lines: string[] = [];
+                  lines.push(`# 结构分析摘要 — PDB ${s.pdbId}`);
+                  lines.push('');
+                  lines.push(`> 生成时间: ${new Date().toLocaleString()}`);
+                  lines.push('');
+                  if (s.bindingPocket) {
+                    lines.push('## 结合口袋 (Binding Pocket)');
+                    lines.push('');
+                    lines.push('| 属性 | 值 |');
+                    lines.push('|------|------|');
+                    lines.push(`| 配体 | ${s.bindingPocket.ligand} |`);
+                    lines.push(`| 残基数 | ${s.bindingPocket.residueCount} |`);
+                    lines.push(`| 体积 (Å³) | ${s.bindingPocket.volume} |`);
+                    lines.push('');
+                  }
+                  if (s.allInteractions) {
+                    lines.push('## 链间互作 (Interactions)');
+                    lines.push('');
+                    lines.push('| 属性 | 值 |');
+                    lines.push('|------|------|');
+                    lines.push(`| 链 | ${s.allInteractions.chains} |`);
+                    lines.push(`| 总互作数 | ${s.allInteractions.total} |`);
+                    lines.push(`| 氢键 | ${s.allInteractions.hbonds} |`);
+                    lines.push(`| 盐桥 | ${s.allInteractions.saltBridges} |`);
+                    lines.push(`| 疏水接触 | ${s.allInteractions.hydrophobic} |`);
+                    lines.push('');
+                  }
+                  if (s.hbonds) {
+                    lines.push('## 链内氢键 (Intra-chain H-bonds)');
+                    lines.push('');
+                    lines.push(`- 总数: **${s.hbonds.total}**`);
+                    lines.push('');
+                  }
+                  if (s.druggability) {
+                    lines.push('## 可成药性 (Druggability)');
+                    lines.push('');
+                    lines.push('| 属性 | 值 |');
+                    lines.push('|------|------|');
+                    lines.push(`| 评分 | ${s.druggability.score}/10 |`);
+                    lines.push(`| 分类 | ${s.druggability.category} |`);
+                    lines.push('');
+                  }
+                  if (s.virtualScreening) {
+                    lines.push('## 虚拟筛选 (Virtual Screening)');
+                    lines.push('');
+                    lines.push('| 属性 | 值 |');
+                    lines.push('|------|------|');
+                    lines.push(`| 筛选片段数 | ${s.virtualScreening.fragmentsScreened} |`);
+                    lines.push(`| 最佳命中 | ${s.virtualScreening.topHit || '—'} |`);
+                    lines.push(`| 最佳 Ki (μM) | ${s.virtualScreening.bestKi_uM} |`);
+                    lines.push('');
+                  }
+                  const md = lines.join('\n');
+                  const blob = new Blob([md], { type: 'text/markdown' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `analysis-summary-${s.pdbId}-${Date.now()}.md`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="grid h-5 w-5 place-items-center rounded text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                title={zh ? '导出为 Markdown' : 'Export as Markdown'}
+              >
+                <Code className="h-3 w-3" />
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
