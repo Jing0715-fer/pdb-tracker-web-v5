@@ -785,6 +785,23 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
               <span className="text-[10px] text-muted-foreground ml-auto">
                 PDB: <span className="font-mono font-semibold">{s.pdbId}</span>
               </span>
+              {/* Round 45: Export buttons */}
+              <button
+                onClick={() => {
+                  const json = JSON.stringify(s, null, 2);
+                  const blob = new Blob([json], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `analysis-summary-${s.pdbId}-${Date.now()}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="grid h-5 w-5 place-items-center rounded text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                title={zh ? '导出为 JSON' : 'Export as JSON'}
+              >
+                <Download className="h-3 w-3" />
+              </button>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
               {s.bindingPocket && (

@@ -221,6 +221,7 @@ export function ChatTab() {
   const switchChatSession = useAppStore((s) => s.switchChatSession);
   const deleteChatSession = useAppStore((s) => s.deleteChatSession);
   const renameChatSession = useAppStore((s) => s.renameChatSession);
+  const toggleChatSessionPin = useAppStore((s) => s.toggleChatSessionPin);
   const saveCurrentSession = useAppStore((s) => s.saveCurrentSession);
   const [sessionOpen, setSessionOpen] = useState(false);
 
@@ -2304,12 +2305,31 @@ export function ChatTab() {
                   }}
                 >
                   <MessageSquare className="h-2.5 w-2.5 shrink-0 opacity-60" />
+                  {s.pinned && (
+                    <Pin className="h-2 w-2 shrink-0 text-claude-accent fill-claude-accent" />
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="truncate font-medium">{s.title}</div>
                     <div className="text-[7px] text-claude-text-muted/60">
                       {s.messages.length} msgs · {new Date(s.updatedAt).toLocaleDateString()} {new Date(s.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </div>
                   </div>
+                  {/* Pin button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleChatSessionPin(s.id);
+                      toast(s.pinned ? "Session unpinned" : "Session pinned to top", "info");
+                    }}
+                    className={`grid h-4 w-4 place-items-center rounded transition-opacity shrink-0 ${
+                      s.pinned
+                        ? "text-claude-accent opacity-100"
+                        : "text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/40 opacity-0 group-hover/sess:opacity-100"
+                    }`}
+                    title={s.pinned ? "Unpin session" : "Pin session to top"}
+                  >
+                    <Pin className={`h-2 w-2 ${s.pinned ? "fill-current" : ""}`} />
+                  </button>
                   {/* Rename button */}
                   <button
                     onClick={(e) => {
