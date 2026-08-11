@@ -785,7 +785,7 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
               <span className="text-[10px] text-muted-foreground ml-auto">
                 PDB: <span className="font-mono font-semibold">{s.pdbId}</span>
               </span>
-              {/* Round 45: Export buttons */}
+              {/* Round 45/46: Export buttons (JSON + CSV) */}
               <button
                 onClick={() => {
                   const json = JSON.stringify(s, null, 2);
@@ -801,6 +801,50 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
                 title={zh ? '导出为 JSON' : 'Export as JSON'}
               >
                 <Download className="h-3 w-3" />
+              </button>
+              {/* Round 46: CSV export */}
+              <button
+                onClick={() => {
+                  const rows: string[] = [];
+                  rows.push('Category,Metric,Value');
+                  if (s.bindingPocket) {
+                    rows.push(`Binding Pocket,Ligand,${s.bindingPocket.ligand}`);
+                    rows.push(`Binding Pocket,Residue Count,${s.bindingPocket.residueCount}`);
+                    rows.push(`Binding Pocket,Volume (Å³),${s.bindingPocket.volume}`);
+                  }
+                  if (s.allInteractions) {
+                    rows.push(`Interactions,Chains,${s.allInteractions.chains}`);
+                    rows.push(`Interactions,Total,${s.allInteractions.total}`);
+                    rows.push(`Interactions,H-bonds,${s.allInteractions.hbonds}`);
+                    rows.push(`Interactions,Salt Bridges,${s.allInteractions.saltBridges}`);
+                    rows.push(`Interactions,Hydrophobic,${s.allInteractions.hydrophobic}`);
+                  }
+                  if (s.hbonds) {
+                    rows.push(`Intra-chain H-bonds,Total,${s.hbonds.total}`);
+                  }
+                  if (s.druggability) {
+                    rows.push(`Druggability,Score,${s.druggability.score}/10`);
+                    rows.push(`Druggability,Category,${s.druggability.category}`);
+                  }
+                  if (s.virtualScreening) {
+                    rows.push(`Virtual Screening,Fragments Screened,${s.virtualScreening.fragmentsScreened}`);
+                    rows.push(`Virtual Screening,Top Hit,${s.virtualScreening.topHit || '—'}`);
+                    rows.push(`Virtual Screening,Best Ki (μM),${s.virtualScreening.bestKi_uM}`);
+                  }
+                  rows.push(`PDB,ID,${s.pdbId}`);
+                  const csv = rows.join('\n');
+                  const blob = new Blob([csv], { type: 'text/csv' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `analysis-summary-${s.pdbId}-${Date.now()}.csv`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="grid h-5 w-5 place-items-center rounded text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                title={zh ? '导出为 CSV' : 'Export as CSV'}
+              >
+                <FileText className="h-3 w-3" />
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">

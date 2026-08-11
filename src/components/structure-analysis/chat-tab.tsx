@@ -224,6 +224,7 @@ export function ChatTab() {
   const toggleChatSessionPin = useAppStore((s) => s.toggleChatSessionPin);
   const saveCurrentSession = useAppStore((s) => s.saveCurrentSession);
   const [sessionOpen, setSessionOpen] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
 
   // Round 4: Chat search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -2262,7 +2263,7 @@ export function ChatTab() {
         </div>
       </div>
 
-      {/* Round 33: Chat sessions panel (collapsible) */}
+      {/* Round 33/46: Chat sessions panel (collapsible) with search filter */}
       {sessionOpen && (
         <div className="shrink-0 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40 max-h-64 overflow-y-auto sa-scroll">
           <div className="flex items-center gap-1 mb-1">
@@ -2284,13 +2285,42 @@ export function ChatTab() {
               New
             </Button>
           </div>
+          {/* Round 46: Session search filter */}
+          {chatSessions.length > 3 && (
+            <div className="relative mb-1">
+              <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-2.5 w-2.5 text-claude-text-muted/50" />
+              <input
+                type="text"
+                value={sessionSearch}
+                onChange={(e) => setSessionSearch(e.target.value)}
+                placeholder="Search sessions…"
+                className="w-full h-6 pl-6 pr-6 rounded-md border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-[9px] text-claude-text placeholder:text-claude-text-muted/50 focus:outline-none focus:border-claude-accent/40"
+              />
+              {sessionSearch && (
+                <button
+                  onClick={() => setSessionSearch("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-claude-text-muted hover:text-destructive"
+                  title="Clear search"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
+            </div>
+          )}
           {chatSessions.length === 0 ? (
             <div className="text-[9px] text-claude-text-muted text-center py-3">
               No saved sessions yet. Click "New" to start a new conversation.
             </div>
           ) : (
             <div className="space-y-0.5">
-              {chatSessions.map((s) => (
+              {chatSessions
+                .filter((s) => {
+                  if (!sessionSearch.trim()) return true;
+                  const q = sessionSearch.toLowerCase();
+                  return s.title.toLowerCase().includes(q) ||
+                    s.messages.some((m: any) => m.content?.toLowerCase().includes(q));
+                })
+                .map((s) => (
                 <div
                   key={s.id}
                   className={`group/sess flex items-center gap-1 rounded px-1.5 py-1 text-[10px] cursor-pointer transition-colors ${
