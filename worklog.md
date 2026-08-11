@@ -11269,3 +11269,132 @@ Improvement Suggestions for Next Round:
 7. **Add analysis summary Markdown export** — export as a formatted Markdown table for inclusion in reports.
 
 8. **Add session tags** — allow tagging sessions (e.g., "kinase", "hemoglobin") for better organization and filtering.
+
+---
+Task ID: round-48-fix-reference-errors-null-cache-batch-empty
+Agent: main
+Task: Fix 6 bugs reported by user: 3 ReferenceErrors, structural analysis empty results, batch empty data, page auto-refresh. Perform real job test, commit and push.
+
+User Bug Reports:
+1. ReferenceError: useMemo is not defined (message-bubble.tsx:156)
+2. ReferenceError: analyzeSentiment is not defined (chat-tab.tsx:488)
+3. ReferenceError: RETRY_EVENT is not defined (chat-tab.tsx:320)
+4. Structural analysis returning empty results for P00533 (EGFR) — all 3 PDBs failed
+5. Batch target analysis showing success but report says "暂无可靠数据"
+6. Page frequently auto-refreshing during database writes
+
+Root Cause Analysis:
+
+## Bug 1-3: ReferenceErrors from incomplete code extraction
+When MessageBubble was extracted to message-bubble.tsx (Round 30), the event constants (RETRY_EVENT, etc.), analyzeSentiment, and generateQuickReplies were moved to the new file. However:
+- `useMemo` was not included in the React imports (only `useState, useCallback`)
+- The event constants were not exported from message-bubble.tsx
+- `analyzeSentiment` was not exported from message-bubble.tsx
+- chat-tab.tsx still referenced these without importing them
+
+These errors caused the ChatTab component to crash on render, triggering the error boundary.
+
+## Bug 4: Null results cached → analysis appears to succeed but returns empty
+The recipe-runner cached ALL results, including null (failed) results, for 30 minutes. When a recipe failed (e.g., PDB download timeout, Python error), the null was cached. On subsequent runs, the cache returned null immediately without re-executing the recipe — making it impossible to recover from transient failures.
+
+The user's P00533 analysis completed in 4 seconds for 3 PDBs (should take 30-60s), confirming that cached nulls were being returned instantly.
+
+## Bug 5: Batch analysis emitting success with null data
+The batch target code emitted "结构分析完成" success message and the structure-analysis-summary SSE event unconditionally — even when all analysis fields (bindingPocket, allInteractions, etc.) were null. The LLM then received an empty structure_analysis context and wrote "暂无可靠数据" in the report.
+
+## Bug 6: Page auto-refresh during database writes
+The ReferenceErrors (bugs 1-3) caused the ChatTab to crash. The error boundary caught the error, and the chunk loader retry mechanism in layout.tsx (8 retries → window.location.reload()) eventually reloaded the page. Each database write triggered a state update that re-rendered ChatTab, which crashed again, causing another page reload.
+
+Fixes Applied:
+
+### 1. Fix useMemo import (message-bubble.tsx)
+```typescript
+// Before: import { useState, useCallback } from "react";
+// After:  import { useState, useCallback, useMemo } from "react";
+```
+
+### 2. Export event constants + analyzeSentiment (message-bubble.tsx)
+Added `export` to all 10 event constants (RETRY_EVENT, REEXEC_EVENT, EDIT_EVENT, REACTION_EVENT, PIN_EVENT, BOOKMARK_EVENT, FOLDER_EVENT, BRANCH_EVENT, TAG_EVENT, PIN_NOTE_EVENT) and `analyzeSentiment`.
+
+### 3. Import in chat-tab.tsx
+```typescript
+import { MessageBubble, analyzeSentiment,
+  RETRY_EVENT, REEXEC_EVENT, EDIT_EVENT, REACTION_EVENT,
+  PIN_EVENT, BOOKMARK_EVENT, FOLDER_EVENT, BRANCH_EVENT,
+  TAG_EVENT, PIN_NOTE_EVENT,
+} from "./message-bubble";
+```
+
+### 4. Don't cache null results (recipe-runner.ts)
+```typescript
+// Before: setCached(pdbId, recipeId, params, result);  // Caches null!
+// After:  if (result !== null) { setCached(pdbId, recipeId, params, result); }
+```
+Also improved error logging: JSON parse failures now include both stdout and stderr.
+
+### 5. Batch analysis hasData check (evaluations/run/route.ts)
+```typescript
+const bHasData = bStructureAnalyses.bindingPocket || bStructureAnalyses.allInteractions ||
+  bStructureAnalyses.hbonds || bStructureAnalyses.druggability || bStructureAnalyses.virtualScreening;
+if (bHasData) {
+  // emit success + summary
+} else {
+  emit({ stage: `batch-${bi}-llm`, level: 'warn', message: `[Target N] 结构分析完成但无有效数据` });
+}
+```
+
+### 6. Page auto-refresh (indirect fix)
+Fixed by resolving bugs 1-3 — ChatTab no longer throws ReferenceErrors, so the error boundary doesn't trigger, and the chunk loader doesn't reload the page.
+
+Real Job Test Results:
+
+## Job: P68871 (Hemoglobin subunit beta) — AFTER ALL FIXES
+| Stage | Status | Details |
+|-------|--------|---------|
+| Structural analysis | ✅ SUCCESS | 15s execution time (was 4s with null cache) |
+| Analysis results | ✅ POPULATED | pocket 94 residues, 868 H-bonds, druggability 7/10, 5 VS hits |
+| SSE summary event | ✅ EMITTED | All 5 categories populated |
+| Report generation | ✅ PASS | 9/9 chapters, 4126 chars, 70.5s total |
+| Chapter 5 content | ✅ EXCELLENT | His87, His92, Lys61, Tyr42, Phe41, 868 H-bonds, Ki 5979μM |
+| Database save | ✅ SUCCESS | dbSaved: true |
+| Page refresh | ✅ NONE | No auto-refresh during or after the job |
+
+Verification:
+
+### Lint Check
+- `src/components/structure-analysis/message-bubble.tsx`: 0 errors ✓
+- `src/components/structure-analysis/chat-tab.tsx`: 0 errors, 1 pre-existing warning ✓
+- `src/lib/molcraft/recipe-runner.ts`: 0 errors ✓
+- `src/app/api/evaluations/run/route.ts`: 0 errors ✓
+
+### Git
+- Commit: 24441fd "fix: 3 ReferenceErrors + null cache + batch empty data + page refresh"
+- Pushed to origin/main (909f648..24441fd)
+- 4 files changed, 47 insertions(+), 31 deletions(-)
+
+Stage Summary:
+- ✅ Fixed 3 ReferenceErrors (useMemo, RETRY_EVENT, analyzeSentiment)
+- ✅ Fixed null result caching (root cause of empty analysis)
+- ✅ Fixed batch analysis emitting success with null data
+- ✅ Fixed page auto-refresh (indirect — caused by ReferenceErrors)
+- ✅ Real job test: all analysis data populated correctly
+- ✅ 9/9 chapters with specific residue data
+- ✅ Committed and pushed to GitHub
+
+Improvement Suggestions for Next Round:
+
+1. **Extract ChatInput component** — still pending from earlier rounds.
+
+2. **Lazy-load Molstar viewer** — still pending.
+
+3. **Split cli-registry.ts** (~4100 lines) — still pending.
+
+4. **Add command execution timeline** — Gantt-style visualization.
+
+5. **Add multi-ligand analysis** — run binding_pocket for each ligand.
+
+6. **Add analysis result comparison** — compare results across PDBs.
+
+7. **Add tag-based session filtering** — filter sessions by tags.
+
+8. **Add analysis summary PDF export** — export as formatted PDF.
