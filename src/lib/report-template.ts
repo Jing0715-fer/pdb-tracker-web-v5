@@ -30,6 +30,48 @@ export interface EvalDataForReport {
   literatureInfo?: string;
   /** Number of literature papers included in `literatureInfo`. */
   literatureCount?: number;
+  /** Round 34: Structural analysis results for the top PDB (from /api/analyze/run recipes).
+   *  Includes binding pocket, interactions, and hydrogen bond data.
+   *  When present, a "结构活性位点分析" chapter is generated. */
+  structureAnalyses?: StructureAnalysisData;
+}
+
+/** Round 34: Structural analysis results from the Analysis module's recipes. */
+export interface StructureAnalysisData {
+  /** PDB ID that was analyzed. */
+  pdbId: string;
+  /** Binding pocket analysis (residues within radius of the primary ligand). */
+  bindingPocket?: {
+    ligand: string;
+    radius: number;
+    residueCount: number;
+    volume: number | string;
+    composition: Record<string, number>;
+    topResidues: string[];
+    catalyticResidues?: string[];
+  };
+  /** All inter-chain interactions (H-bonds, salt bridges, hydrophobic contacts). */
+  allInteractions?: {
+    chain1: string;
+    chain2: string;
+    total: number;
+    hbonds: number;
+    saltBridges: number;
+    hydrophobic: number;
+    topContacts: Array<{ pair: string; distance: number; type: string }>;
+    hotspots: Array<{ residue: string; contacts: number }>;
+  };
+  /** Hydrogen bonds within a single chain (intra-chain). */
+  hbonds?: {
+    total: number;
+    topPairs: Array<{ pair: string; distance: number }>;
+  };
+  /** Druggability score from the druggability recipe. */
+  druggability?: {
+    score: number;
+    category: string;
+    rationale: string;
+  };
 }
 
 export function buildReportSystemPrompt(): string {
@@ -275,6 +317,7 @@ export type ReportChapterKey =
   | 'function'
   | 'topology'
   | 'pdb_analysis'
+  | 'structure_analysis'
   | 'feasibility'
   | 'experimental'
   | 'references'
@@ -386,11 +429,74 @@ ${CHAPTER_FORMAT_CONSTRAINTS}
 （基于 SIFTS 覆盖率 ${d.coverage}% + BLAST 同源 ${d.blastHitCount} 条 + IF 最高期刊等推断 3 个具体可深入方向）
 
 **章节输出结构**:以 \`## 3. 现有 PDB 结构分析\` 开头,3 个 H3 子节(§3.1 / §3.2 / §3.3)。`;
+    case 'structure_analysis': {
+      // Round 34: New chapter that uses structural analysis results from the
+      // Analysis module (binding_pocket, all_interactions, hbonds, druggability).
+      // Only included when d.structureAnalyses is present.
+      const sa = d.structureAnalyses;
+      let analysisContext = '';
+      if (sa) {
+        analysisContext = `
+## 结构分析数据（由 Analysis 模块自动生成，基于 PDB ${sa.pdbId}）
+
+`;
+        if (sa.bindingPocket) {
+          const bp = sa.bindingPocket;
+          analysisContext += `### 结合口袋分析（配体 ${bp.ligand}, 半径 ${bp.radius} Å）
+- 口袋残基数: ${bp.residueCount}
+- 估计体积: ${bp.volume} Å³
+- 残基组成: ${Object.entries(bp.composition).map(([k, v]) => `${k} ${v}`).join(', ')}
+- 关键口袋残基: ${bp.topResidues.join(', ')}
+${bp.catalyticResidues && bp.catalyticResidues.length > 0 ? `- 催化残基: ${bp.catalyticResidues.join(', ')}` : ''}
+
+`;
+        }
+        if (sa.allInteractions) {
+          const ai = sa.allInteractions;
+          analysisContext += `### 链间互作分析（链 ${ai.chain1} ↔ 链 ${ai.chain2}）
+- 总互作数: ${ai.total}（氢键 ${ai.hbonds}, 盐桥 ${ai.saltBridges}, 疏水接触 ${ai.hydrophobic}）
+- 主要互作对:
+${ai.topContacts.map(c => `  - ${c.pair} (${c.distance} Å, ${c.type})`).join('\n')}
+${ai.hotspots.length > 0 ? `- 界面热点残基（≥2 次接触）:\n${ai.hotspots.map(h => `  - ${h.residue} (${h.contacts} 次接触)`).join('\n')}` : ''}
+
+`;
+        }
+        if (sa.hbonds) {
+          analysisContext += `### 链内氢键分析
+- 总氢键数: ${sa.hbonds.total}
+- 主要氢键对:
+${sa.hbonds.topPairs.map(p => `  - ${p.pair} (${p.distance} Å)`).join('\n')}
+
+`;
+        }
+        if (sa.druggability) {
+          analysisContext += `### 可成药性评估
+- 评分: ${sa.druggability.score}/10
+- 分类: ${sa.druggability.category}
+- 依据: ${sa.druggability.rationale}
+
+`;
+        }
+      }
+      return ctxHeader + analysisContext + `
+## 4. 结构活性位点分析
+
+### §4.1 结合口袋与关键残基
+（基于上方"结构分析数据"中的结合口袋分析结果，讨论口袋大小、残基组成、催化残基的生物学意义。引用具体残基名称和编号。如果无结合口袋数据，写"暂无可靠数据"。）
+
+### §4.2 蛋白-蛋白/配体互作界面
+（基于链间互作分析结果，讨论界面互作类型分布（氢键/盐桥/疏水）、关键热点残基、以及界面稳定性。引用具体残基对和距离数字。如果无互作数据，写"暂无可靠数据"。）
+
+### §4.3 可成药性评估
+（基于可成药性评分和口袋分析，综合评估该靶点的成药潜力。讨论口袋可及性、关键残基的保守性、以及潜在的药物设计策略。如果无可成药性数据，基于口袋大小和组成进行推断。）
+
+**章节输出结构**:以 \`## 4. 结构活性位点分析\` 开头,3 个 H3 子节(§4.1 / §4.2 / §4.3);必须引用结构分析数据中的具体残基和数字。`;
+    }
     case 'feasibility':
       return ctxHeader + `
-## 4. 结构解析可行性评估
+## 5. 结构解析可行性评估
 
-### §4.1 评估维度对比
+### §5.1 评估维度对比
 
 | 维度 | Cryo-EM | X-ray | NMR |
 |------|---------|-------|-----|
@@ -398,21 +504,21 @@ ${CHAPTER_FORMAT_CONSTRAINTS}
 | 已有 PDB 数据基础 | | | |
 | 整体评分 | ${d.scores.cryoem.score}/10 | ${d.scores.xray.score}/10 | ${d.scores.nmr.score}/10 |
 
-### §4.2 综合结论
+### §5.2 综合结论
 （2-3 段：推荐方法 + 理由 + 备选方案）
 
-**章节输出结构**:以 \`## 4. 结构解析可行性评估\` 开头,2 个 H3 子节(§4.1 / §4.2);§4.1 必须包含上表。`;
+**章节输出结构**:以 \`## 5. 结构解析可行性评估\` 开头,2 个 H3 子节(§5.1 / §5.2);§5.1 必须包含上表。`;
     case 'experimental':
       return ctxHeader + `
-## 5. 实验方案
+## 6. 实验方案
 
-### §5.1 构建设计
+### §6.1 构建设计
 （基于 ${d.coverage}% SIFTS 覆盖率 + ${d.directPdbCount} 直接 PDB 数据基础建议构建设计策略;说明全长/截短体/标签选择）
 
-### §5.2 表达与样品制备流程
+### §6.2 表达与样品制备流程
 （简要:表达系统选择 / 纯化策略 / 样品质量评估 / 缓冲液条件）
 
-### §5.3 时间规划
+### §6.3 时间规划
 
 | 阶段 | 预计时间 | 预期结果 |
 |------|---------|---------|
@@ -420,17 +526,17 @@ ${CHAPTER_FORMAT_CONSTRAINTS}
 | 结构解析 | 3-6 月 | 原子模型 |
 | **总计** | **6-12 个月** | |
 
-**章节输出结构**:以 \`## 5. 实验方案\` 开头,3 个 H3 子节(§5.1 / §5.2 / §5.3);§5.3 必须包含上表。`;
+**章节输出结构**:以 \`## 6. 实验方案\` 开头,3 个 H3 子节(§6.1 / §6.2 / §6.3);§6.3 必须包含上表。`;
     case 'references':
       return ctxHeader + `
-## 6. 重要参考文献
+## 7. 重要参考文献
 
 **无子节**。基于 PDB 数据表中的高 IF 期刊条目列出 3-5 个,每条必须包含:作者(et al.)、期刊名称、IF 值、PDB ID、分辨率。
 
-**章节输出结构**:以 \`## 6. 重要参考文献\` 开头,直接列出 3-5 条参考文献(列表项格式: - Author et al., *Journal Name* (IF: XX.X), PDB XXXX, Y.Y Å.)。`;
+**章节输出结构**:以 \`## 7. 重要参考文献\` 开头,直接列出 3-5 条参考文献(列表项格式: - Author et al., *Journal Name* (IF: XX.X), PDB XXXX, Y.Y Å.)。`;
     case 'conclusion':
       return ctxHeader + `
-## 7. 总结
+## 8. 总结
 
 **无子节**。4 段总结:
 1. 核心结论
@@ -438,20 +544,21 @@ ${CHAPTER_FORMAT_CONSTRAINTS}
 3. 与现有药物的关系
 4. 后续建议与展望
 
-**章节输出结构**:以 \`## 7. 总结\` 开头,直接写 4 段正文,不要列表化。`;
+**章节输出结构**:以 \`## 8. 总结\` 开头,直接写 4 段正文,不要列表化。`;
   }
 }
 
 function chapterTitleZh(k: ReportChapterKey): string {
   return ({
-    summary:     '执行摘要',
-    function:    '蛋白功能与生物学背景',
-    topology:    '序列与拓扑结构',
-    pdb_analysis:'现有 PDB 结构分析',
-    feasibility: '结构解析可行性评估',
-    experimental:'实验方案',
-    references:  '重要参考文献',
-    conclusion:  '总结',
+    summary:           '执行摘要',
+    function:          '蛋白功能与生物学背景',
+    topology:          '序列与拓扑结构',
+    pdb_analysis:      '现有 PDB 结构分析',
+    structure_analysis:'结构活性位点分析',
+    feasibility:       '结构解析可行性评估',
+    experimental:      '实验方案',
+    references:        '重要参考文献',
+    conclusion:        '总结',
   } as Record<ReportChapterKey, string>)[k];
 }
 

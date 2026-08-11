@@ -1,8 +1,9 @@
 import { sseStream, sleep, type SseEvent } from '@/lib/sse';
 import { generateText } from '@/lib/llm';
-import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, type ReportChapterKey } from '@/lib/report-template';
+import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
 import { buildProvenance, verifyCitations, hashPrompt, type DataSourceTrace, type LlmTrace, type ProvenanceRecord } from '@/lib/provenance';
+import { runMultipleAnalyses } from '@/lib/molcraft/recipe-runner';
 import { fetchPdbIdsForUniprot, fetchPdbEntryDetails, fetchUniprotMeta, type PdbEntryDetail } from '@/lib/rcsb';
 import { runBlast, runBlastDb, fetchUniprotSequence } from '@/lib/blast';
 import { efetch } from '@/lib/pubmed';
@@ -1044,6 +1045,116 @@ ${overlapSummary}${crossLitBlock}
           emit({ stage: 'llm-report', level: 'info', message: `已附加 ${litInfo.count} 篇 PubMed 文献（按 IF 降序）到 LLM 上下文`, progress: 65 });
         }
 
+        // ── Round 34: Run structural analysis on the top PDB for the report ──
+        // Use the Analysis module's recipes (binding_pocket, all_interactions,
+        // hbonds) to generate structural insights that enrich the LLM report.
+        let structureAnalyses: StructureAnalysisData | undefined;
+        try {
+          // Pick the top PDB (highest resolution X-ray structure, or first available)
+          const topPdb = pdbDetails
+            .filter(e => (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON'))
+            .sort((a, b) => (a.resolution || 99) - (b.resolution || 99))[0]
+            || pdbDetails[0];
+
+          if (topPdb) {
+            emit({ stage: 'llm-report', level: 'info', message: `正在对重点结构 ${topPdb.pdbId} 运行结构分析（结合口袋、互作、氢键）…`, progress: 64 });
+
+            // Determine chain IDs from the PDB details (default to A/B if available)
+            const chain1 = 'A';
+            const chain2 = topPdb.pdbId === '4HHB' ? 'B' : 'A'; // 4HHB is a tetramer (A,B,C,D)
+
+            // Determine ligand compId from the PDB details (ligands is a "; "-separated string)
+            const ligandStr = typeof topPdb.ligands === 'string' ? topPdb.ligands : '';
+            const ligandCompId = ligandStr.split(/[;,\s]+/).filter(Boolean)[0];
+
+            const recipesToRun: Array<{ recipeId: string; params?: Record<string, unknown> }> = [
+              { recipeId: 'all_interactions', params: { chain1, chain2 } },
+              { recipeId: 'hbonds', params: { chain1, chain2: chain1 } },
+            ];
+            if (ligandCompId) {
+              recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
+            }
+
+            const results = await runMultipleAnalyses(topPdb.pdbId, recipesToRun);
+
+            // Build the StructureAnalysisData object
+            structureAnalyses = {
+              pdbId: topPdb.pdbId,
+            };
+
+            // Parse binding_pocket result
+            const bpRaw = results['binding_pocket'] as any;
+            if (bpRaw && bpRaw.data) {
+              const bp = bpRaw.data;
+              const residues = bp.residues || [];
+              structureAnalyses.bindingPocket = {
+                ligand: bp.ligand || ligandCompId || 'unknown',
+                radius: bp.radius_A || bp.radius || 5.0,
+                residueCount: bp.pocket_residue_count || residues.length,
+                volume: bp.estimated_volume_A3 || bp.estimated_volume || '?',
+                composition: bp.composition || {},
+                topResidues: residues.slice(0, 15).map((r: any) =>
+                  `${r.resname || '?'}${r.resno || r.residue_number || '?'}(${r.chain || r.chain_id || '?'})`
+                ),
+                catalyticResidues: residues
+                  .filter((r: any) => [41, 145].includes(Number(r.resno || r.residue_number || 0)))
+                  .map((r: any) => `${r.resname || '?'}${r.resno || r.residue_number || '?'}`),
+              };
+            }
+
+            // Parse all_interactions result
+            const aiRaw = results['all_interactions'] as any;
+            if (aiRaw && aiRaw.data) {
+              const ai = aiRaw.data;
+              const interactions = ai.interactions || [];
+              const residueCounts: Record<string, number> = {};
+              for (const c of interactions) {
+                const r1 = `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'})`;
+                const r2 = `${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`;
+                residueCounts[r1] = (residueCounts[r1] || 0) + 1;
+                residueCounts[r2] = (residueCounts[r2] || 0) + 1;
+              }
+              structureAnalyses.allInteractions = {
+                chain1: ai.chain1 || chain1,
+                chain2: ai.chain2 || chain2,
+                total: ai.total || 0,
+                hbonds: ai.hbonds || 0,
+                saltBridges: ai.salt_bridges || 0,
+                hydrophobic: ai.hydrophobic || 0,
+                topContacts: interactions.slice(0, 10).map((c: any) => ({
+                  pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ↔ ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'})`,
+                  distance: c.distance_A || 0,
+                  type: c.type || 'unknown',
+                })),
+                hotspots: Object.entries(residueCounts)
+                  .filter(([, n]) => n >= 2)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 10)
+                  .map(([residue, contacts]) => ({ residue, contacts })),
+              };
+            }
+
+            // Parse hbonds result
+            const hbRaw = results['hbonds'] as any;
+            if (hbRaw && hbRaw.data) {
+              const hb = hbRaw.data;
+              const bonds = hb.hbonds || hb.bonds || [];
+              structureAnalyses.hbonds = {
+                total: hb.total_hbonds || hb.count || bonds.length,
+                topPairs: bonds.slice(0, 10).map((c: any) => ({
+                  pair: `${c.resname1 || '?'}${c.resno1 || '?'}(${c.chain1 || '?'}) ${c.atom1 || ''} → ${c.resname2 || '?'}${c.resno2 || '?'}(${c.chain2 || '?'}) ${c.atom2 || ''}`,
+                  distance: c.distance_A || 0,
+                })),
+              };
+            }
+
+            emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${structureAnalyses.bindingPocket ? `口袋 ${structureAnalyses.bindingPocket.residueCount} 残基` : ''} ${structureAnalyses.allInteractions ? `互作 ${structureAnalyses.allInteractions.total} 个` : ''} ${structureAnalyses.hbonds ? `氢键 ${structureAnalyses.hbonds.total} 个` : ''}`, progress: 65 });
+          }
+        } catch (err) {
+          // Structural analysis is optional — don't fail the report if it errors
+          emit({ stage: 'llm-report', level: 'warn', message: `结构分析跳过: ${err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80)}`, progress: 65 });
+        }
+
         const reportData = {
           uniprot,
           entryName: uniprotInfo.entryName,
@@ -1061,15 +1172,16 @@ ${overlapSummary}${crossLitBlock}
           blastTable,
           literatureInfo,
           literatureCount: litInfo.count,
+          structureAnalyses, // Round 34: structural analysis data for the new chapter
         };
 
         // ── Chapter-streaming mode: each chapter = its own short LLM call. ──────
         // This gives progressive output (SSE `chapter_*` events) AND avoids 240s+
         // timeouts because each prompt is ~3-5k chars (1-2KB output, 15-30s).
-        const chapters: ReportChapterKey[] = [
-          'summary', 'function', 'topology', 'pdb_analysis',
-          'feasibility', 'experimental', 'references', 'conclusion',
-        ];
+        // Round 34: Include 'structure_analysis' chapter only when analysis data exists.
+        const chapters: ReportChapterKey[] = structureAnalyses
+          ? ['summary', 'function', 'topology', 'pdb_analysis', 'structure_analysis', 'feasibility', 'experimental', 'references', 'conclusion']
+          : ['summary', 'function', 'topology', 'pdb_analysis', 'feasibility', 'experimental', 'references', 'conclusion'];
         const chapterContents: Record<string, string> = {};
         const totalChapters = chapters.length;
         let perChapterOkCount = 0;

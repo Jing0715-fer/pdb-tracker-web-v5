@@ -9517,3 +9517,174 @@ Improvement Suggestions for Next Round:
 7. **Add chat search** — search across all messages in the conversation (content, commands, analysis results) with result highlighting.
 
 8. **Add session pinning** — pin frequently-used sessions to the top of the list.
+
+---
+Task ID: explore-run-center
+Agent: Explore
+Task: Explore Run Center job system and LLM report generation pipeline
+
+Work Log:
+- Read worklog.md head (project context: PDB Structure Tracker, 4 modules, 331 TS/TSX files, dev server stable) and tail (latest round 33 = chat session management).
+- Searched for `Run Center` references across the codebase (13 files) — found that "Run Center" is a UI label, not a separate component folder.
+- Located the actual Run Center component: `src/components/settings-run-panel.tsx` (exported as `SettingsRunPanel`, opened from `pdb-tracker.tsx` via `runCenterOpen` state).
+- Read the full SettingsRunPanel header docstring + lines 1136–1535 to map the three job modules and their API endpoints.
+- Traced each module's run trigger: `runLiterature` → POST /api/literature/daily/run; `runEvaluation` → POST /api/evaluations/run; `runWeekly` → POST /api/pdb-weekly/run. All three use `useRunStream()` (SSE consumer) and the shared `llmBody()` helper.
+- Read `src/lib/llm.ts` (1499 lines): provider probe + adapter table (hermes/claude/codex/openclaw/gemini/codebuddy/aider CLIs + anthropic/openai/zai SDKs), `generateText()` is the entry point used by all three Run Center modules + the chat route.
+- Read `src/lib/report-template.ts` (566 lines) in full — defines the canonical 8-chapter outline (`REPORT_OUTLINE_ZH`), `buildChapterSystemPrompt()`, `buildChapterPrompt(chapterKey)`, `validateChapterContent()`, and `EvalDataForReport`.
+- Read `/api/evaluations/run/route.ts` lines 1018–1260 to follow the chapter-streaming pipeline: 8 sequential `generateText` calls (one per chapter), per-chapter validation+retry (MAX_CHAPTER_RETRIES=2), final rescue pass, then concatenated `finalReport` saved to `Evaluation.report` column.
+- Read `/api/llm/chat/stream/route.ts` lines 1–170 + 260–370 — confirmed the Structure-Analysis chat uses the same `generateText()` but with a different system prompt (Molcraft AI assistant for command generation, not report generation).
+- Read `/api/analyze/run/route.ts` (259 lines) — confirmed recipes run Python scripts via `cli-registry.ts`, results returned as JSON.
+- Verified there is NO existing connection between Structure Analysis recipes and Run Center report generation (grep for `analyze`/`recipe`/`hbonds`/`binding_pocket` in target-evaluation.ts, report-template.ts, evaluations/run/route.ts → no matches).
+- Inspected `src/lib/molcraft/cli-registry.ts` recipe list (34 recipes) and `chat-helpers.tsx::formatAnalysisResults` to understand the recipe output shape for each of `hbonds`, `all_interactions`, `binding_pocket`.
+- Confirmed report storage: `prisma/schema.prisma` `Evaluation.report` (String?, Markdown) + `EvaluationBatch.combinedReport` + `EvaluationReport.content`.
+- Computed line counts for all key files (settings-run-panel 2985, llm.ts 1499, report-template.ts 566, evaluations/run 1921, cli-registry.ts 4128, chat-tab.tsx 3165, etc.).
+
+Stage Summary:
+
+## 1. Run Center Location
+
+There is no `run-center*` component file — "Run Center" is the **UI label** of the `SettingsRunPanel` component.
+
+- **Component**: `src/components/settings-run-panel.tsx` (2985 lines) — `export function SettingsRunPanel({...})` at line 1136. A `<Dialog>` with 3 tabs (`evaluation` / `literature` / `weekly`).
+- **Trigger button**: `src/components/quick-actions.tsx` line 127 (`label: 'Run Center'`) and `src/components/settings-run-panel.tsx` line 1795 (`<DialogTrigger>` button labeled `{t.runCenter}` with a `Settings2` icon).
+- **Mounting**: `src/components/pdb-tracker.tsx` lines 1395 (`useState(false)` for `runCenterOpen`), 1417 (`onOpenRunCenter`), 2473 (QuickActions callback), 4908–4916 (the `<SettingsRunPanel>` JSX with controlled `open` / `activeTab`).
+- **API routes** (one per tab):
+  - `POST /api/evaluations/run` — `src/app/api/evaluations/run/route.ts` (1921 lines) — target evaluation + 8-chapter LLM report (atomic).
+  - `POST /api/evaluations/[uniprotId]/report/run` — `src/app/api/evaluations/[uniprotId]/report/run/route.ts` (34 lines) — manual re-report of an existing evaluation (calls `generateEvaluationReport` from `target-evaluation.ts`).
+  - `POST /api/literature/daily/run` — `src/app/api/literature/daily/run/route.ts` (126 lines) — daily PubMed literature digest (dual-pathway search + LLM Chinese summary).
+  - `POST /api/pdb-weekly/run` — `src/app/api/pdb-weekly/run/route.ts` (345 lines) — weekly PDB structure report (1–3 cycles, Cryo-EM + X-ray chapters).
+  - `GET  /api/llm/providers` — provider scan (consumed by Run Center header on open).
+  - `GET  /api/db-config` — DB path sync (consumed by Run Center "DB Setup" tab).
+
+## 2. Job Pipeline
+
+**Job types (the 3 "modules" inside Run Center):**
+| Module | Endpoint | Input | Output |
+|--------|----------|-------|--------|
+| ① Literature | `/api/literature/daily/run` | `date`, `windowDays`, `maxPathA/B/C`, `maxPapers`, `skipWikiFiles`, `llm` | PubMedArticle rows + daily markdown digest saved to `LLM-Wiki/daily-reports/structural-biology/` |
+| ② Evaluation | `/api/evaluations/run` | `uniprot` or `sequence[s]`/`sequenceType`, `maxPdb`, `maxBlastHits`, `maxLitCount`, `generateReport`, `saveReportFile`, `targets[]`, `isBatch`, `llm` | `Evaluation` row (with `report` column) + `EvaluationPdbStructure[]` + `EvaluationBlastResult[]` + optional `EvaluationBatch` (multi-target) |
+| ③ Weekly | `/api/pdb-weekly/run` | `maxCycles` (1/2/3), optional `weekId`, `llm` | `WeeklyReportRun` + `SkillRunRecord` rows + markdown file in `LLM-Wiki/weekly-reports/` |
+
+**Job creation/execution flow** (same shape for all three):
+1. UI calls `useRunStream().start(url, body)` (`src/lib/use-run-stream.ts` line 90).
+2. The hook POSTs the JSON body to the route with `Accept: text/event-stream`.
+3. Route handler opens an SSE stream via `sseStream()` from `src/lib/sse.ts` (92 lines) and emits `progress` / `log` / `done` / `error` events as it works.
+4. On completion the route emits a final `done` event with the full result payload; the hook sets `state.done = true` and `state.result = payload`.
+5. The `SettingsRunPanel` `useEffect` watchers (lines 1679–1787) react to `*.state.done` to log success/error and call `markDone(module)`.
+
+**Job status flow**: There is **no persistent job queue** — each run is an in-memory SSE connection that lives for the duration of one HTTP request. The state machine is purely client-side: `idle → running` (on `start()`) → `done` (on `done`/`error` event). Completion records are persisted to two tables:
+- `SkillRunRecord` (module, status, summary, details, provider, model, llmOk, durationMs, resultJson, log) — written by the weekly route (line 337 of pdb-weekly/run/route.ts).
+- The `RunHistoryPanel` component (`settings-run-panel.tsx` line 550) displays past runs.
+
+**LLM report generation (Module ② — the most elaborate):**
+- File: `src/app/api/evaluations/run/route.ts` lines 1025–1222.
+- Function used: `generateText(systemPrompt, userPrompt, { maxChars: 4000, llm: body.llm })` imported from `src/lib/llm.ts` (line 2 of the route).
+- **8 chapter-by-chapter calls** (one `generateText` per chapter), chapters defined at line 1069: `['summary', 'function', 'topology', 'pdb_analysis', 'feasibility', 'experimental', 'references', 'conclusion']`.
+- Each chapter: build prompt via `buildChapterPrompt({...reportData, chapterKey, chapterIndex, chapterTotal})` + `buildChapterSystemPrompt()` from `src/lib/report-template.ts`; call LLM; validate via `validateChapterContent(ck, content)`; retry up to 2 times.
+- Per chapter emits an SSE `chapter_done` event with `chapterContent` so the front-end `ChapterStream` component (line 759) renders incrementally.
+- After all 8 chapters: one final "rescue pass" regenerates any chapter that still failed validation (lines 1186–1208).
+- Final report = `sanitizeReport(chapters.map(...).join('\n\n'))` (line 1214).
+- Persisted: `INSERT INTO Evaluation (..., report, ...)` (line 1305).
+
+**Data passed to the LLM** (`EvalDataForReport`, defined in `report-template.ts` lines 9–33):
+- `uniprot`, `entryName`, `proteinName`, `geneNames`, `organism`, `sequenceLength`, `coverage`, `directPdbCount`, `blastHitCount`, `scores` (X-ray / Cryo-EM / NMR / Overall).
+- `pdbTable` — markdown table of up to 80 PDB entries built by `buildDetailedPdbTable()` (PDB ID, method, resolution, identity, journal IF, ligands, title).
+- `blastTable` — markdown table of up to 50 BLAST homologs built by `buildDetailedBlastTable()`.
+- `literatureInfo` — PubMed article titles/journals/abstracts (capped at `maxLitCount`, default 20) built by `buildLiteratureInfo()` (route lines 103–232).
+- Chapter index/total + `chapterKey`.
+
+**Provider selection** (`src/lib/llm.ts`):
+- `resolveLlmConfig(overrides)` (line 1065) merges user overrides + env vars + default `'auto'`.
+- `decideProviderOrder()` (line 1255) walks: native CLIs (hermes, claude, codex, openclaw, gemini, codebuddy, aider) → WSL-mirror CLIs → anthropic SDK → openai SDK → zai SDK.
+- `callAnyLlm()` (line 1119) tries each provider in order; on failure falls through to the next (best-effort, no fabricated output).
+- CLI adapters prepend the system prompt to the user prompt (line 1147) because CLIs only accept a single prompt string.
+
+## 3. LLM Report Content
+
+**System prompts** (`src/lib/report-template.ts`):
+- `buildReportSystemPrompt()` (line 35) — single-shot mode (legacy, used by `target-evaluation.ts::generateEvaluationReport`).
+- `buildChapterSystemPrompt()` (line 74) — chapter mode (used by `/api/evaluations/run`). Includes the full `REPORT_OUTLINE_ZH` (line 45) as a system anchor.
+- `REPORT_OUTLINE_ZH` (line 45) — canonical 8-section Chinese outline table with section/subsection numbering (§1.1, §1.2, etc.) and writing guidance per section.
+- `CHAPTER_FORMAT_CONSTRAINTS` (line 90) — 10 mandatory formatting rules (no emoji, real data only, §N.M numbering, H2 for chapters / H3 for subsections, 250–500 chars per chapter, "暂无可靠数据" for missing data, etc.).
+
+**Report structure** (8 chapters in canonical order, see `ReportChapterKey` type at line 273):
+1. **执行摘要 (Executive Summary)** — 2-3 paragraphs, no subsections.
+2. **蛋白功能与生物学背景 (Protein Function)** — §1.1 基本功能 / §1.2 调控机制 / §1.3 疾病关联.
+3. **序列与拓扑结构 (Sequence & Topology)** — §2.1 拓扑模型 / §2.2 结构域解析.
+4. **现有 PDB 结构分析 (PDB Structure Analysis)** — §3.1 方法学分布 / §3.2 代表性 PDB / §3.3 研究空白.
+5. **结构解析可行性评估 (Feasibility)** — §4.1 评估维度对比 (Cryo-EM/X-ray/NMR table) / §4.2 综合结论.
+6. **实验方案 (Experimental Plan)** — §5.1 构建设计 / §5.2 表达纯化 / §5.3 时间规划.
+7. **重要参考文献 (References)** — 3-5 entries with PMID/PDB/IF/resolution.
+8. **总结 (Conclusion)** — 4 paragraphs.
+
+Each chapter prompt is built by `buildChapterPrompt(d)` (line 283) which prepends a shared "数据上下文" header (UniProt metadata, scores, PDB table, BLAST table, literature) so every chapter sees the same data context.
+
+**Storage**:
+- `Evaluation.report` (String?, markdown) — primary storage; see `prisma/schema.prisma` line 85.
+- `Evaluation.provenance` (String?, JSON) — full lineage: data sources queried, LLM calls made, citations extracted + verification status (built by `buildProvenance()` at route line 1248).
+- `EvaluationBatch.combinedReport` (String?) — cross-target synthesis report for batch runs.
+- `EvaluationReport` model (line 179) — additional per-evaluation report snapshots.
+- Filesystem: `/Users/lijing/Documents/my_note/LLM-Wiki/wiki/evaluations/<uniprot>.md` when `saveReportFile=true` (only on the developer's Mac — path is hardcoded in `target-evaluation.ts` line 843).
+
+**Display**:
+- `LLMPreview` component (`settings-run-panel.tsx` line 386) — renders the streaming report incrementally inside the Run Center dialog.
+- `ChapterStream` component (line 759) — shows each chapter as it streams in (status: running/success/error, durationMs, content preview).
+- `EvalReportGenerator` component (`src/components/eval-report-generator.tsx` line 350) — renders the saved report in the Evaluation view as a full HTML page via `renderMarkdownToFullPage()`.
+- `LazyMarkdown` component — used to render the markdown in various views.
+
+## 4. Analysis Module Integration Potential
+
+**Current connection: NONE.** Confirmed by:
+- `grep` for `analyze` / `recipe` / `hbonds` / `binding_pocket` / `all_interactions` / `cli-registry` / `molcraft` in `src/lib/target-evaluation.ts`, `src/lib/report-template.ts`, and `src/app/api/evaluations/run/route.ts` → **zero matches**.
+- The Structure Analysis recipes (`src/lib/molcraft/cli-registry.ts`, 34 recipes) are entirely separate from the Run Center report pipeline.
+
+**How Structure Analysis currently works:**
+- UI: `src/components/structure-analysis/` (chat-tab.tsx 3165 lines, analysis-left-panel.tsx 1868 lines, viewer-tools-tabs.tsx 1932 lines, etc.).
+- API: `POST /api/analyze/run` (`src/app/api/analyze/run/route.ts`, 259 lines) — takes `{ pdbId | fileContent, recipe, params }`, downloads the structure from RCSB, runs a Python script (built by `recipe.buildScript()`), returns JSON `{ recipe, ok, pdbId, data, stdout, stderr }`.
+- Recipes are defined in `src/lib/molcraft/cli-registry.ts` line 273 (`ANALYSIS_RECIPES`): `summary`, `distances`, `interface_residues`, `sasa`, `disulfide_bonds`, `contact_map`, `hbonds`, `salt_bridges`, `hydrophobic_contacts`, `all_interactions`, `ramachandran`, `ligand_interactions`, `sequence_align`, `electrostatic`, `sequence_features`, `rmsd`, `secondary_structure_simple`, `bfactor_stats`, `cross_pdb_rmsd`, `cross_pdb_rmsd_aligned`, `aromatic_stacking`, `water_bridges`, `metal_coordination`, `structure_validation`, `apbs_electrostatic`, `surface_residues`, `oligomer_analysis`, `binding_pocket`, `druggability`, `virtual_screening`, `per_residue_rmsd_two`, `detect_pockets`, `entity_analysis`.
+- LLM chat (`POST /api/llm/chat/stream`) consumes analysis results via the `context.analysisResults` field (route.ts line 282-292) — but only to discuss them in chat, NOT to feed them into the Run Center report.
+- Recipe output shapes (verified in `chat-helpers.tsx` lines 33-39):
+  - `hbonds`: `{ total_hbonds, hbonds: [{resname1, resno1, chain1, atom1, resname2, resno2, chain2, atom2, distance_A}], top_residue_pairs[] }`
+  - `all_interactions`: `{ chain1, chain2, total, salt_bridges (count), hbonds (count), hydrophobic (count), interactions[] }`
+  - `binding_pocket`: `{ ligand, radius_A, pocket_residue_count, estimated_volume_A3, composition{}, residues[] }`
+  - `druggability` (line 3085 of cli-registry): produces a druggability score + classification based on pocket volume, hydrophobic ratio, polar ratio, charge distribution.
+
+**How analysis results COULD be integrated into the Run Center LLM report** (5 concrete paths, ordered by effort):
+
+1. **Augment `EvalDataForReport` with an optional `structureAnalyses` field** (`src/lib/report-template.ts` line 9). Add a new "数据上下文" section in `buildChapterPrompt()` (line 287) listing key residues, interaction counts, pocket composition for each PDB ID analyzed. The LLM would then cite real binding-pocket residues in chapter 4 (PDB Structure Analysis) and chapter 5 (Feasibility). Effort: ~50 lines in `report-template.ts`.
+
+2. **Add a new chapter "结构活性位点分析"** to the canonical outline (becomes a 9-chapter report). Extend `ReportChapterKey` (line 273) with `'active_site'`, add a row to `REPORT_OUTLINE_ZH` (line 45), and write a new `case 'active_site'` branch in `buildChapterPrompt()` (line 344). The new chapter would summarize hbonds/salt_bridges/binding_pocket/druggability results from recipes run on the evaluation's top PDB structures. Effort: ~80 lines across `report-template.ts` + `evaluations/run/route.ts`.
+
+3. **Pre-run recipes during evaluation, before chapter generation.** In `/api/evaluations/run/route.ts` between lines 1018 and 1025, after fetching `pdbDetails`, fire `Promise.all` over the top 3-5 PDB IDs calling `/api/analyze/run` (or directly `getRecipe().buildScript()`) for `binding_pocket`, `all_interactions`, and `druggability`. Persist results to a new `EvaluationStructureAnalysis` table (similar to `EvaluationPdbStructure`). This makes the analysis data first-class — provenance-tracked, queryable, and re-usable. Effort: ~150 lines + a Prisma migration.
+
+4. **Surface analysis results in the chat-tab as a "Send to Run Center" button.** When the user runs `binding_pocket` or `all_interactions` on a PDB ID, show a button that opens the Run Center with the PDB ID pre-filled as an evaluation target and the analysis results attached as supplementary context. This requires a new shared store (the chat-tab already uses `src/lib/molcraft/store.ts` Zustand store) and a small bridge in `pdb-tracker.tsx`. Effort: ~200 lines.
+
+5. **Use `druggability` recipe output as a score input.** The `druggability` recipe already produces a 0-10 score and classification. This could feed a new `scores.druggability` field in `EvalDataForReport.scores` (currently only X-ray/Cryo-EM/NMR/Overall) and be referenced in chapter 5 (Feasibility) and chapter 8 (Conclusion). Effort: ~30 lines, but requires running the recipe for at least one PDB per evaluation.
+
+**Recommended path**: #1 + #2 combined — add a `structureAnalyses` field to `EvalDataForReport` and a new chapter. This gives the LLM real per-structure binding-site evidence (catalytic residues, H-bond networks, pocket volume) instead of relying solely on metadata (resolution, journal IF). The `chat-helpers.tsx::formatAnalysisResults` function already shows what well-formatted analysis summaries look like and could be reused as the LLM context formatter.
+
+## 5. Key Files for the Run Center
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `src/components/settings-run-panel.tsx` | 2985 | **The Run Center UI itself.** `SettingsRunPanel` Dialog component with 3 tabs (evaluation/literature/weekly), LLM provider picker, SSE stream feed (`StreamFeed` line 210), chapter stream (`ChapterStream` line 759), LLM report preview (`LLMPreview` line 386), run history panel (`RunHistoryPanel` line 550), and DB setup wizard integration. Lines 1531–1676 contain the three run-trigger functions (`runLiterature`, `runEvaluation`, `runWeekly`). |
+| `src/lib/llm.ts` | 1499 | **Shared LLM dispatch layer.** Provider probe (`inspectProviders` line 970), adapter table for 7 CLIs (hermes/claude/codex/openclaw/gemini/codebuddy/aider) + 3 SDKs (anthropic/openai/zai), `generateText()` (line 1074) — the single entry point used by all three Run Center modules + the chat route. `callAnyLlm()` (line 1119) implements provider fallback. |
+| `src/lib/report-template.ts` | 566 | **Report prompt + structure definition.** `EvalDataForReport` interface (line 9), `buildChapterSystemPrompt()` (line 74), `REPORT_OUTLINE_ZH` 8-section canonical outline (line 45), `buildChapterPrompt(chapterKey)` (line 283 — per-chapter prompt builder with shared data context header), `validateChapterContent()` (line 487), `buildDetailedPdbTable()` / `buildDetailedBlastTable()` (lines 516/552). |
+| `src/app/api/evaluations/run/route.ts` | 1921 | **Module ② API route.** SSE handler that fetches UniProt → RCSB → BLAST → PubMed, computes scores, then runs 8 chapter-by-chapter `generateText()` calls (lines 1081–1170) with per-chapter retry + rescue pass. Persists to `Evaluation` + `EvaluationPdbStructure` + `EvaluationBlastResult` + `EvaluationBatch`. |
+| `src/lib/use-run-stream.ts` | 237 | **Client-side SSE consumer hook.** `useRunStream()` returns `{ state, start, reset, cancel }`; parses `progress`/`log`/`done`/`error` SSE frames; buffers events at 8 fps to avoid UI jank during chapter streaming. |
+| `src/lib/sse.ts` | 92 | **Server-side SSE helper.** `sseStream()` returns `{ stream, progress, done }` — used by all three Run Center API routes to emit events. |
+| `src/app/api/literature/daily/run/route.ts` | 126 | **Module ① API route.** Wraps `runLiteratureDaily()` from `src/lib/literature-daily.ts` (642 lines) — dual-pathway PubMed search, LLM Chinese summary per paper, daily digest markdown file written to LLM-Wiki. |
+| `src/app/api/pdb-weekly/run/route.ts` | 345 | **Module ③ API route.** Fetches new PDB structures from RCSB for the current ISO week, splits by method (Cryo-EM / X-ray), runs chapter-by-chapter LLM report per method (lines 60–150), saves to `WeeklyReportRun` + `SkillRunRecord`. |
+| `src/lib/target-evaluation.ts` | 1031 | **Legacy evaluation engine.** `runTargetEvaluation()` (line 692) fetches UniProt/RCSB/BLAST/SIFTS, `computeScores()` rates X-ray/Cryo-EM/NMR feasibility, `generateEvaluationReport()` (line 845) is the legacy single-shot report generator (still used by `/api/evaluations/[uniprotId]/report/run`). |
+| `src/lib/literature-daily.ts` | 642 | **Module ① core logic.** PubMed esearch/efetch, method classification regex, paper summarization via `generatePaperDigest()` (llm.ts line 1109), daily report markdown assembly. |
+| `src/app/api/llm/providers/route.ts` | — | Provider scan endpoint — consumed by Run Center on dialog open (settings-run-panel.tsx line 1398) and by chat-tab provider picker. |
+| `src/app/api/evaluations/[uniprotId]/report/run/route.ts` | 34 | Thin wrapper around `generateEvaluationReport()` for manual re-report of an existing evaluation. |
+| `prisma/schema.prisma` | 284 | Database schema. `Evaluation.report` (line 85) stores the LLM markdown report; `Evaluation.provenance` (line 90) stores the JSON lineage; `EvaluationBatch.combinedReport` (line 167) stores cross-target synthesis; `EvaluationReport` (line 179) stores per-evaluation report snapshots. |
+| `src/components/quick-actions.tsx` | 264 | Sidebar quick-action card that opens the Run Center (`onOpenRunCenter` prop, line 91/130). |
+| `src/components/pdb-tracker.tsx` | 5753 | Top-level app shell. Owns `runCenterOpen` / `runCenterTab` state (lines 1395–1396), wires the tour integration (lines 1417–1427), mounts `<SettingsRunPanel>` (lines 4908–4916). |
+| `src/components/structure-analysis/chat-tab.tsx` | 3165 | Structure Analysis chat UI. Uses the same `generateText()` via `/api/llm/chat/stream` but for command generation (not report generation). Shares the LLM provider picker state with Run Center via `localStorage` keys `pdb-tracker:llm-cfg:v2` / `pdb-tracker:llm-provider:v2`. |
+| `src/components/structure-analysis/chat-helpers.tsx` | 344 | `formatAnalysisResults()` (line 41) — formats recipe output (`hbonds`/`salt_bridges`/`all_interactions`/`binding_pocket`/etc.) into markdown for chat display. Reusable as the LLM context formatter if analysis results are integrated into Run Center reports. |
+| `src/lib/molcraft/cli-registry.ts` | 4128 | **34 analysis recipes** (`ANALYSIS_RECIPES` line 273). Each recipe is a Python script template (`buildScript(inputPath, params)`). Key recipes for Run Center integration: `binding_pocket` (line 3005), `druggability` (line 3085), `all_interactions` (line 1042), `hbonds` (line 575). |
+| `src/app/api/analyze/run/route.ts` | 259 | Structure Analysis API route. Takes `{ pdbId | fileContent, recipe, params }`, downloads structure from RCSB, runs Python script, returns JSON. |
+| `src/app/api/llm/chat/stream/route.ts` | 654 | Structure Analysis chat SSE route. Uses `generateText()` with a Molcraft-AI system prompt (line 32) for command generation; passes `context.analysisResults` (line 282) so the LLM can discuss prior recipe outputs. |
+
