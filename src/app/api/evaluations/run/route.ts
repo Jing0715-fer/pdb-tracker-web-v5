@@ -1094,10 +1094,16 @@ ${overlapSummary}${crossLitBlock}
                 emit({ stage: 'llm-report', level: 'info', message: `检测到配体: ${ligandCompId}`, progress: 64 });
               }
 
-              const recipesToRun: Array<{ recipeId: string; params?: Record<string, unknown> }> = [
-                { recipeId: 'all_interactions', params: { chain1, chain2 } },
-                { recipeId: 'hbonds', params: { chain1, chain2: chain1 } },
-              ];
+              // Round 40: For single-chain structures (chain1===chain2), skip
+              // all_interactions (returns 0) and only run hbonds (intra-chain).
+              // For multi-chain structures, run both all_interactions (inter-chain)
+              // and hbonds (intra-chain on the largest chain).
+              const isSingleChain = chain1 === chain2;
+              const recipesToRun: Array<{ recipeId: string; params?: Record<string, unknown> }> = [];
+              if (!isSingleChain) {
+                recipesToRun.push({ recipeId: 'all_interactions', params: { chain1, chain2 } });
+              }
+              recipesToRun.push({ recipeId: 'hbonds', params: { chain1, chain2: chain1 } });
               if (ligandCompId) {
                 recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
                 recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId, radius: 5.0 } });

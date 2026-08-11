@@ -210,6 +210,28 @@ export async function detectPrimaryLigand(pdbId: string): Promise<string | null>
       "SAH", "SAM", "ACP",
     ]);
 
+    // Round 40: Blocklist of ions and small molecules that are not biologically
+    // relevant for drug design. These are common crystallization additives or
+    // buffer components that should not be used as binding pocket centers.
+    const ION_BLOCKLIST = new Set([
+      // Common ions
+      "SO4", "PO4", "SEP", "TPO", "PTR", "CSO",
+      "MG", "ZN", "CA", "FE", "CU", "MN", "NI", "CO", "CD", "HG", "PB",
+      "NA", "CL", "K", "LI", "RB", "CS", "BA", "SR",
+      "BR", "I", "F",
+      // Common buffer/crystallization additives
+      "GOL", "PEG", "EDO", "DMS", "ACT", "FMT", "CIT", "MAL", "FUM", "SUC",
+      "MES", "TRS", "HEPES", "PIPES", "MOPS", "EPE", "TRS",
+      "DOD", "EOH", "MBO", "MRD", "PG4", "PGE",
+      // Small detergents/salts
+      "CIT", "CL", "ACY", "ACY", "AZI", "BH3", "BEN", "BME", "BOG",
+      "C2E", "CAC", "CHX", "DAH", "DIO", "DPG", "DTT", "EPE",
+      // Lipids and detergents (not drug targets)
+      "LDA", "LMT", "LMG", "OLC", "OLE", "PCW", "PEU", "PLM", "PGV",
+      // Common covalent modifiers (not drug targets)
+      "MES", "MSE",
+    ]);
+
     const hetatmCounts = new Map<string, number>();
     const WATER_CODES = new Set(["HOH", "WAT", "DOD"]);
 
@@ -245,20 +267,35 @@ export async function detectPrimaryLigand(pdbId: string): Promise<string | null>
       }
     }
 
-    // First check for priority ligands
+    // First check for priority ligands (bypasses blocklist)
     for (const [compId] of hetatmCounts) {
       if (PRIORITY_LIGANDS.has(compId)) return compId;
     }
 
-    // Fall back to the most common HETATM (by atom count)
+    // Round 40: Fall back to the most common HETATM that is NOT in the ion blocklist.
+    // This skips SO4, PO4, MG, ZN, etc. and picks the next real ligand.
     let bestLigand: string | null = null;
     let bestCount = 0;
     for (const [compId, count] of hetatmCounts) {
+      if (ION_BLOCKLIST.has(compId)) continue;
       if (count > bestCount) {
         bestCount = count;
         bestLigand = compId;
       }
     }
+
+    // If all HETATM are ions/blocked, fall back to the most common one
+    // (better to have an ion than nothing — the recipe will still run)
+    if (!bestLigand && hetatmCounts.size > 0) {
+      let fallbackCount = 0;
+      for (const [compId, count] of hetatmCounts) {
+        if (count > fallbackCount) {
+          fallbackCount = count;
+          bestLigand = compId;
+        }
+      }
+    }
+
     return bestLigand;
   } catch {
     return null;
