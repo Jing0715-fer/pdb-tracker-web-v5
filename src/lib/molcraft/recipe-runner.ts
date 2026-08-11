@@ -237,7 +237,6 @@ export async function runAnalysisRecipe(
   if (cached !== undefined) {
     return cached;
   }
-
   const recipe = getRecipe(recipeId);
   if (!recipe) {
     throw new Error(`Unknown recipe: ${recipeId}`);
@@ -308,6 +307,50 @@ export async function runAnalysisRecipe(
       // ignore
     }
   }
+}
+
+/**
+ * Round 37: Run multiple analysis recipes and return results with cache info.
+ * Each result includes a `__cached: boolean` flag indicating whether the
+ * result came from the cache or was freshly computed.
+ *
+ * @param pdbId - PDB ID to analyze
+ * @param recipes - Array of { recipeId, params } objects
+ * @returns Object with `results` (recipeId → result) and `cacheHits` (count)
+ */
+export async function runMultipleAnalysesWithCacheInfo(
+  pdbId: string,
+  recipes: Array<{ recipeId: string; params?: Record<string, unknown> }>,
+): Promise<{ results: Record<string, unknown | null>; cacheHits: number; cacheMisses: number }> {
+  let cacheHits = 0;
+  let cacheMisses = 0;
+  const entries = await Promise.all(
+    recipes.map(async ({ recipeId, params }) => {
+      // Check cache before running
+      const cached = getCached(pdbId, recipeId, params);
+      if (cached !== undefined) {
+        cacheHits++;
+        return [recipeId, cached] as const;
+      }
+      try {
+        const result = await runAnalysisRecipe(recipeId, pdbId, params);
+        cacheMisses++;
+        return [recipeId, result] as const;
+      } catch (err) {
+        console.warn(
+          `[recipe-runner] ${recipeId} on ${pdbId} failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        return [recipeId, null] as const;
+      }
+    }),
+  );
+  return {
+    results: Object.fromEntries(entries),
+    cacheHits,
+    cacheMisses,
+  };
 }
 
 /**

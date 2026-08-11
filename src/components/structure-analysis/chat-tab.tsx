@@ -697,9 +697,18 @@ export function ChatTab() {
       result = result.filter((m) =>
         m.content?.toLowerCase().includes(q) ||
         m.commands?.some((cmd) => {
-          const c = cmd as { type?: string };
-          return c.type?.toLowerCase().includes(q) || describeCommand(c as unknown as LlmCommand).toLowerCase().includes(q);
-        })
+          const c = cmd as { type?: string; recipe?: string; id?: string; compId?: string; theme?: string; preset?: string };
+          return c.type?.toLowerCase().includes(q) ||
+            c.recipe?.toLowerCase().includes(q) ||
+            c.id?.toLowerCase().includes(q) ||
+            c.compId?.toLowerCase().includes(q) ||
+            c.theme?.toLowerCase().includes(q) ||
+            c.preset?.toLowerCase().includes(q) ||
+            describeCommand(c as unknown as LlmCommand).toLowerCase().includes(q);
+        }) ||
+        m.tags?.some((t) => t.toLowerCase().includes(q)) ||
+        m.provider?.toLowerCase().includes(q) ||
+        m.model?.toLowerCase().includes(q)
       );
     }
     // Apply sort mode
@@ -2394,8 +2403,42 @@ export function ChatTab() {
             ))}
           </div>
           {(searchQuery || filterMode !== "all") && (
-            <div className="mt-1 text-[9px] text-claude-text-muted">
-              {filteredMessages.length} of {messages.length} messages {filterMode !== "all" ? `(${filterMode})` : "match"}
+            <div className="mt-1 flex items-center justify-between text-[9px] text-claude-text-muted">
+              <span>
+                {filteredMessages.length} of {messages.length} messages {filterMode !== "all" ? `(${filterMode})` : "match"}
+              </span>
+              {searchQuery && filteredMessages.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      // Scroll to the first matching message
+                      const firstMatch = filteredMessages[0];
+                      if (firstMatch) {
+                        const el = document.getElementById(`msg-${firstMatch.id}`);
+                        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-claude-text-muted/10 hover:bg-claude-accent-light/30 text-claude-text-muted hover:text-claude-accent transition-colors"
+                    title="Jump to first match"
+                  >
+                    ↑ First
+                  </button>
+                  <button
+                    onClick={() => {
+                      // Scroll to the last matching message
+                      const lastMatch = filteredMessages[filteredMessages.length - 1];
+                      if (lastMatch) {
+                        const el = document.getElementById(`msg-${lastMatch.id}`);
+                        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-claude-text-muted/10 hover:bg-claude-accent-light/30 text-claude-text-muted hover:text-claude-accent transition-colors"
+                    title="Jump to last match"
+                  >
+                    ↓ Last
+                  </button>
+                </span>
+              )}
             </div>
           )}
           {/* Round 7: Quick filter chips for command types */}
@@ -2994,14 +3037,15 @@ export function ChatTab() {
           </div>
         ) : (
           filteredMessages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              searchQuery={searchQuery}
-              translatingId={translatingId}
-              onTranslate={handleTranslate}
-              messageSentiment={messageSentiment}
-            />
+            <div key={m.id} id={`msg-${m.id}`}>
+              <MessageBubble
+                message={m}
+                searchQuery={searchQuery}
+                translatingId={translatingId}
+                onTranslate={handleTranslate}
+                messageSentiment={messageSentiment}
+              />
+            </div>
           ))
         )}
       </div>

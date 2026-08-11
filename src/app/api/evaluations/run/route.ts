@@ -3,7 +3,7 @@ import { generateText } from '@/lib/llm';
 import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
 import { buildProvenance, verifyCitations, hashPrompt, type DataSourceTrace, type LlmTrace, type ProvenanceRecord } from '@/lib/provenance';
-import { runMultipleAnalyses, pickAnalysisChains, detectPrimaryLigand } from '@/lib/molcraft/recipe-runner';
+import { runMultipleAnalyses, runMultipleAnalysesWithCacheInfo, pickAnalysisChains, detectPrimaryLigand } from '@/lib/molcraft/recipe-runner';
 import { fetchPdbIdsForUniprot, fetchPdbEntryDetails, fetchUniprotMeta, type PdbEntryDetail } from '@/lib/rcsb';
 import { runBlast, runBlastDb, fetchUniprotSequence } from '@/lib/blast';
 import { efetch } from '@/lib/pubmed';
@@ -1091,7 +1091,10 @@ ${overlapSummary}${crossLitBlock}
               recipesToRun.push({ recipeId: 'virtual_screening', params: { ligandCompId, radius: 5.0, fragment_set: 'druglike' } });
             }
 
-            const results = await runMultipleAnalyses(topPdb.pdbId, recipesToRun);
+            const { results, cacheHits, cacheMisses } = await runMultipleAnalysesWithCacheInfo(topPdb.pdbId, recipesToRun);
+            if (cacheHits > 0) {
+              emit({ stage: 'llm-report', level: 'info', message: `结构分析: ${cacheHits} 个结果来自缓存, ${cacheMisses} 个新计算`, progress: 64 });
+            }
 
             // Build the StructureAnalysisData object
             structureAnalyses = {
