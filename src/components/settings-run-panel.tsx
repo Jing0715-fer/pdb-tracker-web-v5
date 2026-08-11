@@ -745,103 +745,120 @@ function RunHistoryPanel({
 }
 
 /**
- * Round 43: AnalysisSummaryCard — displays the structural analysis results
+ * Round 43/44: AnalysisSummaryCard — displays the structural analysis results
  * from the 'structure-analysis-summary' SSE event as a compact card.
  * Shows binding pocket, interactions, H-bonds, druggability, and virtual
  * screening results in a visually organized format.
+ * Round 44: Also displays batch target summaries (batch-N-structure-analysis-summary).
  */
 function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale: 'zh' | 'en' }) {
-  // Find the most recent structure-analysis-summary event
-  const summaryEvent = [...events].reverse().find(
-    (e) => e.stage === 'structure-analysis-summary' && e.analysisSummary
+  // Find all structure-analysis-summary events (primary + batch targets)
+  const allSummaries = events.filter(
+    (e) => (e.stage === 'structure-analysis-summary' || (e.stage as string)?.startsWith('batch-') && (e.stage as string).endsWith('-structure-analysis-summary')) && e.analysisSummary
   );
 
-  if (!summaryEvent?.analysisSummary) return null;
+  if (allSummaries.length === 0) return null;
 
-  const s = summaryEvent.analysisSummary;
   const zh = locale === 'zh';
 
   return (
-    <div className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-base">🔬</span>
-        <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-          {zh ? '结构分析摘要' : 'Structure Analysis Summary'}
-        </span>
-        <span className="text-[10px] text-muted-foreground ml-auto">
-          PDB: <span className="font-mono font-semibold">{s.pdbId}</span>
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        {s.bindingPocket && (
-          <div className="rounded-md bg-background/60 p-2 border border-border/40">
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
-              {zh ? '结合口袋' : 'Binding Pocket'}
+    <div className="mt-2 space-y-2">
+      {allSummaries.map((summaryEvent, idx) => {
+        const s = summaryEvent.analysisSummary as any;
+        const isBatch = (summaryEvent.stage as string)?.startsWith('batch-');
+        const targetLabel = isBatch && summaryEvent.targetUniprot
+          ? `[Target ${(summaryEvent.targetIndex as number) + 1}] ${summaryEvent.targetUniprot}`
+          : null;
+
+        return (
+          <div key={idx} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-base">🔬</span>
+              <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                {zh ? '结构分析摘要' : 'Structure Analysis Summary'}
+              </span>
+              {targetLabel && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono">
+                  {targetLabel}
+                </span>
+              )}
+              <span className="text-[10px] text-muted-foreground ml-auto">
+                PDB: <span className="font-mono font-semibold">{s.pdbId}</span>
+              </span>
             </div>
-            <div className="text-sm font-bold text-foreground">{s.bindingPocket.residueCount}</div>
-            <div className="text-[9px] text-muted-foreground">
-              {zh ? '残基' : 'residues'} · {s.bindingPocket.volume} Å³
-            </div>
-            <div className="text-[8px] text-muted-foreground/60 mt-0.5">
-              {zh ? '配体' : 'Ligand'}: <span className="font-mono">{s.bindingPocket.ligand}</span>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              {s.bindingPocket && (
+                <div className="rounded-md bg-background/60 p-2 border border-border/40">
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                    {zh ? '结合口袋' : 'Binding Pocket'}
+                  </div>
+                  <div className="text-sm font-bold text-foreground">{s.bindingPocket.residueCount}</div>
+                  <div className="text-[9px] text-muted-foreground">
+                    {zh ? '残基' : 'residues'} · {s.bindingPocket.volume} Å³
+                  </div>
+                  <div className="text-[8px] text-muted-foreground/60 mt-0.5">
+                    {zh ? '配体' : 'Ligand'}: <span className="font-mono">{s.bindingPocket.ligand}</span>
+                  </div>
+                </div>
+              )}
+              {s.allInteractions && (
+                <div className="rounded-md bg-background/60 p-2 border border-border/40">
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                    {zh ? '链间互作' : 'Interactions'}
+                  </div>
+                  <div className="text-sm font-bold text-foreground">{s.allInteractions.total}</div>
+                  <div className="text-[9px] text-muted-foreground">
+                    {zh ? '个 · 链' : 'total · chains'} {s.allInteractions.chains}
+                  </div>
+                  <div className="text-[8px] text-muted-foreground/60 mt-0.5">
+                    🤝 {s.allInteractions.hbonds} · ⚡ {s.allInteractions.saltBridges} · 💧 {s.allInteractions.hydrophobic}
+                  </div>
+                </div>
+              )}
+              {s.hbonds && (
+                <div className="rounded-md bg-background/60 p-2 border border-border/40">
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                    {zh ? '链内氢键' : 'Intra-chain H-bonds'}
+                  </div>
+                  <div className="text-sm font-bold text-foreground">{s.hbonds.total}</div>
+                  <div className="text-[9px] text-muted-foreground">
+                    {zh ? '个氢键' : 'H-bonds'}
+                  </div>
+                </div>
+              )}
+              {s.druggability && (
+                <div className="rounded-md bg-background/60 p-2 border border-border/40">
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                    {zh ? '可成药性' : 'Druggability'}
+                  </div>
+                  <div className="text-sm font-bold text-foreground">
+                    {s.druggability.score}<span className="text-[9px] text-muted-foreground">/10</span>
+                  </div>
+                  <div className="text-[9px] text-muted-foreground">
+                    {s.druggability.category}
+                  </div>
+                </div>
+              )}
+              {s.virtualScreening && (
+                <div className="rounded-md bg-background/60 p-2 border border-border/40">
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                    {zh ? '虚拟筛选' : 'Virtual Screening'}
+                  </div>
+                  <div className="text-sm font-bold text-foreground">
+                    {s.virtualScreening.topHit || '—'}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground">
+                    {zh ? '最佳片段' : 'top hit'} · Ki {s.virtualScreening.bestKi_uM} μM
+                  </div>
+                  <div className="text-[8px] text-muted-foreground/60 mt-0.5">
+                    {s.virtualScreening.fragmentsScreened} {zh ? '个片段筛选' : 'fragments screened'}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        )}
-        {s.allInteractions && (
-          <div className="rounded-md bg-background/60 p-2 border border-border/40">
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
-              {zh ? '链间互作' : 'Interactions'}
-            </div>
-            <div className="text-sm font-bold text-foreground">{s.allInteractions.total}</div>
-            <div className="text-[9px] text-muted-foreground">
-              {zh ? '个 · 链' : 'total · chains'} {s.allInteractions.chains}
-            </div>
-            <div className="text-[8px] text-muted-foreground/60 mt-0.5">
-              🤝 {s.allInteractions.hbonds} · ⚡ {s.allInteractions.saltBridges} · 💧 {s.allInteractions.hydrophobic}
-            </div>
-          </div>
-        )}
-        {s.hbonds && (
-          <div className="rounded-md bg-background/60 p-2 border border-border/40">
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
-              {zh ? '链内氢键' : 'Intra-chain H-bonds'}
-            </div>
-            <div className="text-sm font-bold text-foreground">{s.hbonds.total}</div>
-            <div className="text-[9px] text-muted-foreground">
-              {zh ? '个氢键' : 'H-bonds'}
-            </div>
-          </div>
-        )}
-        {s.druggability && (
-          <div className="rounded-md bg-background/60 p-2 border border-border/40">
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
-              {zh ? '可成药性' : 'Druggability'}
-            </div>
-            <div className="text-sm font-bold text-foreground">
-              {s.druggability.score}<span className="text-[9px] text-muted-foreground">/10</span>
-            </div>
-            <div className="text-[9px] text-muted-foreground">
-              {s.druggability.category}
-            </div>
-          </div>
-        )}
-        {s.virtualScreening && (
-          <div className="rounded-md bg-background/60 p-2 border border-border/40">
-            <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
-              {zh ? '虚拟筛选' : 'Virtual Screening'}
-            </div>
-            <div className="text-sm font-bold text-foreground">
-              {s.virtualScreening.topHit || '—'}
-            </div>
-            <div className="text-[9px] text-muted-foreground">
-              {zh ? '最佳片段' : 'top hit'} · Ki {s.virtualScreening.bestKi_uM} μM
-            </div>
-            <div className="text-[8px] text-muted-foreground/60 mt-0.5">
-              {s.virtualScreening.fragmentsScreened} {zh ? '个片段筛选' : 'fragments screened'}
-            </div>
-          </div>
-        )}
-      </div>
+        );
+      })}
     </div>
   );
 }

@@ -1943,6 +1943,40 @@ ${overlapSummary}${crossLitBlock}
                         };
                       }
                       emit({ stage: `batch-${bi}-llm`, level: 'success', message: `[Target ${bi + 1}] 结构分析完成: ${bStructureAnalyses.bindingPocket ? `口袋 ${bStructureAnalyses.bindingPocket.residueCount} 残基` : ''} ${bStructureAnalyses.allInteractions ? `互作 ${bStructureAnalyses.allInteractions.total} 个` : ''}`, progress: 54 });
+                      // Round 44: Emit structured analysis summary for batch targets too
+                      emit({
+                        stage: `batch-${bi}-structure-analysis-summary`,
+                        level: 'success',
+                        message: `[Target ${bi + 1}] 结构分析摘要`,
+                        progress: 54,
+                        targetIndex: bi,
+                        targetUniprot: bUid,
+                        analysisSummary: {
+                          pdbId: bStructureAnalyses.pdbId,
+                          bindingPocket: bStructureAnalyses.bindingPocket ? {
+                            ligand: bStructureAnalyses.bindingPocket.ligand,
+                            residueCount: bStructureAnalyses.bindingPocket.residueCount,
+                            volume: bStructureAnalyses.bindingPocket.volume,
+                          } : null,
+                          allInteractions: bStructureAnalyses.allInteractions ? {
+                            chains: `${bStructureAnalyses.allInteractions.chain1}↔${bStructureAnalyses.allInteractions.chain2}`,
+                            total: bStructureAnalyses.allInteractions.total,
+                            hbonds: bStructureAnalyses.allInteractions.hbonds,
+                            saltBridges: bStructureAnalyses.allInteractions.saltBridges,
+                            hydrophobic: bStructureAnalyses.allInteractions.hydrophobic,
+                          } : null,
+                          hbonds: bStructureAnalyses.hbonds ? { total: bStructureAnalyses.hbonds.total } : null,
+                          druggability: bStructureAnalyses.druggability ? {
+                            score: bStructureAnalyses.druggability.score,
+                            category: bStructureAnalyses.druggability.category,
+                          } : null,
+                          virtualScreening: bStructureAnalyses.virtualScreening ? {
+                            fragmentsScreened: bStructureAnalyses.virtualScreening.fragmentsScreened,
+                            topHit: bStructureAnalyses.virtualScreening.topHits[0]?.name || null,
+                            bestKi_uM: bStructureAnalyses.virtualScreening.bestKi_uM,
+                          } : null,
+                        },
+                      });
                     }
                   } catch (err) {
                     emit({ stage: `batch-${bi}-llm`, level: 'warn', message: `[Target ${bi + 1}] 结构分析跳过: ${err instanceof Error ? err.message.slice(0, 60) : String(err).slice(0, 60)}`, progress: 54 });
