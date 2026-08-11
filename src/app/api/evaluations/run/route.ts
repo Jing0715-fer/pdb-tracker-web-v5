@@ -1141,10 +1141,15 @@ ${overlapSummary}${crossLitBlock}
               // Build the StructureAnalysisData object
               const sa: StructureAnalysisData = { pdbId: topPdb.pdbId };
 
+              // Round 42: Fix data access — recipe-runner returns the raw recipe
+              // output directly (not wrapped in {data: ...} like /api/analyze/run).
+              // The raw output has fields like {ligand, radius_A, pocket_residue_count, ...}
+              // directly at the top level.
+
               // Parse binding_pocket result
               const bpRaw = results['binding_pocket'] as any;
-              if (bpRaw && bpRaw.data) {
-                const bp = bpRaw.data;
+              const bp = bpRaw?.data || bpRaw; // Handle both wrapped and raw formats
+              if (bp && (bp.pocket_residue_count || bp.residues)) {
                 const residues = bp.residues || [];
                 sa.bindingPocket = {
                   ligand: bp.ligand || ligandCompId || 'unknown',
@@ -1163,8 +1168,8 @@ ${overlapSummary}${crossLitBlock}
 
               // Parse all_interactions result
               const aiRaw = results['all_interactions'] as any;
-              if (aiRaw && aiRaw.data) {
-                const ai = aiRaw.data;
+              const ai = aiRaw?.data || aiRaw; // Handle both wrapped and raw formats
+              if (ai && (ai.total !== undefined || ai.interactions)) {
                 const interactions = ai.interactions || [];
                 const residueCounts: Record<string, number> = {};
                 for (const c of interactions) {
@@ -1195,8 +1200,8 @@ ${overlapSummary}${crossLitBlock}
 
               // Parse hbonds result
               const hbRaw = results['hbonds'] as any;
-              if (hbRaw && hbRaw.data) {
-                const hb = hbRaw.data;
+              const hb = hbRaw?.data || hbRaw; // Handle both wrapped and raw formats
+              if (hb && (hb.total_hbonds !== undefined || hb.hbonds || hb.bonds)) {
                 const bonds = hb.hbonds || hb.bonds || [];
                 sa.hbonds = {
                   total: hb.total_hbonds || hb.count || bonds.length,
@@ -1209,8 +1214,8 @@ ${overlapSummary}${crossLitBlock}
 
               // Parse druggability result
               const drugRaw = results['druggability'] as any;
-              if (drugRaw && drugRaw.data) {
-                const drug = drugRaw.data;
+              const drug = drugRaw?.data || drugRaw; // Handle both wrapped and raw formats
+              if (drug && drug.druggability_score !== undefined) {
                 const drugScore = drug.druggability_score || 0;
                 const classification = drug.classification || 'unknown';
                 const catMap: Record<string, string> = {
@@ -1236,8 +1241,8 @@ ${overlapSummary}${crossLitBlock}
 
               // Parse virtual_screening result
               const vsRaw = results['virtual_screening'] as any;
-              if (vsRaw && vsRaw.data) {
-                const vs = vsRaw.data;
+              const vs = vsRaw?.data || vsRaw; // Handle both wrapped and raw formats
+              if (vs && (vs.pocket_score !== undefined || vs.ranked_hits)) {
                 const hits = vs.ranked_hits || [];
                 sa.virtualScreening = {
                   pocketScore: vs.pocket_score || 0,
