@@ -963,6 +963,77 @@ export function ChatTab() {
     toast(`Exported ${messages.length} messages as JSON`, "success");
   }, [messages, providerLabel, toast]);
 
+  /** Round 32: Import chat from JSON (restore a previously exported conversation). */
+  const handleImportJson = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!data || !Array.isArray(data.messages)) {
+          toast("Invalid JSON: missing messages array", "error");
+          return;
+        }
+        // Validate each message has the required fields
+        const validMessages: ChatMessage[] = [];
+        let skipped = 0;
+        for (const m of data.messages) {
+          if (!m.id || !m.role || typeof m.content !== "string" || typeof m.ts !== "number") {
+            skipped++;
+            continue;
+          }
+          validMessages.push({
+            id: m.id,
+            role: m.role === "user" ? "user" : "assistant",
+            content: m.content,
+            ts: m.ts,
+            commands: m.commands,
+            provider: m.provider,
+            model: m.model,
+            durationMs: m.durationMs,
+            isError: m.isError,
+            retryable: m.retryable,
+            pinned: m.pinned,
+            bookmarked: m.bookmarked,
+            reaction: m.reaction,
+            tags: m.tags,
+            agentStep: m.agentStep,
+            pending: false, // Never restore as pending
+          });
+        }
+        if (validMessages.length === 0) {
+          toast("No valid messages found in JSON", "error");
+          return;
+        }
+        // Confirm before replacing current chat
+        if (messages.length > 0) {
+          const ok = window.confirm(
+            `Import ${validMessages.length} messages? This will replace your current ${messages.length} messages.`
+          );
+          if (!ok) return;
+        }
+        // Clear current chat and add imported messages
+        clearChat();
+        for (const m of validMessages) {
+          addMessage(m);
+        }
+        toast(
+          skipped > 0
+            ? `Imported ${validMessages.length} messages (${skipped} skipped due to missing fields)`
+            : `Imported ${validMessages.length} messages from ${file.name}`,
+          "success"
+        );
+      } catch (err) {
+        toast(`Import failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    };
+    input.click();
+  }, [messages.length, clearChat, addMessage, toast]);
+
   /** Round 8: Export command history as CSV. */
   const handleExportCommandCsv = useCallback(() => {
     if (commandHistory.length === 0) {
@@ -1959,6 +2030,26 @@ export function ChatTab() {
             </div>
           </PopoverContent>
         </Popover>
+        {/* Round 32: Provider status indicator — shows available count + rate-limit warning */}
+        {providersLoading ? (
+          <Loader2 className="h-2.5 w-2.5 text-claude-text-muted/40 animate-spin" />
+        ) : providers.length > 0 ? (
+          <span
+            className="flex items-center gap-0.5 text-[8px] text-claude-text-muted/60"
+            title={`${providers.filter(p => p.available).length} of ${providers.length} providers available`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${providers.some(p => p.available) ? "bg-green-500" : "bg-red-500"}`} />
+            {providers.filter(p => p.available).length}/{providers.length}
+          </span>
+        ) : (
+          <span
+            className="flex items-center gap-0.5 text-[8px] text-amber-600/80"
+            title="No CLI providers detected — using built-in ZAI SDK (may be rate-limited)"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            ZAI only
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-0.5">
           {messages.length > 0 && (
@@ -1996,12 +2087,15 @@ export function ChatTab() {
                     variant="ghost"
                     size="sm"
                     className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
-                    title="Export chat"
+                    title="Export / Import chat"
                   >
                     <Download className="h-3 w-3" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-44 p-1" align="end">
+                <PopoverContent className="w-48 p-1" align="end">
+                  <div className="px-2 py-1 text-[7px] font-semibold uppercase tracking-wide text-claude-text-muted/60">
+                    Export
+                  </div>
                   <button
                     onClick={handleExportMarkdown}
                     className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[10px] text-claude-text hover:bg-claude-accent-light/30 transition-colors"
@@ -2022,6 +2116,17 @@ export function ChatTab() {
                   >
                     <History className="h-3 w-3 text-claude-accent" />
                     Export commands CSV
+                  </button>
+                  <div className="my-1 border-t border-claude-border-light/30 dark:border-[#3d3832]/30" />
+                  <div className="px-2 py-1 text-[7px] font-semibold uppercase tracking-wide text-claude-text-muted/60">
+                    Import
+                  </div>
+                  <button
+                    onClick={handleImportJson}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[10px] text-claude-text hover:bg-claude-accent-light/30 transition-colors"
+                  >
+                    <Upload className="h-3 w-3 text-claude-accent" />
+                    Import from JSON
                   </button>
                 </PopoverContent>
               </Popover>
