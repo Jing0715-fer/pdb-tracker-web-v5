@@ -10,6 +10,7 @@ import { efetch } from '@/lib/pubmed';
 import { db } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { getActiveDbFsPath } from '@/lib/db';
+import { JOURNAL_IF_MAP } from '@/lib/journal-if-map';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -892,6 +893,15 @@ ${overlapSummary}${crossLitBlock}
         }
         emit({ stage: 'rcsb-detail', level: 'info', message: `拉取详细元数据`, progress: 28 });
         pdbDetails = directPdbCount > 0 ? await fetchPdbEntryDetails(pdbIds) : [];
+        // Round 49: Fill in missing IF from JOURNAL_IF_MAP when RCSB API doesn't return it
+        for (const d of pdbDetails) {
+          if (d.journalIf == null && d.journal) {
+            const normalized = d.journal.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (JOURNAL_IF_MAP[normalized]) {
+              d.journalIf = JOURNAL_IF_MAP[normalized];
+            }
+          }
+        }
         emit({ stage: 'rcsb-detail', level: 'success', message: `✓ 获取 ${pdbDetails.length} 条详细元数据`, progress: 34 });
       }
 

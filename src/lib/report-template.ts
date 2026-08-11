@@ -364,8 +364,8 @@ export function buildChapterPrompt(
 
 ## 完整 PDB 数据表（共 ${d.pdbCount ?? d.directPdbCount} 条，按分辨率/IF 排序）
 
-| # | PDB | 方法 | 分辨率(Å) | Identity (BLAST/direct) | 期刊 (IF) | 配体 | 标题 |
-|---|------|------|-----------|----------|------|------|
+| # | PDB | 方法 | 分辨率(Å) | Identity (BLAST/direct) | 期刊 (IF) | 配体 | 作者 | 标题 |
+|---|------|------|-----------|--------------------------|------|------|------|------|
 ${d.pdbTable}
 
 ---
@@ -651,6 +651,7 @@ export function buildDetailedPdbTable(
     pdbId: string; method?: string | null; resolution?: number | null;
     journal?: string | null; journalIf?: number | null; ligands?: string | null;
     title?: string | null; blastIdentity?: number | null;  // Fix 2: BLAST-derived rows carry identity% here
+    authors?: string | null;  // Round 49: Include author info
   }>,
   maxRows = 80,
 ): string {
@@ -674,10 +675,11 @@ export function buildDetailedPdbTable(
     const ifStr = e.journalIf != null ? e.journalIf.toFixed(1) : '-';
     const lig = (e.ligands || '-').replace(/\|+/g, ' ').slice(0, 20);
     const title = (e.title || '-').replace(/\|+/g, ' ').replace(/\n+/g, ' ').slice(0, 60);
+    const authors = (e.authors || '-').replace(/\|+/g, ' ').replace(/\n+/g, ' ').slice(0, 40);
     // Fix 2: show Identity% with "BLAST" tag for BLAST-derived rows so the LLM
     // and the human reader can immediately distinguish "direct PDB" from "BLAST homolog".
     const ident = e.blastIdentity != null ? `BLAST ${e.blastIdentity.toFixed(1)}%` : 'direct';
-    return `| ${i + 1} | ${e.pdbId} | ${method} | ${res} | ${ident} | ${j} (${ifStr}) | ${lig} | ${title} |`;
+    return `| ${i + 1} | ${e.pdbId} | ${method} | ${res} | ${ident} | ${j} (IF: ${ifStr}) | ${lig} | ${authors} | ${title} |`;
   }).join('\n');
 }
 

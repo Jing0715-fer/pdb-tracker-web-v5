@@ -50,9 +50,16 @@ const nextConfig: NextConfig = {
   // file (db/custom.db) is written to by API routes (e.g. run center jobs,
   // PDB weekly fetch, seed-demo). Without this, every DB write triggers a
   // full page reload in dev mode.
+  // Round 49: Ignore SQLite database files (including WAL/journal) + other
+  // runtime-generated files to prevent HMR from triggering page reloads
+  // when API routes write to the database.
   watchOptions: {
     ignored: [
       '**/db/**',
+      '**/*.db',
+      '**/*.db-journal',
+      '**/*.db-wal',
+      '**/*.db-shm',
       '**/dev.log',
       '**/dev.out.log',
       '**/.hermes/**',
@@ -60,6 +67,8 @@ const nextConfig: NextConfig = {
       '**/wiki/**',
       '**/download/**',
       '**/upload/**',
+      '**/.zscripts/**',
+      '**/worklog.md',
     ],
   },
   // Webpack config — used when `next dev --webpack` or `next build` is run.
