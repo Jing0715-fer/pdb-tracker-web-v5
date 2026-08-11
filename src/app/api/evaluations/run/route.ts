@@ -3,7 +3,7 @@ import { generateText } from '@/lib/llm';
 import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
 import { buildProvenance, verifyCitations, hashPrompt, type DataSourceTrace, type LlmTrace, type ProvenanceRecord } from '@/lib/provenance';
-import { runMultipleAnalyses } from '@/lib/molcraft/recipe-runner';
+import { runMultipleAnalyses, pickAnalysisChains, detectPrimaryLigand } from '@/lib/molcraft/recipe-runner';
 import { fetchPdbIdsForUniprot, fetchPdbEntryDetails, fetchUniprotMeta, type PdbEntryDetail } from '@/lib/rcsb';
 import { runBlast, runBlastDb, fetchUniprotSequence } from '@/lib/blast';
 import { efetch } from '@/lib/pubmed';
@@ -1045,9 +1045,12 @@ ${overlapSummary}${crossLitBlock}
           emit({ stage: 'llm-report', level: 'info', message: `已附加 ${litInfo.count} 篇 PubMed 文献（按 IF 降序）到 LLM 上下文`, progress: 65 });
         }
 
-        // ── Round 34: Run structural analysis on the top PDB for the report ──
+        // ── Round 34/35: Run structural analysis on the top PDB for the report ──
         // Use the Analysis module's recipes (binding_pocket, all_interactions,
-        // hbonds) to generate structural insights that enrich the LLM report.
+        // hbonds, druggability) to generate structural insights that enrich
+        // the LLM report.
+        // Round 35: Now uses automatic chain detection and ligand detection
+        // instead of hardcoded A/B chains.
         let structureAnalyses: StructureAnalysisData | undefined;
         try {
           // Pick the top PDB (highest resolution X-ray structure, or first available)
@@ -1057,15 +1060,19 @@ ${overlapSummary}${crossLitBlock}
             || pdbDetails[0];
 
           if (topPdb) {
-            emit({ stage: 'llm-report', level: 'info', message: `正在对重点结构 ${topPdb.pdbId} 运行结构分析（结合口袋、互作、氢键）…`, progress: 64 });
+            emit({ stage: 'llm-report', level: 'info', message: `正在对重点结构 ${topPdb.pdbId} 运行结构分析（结合口袋、互作、氢键、可药性）…`, progress: 64 });
 
-            // Determine chain IDs from the PDB details (default to A/B if available)
-            const chain1 = 'A';
-            const chain2 = topPdb.pdbId === '4HHB' ? 'B' : 'A'; // 4HHB is a tetramer (A,B,C,D)
+            // Round 35: Auto-detect chain IDs by parsing the PDB file
+            const { chain1, chain2 } = await pickAnalysisChains(topPdb.pdbId);
+            emit({ stage: 'llm-report', level: 'info', message: `检测到链: ${chain1}${chain1 !== chain2 ? ', ' + chain2 : ' (单链，链内分析)'}`, progress: 64 });
 
-            // Determine ligand compId from the PDB details (ligands is a "; "-separated string)
-            const ligandStr = typeof topPdb.ligands === 'string' ? topPdb.ligands : '';
-            const ligandCompId = ligandStr.split(/[;,\s]+/).filter(Boolean)[0];
+            // Round 35: Auto-detect the primary ligand by parsing the PDB file
+            // Falls back to the ligand string from RCSB if detection fails
+            let ligandCompId = await detectPrimaryLigand(topPdb.pdbId);
+            if (!ligandCompId) {
+              const ligandStr = typeof topPdb.ligands === 'string' ? topPdb.ligands : '';
+              ligandCompId = ligandStr.split(/[;,\s]+/).filter(Boolean)[0];
+            }
 
             const recipesToRun: Array<{ recipeId: string; params?: Record<string, unknown> }> = [
               { recipeId: 'all_interactions', params: { chain1, chain2 } },
@@ -1073,6 +1080,8 @@ ${overlapSummary}${crossLitBlock}
             ];
             if (ligandCompId) {
               recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
+              // Round 35: Also run the druggability recipe
+              recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId, radius: 5.0 } });
             }
 
             const results = await runMultipleAnalyses(topPdb.pdbId, recipesToRun);
@@ -1148,7 +1157,35 @@ ${overlapSummary}${crossLitBlock}
               };
             }
 
-            emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${structureAnalyses.bindingPocket ? `口袋 ${structureAnalyses.bindingPocket.residueCount} 残基` : ''} ${structureAnalyses.allInteractions ? `互作 ${structureAnalyses.allInteractions.total} 个` : ''} ${structureAnalyses.hbonds ? `氢键 ${structureAnalyses.hbonds.total} 个` : ''}`, progress: 65 });
+            // Round 35: Parse druggability result
+            const drugRaw = results['druggability'] as any;
+            if (drugRaw && drugRaw.data) {
+              const drug = drugRaw.data;
+              const drugScore = drug.druggability_score || 0;
+              const classification = drug.classification || 'unknown';
+              // Map Chinese category labels
+              const categoryMap: Record<string, string> = {
+                'highly_druggable': '高（高度可成药）',
+                'druggable': '中（可成药）',
+                'moderately_druggable': '中低（中度可成药）',
+                'difficult': '低（成药困难）',
+              };
+              const breakdown = drug.score_breakdown || {};
+              structureAnalyses.druggability = {
+                score: Math.round(drugScore / 10), // Normalize 0-100 to 0-10
+                category: categoryMap[classification] || classification,
+                rationale: [
+                  `口袋体积 ${drug.pocket_volume_A3 || '?'} Å³`,
+                  `疏水 ${drug.hydrophobic_pct || 0}% / 极性 ${drug.polar_pct || 0}% / 电荷 ${drug.charged_pct || 0}%`,
+                  `分类: ${classification}`,
+                  breakdown.volume ? `体积评分 ${breakdown.volume}` : '',
+                  breakdown.hydrophobicity ? `疏水性评分 ${breakdown.hydrophobicity}` : '',
+                  breakdown.polarity ? `极性评分 ${breakdown.polarity}` : '',
+                ].filter(Boolean).join('; '),
+              };
+            }
+
+            emit({ stage: 'llm-report', level: 'success', message: `结构分析完成: ${structureAnalyses.bindingPocket ? `口袋 ${structureAnalyses.bindingPocket.residueCount} 残基` : ''} ${structureAnalyses.allInteractions ? `互作 ${structureAnalyses.allInteractions.total} 个` : ''} ${structureAnalyses.hbonds ? `氢键 ${structureAnalyses.hbonds.total} 个` : ''} ${structureAnalyses.druggability ? `可药性 ${structureAnalyses.druggability.score}/10` : ''}`, progress: 65 });
           }
         } catch (err) {
           // Structural analysis is optional — don't fail the report if it errors
