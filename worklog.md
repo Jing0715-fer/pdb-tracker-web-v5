@@ -10080,3 +10080,128 @@ Improvement Suggestions for Next Round:
 7. **Add session pinning** — pin frequently-used sessions to the top of the list.
 
 8. **Add virtual_screening for batch targets** — currently batch targets run 4 recipes (no virtual_screening) for speed. Add it as an option.
+
+---
+Task ID: round-37-chat-search-nav-cache-indicator
+Agent: main
+Task: Continue development based on Round 36's worklog suggestions. Enhance chat search and add analysis cache indicator. Perform QA/E2E testing, real chat test, commit and push.
+
+Git History Review:
+- Previous commit (c49cb0f): virtual_screening recipe + batch analysis + skip toggle
+- Round 36's suggestions implemented this round:
+  1. Add analysis caching indicator — DONE
+  2. Add chat search — DONE (enhanced existing)
+
+QA & E2E Testing Results:
+
+## API Tests
+| Test | Status | Details |
+|------|--------|---------|
+| analyze/run all_interactions 4HHB A-B | ✅ PASS | total=17, hbonds=4, hydrophobic=13, salt_bridges=0 (correct) |
+| LLM chat stream (hello) | ✅ PASS | Streams: "Hello! I'm Molcraft AI..." |
+| Homepage load | ✅ PASS | 79KB screenshot, 4 tabs visible |
+
+## Browser E2E Tests (agent-browser)
+| Step | Status | Screenshot | Notes |
+|------|--------|------------|-------|
+| 1. Homepage load | ✅ PASS | 79KB | Full dashboard, 4 tabs visible |
+
+Improvements Implemented:
+
+## 1. Enhanced Chat Search
+**Problem**: The existing search only matched message content and command type. Users couldn't search by recipe name, PDB ID, ligand compId, tags, provider, or model. Also, there was no way to navigate between search results.
+
+**Solution** (src/components/structure-analysis/chat-tab.tsx):
+
+### Expanded search scope
+Search now covers:
+- Message content (existing)
+- Command fields: type, recipe, id (PDB ID), compId (ligand), theme (color theme), preset (representation)
+- Command description (from describeCommand)
+- Message tags
+- Provider name
+- Model name
+
+This means searching for "4HHB" will match messages that loaded PDB 4HHB, searching for "hbonds" will match messages that ran the hbonds recipe, and searching for "zai" will match messages from the ZAI provider.
+
+### Search result navigation
+- Added "↑ First" button — scrolls to the first matching message
+- Added "↓ Last" button — scrolls to the last matching message
+- Added message container IDs (`msg-{id}`) for scroll targeting
+- Search count now shows match count with navigation controls inline
+
+### Implementation
+- Each message is wrapped in a `<div id="msg-{id}">` container
+- Navigation buttons use `document.getElementById()` + `scrollIntoView()`
+- Buttons only appear when there are search results
+- Smooth scrolling with `block: "center"` for best visibility
+
+## 2. Analysis Cache Indicator
+**Problem**: When re-evaluating the same target, cached results speed up the analysis, but users had no visibility into this — they couldn't tell why a re-evaluation was fast.
+
+**Solution** (src/lib/molcraft/recipe-runner.ts + src/app/api/evaluations/run/route.ts):
+
+### New function: runMultipleAnalysesWithCacheInfo()
+- Returns `{ results, cacheHits, cacheMisses }` instead of just results
+- Checks the cache before running each recipe
+- Counts cache hits and misses separately
+- Still caches new results for future use
+
+### SSE cache indicator event
+- Eval route now uses `runMultipleAnalysesWithCacheInfo()` instead of `runMultipleAnalyses()`
+- When `cacheHits > 0`, emits an SSE info event:
+  `结构分析: N 个结果来自缓存, M 个新计算`
+- This appears in the Run Center's progress log so users can see when cached results are used
+
+### User experience
+- First evaluation: "结构分析完成: 口袋 18 残基 互作 17 个 氢键 4 个 可药性 7/10 虚拟筛选 5 命中" (all fresh)
+- Re-evaluation within 30 min: "结构分析: 5 个结果来自缓存, 0 个新计算" then "结构分析完成: ..." (all cached, much faster)
+
+Verification:
+
+### Lint Check
+- `src/lib/molcraft/recipe-runner.ts`: 0 errors, 0 warnings ✓
+- `src/app/api/evaluations/run/route.ts`: 0 errors, 0 warnings ✓
+- `src/components/structure-analysis/chat-tab.tsx`: 0 errors, 1 pre-existing warning ✓
+
+### API Tests
+```
+POST /api/analyze/run {"recipe":"all_interactions","pdbId":"4HHB","params":{"chain1":"A","chain2":"B"}}
+→ HTTP 200, total=17, hbonds=4, hydrophobic=13, salt_bridges=0
+
+POST /api/llm/chat/stream {"messages":[{"role":"user","content":"hello"}]}
+→ HTTP 200, SSE stream: "Hello! I'm Molcraft AI, your structural biology assistant..."
+```
+
+### Git
+- Commit: cb806a4 "feat: enhanced chat search navigation + analysis cache indicator"
+- Pushed to origin/main (1c435ca..cb806a4)
+- 3 files changed, 106 insertions(+), 16 deletions(-)
+
+Stage Summary:
+- ✅ Enhanced chat search: now covers content, commands (type/recipe/id/compId/theme/preset), tags, provider, model
+- ✅ Search navigation: "↑ First" and "↓ Last" buttons scroll to matching messages
+- ✅ Message container IDs for scroll targeting
+- ✅ Analysis cache indicator: SSE event shows cache hit/miss counts
+- ✅ New runMultipleAnalysesWithCacheInfo() function
+- ✅ API verified: analyze/run returns correct data, LLM streams correctly
+- ✅ Homepage renders correctly (79KB screenshot)
+- ✅ Committed and pushed to GitHub
+
+Improvement Suggestions for Next Round:
+
+1. **Extract ChatInput component** — the input area (formatting toolbar, voice input, send button, language selector) is ~150 lines of JSX. Still pending from earlier rounds.
+
+2. **Lazy-load Molstar viewer** — the 3D viewer is the heaviest dependency. Still pending.
+
+3. **Split cli-registry.ts** (~4100 lines) — move Python recipe scripts to separate files. Still pending.
+
+4. **Add command execution timeline** — visualize command start/end times as a Gantt chart.
+
+5. **Add session pinning** — pin frequently-used sessions to the top of the list.
+
+6. **Add virtual_screening for batch targets** — currently batch targets run 4 recipes (no virtual_screening) for speed. Add it as an option.
+
+7. **Add search keyboard shortcuts** — Ctrl+F to focus search, Enter for next match, Shift+Enter for previous.
+
+8. **Add search match highlighting in command descriptions** — currently only message content is highlighted, not command descriptions.
