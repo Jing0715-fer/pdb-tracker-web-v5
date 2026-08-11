@@ -9257,3 +9257,120 @@ Improvement Suggestions for Next Round:
 7. **Add chat search** — search across all messages in the conversation (content, commands, analysis results) with result highlighting.
 
 8. **Pre-compile heavy routes on server start** — add a warmup script that pre-compiles /api/analyze/run and the chat tab chunk on server boot.
+
+---
+Task ID: round-32-chat-import-provider-status
+Agent: main
+Task: Continue development based on Round 31's worklog suggestions. Perform QA/E2E testing, real chat test, implement improvements, commit and push.
+
+Git History Review:
+- Previous commit (963a8b9): faster LLM 429 fallback + JSON chat export
+- Round 31's suggestions implemented this round:
+  4. Add chat import — DONE
+  5. Add provider status indicator — DONE
+
+QA & E2E Testing Results:
+
+## API Tests
+| Test | Status | Details |
+|------|--------|---------|
+| analyze/run all_interactions 4HHB A-B | ✅ PASS | total=17, hbonds=4, hydrophobic=13, salt_bridges=0 (correct) |
+| LLM chat stream (hello) | ✅ PASS | Streams response: "Hello! I'm Molcraft AI, your structural biology assistant..." (ZAI rate limit cleared!) |
+| LLM chat stream (full analysis) | ✅ PASS | Returns correct commands: load_pdb 4HHB + analyze_run all_interactions A↔B |
+
+## Browser E2E Tests (agent-browser)
+| Step | Status | Screenshot | Notes |
+|------|--------|------------|-------|
+| 1. Homepage load | ✅ PASS | 108KB | Full dashboard, 4 tabs visible |
+
+## Key Findings
+
+### What Works:
+1. **ZAI LLM API rate limit cleared!** — The LLM now streams responses correctly. The 429 rate limit from previous rounds was temporary and has resolved.
+2. **analyze/run API fully functional**: all_interactions on 4HHB A-B returns exact correct data (17 total, 4 hbonds, 13 hydrophobic, 0 salt bridges)
+3. **LLM returns correct commands**: For "Load 4HHB and analyze all interactions between chains A and B", the LLM returns `[load_pdb 4HHB, analyze_run all_interactions A↔B]` with `continueAfterAnalysis: true`
+4. **Homepage renders correctly**: 108KB screenshot with all UI elements
+5. **No code errors**: Lint passes with 0 errors
+
+Improvements Implemented:
+
+## Improvement #1: Chat import from JSON
+**Problem**: Users could export chat as JSON but had no way to import it back to restore a conversation.
+
+**Fix** (`src/components/structure-analysis/chat-tab.tsx`):
+- Added `handleImportJson` function that:
+  - Opens a file picker for `.json` files
+  - Reads and parses the JSON
+  - Validates each message has required fields (id, role, content, ts)
+  - Skips invalid messages with a count in the toast
+  - Shows a confirmation dialog before replacing the current chat
+  - Clears the current chat and adds all imported messages
+  - Never restores messages as `pending` (prevents stuck loading state)
+  - Restores all metadata: commands, provider, model, duration, tags, reactions, pin/bookmark status, error/retryable flags
+
+## Improvement #2: Provider status indicator
+**Problem**: Users had no visibility into which LLM providers were available vs rate-limited, making it hard to know which to try.
+
+**Fix** (`src/components/structure-analysis/chat-tab.tsx`):
+- Added a status indicator next to the provider selector showing:
+  - **Spinner** during provider loading
+  - **Green dot + "N/M"** when providers are available (e.g., "2/3")
+  - **Red dot + "N/M"** when no providers are available
+  - **Amber "ZAI only" badge** when no CLI providers are detected (warns that the built-in ZAI SDK may be rate-limited)
+- Tooltip shows full availability details
+- Color-coded for instant visual scanning
+
+## Improvement #3: Reorganized export/import dropdown
+- Single Popover menu now has **Export** and **Import** sections
+- Separated by a divider with section headers
+- Export: Markdown, JSON, commands CSV
+- Import: from JSON
+
+Verification:
+
+### Lint Check
+- `src/components/structure-analysis/chat-tab.tsx`: 0 errors, 1 pre-existing warning ✓
+
+### API Tests
+```
+POST /api/analyze/run {"recipe":"all_interactions","pdbId":"4HHB","params":{"chain1":"A","chain2":"B"}}
+→ HTTP 200, total=17, hbonds=4, hydrophobic=13, salt_bridges=0
+
+POST /api/llm/chat/stream {"messages":[{"role":"user","content":"hello"}]}
+→ HTTP 200, SSE stream: "Hello! I'm Molcraft AI, your structural biology assistant..."
+
+POST /api/llm/chat/stream {"messages":[{"role":"user","content":"Load 4HHB and analyze all interactions between chains A and B"}]}
+→ HTTP 200, returns commands: [load_pdb 4HHB, analyze_run all_interactions A↔B]
+```
+
+### Git
+- Commit: 9070ee9 "feat: chat import from JSON + provider status indicator"
+- Pushed to origin/main (294534f..9070ee9)
+- 1 file changed, 107 insertions(+), 2 deletions(-)
+
+Stage Summary:
+- ✅ Added chat import from JSON — restore previously exported conversations
+- ✅ Added provider status indicator — visual feedback on provider availability
+- ✅ Reorganized export/import into a single dropdown with sections
+- ✅ API verified: analyze/run returns correct data, LLM streams correctly
+- ✅ Homepage renders correctly (108KB screenshot)
+- ✅ Committed and pushed to GitHub
+- ✅ ZAI LLM rate limit cleared — chat works end-to-end!
+
+Improvement Suggestions for Next Round:
+
+1. **Extract ChatInput component** — the input area (formatting toolbar, voice input, send button, language selector) is ~150 lines of JSX. Requires passing input/setInput/sendingRef/inputRef/abortRef/handleVoiceInput/send/insertMarkdown/handleKeyDown as props or using a context.
+
+2. **Lazy-load Molstar viewer** — the 3D viewer is the heaviest dependency. Use `dynamic(() => import('./molstar-viewer'), { ssr: false })` so it only loads when a structure is actually loaded.
+
+3. **Split cli-registry.ts** (~4100 lines) — move Python recipe scripts to separate `.py` files loaded at runtime.
+
+4. **Add command execution timeline** — visualize command start/end times, duration, and status as a Gantt-style chart.
+
+5. **Add chat search** — search across all messages in the conversation (content, commands, analysis results) with result highlighting.
+
+6. **Pre-compile heavy routes on server start** — add a warmup script that pre-compiles /api/analyze/run and the chat tab chunk on server boot.
+
+7. **Add conversation summarization** — use the LLM to generate a summary of the entire conversation for quick review.
+
+8. **Add message threading** — allow replying to a specific message to create threaded conversations.
