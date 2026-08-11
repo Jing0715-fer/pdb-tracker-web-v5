@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -214,6 +214,15 @@ export function ChatTab() {
   const structures = useAppStore((s) => s.structures);
   const toast = useAppStore((s) => s.toast);
   const logCommand = useAppStore((s) => s.logCommand);
+  // Round 33: Chat session management
+  const chatSessions = useAppStore((s) => s.chatSessions);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const createChatSession = useAppStore((s) => s.createChatSession);
+  const switchChatSession = useAppStore((s) => s.switchChatSession);
+  const deleteChatSession = useAppStore((s) => s.deleteChatSession);
+  const renameChatSession = useAppStore((s) => s.renameChatSession);
+  const saveCurrentSession = useAppStore((s) => s.saveCurrentSession);
+  const [sessionOpen, setSessionOpen] = useState(false);
 
   // Round 4: Chat search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -378,6 +387,15 @@ export function ChatTab() {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages, autoScroll]);
+
+  // Round 33: Auto-save current session when messages change (debounced)
+  useEffect(() => {
+    if (!activeSessionId || messages.length === 0) return;
+    const timer = setTimeout(() => {
+      saveCurrentSession();
+    }, 2000); // 2s debounce
+    return () => clearTimeout(timer);
+  }, [messages, activeSessionId, saveCurrentSession]);
 
   // Round 15: Track unread messages when chat is not visible
   // Uses IntersectionObserver to detect if the chat container is visible
@@ -2191,8 +2209,40 @@ export function ChatTab() {
               <Button
                 variant="ghost"
                 size="sm"
+                className={`h-7 w-7 p-0 ${sessionOpen ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
+                onClick={() => setSessionOpen(!sessionOpen)}
+                title="Chat sessions"
+              >
+                <MessageSquare className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-accent"
+                onClick={() => {
+                  // Save current session before creating a new one
+                  if (activeSessionId && messages.length > 0) {
+                    saveCurrentSession();
+                  }
+                  createChatSession();
+                  toast("New chat session created", "success");
+                }}
+                title="New chat session"
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 className="h-7 w-7 p-0 text-claude-text-muted hover:text-destructive"
-                onClick={() => { clearChat(); toast("Chat cleared", "info"); }}
+                onClick={() => {
+                  if (activeSessionId && messages.length > 0) {
+                    saveCurrentSession();
+                    toast("Session saved", "success");
+                  }
+                  clearChat();
+                  toast("Chat cleared", "info");
+                }}
                 title="Clear chat"
               >
                 <Trash2 className="h-3 w-3" />
@@ -2201,6 +2251,91 @@ export function ChatTab() {
           )}
         </div>
       </div>
+
+      {/* Round 33: Chat sessions panel (collapsible) */}
+      {sessionOpen && (
+        <div className="shrink-0 border-b border-claude-border-light/40 dark:border-[#3d3832]/40 px-2 py-1.5 bg-claude-bg/40 dark:bg-[#1a1917]/40 max-h-64 overflow-y-auto sa-scroll">
+          <div className="flex items-center gap-1 mb-1">
+            <MessageSquare className="h-2.5 w-2.5 text-claude-accent" />
+            <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted">
+              Chat Sessions ({chatSessions.length})
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-5 px-1.5 text-[8px] gap-0.5 text-claude-accent hover:bg-claude-accent-light/30"
+              onClick={() => {
+                if (activeSessionId && messages.length > 0) saveCurrentSession();
+                createChatSession();
+                toast("New chat session created", "success");
+              }}
+            >
+              <Plus className="h-2.5 w-2.5" />
+              New
+            </Button>
+          </div>
+          {chatSessions.length === 0 ? (
+            <div className="text-[9px] text-claude-text-muted text-center py-3">
+              No saved sessions yet. Click "New" to start a new conversation.
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {chatSessions.map((s) => (
+                <div
+                  key={s.id}
+                  className={`group/sess flex items-center gap-1 rounded px-1.5 py-1 text-[10px] cursor-pointer transition-colors ${
+                    s.id === activeSessionId
+                      ? "bg-claude-accent-light/30 text-claude-accent"
+                      : "text-claude-text hover:bg-claude-accent-light/20"
+                  }`}
+                  onClick={() => {
+                    switchChatSession(s.id);
+                    setSessionOpen(false);
+                    toast(`Switched to "${s.title}"`, "info");
+                  }}
+                >
+                  <MessageSquare className="h-2.5 w-2.5 shrink-0 opacity-60" />
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate font-medium">{s.title}</div>
+                    <div className="text-[7px] text-claude-text-muted/60">
+                      {s.messages.length} msgs · {new Date(s.updatedAt).toLocaleDateString()} {new Date(s.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </div>
+                  {/* Rename button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newTitle = window.prompt("Rename session:", s.title);
+                      if (newTitle && newTitle.trim()) {
+                        renameChatSession(s.id, newTitle.trim());
+                        toast("Session renamed", "success");
+                      }
+                    }}
+                    className="grid h-4 w-4 place-items-center rounded text-claude-text-muted/40 hover:text-claude-accent hover:bg-claude-accent-light/40 opacity-0 group-hover/sess:opacity-100 transition-opacity shrink-0"
+                    title="Rename session"
+                  >
+                    <Pencil className="h-2 w-2" />
+                  </button>
+                  {/* Delete button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`Delete session "${s.title}"? This cannot be undone.`)) {
+                        deleteChatSession(s.id);
+                        toast("Session deleted", "info");
+                      }
+                    }}
+                    className="grid h-4 w-4 place-items-center rounded text-claude-text-muted/40 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover/sess:opacity-100 transition-opacity shrink-0"
+                    title="Delete session"
+                  >
+                    <Trash2 className="h-2 w-2" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Round 4: Search bar (collapsible) */}
       {showSearch && messages.length > 0 && (

@@ -22,6 +22,8 @@ const STORAGE_KEY_CHAT_PROVIDER = "pdb-tracker:llm-provider:v2";
 const STORAGE_KEY_MEASUREMENTS = "pdb-tracker:measurements:v1";
 const STORAGE_KEY_INTERACTION_LINES = "pdb-tracker:interaction-lines:v1";
 const STORAGE_KEY_CHAT_MESSAGES = "pdb-tracker:chat-messages:v1";
+const STORAGE_KEY_CHAT_SESSIONS = "pdb-tracker:chat-sessions:v1";
+const STORAGE_KEY_ACTIVE_SESSION = "pdb-tracker:active-chat-session:v1";
 
 function loadFromStorage<T>(key: string): T[] {
   if (typeof window === "undefined") return [];
@@ -246,6 +248,15 @@ interface AppState {
   chatProvider: string;
   setChatProvider: (providerId: string) => void;
 
+  // Round 33: Chat session management — multiple named conversations
+  chatSessions: ChatSession[];
+  activeSessionId: string | null;
+  createChatSession: (title?: string) => string;
+  switchChatSession: (id: string) => void;
+  deleteChatSession: (id: string) => void;
+  renameChatSession: (id: string, title: string) => void;
+  saveCurrentSession: () => void;
+
   // Chart presets (save/load chart parameter combinations)
   chartPresets: ChartPreset[];
   saveChartPreset: (preset: ChartPreset) => void;
@@ -297,6 +308,17 @@ export interface ChatMessage {
   originalContent?: string;
   /** Round 24: Bookmark folder name for organization. */
   bookmarkFolder?: string;
+}
+
+/** Round 33: A chat session — a named conversation with its own message history. */
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+  /** Optional provider used for this session (for display). */
+  provider?: string;
 }
 
 export interface ChartPreset {
@@ -737,6 +759,101 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ chatProvider: providerId });
   },
 
+  // Round 33: Chat session management
+  chatSessions: loadChatSessions(),
+  activeSessionId: loadActiveSessionId(),
+  createChatSession: (title) => {
+    const id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const now = Date.now();
+    const session: ChatSession = {
+      id,
+      title: title || `Session ${new Date().toLocaleString()}`,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      provider: get().chatProvider || undefined,
+    };
+    const sessions = [session, ...get().chatSessions];
+    persistChatSessions(sessions);
+    persistActiveSessionId(id);
+    // Clear current messages for the new session
+    persistChatMessages([]);
+    set({ chatSessions: sessions, activeSessionId: id, chatMessages: [] });
+    return id;
+  },
+  switchChatSession: (id) => {
+    const session = get().chatSessions.find((s) => s.id === id);
+    if (!session) return;
+    // Save current messages to the current session before switching
+    const currentId = get().activeSessionId;
+    if (currentId) {
+      const sessions = get().chatSessions.map((s) =>
+        s.id === currentId
+          ? { ...s, messages: get().chatMessages.filter((m) => !m.pending), updatedAt: Date.now() }
+          : s
+      );
+      persistChatSessions(sessions);
+      set({ chatSessions: sessions });
+    }
+    // Load the target session's messages
+    const messages = session.messages.filter((m) => !m.pending);
+    persistChatMessages(messages);
+    persistActiveSessionId(id);
+    set({ activeSessionId: id, chatMessages: messages });
+  },
+  deleteChatSession: (id) => {
+    const sessions = get().chatSessions.filter((s) => s.id !== id);
+    persistChatSessions(sessions);
+    // If we deleted the active session, switch to the first remaining or create new
+    if (get().activeSessionId === id) {
+      if (sessions.length > 0) {
+        const next = sessions[0];
+        const messages = next.messages.filter((m) => !m.pending);
+        persistChatMessages(messages);
+        persistActiveSessionId(next.id);
+        set({ chatSessions: sessions, activeSessionId: next.id, chatMessages: messages });
+      } else {
+        persistChatMessages([]);
+        persistActiveSessionId(null);
+        set({ chatSessions: sessions, activeSessionId: null, chatMessages: [] });
+      }
+    } else {
+      set({ chatSessions: sessions });
+    }
+  },
+  renameChatSession: (id, title) => {
+    const sessions = get().chatSessions.map((s) =>
+      s.id === id ? { ...s, title, updatedAt: Date.now() } : s
+    );
+    persistChatSessions(sessions);
+    set({ chatSessions: sessions });
+  },
+  saveCurrentSession: () => {
+    const id = get().activeSessionId;
+    if (!id) return;
+    // Auto-generate title from first user message if title is default
+    const messages = get().chatMessages;
+    const sessions = get().chatSessions.map((s) => {
+      if (s.id !== id) return s;
+      let title = s.title;
+      if (title.startsWith("Session ") && messages.length > 0) {
+        const firstUser = messages.find((m) => m.role === "user");
+        if (firstUser) {
+          title = firstUser.content.slice(0, 40) + (firstUser.content.length > 40 ? "…" : "");
+        }
+      }
+      return {
+        ...s,
+        title,
+        messages: messages.filter((m) => !m.pending),
+        updatedAt: Date.now(),
+        provider: get().chatProvider || undefined,
+      };
+    });
+    persistChatSessions(sessions);
+    set({ chatSessions: sessions });
+  },
+
   chartPresets: loadChartPresets(),
   saveChartPreset: (preset) =>
     set((state) => {
@@ -897,5 +1014,48 @@ function persistChatMessages(messages: ChatMessage[]): void {
     // Cap at 50 messages, strip pending messages (they're transient)
     const toSave = messages.filter((m) => !m.pending).slice(-50);
     localStorage.setItem(STORAGE_KEY_CHAT_MESSAGES, JSON.stringify(toSave));
+  } catch { /* ignore */ }
+}
+
+// ---- chat session persistence (Round 33) ----
+function loadChatSessions(): ChatSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CHAT_SESSIONS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, 20); // Cap at 20 sessions
+  } catch {
+    return [];
+  }
+}
+
+function persistChatSessions(sessions: ChatSession[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Cap at 20 sessions
+    const toSave = sessions.slice(0, 20);
+    localStorage.setItem(STORAGE_KEY_CHAT_SESSIONS, JSON.stringify(toSave));
+  } catch { /* ignore */ }
+}
+
+function loadActiveSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(STORAGE_KEY_ACTIVE_SESSION) || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveSessionId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) {
+      localStorage.setItem(STORAGE_KEY_ACTIVE_SESSION, id);
+    } else {
+      localStorage.removeItem(STORAGE_KEY_ACTIVE_SESSION);
+    }
   } catch { /* ignore */ }
 }
