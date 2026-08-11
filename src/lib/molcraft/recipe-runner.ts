@@ -431,13 +431,19 @@ export async function runAnalysisRecipe(
       } catch {
         // JSON parsing failed — result stays null
         console.warn(
-          `[recipe-runner] ${recipeId} on ${pdbId}: JSON parse failed. stderr: ${stderr.slice(0, 200)}`
+          `[recipe-runner] ${recipeId} on ${pdbId}: JSON parse failed. stdout: ${trimmed.slice(0, 200)}, stderr: ${stderr.slice(0, 200)}`
         );
       }
     }
 
-    // Round 35: Cache the result
-    setCached(pdbId, recipeId, params, result);
+    // Round 35/48: Cache the result — but ONLY if it's non-null.
+    // Null results (failed recipes) should NOT be cached, otherwise
+    // subsequent runs will skip the actual computation and return null
+    // immediately from cache, making it impossible to recover from
+    // transient failures (e.g., PDB download timeout, Python error).
+    if (result !== null) {
+      setCached(pdbId, recipeId, params, result);
+    }
     return result;
   } finally {
     // Cleanup script file

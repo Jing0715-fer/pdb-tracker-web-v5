@@ -13,7 +13,7 @@
  * display-related props.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   User, Bot, Check, X, Clock, Loader2, Terminal, Brain, Cog, Timer,
   AlertCircle, Copy, Play, RotateCcw, Pencil, ThumbsUp, ThumbsDown,
@@ -36,61 +36,61 @@ import {
 /** Improvement #3: Global event bus for retry — the MessageBubble dispatches a
  *  custom event that the ChatTab listens for, avoiding the need to pass the
  *  send callback through props or the store. */
-const RETRY_EVENT = "chat-retry";
+export const RETRY_EVENT = "chat-retry";
 function dispatchRetry(prompt: string) {
   window.dispatchEvent(new CustomEvent(RETRY_EVENT, { detail: prompt }));
 }
 
 /** Round 3: Global event bus for command re-execution. */
-const REEXEC_EVENT = "chat-reexec-command";
+export const REEXEC_EVENT = "chat-reexec-command";
 function dispatchReexec(cmd: LlmCommand) {
   window.dispatchEvent(new CustomEvent(REEXEC_EVENT, { detail: cmd }));
 }
 
 /** Round 4: Global event bus for message editing — re-sends an edited user message. */
-const EDIT_EVENT = "chat-edit-message";
+export const EDIT_EVENT = "chat-edit-message";
 function dispatchEdit(messageId: string, newContent: string) {
   window.dispatchEvent(new CustomEvent(EDIT_EVENT, { detail: { messageId, newContent } }));
 }
 
 /** Round 5: Global event bus for message reactions (👍/👎). */
-const REACTION_EVENT = "chat-reaction";
+export const REACTION_EVENT = "chat-reaction";
 function dispatchReaction(messageId: string, reaction: "thumbs-up" | "thumbs-down" | null) {
   window.dispatchEvent(new CustomEvent(REACTION_EVENT, { detail: { messageId, reaction } }));
 }
 
 /** Round 5: Global event bus for message pinning. */
-const PIN_EVENT = "chat-pin";
+export const PIN_EVENT = "chat-pin";
 function dispatchPin(messageId: string, pinned: boolean) {
   window.dispatchEvent(new CustomEvent(PIN_EVENT, { detail: { messageId, pinned } }));
 }
 
 /** Round 5: Global event bus for message bookmarks. */
-const BOOKMARK_EVENT = "chat-bookmark";
+export const BOOKMARK_EVENT = "chat-bookmark";
 function dispatchBookmark(messageId: string, bookmarked: boolean) {
   window.dispatchEvent(new CustomEvent(BOOKMARK_EVENT, { detail: { messageId, bookmarked } }));
 }
 
 /** Round 24: Bookmark folder event bus. */
-const FOLDER_EVENT = "chat-bookmark-folder";
+export const FOLDER_EVENT = "chat-bookmark-folder";
 function dispatchFolder(messageId: string, folder: string | undefined) {
   window.dispatchEvent(new CustomEvent(FOLDER_EVENT, { detail: { messageId, folder } }));
 }
 
 /** Round 25: Conversation branch event bus. */
-const BRANCH_EVENT = "chat-branch";
+export const BRANCH_EVENT = "chat-branch";
 function dispatchBranch(messageId: string) {
   window.dispatchEvent(new CustomEvent(BRANCH_EVENT, { detail: { messageId } }));
 }
 
 /** Round 19: Tag management event bus. */
-const TAG_EVENT = "chat-tag";
+export const TAG_EVENT = "chat-tag";
 function dispatchTag(messageId: string, tags: string[]) {
   window.dispatchEvent(new CustomEvent(TAG_EVENT, { detail: { messageId, tags } }));
 }
 
 /** Round 19: Pin with note event bus. */
-const PIN_NOTE_EVENT = "chat-pin-note";
+export const PIN_NOTE_EVENT = "chat-pin-note";
 function dispatchPinNote(messageId: string, note: string) {
   window.dispatchEvent(new CustomEvent(PIN_NOTE_EVENT, { detail: { messageId, note } }));
 }
@@ -178,7 +178,7 @@ function QuickReplies({ message }: { message: ChatMessage }) {
 /**
  * Round 17: Simple sentiment analysis based on keywords.
  */
-function analyzeSentiment(text: string): "positive" | "neutral" | "negative" {
+export function analyzeSentiment(text: string): "positive" | "neutral" | "negative" {
   const lower = text.toLowerCase();
   const positiveWords = ["success", "stable", "good", "excellent", "high quality", "well-defined", "strong", "complete", "found", "detected"];
   const negativeWords = ["error", "fail", "failed", "missing", "unstable", "poor", "low quality", "cannot", "unable", "not found", "invalid"];

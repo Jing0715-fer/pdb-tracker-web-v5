@@ -1942,21 +1942,24 @@ ${overlapSummary}${crossLitBlock}
                           rationale: `口袋体积 ${drug.pocket_volume_A3 || '?'} Å³; 疏水 ${drug.hydrophobic_pct || 0}% / 极性 ${drug.polar_pct || 0}% / 电荷 ${drug.charged_pct || 0}%; 分类: ${cls}`,
                         };
                       }
-                      emit({ stage: `batch-${bi}-llm`, level: 'success', message: `[Target ${bi + 1}] 结构分析完成: ${bStructureAnalyses.bindingPocket ? `口袋 ${bStructureAnalyses.bindingPocket.residueCount} 残基` : ''} ${bStructureAnalyses.allInteractions ? `互作 ${bStructureAnalyses.allInteractions.total} 个` : ''}`, progress: 54 });
-                      // Round 44: Emit structured analysis summary for batch targets too
-                      emit({
-                        stage: `batch-${bi}-structure-analysis-summary`,
-                        level: 'success',
-                        message: `[Target ${bi + 1}] 结构分析摘要`,
-                        progress: 54,
-                        targetIndex: bi,
-                        targetUniprot: bUid,
-                        analysisSummary: {
-                          pdbId: bStructureAnalyses.pdbId,
-                          bindingPocket: bStructureAnalyses.bindingPocket ? {
-                            ligand: bStructureAnalyses.bindingPocket.ligand,
-                            residueCount: bStructureAnalyses.bindingPocket.residueCount,
-                            volume: bStructureAnalyses.bindingPocket.volume,
+                      // Round 48: Only emit success + summary if we actually got data
+                      const bHasData = bStructureAnalyses.bindingPocket || bStructureAnalyses.allInteractions || bStructureAnalyses.hbonds || bStructureAnalyses.druggability || bStructureAnalyses.virtualScreening;
+                      if (bHasData) {
+                        emit({ stage: `batch-${bi}-llm`, level: 'success', message: `[Target ${bi + 1}] 结构分析完成: ${bStructureAnalyses.bindingPocket ? `口袋 ${bStructureAnalyses.bindingPocket.residueCount} 残基` : ''} ${bStructureAnalyses.allInteractions ? `互作 ${bStructureAnalyses.allInteractions.total} 个` : ''}`, progress: 54 });
+                        // Round 44: Emit structured analysis summary for batch targets too
+                        emit({
+                          stage: `batch-${bi}-structure-analysis-summary`,
+                          level: 'success',
+                          message: `[Target ${bi + 1}] 结构分析摘要`,
+                          progress: 54,
+                          targetIndex: bi,
+                          targetUniprot: bUid,
+                          analysisSummary: {
+                            pdbId: bStructureAnalyses.pdbId,
+                            bindingPocket: bStructureAnalyses.bindingPocket ? {
+                              ligand: bStructureAnalyses.bindingPocket.ligand,
+                              residueCount: bStructureAnalyses.bindingPocket.residueCount,
+                              volume: bStructureAnalyses.bindingPocket.volume,
                           } : null,
                           allInteractions: bStructureAnalyses.allInteractions ? {
                             chains: `${bStructureAnalyses.allInteractions.chain1}↔${bStructureAnalyses.allInteractions.chain2}`,
@@ -1977,6 +1980,9 @@ ${overlapSummary}${crossLitBlock}
                           } : null,
                         },
                       });
+                      } else {
+                        emit({ stage: `batch-${bi}-llm`, level: 'warn', message: `[Target ${bi + 1}] 结构分析完成但无有效数据`, progress: 54 });
+                      }
                     }
                   } catch (err) {
                     emit({ stage: `batch-${bi}-llm`, level: 'warn', message: `[Target ${bi + 1}] 结构分析跳过: ${err instanceof Error ? err.message.slice(0, 60) : String(err).slice(0, 60)}`, progress: 54 });

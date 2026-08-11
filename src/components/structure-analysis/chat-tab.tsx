@@ -43,7 +43,11 @@ import {
   formatAnalysisResults,
   describeCommand,
 } from "./chat-helpers";
-import { MessageBubble } from "./message-bubble";
+import { MessageBubble, analyzeSentiment,
+  RETRY_EVENT, REEXEC_EVENT, EDIT_EVENT, REACTION_EVENT,
+  PIN_EVENT, BOOKMARK_EVENT, FOLDER_EVENT, BRANCH_EVENT,
+  TAG_EVENT, PIN_NOTE_EVENT,
+} from "./message-bubble";
 
 interface LlmProviderInfo {
   provider: string;
