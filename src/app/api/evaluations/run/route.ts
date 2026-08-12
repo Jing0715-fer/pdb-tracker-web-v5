@@ -3,7 +3,7 @@ import { generateText } from '@/lib/llm';
 import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
 import { buildProvenance, verifyCitations, hashPrompt, type DataSourceTrace, type LlmTrace, type ProvenanceRecord } from '@/lib/provenance';
-import { runMultipleAnalyses, runMultipleAnalysesWithCacheInfo, pickAnalysisChains, detectPrimaryLigand } from '@/lib/molcraft/recipe-runner';
+import { runMultipleAnalyses, runMultipleAnalysesWithCacheInfo, runAnalysisRecipe, pickAnalysisChains, detectPrimaryLigand, detectAllLigands } from '@/lib/molcraft/recipe-runner';
 import { fetchPdbIdsForUniprot, fetchPdbEntryDetails, fetchUniprotMeta, type PdbEntryDetail } from '@/lib/rcsb';
 import { runBlast, runBlastDb, fetchUniprotSequence } from '@/lib/blast';
 import { efetch } from '@/lib/pubmed';
@@ -1160,10 +1160,20 @@ ${overlapSummary}${crossLitBlock}
                 recipesToRun.push({ recipeId: 'all_interactions', params: { chain1, chain2 } });
               }
               recipesToRun.push({ recipeId: 'hbonds', params: { chain1, chain2: chain1 } });
+
+              // Round 50: Multi-ligand analysis — detect all valid ligands and run
+              // binding_pocket for each one (up to 3 ligands)
+              let allLigands: string[] = [];
               if (ligandCompId) {
-                recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId, radius: 5.0 } });
-                recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId, radius: 5.0 } });
-                recipesToRun.push({ recipeId: 'virtual_screening', params: { ligandCompId, radius: 5.0, fragment_set: 'druglike' } });
+                allLigands = await detectAllLigands(topPdb.pdbId);
+                if (allLigands.length === 0) allLigands = [ligandCompId];
+                if (allLigands.length > 1) {
+                  emit({ stage: 'llm-report', level: 'info', message: `检测到多个配体: ${allLigands.join(', ')}，为每个配体运行结合口袋分析`, progress: 64 });
+                }
+                // Run binding_pocket + druggability + virtual_screening for primary ligand
+                recipesToRun.push({ recipeId: 'binding_pocket', params: { ligandCompId: allLigands[0], radius: 5.0 } });
+                recipesToRun.push({ recipeId: 'druggability', params: { ligandCompId: allLigands[0], radius: 5.0 } });
+                recipesToRun.push({ recipeId: 'virtual_screening', params: { ligandCompId: allLigands[0], radius: 5.0, fragment_set: 'druglike' } });
               }
 
               const { results, cacheHits, cacheMisses } = await runMultipleAnalysesWithCacheInfo(topPdb.pdbId, recipesToRun);
@@ -1171,8 +1181,32 @@ ${overlapSummary}${crossLitBlock}
                 emit({ stage: 'llm-report', level: 'info', message: `结构分析: ${cacheHits} 个结果来自缓存, ${cacheMisses} 个新计算`, progress: 64 });
               }
 
-              // Build the StructureAnalysisData object
+              // Round 50: Run binding_pocket for additional ligands (multi-ligand)
+              const multiLigandPockets: Array<{ ligand: string; residueCount: number; volume: number | string }> = [];
+              if (allLigands.length > 1) {
+                for (let li = 1; li < allLigands.length; li++) {
+                  try {
+                    const extraBp = await runAnalysisRecipe('binding_pocket', topPdb.pdbId, { ligandCompId: allLigands[li], radius: 5.0 });
+                    const bpRaw = extraBp as any;
+                    const bp = bpRaw?.data || bpRaw;
+                    if (bp && (bp.pocket_residue_count || bp.residues)) {
+                      multiLigandPockets.push({
+                        ligand: allLigands[li],
+                        residueCount: bp.pocket_residue_count || (bp.residues || []).length,
+                        volume: bp.estimated_volume_A3 || bp.estimated_volume || '?',
+                      });
+                    }
+                  } catch { /* ignore individual ligand failures */ }
+                }
+              }
+              if (cacheHits > 0) {
+                emit({ stage: 'llm-report', level: 'info', message: `结构分析: ${cacheHits} 个结果来自缓存, ${cacheMisses} 个新计算`, progress: 64 });
+              }
               const sa: StructureAnalysisData = { pdbId: topPdb.pdbId };
+              // Round 50: Add multi-ligand pocket results
+              if (multiLigandPockets.length > 0) {
+                sa.multiLigandPockets = multiLigandPockets;
+              }
 
               // Round 42: Fix data access — recipe-runner returns the raw recipe
               // output directly (not wrapped in {data: ...} like /api/analyze/run).
@@ -1344,6 +1378,44 @@ ${overlapSummary}${crossLitBlock}
                 throw pdbErr; // Re-throw on the last PDB to trigger the outer catch
               }
             }
+          }
+
+          // Round 50: PDB comparison — collect summary analysis from up to 3 PDBs
+          if (structureAnalyses && candidatePdbs.length > 1) {
+            try {
+              const pdbComparisons: Array<{ pdbId: string; bindingPocket?: { ligand: string; residueCount: number; volume: number | string }; druggability?: { score: number; category: string }; hbonds?: { total: number } }> = [];
+              // Add the primary analyzed PDB
+              if (structureAnalyses.bindingPocket) {
+                pdbComparisons.push({
+                  pdbId: structureAnalyses.pdbId,
+                  bindingPocket: { ligand: structureAnalyses.bindingPocket.ligand, residueCount: structureAnalyses.bindingPocket.residueCount, volume: structureAnalyses.bindingPocket.volume },
+                  druggability: structureAnalyses.druggability ? { score: structureAnalyses.druggability.score, category: structureAnalyses.druggability.category } : undefined,
+                  hbonds: structureAnalyses.hbonds ? { total: structureAnalyses.hbonds.total } : undefined,
+                });
+              }
+              // Run quick binding_pocket on the other candidate PDBs (up to 2 more)
+              for (let ci = 0; ci < candidatePdbs.length && pdbComparisons.length < 3; ci++) {
+                const cp = candidatePdbs[ci];
+                if (!cp || cp.pdbId === structureAnalyses.pdbId) continue;
+                try {
+                  const cLigand = await detectPrimaryLigand(cp.pdbId);
+                  if (!cLigand) continue;
+                  const cBp = await runAnalysisRecipe('binding_pocket', cp.pdbId, { ligandCompId: cLigand, radius: 5.0 });
+                  const bpRaw = cBp as any;
+                  const bp = bpRaw?.data || bpRaw;
+                  if (bp && (bp.pocket_residue_count || bp.residues)) {
+                    pdbComparisons.push({
+                      pdbId: cp.pdbId,
+                      bindingPocket: { ligand: cLigand, residueCount: bp.pocket_residue_count || (bp.residues || []).length, volume: bp.estimated_volume_A3 || bp.estimated_volume || '?' },
+                    });
+                  }
+                } catch { /* ignore comparison failures */ }
+              }
+              if (pdbComparisons.length > 1) {
+                structureAnalyses.pdbComparisons = pdbComparisons;
+                emit({ stage: 'llm-report', level: 'info', message: `PDB 比较分析: ${pdbComparisons.length} 个结构的结合口袋数据已收集`, progress: 65 });
+              }
+            } catch { /* ignore comparison errors */ }
           }
         } catch (err) {
           // Structural analysis is optional — don't fail the report if it errors

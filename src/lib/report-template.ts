@@ -50,6 +50,19 @@ export interface StructureAnalysisData {
     topResidues: string[];
     catalyticResidues?: string[];
   };
+  /** Round 50: Multi-ligand binding pocket results (when structure has multiple ligands). */
+  multiLigandPockets?: Array<{
+    ligand: string;
+    residueCount: number;
+    volume: number | string;
+  }>;
+  /** Round 50: Analysis results from multiple PDBs for comparison. */
+  pdbComparisons?: Array<{
+    pdbId: string;
+    bindingPocket?: { ligand: string; residueCount: number; volume: number | string };
+    druggability?: { score: number; category: string };
+    hbonds?: { total: number };
+  }>;
   /** All inter-chain interactions (H-bonds, salt bridges, hydrophobic contacts). */
   allInteractions?: {
     chain1: string;
@@ -500,6 +513,20 @@ ${sa.hbonds.topPairs.map(p => `  - ${p.pair} (${p.distance} Å)`).join('\n')}
 - 最佳 Ki: ${vs.bestKi_uM} μM
 - Top 5 命中片段:
 ${vs.topHits.map((h, i) => `  ${i + 1}. ${h.name} (MW ${h.mw}, logP ${h.logp}) — Ki ${h.ki_uM} μM, 亲和力 ${h.affinityKcalMol} kcal/mol — ${h.rationale}`).join('\n')}
+
+`;
+        }
+        if (sa.multiLigandPockets && sa.multiLigandPockets.length > 0) {
+          analysisContext += `### 多配体结合口袋分析（Round 50）
+${sa.multiLigandPockets.map(p => `- 配体 ${p.ligand}: ${p.residueCount} 残基, 体积 ${p.volume} Å³`).join('\n')}
+
+`;
+        }
+        if (sa.pdbComparisons && sa.pdbComparisons.length > 1) {
+          analysisContext += `### PDB 比较分析（Round 50 — ${sa.pdbComparisons.length} 个结构对比）
+| PDB | 配体 | 口袋残基数 | 体积 (Å³) | 可成药性 | 氢键数 |
+|-----|------|-----------|----------|---------|--------|
+${sa.pdbComparisons.map(c => `| ${c.pdbId} | ${c.bindingPocket?.ligand || '-'} | ${c.bindingPocket?.residueCount || '-'} | ${c.bindingPocket?.volume || '-'} | ${c.druggability ? `${c.druggability.score}/10` : '-'} | ${c.hbonds?.total || '-'} |`).join('\n')}
 
 `;
         }

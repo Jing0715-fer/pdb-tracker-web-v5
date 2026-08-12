@@ -303,6 +303,62 @@ export async function detectPrimaryLigand(pdbId: string): Promise<string | null>
 }
 
 /**
+ * Round 50: Detect ALL valid (non-ion) ligands in a PDB structure.
+ * Returns an array of compIds, sorted by priority then atom count descending.
+ * Used for multi-ligand analysis.
+ */
+export async function detectAllLigands(pdbId: string): Promise<string[]> {
+  try {
+    const inputPath = await ensurePdbCached(pdbId);
+    const content = await readFile(inputPath, "utf-8");
+    const lines = content.split("\n");
+    const isCif = inputPath.endsWith(".cif");
+    const PRIORITY_LIGANDS = new Set(["ATP","ADP","AMP","GTP","GDP","GMP","NAD","NAP","NDP","FAD","FMN","HEM","HEC","HEA","HEB","MLA","PLP","PQQ","TPP","REA","RET","BCL","BPH","SAH","SAM","ACP"]);
+    const ION_BLOCKLIST = new Set(["SO4","PO4","SEP","TPO","PTR","CSO","MG","ZN","CA","FE","CU","MN","NI","CO","CD","HG","PB","NA","CL","K","LI","RB","CS","BA","SR","BR","I","F","GOL","PEG","EDO","DMS","ACT","FMT","CIT","MAL","FUM","SUC","MES","TRS","HEPES","PIPES","MOPS","EPE","DOD","EOH","MBO","MRD","PG4","PGE","ACY","AZI","BH3","BEN","BME","BOG","C2E","CAC","CHX","DAH","DIO","DPG","DTT","LDA","LMT","LMG","OLC","OLE","PCW","PEU","PLM","PGV","MSE"]);
+    const WATER_CODES = new Set(["HOH","WAT","DOD"]);
+    const hetatmCounts = new Map<string, number>();
+    if (isCif) {
+      let inAtomSite = false; let compIdCol = -1; let groupPdbCol = -1;
+      for (const line of lines) {
+        if (line.includes("_atom_site.group_PDB")) {
+          inAtomSite = true;
+          const headers = lines.slice(lines.indexOf(line)).filter(l => l.startsWith("_atom_site.")).map(l => l.trim());
+          compIdCol = headers.findIndex(h => h.includes("auth_comp_id"));
+          groupPdbCol = headers.findIndex(h => h.includes("group_PDB"));
+          continue;
+        }
+        if (inAtomSite && line.trim() && !line.startsWith("_") && !line.startsWith("#")) {
+          const cols = line.trim().split(/\s+/);
+          const group = groupPdbCol >= 0 ? cols[groupPdbCol] : cols[0];
+          if (group !== "HETATM") continue;
+          const compId = compIdCol >= 0 ? cols[compIdCol] : cols[3];
+          if (!compId || WATER_CODES.has(compId)) continue;
+          hetatmCounts.set(compId, (hetatmCounts.get(compId) || 0) + 1);
+        }
+      }
+    } else {
+      for (const line of lines) {
+        if (!line.startsWith("HETATM")) continue;
+        const compId = line.substring(17, 20).trim();
+        if (!compId || WATER_CODES.has(compId)) continue;
+        hetatmCounts.set(compId, (hetatmCounts.get(compId) || 0) + 1);
+      }
+    }
+    const validLigands: Array<{ compId: string; count: number; isPriority: boolean }> = [];
+    for (const [compId, count] of hetatmCounts) {
+      if (PRIORITY_LIGANDS.has(compId)) { validLigands.push({ compId, count, isPriority: true }); }
+      else if (!ION_BLOCKLIST.has(compId)) { validLigands.push({ compId, count, isPriority: false }); }
+    }
+    validLigands.sort((a, b) => {
+      if (a.isPriority && !b.isPriority) return -1;
+      if (!a.isPriority && b.isPriority) return 1;
+      return b.count - a.count;
+    });
+    return validLigands.slice(0, 3).map(l => l.compId);
+  } catch { return []; }
+}
+
+/**
  * Ensure a PDB file is downloaded to the cache. Returns the local file path.
  * If the file is already cached, returns immediately.
  * Round 38: Falls back to mmCIF format if PDB format returns 404 (some newer

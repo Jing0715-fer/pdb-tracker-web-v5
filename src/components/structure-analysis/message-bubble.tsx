@@ -632,6 +632,55 @@ export function MessageBubble({
                     );
                   })}
                 </div>
+                {/* Round 50: Command execution timeline (Gantt-style) */}
+                {message.commands && message.commands.length > 1 && message.commands.some((cmd: any) => cmd.durationMs != null) && (() => {
+                  const cmds = message.commands as Array<{ durationMs?: number; status?: string; type?: string }>;
+                  const completed = cmds.filter(c => c.durationMs != null && (c.status === "done" || c.status === "error"));
+                  if (completed.length < 2) return null;
+                  const totalMs = completed.reduce((sum, c) => sum + (c.durationMs || 0), 0);
+                  if (totalMs === 0) return null;
+                  const maxMs = Math.max(...completed.map(c => c.durationMs || 0));
+                  return (
+                    <div className="mt-1 rounded border border-claude-border-light/30 dark:border-[#3d3832]/30 bg-claude-bg/40 dark:bg-[#1a1917]/40 p-1.5">
+                      <div className="flex items-center gap-1 mb-1">
+                        <Terminal className="h-2 w-2 text-claude-accent" />
+                        <span className="text-[7px] font-semibold uppercase tracking-wide text-claude-text-muted">
+                          Execution Timeline
+                        </span>
+                        <span className="text-[7px] text-claude-text-muted/60 ml-auto">
+                          Total: {(totalMs / 1000).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="space-y-0.5">
+                        {completed.map((c, i) => {
+                          const pct = ((c.durationMs || 0) / maxMs) * 100;
+                          const isError = c.status === "error";
+                          const color = isError
+                            ? "bg-destructive/60"
+                            : (c.durationMs || 0) > maxMs * 0.5
+                              ? "bg-claude-accent/60"
+                              : "bg-green-500/40";
+                          return (
+                            <div key={i} className="flex items-center gap-1 text-[7px]">
+                              <span className="font-mono text-claude-text-muted/60 w-4 shrink-0">{i + 1}.</span>
+                              <span className="text-claude-text-muted truncate w-20 shrink-0" title={c.type}>{c.type || "?"}</span>
+                              <div className="flex-1 h-2 bg-claude-text-muted/10 rounded-sm overflow-hidden">
+                                <div
+                                  className={`h-full ${color} rounded-sm transition-all`}
+                                  style={{ width: `${Math.max(pct, 2)}%` }}
+                                  title={`${c.type}: ${(c.durationMs || 0)}ms`}
+                                />
+                              </div>
+                              <span className="font-mono text-claude-text-muted/60 w-10 text-right shrink-0">
+                                {c.durationMs! < 1000 ? `${c.durationMs}ms` : `${(c.durationMs! / 1000).toFixed(1)}s`}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
             {/* Improvement #3: Retry button for error messages */}
