@@ -195,13 +195,33 @@ export function formatAnalysisResults(
       }
     }
     else if (recipe === "ramachandran") {
-      sections.push(`### 📐 Ramachandran: Favoured ${rd?.favoured||rd?.favoured_percent||"?"}%, Outliers ${rd?.outliers||rd?.outlier_count||0}`);
+      const favoured = rd?.favoured ?? rd?.favoured_pct ?? rd?.favoured_percent ?? "?";
+      const outliers = rd?.outliers ?? rd?.outlier_pct ?? rd?.outlier_count ?? 0;
+      sections.push(`### 📐 Ramachandran: Favoured ${favoured}%, Outliers ${outliers}%`);
     }
     else if (recipe === "sasa") {
-      sections.push(`### 🌐 SASA: ${rd?.total_sasa||rd?.total||"?"} Å²`);
+      sections.push(`### 🌐 SASA: ${rd?.total_sasa||rd?.total_sasa_A2||rd?.total||"?"} Å²`);
     }
     else if (recipe === "bfactor" || recipe === "bfactor_stats") {
-      sections.push(`### 🌡️ B-factor: Mean ${rd?.mean||rd?.mean_bfactor||"?"}, Min ${rd?.min||rd?.min_bfactor||"?"}, Max ${rd?.max||rd?.max_bfactor||"?"}`);
+      // Output format: { chains: { "A": { chain, mean, min, max, std, ... }, "B": {...} }, total_chains }
+      const chainsMap = rd?.chains as Record<string, any> | undefined;
+      if (chainsMap && typeof chainsMap === 'object' && !Array.isArray(chainsMap)) {
+        const chainEntries = Object.values(chainsMap).filter(c => c && typeof c === 'object');
+        if (chainEntries.length > 0) {
+          const allMeans = chainEntries.map(c => c.mean).filter(Boolean);
+          const allMins = chainEntries.map(c => c.min).filter(Boolean);
+          const allMaxs = chainEntries.map(c => c.max).filter(Boolean);
+          const mean = allMeans.length > 0 ? (allMeans.reduce((a: number, b: number) => a + b, 0) / allMeans.length).toFixed(1) : "?";
+          const min = allMins.length > 0 ? Math.min(...allMins).toFixed(1) : "?";
+          const max = allMaxs.length > 0 ? Math.max(...allMaxs).toFixed(1) : "?";
+          sections.push(`### 🌡️ B-factor: Mean ${mean}, Min ${min}, Max ${max}`);
+          sections.push(`**Per-chain:** ${chainEntries.map((c: any) => `Chain ${c.chain}: mean ${c.mean?.toFixed(1)||"?"}`).join(", ")}`);
+        } else {
+          sections.push(`### 🌡️ B-factor: (no chain data)`);
+        }
+      } else {
+        sections.push(`### 🌡️ B-factor: Mean ${rd?.mean||"?"}, Min ${rd?.min||"?"}, Max ${rd?.max||"?"}`);
+      }
     }
     else if (recipe === "druggability") {
       const score = rd?.druggability_score ?? "?";
@@ -227,13 +247,13 @@ export function formatAnalysisResults(
     }
     else if (recipe === "detect_pockets") {
       const pockets = rd?.pockets || [];
-      sections.push(`### 🔍 Pocket Detection: ${pockets.length} pockets found`);
+      sections.push(`### 🔍 Pocket Detection: ${rd?.num_pockets||pockets.length||"?"} pockets found`);
       if (pockets.length > 0) {
         sections.push(pockets.slice(0, 5).map((p: any) => `- Pocket ${p.id||"?"}: volume ${p.volume||"?"} Å³, ${p.residue_count||"?"} residues`).join('\n'));
       }
     }
     else if (recipe === "entity_analysis") {
-      sections.push(`### 📋 Entity Analysis: ${rd?.total_entities||"?"} entities, ${rd?.n_chains||"?"} chains`);
+      sections.push(`### 📋 Entity Analysis: ${rd?.total_entities||"?"} entities, ${rd?.n_chains||rd?.total_chains||"?"} chains`);
       if (rd?.entities) {
         sections.push(rd.entities.slice(0, 5).map((e: any) => `- ${e.entity_id}: ${e.type} (${e.description||e.header||"?"})`).join('\n'));
       }
@@ -246,39 +266,52 @@ export function formatAnalysisResults(
       }
     }
     else if (recipe === "aromatic_stacking") {
-      const stackings = rd?.stackings || rd?.interactions || [];
-      sections.push(`### 📐 Aromatic Stacking: ${rd?.total||stackings.length||"?"} interactions`);
+      const stackings = rd?.interactions || rd?.stackings || [];
+      const total = rd?.total_aromatic_interactions ?? rd?.total ?? stackings.length ?? "?";
+      sections.push(`### 📐 Aromatic Stacking: ${total} interactions (π-π: ${rd?.pi_pi_count||"?"}, cation-π: ${rd?.cation_pi_count||"?"})`);
     }
     else if (recipe === "water_bridges") {
       const bridges = rd?.bridges || rd?.interactions || [];
-      sections.push(`### 💧 Water Bridges: ${rd?.total||bridges.length||"?"} bridges`);
+      const total = rd?.total_water_bridges ?? rd?.total ?? bridges.length ?? "?";
+      sections.push(`### 💧 Water Bridges: ${total} bridges`);
     }
     else if (recipe === "metal_coordination") {
-      sections.push(`### ⚙️ Metal Coordination: ${rd?.total_metals||"?"} metals, ${rd?.total_sites||"?"} sites`);
+      sections.push(`### ⚙️ Metal Coordination: ${rd?.total_metals||"?"} metals, ${rd?.total_sites||rd?.total_metal_sites||"?"} sites`);
     }
     else if (recipe === "contact_map") {
-      sections.push(`### 🗺️ Contact Map: ${rd?.total_contacts||"?"} contacts`);
+      sections.push(`### 🗺️ Contact Map: ${rd?.total_ca_contacts||rd?.total_contacts||"?"} Cα contacts`);
     }
     else if (recipe === "oligomer_analysis") {
-      sections.push(`### 🧬 Oligomer Analysis: ${rd?.oligomeric_state||rd?.assembly||"?"}`);
+      sections.push(`### 🧬 Oligomer Analysis: ${rd?.oligomer_type||rd?.oligomeric_state||rd?.assembly||"?"} (${rd?.is_homomer ? "homomer" : "heteromer"}, ${rd?.n_interfaces||"?"} interfaces)`);
     }
     else if (recipe === "surface_residues") {
-      sections.push(`### 🌐 Surface Residues: ${rd?.total||rd?.count||"?"} residues`);
+      sections.push(`### 🌐 Surface Residues: ${rd?.surface_count||rd?.total||rd?.count||"?"} surface, ${rd?.buried_count||"?"} buried (${rd?.surface_pct||"?"}% surface)`);
     }
     else if (recipe === "structure_validation") {
-      sections.push(`### ✅ Structure Validation: ${rd?.clashscore||"?"} clashes, ${rd?.ramachandran_outliers||"?"}% outliers`);
+      sections.push(`### ✅ Structure Validation: ${rd?.quality||"?"} quality, ${rd?.clash_count||rd?.clashscore||"?"} clashes, ${rd?.rama_outlier_pct||rd?.ramachandran_outliers||"?"}% outliers`);
     }
     else if (recipe === "secondary_structure_simple") {
-      const helices = rd?.helices || rd?.helix_count || 0;
-      const sheets = rd?.sheets || rd?.strand_count || rd?.beta_count || 0;
-      sections.push(`### 🧬 Secondary Structure: ${helices} helices, ${sheets} sheets`);
+      sections.push(`### 🧬 Secondary Structure: ${rd?.alpha_helix_pct||"?"}% α-helix, ${rd?.beta_sheet_pct||"?"}% β-sheet, ${rd?.coil_pct||"?"}% coil, ${rd?.turn_pct||"?"}% turn`);
     }
     else if (recipe === "sequence_features") {
-      sections.push(`### 🧬 Sequence Features: ${rd?.length||"?"} residues, MW ${rd?.molecular_weight||rd?.mw||"?"} kDa`);
+      // Output format: { chains: [{ chain, sequence_length, molecular_weight_Da, isoelectric_point_pI, ... }], n_chains_analyzed }
+      const chains = rd?.chains as any[] || [];
+      if (chains.length > 0 && Array.isArray(chains)) {
+        const totalLen = chains.reduce((s: number, c: any) => s + (c.sequence_length || c.length || 0), 0);
+        const totalMw = chains.reduce((s: number, c: any) => s + (c.molecular_weight_Da || c.mw || c.molecular_weight || 0), 0);
+        const mwKDa = totalMw > 1000 ? (totalMw / 1000).toFixed(1) : totalMw.toFixed(1);
+        sections.push(`### 🧬 Sequence Features: ${totalLen} residues, MW ${mwKDa} kDa (${chains.length} chains)`);
+        sections.push(chains.slice(0, 5).map((c: any) => `- Chain ${c.chain}: ${c.sequence_length||c.length||"?"} aa, MW ${((c.molecular_weight_Da||c.mw||0)/1000).toFixed(1)} kDa, pI ${c.isoelectric_point_pI?.toFixed(1)||c.pi?.toFixed(1)||"?"}`).join('\n'));
+      } else {
+        sections.push(`### 🧬 Sequence Features: ${rd?.length||rd?.sequence_length||"?"} residues, MW ${rd?.molecular_weight||rd?.mw||"?"} kDa`);
+      }
     }
     else if (recipe === "interface_residues") {
-      const residues = rd?.interface_residues || rd?.residues || [];
-      sections.push(`### 🔗 Interface Residues: ${residues.length||rd?.count||"?"} residues`);
+      // Output format: { chain1_interface_residues: [...], chain2_interface_residues: [...], total_atom_pairs }
+      const r1 = rd?.chain1_interface_residues || rd?.interface_residues || rd?.residues || [];
+      const r2 = rd?.chain2_interface_residues || [];
+      const total = rd?.total_atom_pairs ?? r1.length + r2.length ?? "?";
+      sections.push(`### 🔗 Interface Residues: ${r1.length} on chain ${rd?.chain1||"?"}, ${r2.length} on chain ${rd?.chain2||"?"} (${total} atom pairs)`);
     }
     else if (recipe) {
       sections.push(`### 📊 ${recipe}\n\`\`\`json\n${JSON.stringify(rd).slice(0,500)}\n\`\`\``);
