@@ -1695,8 +1695,14 @@ export function SettingsRunPanel({
   const effectiveProviderId = chosenProvider === AUTO_PROVIDER ? (llmInfo?.chosen || '') : chosenProvider;
 
   const rescan = () => {
+    // Round 51: re-scan UI button must CLEAR the on-disk probe cache + re-probe
+    // before fetching providers. Previously this only called GET /api/llm/providers
+    // which returns the (possibly stale) disk cache without re-probing when the
+    // DISK_TTL_MS (6 days) hasn't elapsed. Calling POST /api/llm/refresh first
+    // ensures the user sees the current CLI inventory on every click.
     setScanning(true);
-    fetch('/api/llm/providers')
+    fetch('/api/llm/refresh', { method: 'POST' })
+      .then(() => fetch('/api/llm/providers'))
       .then(r => r.json())
       .then((d: LlmInfo) => setLlmInfo(d))
       .catch(() => { /* ignore */ })

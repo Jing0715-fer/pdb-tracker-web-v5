@@ -405,7 +405,9 @@ export async function runAnalysisRecipe(
 
   try {
     // Execute the Python script
-    const { stdout, stderr } = await execFileAsync("python3", [scriptPath], {
+    // Round 51: Cross-platform — Windows uses 'python', POSIX uses 'python3'
+    const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+    const { stdout, stderr } = await execFileAsync(pythonBin, [scriptPath], {
       timeout: 60_000,
       maxBuffer: 10 * 1024 * 1024,
       cwd: TMP_DIR,

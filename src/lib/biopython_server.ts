@@ -158,7 +158,9 @@ except Exception as e:
     print(json.dumps({'error': str(e), 'points': []}))
 `;
 
-      const proc = spawn('python3', ['-c', pythonScript], {
+      // Round 51: Cross-platform — Windows uses 'python', POSIX uses 'python3'
+      const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+      const proc = spawn(pythonBin, ['-c', pythonScript], {
         timeout: 30000,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
