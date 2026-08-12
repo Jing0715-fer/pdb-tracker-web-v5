@@ -426,12 +426,48 @@ const JOURNAL_IF_MAP_RAW: Record<string, number> = {
   'cancercell': 48.8,
 };
 
+// Round 49: Add common RCSB journal abbreviations as aliases
+// These are the abbreviated forms returned by the RCSB API (rcsb_journal_abbrev)
+// that don't match the full journal name keys in JOURNAL_IF_MAP_RAW
+const RCSB_JOURNAL_ALIASES: Record<string, string> = {
+  'plos biol': 'plos biology',
+  'plos pathog': 'plos pathogens',
+  'plos comput biol': 'plos computational biology',
+  'plos genet': 'plos genetics',
+  'plos one': 'plos one',
+  'proc natl acad sci usa': 'proc natl acad sci usa',
+  'nat commun': 'nature communications',
+  'sci adv': 'science advances',
+  'j biol chem': 'j biol chem',
+  'j mol biol': 'j mol biol',
+  'angew chem int ed': 'angew chem int ed',
+  'angew chem int ed engl': 'angew chem int ed',
+  'nat struct mol biol': 'nature structural & molecular biology',
+  'nat chem biol': 'nature chemical biology',
+  'nat methods': 'nature methods',
+  'nat protoc': 'nature protocols',
+  'cell rep': 'cell reports',
+  'elife': 'elife',
+  'front mol biosci': 'front mol biosci',
+  'acta crystallogr d struct biol': 'acta crystallogr d',
+  'acta crystallogr sect d struct biol': 'acta crystallogr d',
+  'to be published': '',  // No IF for unpublished
+};
+
 // Build normalized map at module load time (one-time cost)
 const JOURNAL_IF_MAP: Record<string, number> = {};
 for (const [key, val] of Object.entries(JOURNAL_IF_MAP_RAW)) {
   const n = normJournal(key);
   if (!JOURNAL_IF_MAP[n] || val > JOURNAL_IF_MAP[n]) {
     JOURNAL_IF_MAP[n] = val;
+  }
+}
+// Also add alias entries (both normalized and raw forms)
+for (const [abbrev, full] of Object.entries(RCSB_JOURNAL_ALIASES)) {
+  if (full && JOURNAL_IF_MAP_RAW[full]) {
+    // Add the abbreviation in both normalized and raw form
+    JOURNAL_IF_MAP[abbrev.toLowerCase()] = JOURNAL_IF_MAP_RAW[full];
+    JOURNAL_IF_MAP[normJournal(abbrev)] = JOURNAL_IF_MAP_RAW[full];
   }
 }
 

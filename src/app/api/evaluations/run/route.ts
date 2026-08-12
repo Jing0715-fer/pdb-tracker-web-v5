@@ -896,9 +896,32 @@ ${overlapSummary}${crossLitBlock}
         // Round 49: Fill in missing IF from JOURNAL_IF_MAP when RCSB API doesn't return it
         for (const d of pdbDetails) {
           if (d.journalIf == null && d.journal) {
-            const normalized = d.journal.toLowerCase().replace(/[^a-z0-9]/g, '');
-            if (JOURNAL_IF_MAP[normalized]) {
-              d.journalIf = JOURNAL_IF_MAP[normalized];
+            const j = d.journal.toLowerCase().trim();
+            // Try multiple normalization strategies:
+            // 1. Direct match (journal name as-is, lowercased)
+            if (JOURNAL_IF_MAP[j]) { d.journalIf = JOURNAL_IF_MAP[j]; continue; }
+            // 2. Remove non-alphanumeric (e.g., "J Med Chem" → "jmedchem")
+            const stripped = j.replace(/[^a-z0-9]/g, '');
+            if (JOURNAL_IF_MAP[stripped]) { d.journalIf = JOURNAL_IF_MAP[stripped]; continue; }
+            // 3. Try with spaces (e.g., "PLoS Biol" → try "plos biol" and "plos biology")
+            if (JOURNAL_IF_MAP[j]) { d.journalIf = JOURNAL_IF_MAP[j]; continue; }
+            // 4. Common abbreviation expansions
+            const expansions: Record<string, string> = {
+              'plos biol': 'plos biology',
+              'plos pathog': 'plos pathogens',
+              'plos comput biol': 'plos computational biology',
+              'pnas': 'proc natl acad sci usa',
+              'j med chem': 'j med chem',
+              'j biol chem': 'j biol chem',
+              'j mol biol': 'j mol biol',
+              'nat commun': 'nature communications',
+              'sci adv': 'science advances',
+            };
+            const expanded = expansions[j];
+            if (expanded && JOURNAL_IF_MAP[expanded]) { d.journalIf = JOURNAL_IF_MAP[expanded]; continue; }
+            // 5. Partial match: find a key that starts with the journal name
+            for (const [key, val] of Object.entries(JOURNAL_IF_MAP)) {
+              if (key.startsWith(j) || j.startsWith(key)) { d.journalIf = val; break; }
             }
           }
         }
