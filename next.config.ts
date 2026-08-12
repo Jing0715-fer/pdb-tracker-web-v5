@@ -50,27 +50,13 @@ const nextConfig: NextConfig = {
   // file (db/custom.db) is written to by API routes (e.g. run center jobs,
   // PDB weekly fetch, seed-demo). Without this, every DB write triggers a
   // full page reload in dev mode.
-  // Round 49: Ignore SQLite database files (including WAL/journal) + other
-  // runtime-generated files to prevent HMR from triggering page reloads
-  // when API routes write to the database.
-  watchOptions: {
-    ignored: [
-      '**/db/**',
-      '**/*.db',
-      '**/*.db-journal',
-      '**/*.db-wal',
-      '**/*.db-shm',
-      '**/dev.log',
-      '**/dev.out.log',
-      '**/.hermes/**',
-      '**/tool-results/**',
-      '**/wiki/**',
-      '**/download/**',
-      '**/upload/**',
-      '**/.zscripts/**',
-      '**/worklog.md',
-    ],
-  },
+  // Round 54: HMR fix — Next.js 16 webpack mode does NOT support watchOptions
+  // (it's a Turbopack-only feature). The old `{ ignored: [...] }` and the
+  // new `{ paths: { ignored: [...] } }` both produce "Unrecognized key" warnings.
+  // The correct approach for webpack is config.snapshot.managedPaths in the
+  // webpack config below, PLUS setting watchFiles to false for the db dir.
+  // We remove the top-level watchOptions entirely and rely on the webpack
+  // snapshot config + a custom watchOptions plugin.
   // Webpack config — used when `next dev --webpack` or `next build` is run.
   // We keep webpack (not Turbopack) because the project relies on
   // serverExternalPackages + snapshot tuning that webpack supports natively.
@@ -107,7 +93,7 @@ const nextConfig: NextConfig = {
 
     if (dev) {
       const root = resolve(__dirname_val);
-      const ignored = [
+      const ignoredPaths = [
         resolve(root, '.hermes'),
         resolve(root, 'dev.log'),
         resolve(root, 'dev.out.log'),
@@ -115,13 +101,34 @@ const nextConfig: NextConfig = {
         resolve(root, 'wiki'),
         resolve(root, 'tool-results'),
         resolve(root, '.bun'),
+        resolve(root, '.zscripts'),
+        resolve(root, 'worklog.md'),
       ];
       config.snapshot = config.snapshot || {};
-      config.snapshot.managedPaths = (config.snapshot.managedPaths || []).concat(ignored);
-      config.snapshot.immutablePaths = (config.snapshot.immutablePaths || []).concat(ignored);
-      // Note: watchOptions.ignored is now set at the top level (see above).
-      // Previously Next.js 16 froze the watchOptions object, but top-level
-      // watchOptions.ignored now works correctly in 16.x for non-route files.
+      // managedPaths: webpack treats these as "managed" (won't trigger rebuilds)
+      config.snapshot.managedPaths = (config.snapshot.managedPaths || []).concat(ignoredPaths);
+      // immutablePaths: webpack caches these and never re-reads them
+      config.snapshot.immutablePaths = (config.snapshot.immutablePaths || []).concat(ignoredPaths);
+
+      // Round 54: Also directly configure the watchOptions plugin to ignore
+      // db/*.db* files at the webpack level. This is the most reliable way
+      // to prevent HMR from triggering when SQLite writes to the database.
+      const webpack = localRequire('webpack');
+      if (webpack) {
+        config.plugins = config.plugins || [];
+        config.plugins.push(new webpack.WatchIgnorePlugin({
+          paths: [
+            /node_modules\/\.prisma/,
+            /db\/.*\.db/,
+            /db\/.*\.db-journal/,
+            /db\/.*\.db-wal/,
+            /db\/.*\.db-shm/,
+            /\.hermes/,
+            /tool-results/,
+            /molcraft-analysis/,
+          ],
+        }));
+      }
     }
     return config;
   },

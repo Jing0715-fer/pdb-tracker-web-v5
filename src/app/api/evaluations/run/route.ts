@@ -1469,6 +1469,10 @@ ${overlapSummary}${crossLitBlock}
 
         emit({ stage: 'llm-report', level: 'info', message: `准备分 ${totalChapters} 章节并发生成报告 (${provider})… 共 ${pdbDetails.length} 个 PDB + ${blastHitCount} 个 BLAST 已加载到上下文`, progress: 66 });
 
+        // Round 54: Generate a session ID for this report so all chapter calls share context
+        const reportSessionId = `eval-${uniprot}-${Date.now()}`;
+        const llmWithSession = { ...body.llm, sessionId: reportSessionId };
+
         for (let i = 0; i < chapters.length; i++) {
           const ck = chapters[i];
           const chapterIdx = i + 1;
@@ -1498,7 +1502,7 @@ ${overlapSummary}${crossLitBlock}
           let chapterDurationMs = 0;
           for (let attempt = 0; attempt <= MAX_CHAPTER_RETRIES; attempt++) {
             const t0 = Date.now();
-            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: body.llm });
+            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession });
             chapterDurationMs += r.durationMs;
             if (!r.ok) {
               chapterError = r.error;
@@ -1585,7 +1589,7 @@ ${overlapSummary}${crossLitBlock}
             emit({ stage: chapterStage, level: 'info', message: `${batchPrefix}[补救] [${chapterIdx}/${totalChapters}] ${labelOf(ck)} — 重新生成`, progress: 90, chapter: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters });
             const userPrompt = buildChapterPrompt({ ...reportData, chapterKey: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters });
             const sysPrompt = buildChapterSystemPrompt();
-            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: body.llm });
+            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession });
             if (r.ok && validateChapterContent(ck, r.content).ok) {
               // Rescue succeeded — replace the failed content.
               chapterContents[ck] = r.content;
@@ -2139,6 +2143,9 @@ ${overlapSummary}${crossLitBlock}
                 let perChapterFailCount = 0;
                 const tBatchReportStart = Date.now();
                 emit({ stage: `batch-${bi}-llm`, level: 'info', message: `[Target ${bi + 1}] ${bUid} 准备分 ${chapters.length} 章节生成报告 (${provider})… 共 ${bPdbDetails.length} 个 PDB${bLitInfo.count > 0 ? ` + ${bLitInfo.count} 篇文献` : ''} 已加载到上下文`, progress: 55 });
+                // Round 54: Generate a session ID for this batch target's report
+                const batchSessionId = `eval-${bUid}-${Date.now()}`;
+                const bLlmWithSession = { ...body.llm, sessionId: batchSessionId };
                 for (let i = 0; i < chapters.length; i++) {
                   const ck = chapters[i];
                   const chapterIdx = i + 1;
@@ -2151,7 +2158,7 @@ ${overlapSummary}${crossLitBlock}
                   let chapterContent = '';
                   let chapterError: string | undefined;
                   for (let attempt = 0; attempt <= MAX_CHAPTER_RETRIES; attempt++) {
-                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: body.llm });
+                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession });
                     if (!r.ok) {
                       chapterError = r.error;
                       if (attempt < MAX_CHAPTER_RETRIES) { await sleep(1500 * (attempt + 1)); continue; }
@@ -2182,7 +2189,7 @@ ${overlapSummary}${crossLitBlock}
                     const chapterIdx = chapters.indexOf(ck) + 1;
                     const userPrompt = buildChapterPrompt({ ...bReportData, chapterKey: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length });
                     const sysPrompt = buildChapterSystemPrompt();
-                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: body.llm });
+                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession });
                     if (r.ok && validateChapterContent(ck, r.content).ok) {
                       chapterContents[ck] = r.content;
                       perChapterOkCount++;

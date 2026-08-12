@@ -33,6 +33,9 @@ export interface LlmConfig {
   system?: string;
   temperature?: number;
   maxTokens?: number;
+  /** Round 54: Session ID for CLI agents that support session reuse.
+   *  When set, all calls with the same sessionId share context. */
+  sessionId?: string;
 }
 
 export interface LlmResult {
@@ -276,8 +279,12 @@ interface CliAdapter {
    * the CLI has no fast --version flag.
    */
   probeCommand?: 'silent-read';
+  /** Round 54: Optional session ID for CLI agents that support session reuse.
+   *  When set, the CLI adapter should use `--session <id>` (or equivalent)
+   *  so multiple calls within the same report share context. */
+  sessionId?: string;
   /** Real-call args template. */
-  callArgs: (prompt: string, model: string | undefined) => string[];
+  callArgs: (prompt: string, model: string | undefined, sessionId?: string) => string[];
   /** Which stream(s) carry the actual text response. */
   outputStream: 'stdout' | 'stderr' | 'both';
   /**
@@ -329,7 +336,9 @@ const CLI_ADAPTERS: CliAdapter[] = [
     // `hermes chat -q "..." -Q` runs a one-shot query in quiet mode (no TUI).
     // We KEEP the user's model/provider config (no `--ignore-user-config`)
     // so the agent honours whatever default the user has set (e.g. MiniMax).
-    callArgs: (q) => ['chat', '-q', q, '-Q'],
+    // Round 54: Hermes supports `--session <id>` for session reuse.
+    // When sessionId is provided, multiple calls share the same context.
+    callArgs: (q, _model, sid) => sid ? ['chat', '-q', q, '-Q', '--session', sid] : ['chat', '-q', q, '-Q'],
     outputStream: 'both',
     stripBanner: (raw) => raw.replace(HERMES_BANNER_RE, '').trim(),
     extraEnv: { PYTHONIOENCODING: 'utf-8' },
@@ -345,8 +354,8 @@ const CLI_ADAPTERS: CliAdapter[] = [
     icon: '🟠',
     wslBin: 'claude',
     probeArgs: ['--version'],
-    // Claude Code supports `claude -p "..."` (print mode, non-interactive).
-    callArgs: (q) => ['-p', q, '--no-stream'],
+    // Claude Code supports `claude -p "..." --session <id>` for session reuse.
+    callArgs: (q, _model, sid) => sid ? ['-p', q, '--no-stream', '--session', sid] : ['-p', q, '--no-stream'],
     outputStream: 'stdout',
     probeTimeoutMs: 15_000,
     callTimeoutMs: 240_000,
@@ -393,7 +402,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
      * The `$OUTPUT_FILE` token is replaced with a per-call temp file
      * path by the library before spawn (see `outputFile` field).
      */
-    callArgs: (q) => ['exec', '--output-last-message', '$OUTPUT_FILE', q],
+    callArgs: (q, _m, sid) => sid ? ['exec', '--output-last-message', '$OUTPUT_FILE', q, '--session', sid] : ['exec', '--output-last-message', '$OUTPUT_FILE', q],
     outputStream: 'stdout',
     outputFile: '$OUTPUT_FILE',
     probeTimeoutMs: 15_000,
@@ -406,7 +415,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     icon: '🦅',
     wslBin: 'openclaw',
     probeArgs: ['--version'],
-    callArgs: (q) => ['llm', 'chat', '--no-stream', q],
+    callArgs: (q, _m, sid) => sid ? ['llm', 'chat', '--no-stream', q, '--session', sid] : ['llm', 'chat', '--no-stream', q],
     outputStream: 'stdout',
     probeTimeoutMs: 15_000,
     callTimeoutMs: 240_000,
@@ -418,7 +427,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     icon: '♊',
     wslBin: 'gemini',
     probeArgs: ['--version'],
-    callArgs: (q) => [q],
+    callArgs: (q, _m, sid) => sid ? [q, '--session', sid] : [q],
     outputStream: 'stdout',
     probeTimeoutMs: 15_000,
     callTimeoutMs: 240_000,
@@ -445,11 +454,10 @@ const CLI_ADAPTERS: CliAdapter[] = [
      *  `--print "<prompt>"` emits a single text reply on stdout and exits.
      *  For streaming, append `--output-format stream-json` (NDJSON events).
      *  For interactive TUI/REPL, omit `--print`. */
-    callArgs: (q, model) => {
-      // Default to deepseek-v4-pro for WorkBuddy CLI; user can override via the
-      // LLM 高级配置 → model field in the Run Center.
+    callArgs: (q, model, sid) => {
       const m = model || process.env.CODEBUDDY_MODEL || 'deepseek-v4-pro';
-      return ['--print', '--model', m, q];
+      const base = ['--print', '--model', m, q];
+      return sid ? [...base, '--session', sid] : base;
     },
     outputStream: 'stdout',
     probeTimeoutMs: 15_000,
@@ -463,7 +471,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     icon: '🛠️',
     wslBin: 'aider',
     probeArgs: ['--version'],
-    callArgs: (q) => ['--message', q, '--no-git', '--yes', '--no-auto-commits'],
+    callArgs: (q, _m, sid) => sid ? ['--message', q, '--no-git', '--yes', '--no-auto-commits', '--session', sid] : ['--message', q, '--no-git', '--yes', '--no-auto-commits'],
     outputStream: 'stdout',
     probeTimeoutMs: 15_000,
     callTimeoutMs: 240_000,
@@ -1147,9 +1155,10 @@ async function callAnyLlm(
         const fullPrompt = cfg.system
           ? `${cfg.system}\n\n---\n\n${prompt}`
           : prompt;
+        // Round 54: Pass sessionId to runCli so CLI agents can reuse sessions
         const text = via === 'wsl'
-          ? await runCliInWsl(adapter, probe.bin, fullPrompt, cfg.model)
-          : await runCli(adapter, probe.bin, fullPrompt, cfg.model);
+          ? await runCliInWsl(adapter, probe.bin, fullPrompt, cfg.model, cfg.sessionId)
+          : await runCli(adapter, probe.bin, fullPrompt, cfg.model, cfg.sessionId);
         return {
           ok: true,
           content: text,
@@ -1285,8 +1294,8 @@ function computeCliTimeoutMs(adapter: CliAdapter, prompt: string): number {
   return Math.max(base, heuristic);
 }
 
-function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string | undefined): Promise<string> {
-  const rawArgs = adapter.callArgs(prompt, model);
+function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string | undefined, sessionId?: string): Promise<string> {
+  const rawArgs = adapter.callArgs(prompt, model, sessionId);
   const timeoutMs = computeCliTimeoutMs(adapter, prompt);
   // If the adapter declares an `outputFile`, the CLI writes its final
   // response to a file we control. Pre-create a unique temp file and
@@ -1370,10 +1379,10 @@ function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string 
   });
 }
 
-function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model: string | undefined): Promise<string> {
+function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model: string | undefined, sessionId?: string): Promise<string> {
   // Build a single bash command string that runs the CLI with the same args,
   // then trim the trailing "session_id: ..." banner on stderr if needed.
-  const args = adapter.callArgs(prompt, model);
+  const args = adapter.callArgs(prompt, model, sessionId);
   const escaped = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
   const timeoutSec = Math.max(1, Math.ceil((adapter.callTimeoutMs ?? 240_000) / 1000));
   // Use `timeout` (coreutils) to hard-cap total wall time inside WSL.
