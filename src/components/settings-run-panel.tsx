@@ -2190,6 +2190,14 @@ export function SettingsRunPanel({
                           <span className="font-mono text-sm">{a.label || a.provider}</span>
                           {a.via === 'wsl' && <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-violet-500/15 text-violet-600 dark:text-violet-300 text-xs font-medium font-mono">WSL</span>}
                           {a.via === 'sdk' && <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 text-xs font-medium font-mono">SDK</span>}
+                          {a.configHint && (
+                            <span
+                              className="px-1.5 h-5 inline-flex items-center rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-300 text-xs font-medium"
+                              title={a.configHint}
+                            >
+                              ⚠
+                            </span>
+                          )}
                           {isPinned && <Lock className="h-2.5 w-2.5 opacity-70" />}
                           {isEffective && !isPinned && (
                             <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -2202,6 +2210,12 @@ export function SettingsRunPanel({
                           <div className="font-mono text-xs opacity-80 mt-0.5 break-all">📁 {a.bin}</div>
                         )}
                         <div className="text-xs opacity-70 mt-0.5">{a.reason}</div>
+                        {a.configHint && (
+                          <div className="text-xs text-amber-600 dark:text-amber-300 mt-1 flex items-start gap-1">
+                            <span>⚠</span>
+                            <span>{a.configHint}</span>
+                          </div>
+                        )}
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

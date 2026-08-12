@@ -11624,3 +11624,77 @@ Stage Summary:
 Git
 - Commit: "fix: Round 58 — CLI error detection + z.ai fallback + report comparison view"
 - Files: src/lib/llm.ts, src/components/settings-run-panel.tsx, worklog.md
+
+---
+Task ID: round-59-config-probe-session-persist
+Agent: main
+Task: Continue development based on Round 58 improvement suggestions. Add Hermes config detection + UI hint, session registry persistence. QA + E2E test, commit and push.
+
+Development:
+
+### 1. Hermes Config Probe (src/lib/llm.ts)
+Added `configProbe` field to CliAdapter interface — a deeper probe that checks
+if the CLI is not just installed but also CONFIGURED. For hermes:
+- Runs `hermes -z "test" --cli` after the basic `--version` probe passes
+- Checks if output contains "No inference provider configured"
+- Returns a hint string: 'Hermes CLI installed but no model configured. Run "hermes model" to set up a provider.'
+
+The provider is still marked `available: true` (the binary exists), but the
+`configHint` field is set on the LlmProviderInfo so the UI can show a warning.
+
+Added `runConfigProbe()` function and integrated into `probeCli()` — runs
+after the basic probe passes. The configHint is persisted in the disk cache
+(CachedProvider.configHint) and restored on cache read.
+
+### 2. Config Hint UI (src/components/settings-run-panel.tsx)
+- Added ⚠ amber badge on provider pills when configHint is set
+- Added amber warning text in the provider tooltip with the full hint message
+- Verified in browser: hermes pill shows "⚠" badge, tooltip shows setup hint
+
+### 3. Session Registry Persistence (src/lib/llm.ts)
+- SESSION_REGISTRY now persists to disk at `/tmp/pdb-tracker-cache/session-registry.json`
+- `loadSessionRegistry()` runs on module init — restores captured session IDs
+  after dev server restart
+- `persistSessionRegistry()` is debounced (2s) to avoid I/O overhead
+- `storeCapturedSession()` now calls persistSessionRegistry() after each capture
+- `_clearSessionRegistry()` also deletes the disk file
+- Moved `_CACHE_DIR` definition to top of file (shared by session registry + provider cache)
+
+### Verification
+
+#### Config Probe Test
+```
+cli:hermes: available=True hint=Hermes CLI installed but no model configured. Run "hermes mo
+cli:codex: available=True hint=none
+```
+
+#### Browser E2E
+- Provider pill shows ⚠ badge for hermes ✅
+- Tooltip shows full config hint ✅
+- No console errors ✅
+- Page loads HTTP 200 ✅
+
+#### Real Task Test (eval chapter generation)
+- generateText with auto provider → zai (fallback) → 415 chars quality content ✅
+- Heading structure: H1=0, H2=1, H3=3, § prefixes=3 ✅
+- Duration: 22.9s (acceptable) ✅
+
+#### Lint
+- src/lib/llm.ts: 0 errors ✅
+- src/components/settings-run-panel.tsx: 0 errors ✅
+
+Stage Summary:
+- ✅ Hermes config probe detects unconfigured hermes and shows UI hint
+- ✅ Session registry persists to disk (survives dev server restart)
+- ✅ All Round 56-58 features still working
+- ✅ Real report generation verified end-to-end
+- ✅ Committed and pushed
+
+Improvement Suggestions for Next Round:
+1. z.ai SDK as primary provider when CLI configHint is set — skip the 1.7s
+   hermes failure by detecting configHint and promoting z.ai to first
+2. Eval report versioning — store normalized report alongside raw LLM output
+3. Weekly report comparison enhancement — add diff highlighting between
+   Cryo-EM and X-ray reports
+4. Provider health check endpoint — periodic background probe to keep
+   configHint fresh

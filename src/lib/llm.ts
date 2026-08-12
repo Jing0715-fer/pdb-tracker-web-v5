@@ -24,6 +24,10 @@ import { existsSync, writeFileSync, readFileSync, unlinkSync, statSync, mkdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// ─── Shared cache dir (defined early, used by session registry + provider cache) ──
+const _CACHE_DIR = join(tmpdir(), 'pdb-tracker-cache');
+try { mkdirSync(_CACHE_DIR, { recursive: true }); } catch { /* ignore */ }
+
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface LlmConfig {
@@ -64,6 +68,12 @@ export interface LlmProviderInfo {
   available: boolean;
   /** 'native' (PATH on host OS), 'wsl' (Linux distro via WSL bridge), or 'sdk'. */
   via: 'native' | 'wsl' | 'sdk';
+  /**
+   * Round 59: Setup hint shown when the CLI binary exists but is not configured
+   * (e.g. hermes is installed but no model is set up). The UI can render this
+   * as a warning badge or tooltip next to the provider entry.
+   */
+  configHint?: string;
 }
 
 
@@ -279,6 +289,20 @@ interface CliAdapter {
    * the CLI has no fast --version flag.
    */
   probeCommand?: 'silent-read';
+  /**
+   * Round 59: Optional deeper probe that checks if the CLI is not just installed
+   * but also CONFIGURED (e.g. hermes needs a model/provider set up before it
+   * can generate text). When defined, probeCli runs this AFTER the basic
+   * probeArgs check passes. If it returns a non-empty string, that string is
+   * used as the `configHint` in the provider info — the UI can display it as
+   * a setup hint. The provider is still marked `available: true` (the binary
+   * exists), but the hint tells the user they need to configure it.
+   *
+   * The config probe should be FAST (< 3s) and must not make a real LLM call.
+   * For hermes: run `hermes -z "test" --cli` and check if the output contains
+   * "No inference provider configured".
+   */
+  configProbe?: { args: string[]; timeoutMs?: number; checkOutput: (stdout: string, stderr: string) => string | null };
   /** Round 54: Optional session ID for CLI agents that support session reuse.
    *  When set, the CLI adapter should use `--session <id>` (or equivalent)
    *  so multiple calls within the same report share context. */
@@ -373,12 +397,57 @@ function parseCodexSessionId(raw: string): string | null {
  * need to share context. Without it, each chapter starts a fresh hermes
  * session and the LLM re-reads the full system prompt every time (slow +
  * loses cross-chapter context).
+ *
+ * Round 59: The registry is persisted to disk (JSON file in the OS temp dir)
+ * so it survives dev server restarts. This is important for long-running
+ * report generation jobs that may span multiple HMR cycles. The file is
+ * written debounced (max once per 2s) to avoid I/O overhead.
  */
 const SESSION_REGISTRY = new Map<string, Map<string, string>>();
+const SESSION_REGISTRY_FILE = join(_CACHE_DIR, 'session-registry.json');
+let _sessionRegistryDirty = false;
+let _sessionRegistryWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Load the session registry from disk on startup. */
+function loadSessionRegistry(): void {
+  try {
+    const text = readFileSync(SESSION_REGISTRY_FILE, 'utf8');
+    const parsed = JSON.parse(text) as Record<string, Record<string, string>>;
+    for (const [logicalSid, providers] of Object.entries(parsed)) {
+      const inner = new Map<string, string>();
+      for (const [providerId, cliSid] of Object.entries(providers)) {
+        inner.set(providerId, cliSid);
+      }
+      SESSION_REGISTRY.set(logicalSid, inner);
+    }
+  } catch { /* file doesn't exist or is invalid — start fresh */ }
+}
+
+/** Persist the session registry to disk (debounced). */
+function persistSessionRegistry(): void {
+  _sessionRegistryDirty = true;
+  if (_sessionRegistryWriteTimer) return; // already scheduled
+  _sessionRegistryWriteTimer = setTimeout(() => {
+    _sessionRegistryWriteTimer = null;
+    if (!_sessionRegistryDirty) return;
+    _sessionRegistryDirty = false;
+    try {
+      const obj: Record<string, Record<string, string>> = {};
+      for (const [logicalSid, inner] of SESSION_REGISTRY) {
+        obj[logicalSid] = Object.fromEntries(inner);
+      }
+      writeFileSync(SESSION_REGISTRY_FILE, JSON.stringify(obj, null, 2));
+    } catch { /* best-effort persistence */ }
+  }, 2000);
+}
+
+// Load on module init
+loadSessionRegistry();
 
 /** Test-visible: clear the session registry (used by unit tests + dev reset). */
 export function _clearSessionRegistry(): void {
   SESSION_REGISTRY.clear();
+  try { unlinkSync(SESSION_REGISTRY_FILE); } catch { /* file didn't exist */ }
 }
 
 /** Resolve a logical sessionId to an effective sid for callArgs.
@@ -393,7 +462,7 @@ function resolveSessionId(providerId: string, logicalSid: string | undefined): s
   return captured ? `resume:${captured}` : logicalSid;
 }
 
-/** Store a captured CLI session ID in the registry. */
+/** Store a captured CLI session ID in the registry (and persist to disk). */
 function storeCapturedSession(providerId: string, logicalSid: string, cliSid: string): void {
   if (!logicalSid || !cliSid) return;
   let inner = SESSION_REGISTRY.get(logicalSid);
@@ -402,6 +471,7 @@ function storeCapturedSession(providerId: string, logicalSid: string, cliSid: st
     SESSION_REGISTRY.set(logicalSid, inner);
   }
   inner.set(providerId, cliSid);
+  persistSessionRegistry(); // Round 59: persist to disk
 }
 
 /**
@@ -486,6 +556,20 @@ const CLI_ADAPTERS: CliAdapter[] = [
     parseSessionId: parseHermesSessionId,
     extraEnv: { PYTHONIOENCODING: 'utf-8' },
     probeTimeoutMs: 15_000,
+    // Round 59: Config probe — check if hermes has a model/provider configured.
+    // hermes -z "test" --cli exits 0 but prints "No inference provider configured"
+    // when no model is set up. This lets us surface a setup hint in the UI.
+    configProbe: {
+      args: ['-z', 'test', '--cli'],
+      timeoutMs: 10_000,
+      checkOutput: (stdout, stderr) => {
+        const combined = (stdout + '\n' + stderr).toLowerCase();
+        if (combined.includes('no inference provider configured')) {
+          return 'Hermes CLI installed but no model configured. Run "hermes model" to set up a provider.';
+        }
+        return null;
+      },
+    },
     // Hermes CLI may need >5min for large reports (e.g. 4000-char full report).
     // Override globally with HERMES_CLI_TIMEOUT_MS env (e.g. `set HERMES_CLI_TIMEOUT_MS=900000`).
     callTimeoutMs: Number(process.env.HERMES_CLI_TIMEOUT_MS) || 600_000,
@@ -868,7 +952,7 @@ function findOnPath(bin: string, extras?: string[]): Promise<string | null> {
 
 // ─── Probe (smoke test) ───────────────────────────────────────────────────────
 
-interface ProbeOk  { ok: true; bin: string; reason: string }
+interface ProbeOk  { ok: true; bin: string; reason: string; configHint?: string }
 interface ProbeErr { ok: false; reason: string }
 
 async function probeCli(adapter: CliAdapter): Promise<ProbeOk | ProbeErr> {
@@ -898,9 +982,50 @@ async function probeCli(adapter: CliAdapter): Promise<ProbeOk | ProbeErr> {
       clearTimeout(killTimer);
       const combined = (stdout + '\n' + stderr).trim();
       if (code === 0 && combined.length > 0) {
-        finish({ ok: true, bin, reason: `${adapter.label} found at ${bin}` });
+        // Round 59: If the adapter has a configProbe, run it now to check if
+        // the CLI is actually CONFIGURED (not just installed). The provider is
+        // still marked available:true, but configHint is set so the UI can show
+        // a setup hint.
+        if (adapter.configProbe) {
+          runConfigProbe(adapter, bin).then((hint) => {
+            finish({ ok: true, bin, reason: `${adapter.label} found at ${bin}`, configHint: hint ?? undefined });
+          });
+        } else {
+          finish({ ok: true, bin, reason: `${adapter.label} found at ${bin}` });
+        }
       } else {
         finish({ ok: false, reason: `${adapter.label} probe failed (exit=${code}, ${combined.slice(0, 120)})` });
+      }
+    });
+  });
+}
+
+/**
+ * Round 59: Run the adapter's configProbe to check if the CLI is configured.
+ * Returns a hint string if the CLI needs setup, or null if it's ready.
+ */
+async function runConfigProbe(adapter: CliAdapter, bin: string): Promise<string | null> {
+  if (!adapter.configProbe) return null;
+  const { args, timeoutMs = 10_000, checkOutput } = adapter.configProbe;
+  return new Promise((resolve) => {
+    const isCmdBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(bin);
+    const child = adapter.needsNode
+      ? spawn(process.execPath, [bin, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...adapter.extraEnv } })
+      : spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...adapter.extraEnv }, shell: isCmdBatch });
+    let stdout = '';
+    let stderr = '';
+    let done = false;
+    const finish = (r: string | null) => { if (!done) { done = true; resolve(r); } };
+    const killTimer = setTimeout(() => { try { child.kill(); } catch {} finish(null); }, timeoutMs);
+    child.stdout.on('data', (b) => { stdout += b.toString(); });
+    child.stderr.on('data', (b) => { stderr += b.toString(); });
+    child.on('error', () => { clearTimeout(killTimer); finish(null); });
+    child.on('close', () => {
+      clearTimeout(killTimer);
+      try {
+        finish(checkOutput(stdout, stderr));
+      } catch {
+        finish(null);
       }
     });
   });
@@ -945,8 +1070,7 @@ const PROBE_TTL_MS = 5 * 60_000; // 5 minutes — in-process TTL for probe resul
 // during an eval run does NOT trigger webpack's file watcher → no HMR /
 // page refresh / CSS flash. The project's .hermes/ dir is still used for
 // db-config.json (written rarely, only on DB path change).
-const _CACHE_DIR = join(tmpdir(), 'pdb-tracker-cache');
-try { mkdirSync(_CACHE_DIR, { recursive: true }); } catch { /* ignore */ }
+// _CACHE_DIR is defined at the top of the file (shared with session registry).
 const DISK_CACHE_FILE = join(_CACHE_DIR, 'llm-providers-cache.json');
 const DISK_CACHE_VERSION = 1;
 const DISK_TTL_MS = 144 * 60 * 60_000; // 144 hours (6 days)
@@ -958,6 +1082,7 @@ interface CachedProvider {
   available: boolean;
   reason: string;
   binMtime?: number;    // seconds since epoch; used for additional freshness check
+  configHint?: string;  // Round 59: setup hint (e.g. "hermes needs model config")
 }
 interface ProviderCache {
   version: number;
@@ -1008,6 +1133,7 @@ function writeDiskCache(probes: Record<string, AdapterProbes>): void {
           available: p.ok,
           reason: p.reason,
           binMtime,
+          configHint: p.ok ? p.configHint : undefined,
         });
       }
     }
@@ -1058,7 +1184,7 @@ function probeAll(force = false): Promise<Record<string, AdapterProbes>> {
         for (const p of disk.providers) {
           if (!out[p.id]) out[p.id] = {};
           out[p.id][p.via] = p.available
-            ? { ok: true, bin: p.bin!, reason: p.reason }
+            ? { ok: true, bin: p.bin!, reason: p.reason, configHint: p.configHint }
             : { ok: false, reason: p.reason };
         }
         // Fill in any adapters the cache didn't have (e.g. a new CLI was added
@@ -1167,6 +1293,7 @@ export async function inspectProviders(opts: InspectProvidersOptions = {}): Prom
         reason: probePair.native.reason,
         available: true,
         via: 'native',
+        configHint: probePair.native.configHint,
       });
     }
     if (probePair.wsl?.ok) {
