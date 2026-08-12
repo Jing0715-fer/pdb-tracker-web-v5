@@ -1,6 +1,6 @@
 import { sseStream, sleep, type SseEvent } from '@/lib/sse';
 import { generateText } from '@/lib/llm';
-import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
+import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, normalizeEvalChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
 import { buildProvenance, verifyCitations, hashPrompt, type DataSourceTrace, type LlmTrace, type ProvenanceRecord } from '@/lib/provenance';
 import { runMultipleAnalyses, runMultipleAnalysesWithCacheInfo, runAnalysisRecipe, pickAnalysisChains, detectPrimaryLigand, detectAllLigands } from '@/lib/molcraft/recipe-runner';
@@ -1536,16 +1536,19 @@ ${overlapSummary}${crossLitBlock}
 
           if (chapterOk) {
             perChapterOkCount++;
-            chapterContents[ck] = chapterContent;
+            // Round 56: Normalize the chapter content for consistent heading
+            // levels and §N.M numbering before storing.
+            const normalizedContent = normalizeEvalChapterContent(chapterContent, ck);
+            chapterContents[ck] = normalizedContent;
             emit({
               stage: chapterDoneStage,
               level: 'success',
-              message: `${batchPrefix}[${chapterIdx}/${totalChapters}] ${labelOf(ck)} ✓ ${chapterContent.length} chars · ${(chapterDurationMs / 1000).toFixed(1)}s`,
+              message: `${batchPrefix}[${chapterIdx}/${totalChapters}] ${labelOf(ck)} ✓ ${normalizedContent.length} chars · ${(chapterDurationMs / 1000).toFixed(1)}s`,
               progress: baseProgress + 2,
               chapter: ck,
               chapterIndex: chapterIdx,
               chapterTotal: totalChapters,
-              chapterContent,
+              chapterContent: normalizedContent,
               chapterDurationMs,
             });
           } else {
@@ -1592,10 +1595,12 @@ ${overlapSummary}${crossLitBlock}
             const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession });
             if (r.ok && validateChapterContent(ck, r.content).ok) {
               // Rescue succeeded — replace the failed content.
-              chapterContents[ck] = r.content;
+              // Round 56: Normalize the rescued chapter too.
+              const normalizedContent = normalizeEvalChapterContent(r.content, ck);
+              chapterContents[ck] = normalizedContent;
               perChapterOkCount++;
               perChapterFailCount = Math.max(0, perChapterFailCount - 1);
-              emit({ stage: chapterDoneStage, level: 'success', message: `${batchPrefix}[补救] [${chapterIdx}/${totalChapters}] ${labelOf(ck)} ✓ ${r.content.length} chars`, progress: 90, chapter: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters, chapterContent: r.content, chapterDurationMs: r.durationMs });
+              emit({ stage: chapterDoneStage, level: 'success', message: `${batchPrefix}[补救] [${chapterIdx}/${totalChapters}] ${labelOf(ck)} ✓ ${normalizedContent.length} chars`, progress: 90, chapter: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters, chapterContent: normalizedContent, chapterDurationMs: r.durationMs });
             } else {
               emit({ stage: chapterDoneStage, level: 'error', message: `${batchPrefix}[补救] [${chapterIdx}/${totalChapters}] ${labelOf(ck)} ✗ 仍失败`, progress: 90, chapter: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters });
             }
@@ -2173,8 +2178,10 @@ ${overlapSummary}${crossLitBlock}
                   }
                   if (chapterOk) {
                     perChapterOkCount++;
-                    chapterContents[ck] = chapterContent;
-                    emit({ stage: `batch-${bi}-chapter_done`, level: 'success', message: `[Target ${bi + 1}] [${chapterIdx}/${chapters.length}] ${labelOf(ck)} ✓ ${chapterContent.length} chars`, progress: 60, chapter: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length, chapterContent });
+                    // Round 56: Normalize the batch chapter content too.
+                    const normalizedContent = normalizeEvalChapterContent(chapterContent, ck);
+                    chapterContents[ck] = normalizedContent;
+                    emit({ stage: `batch-${bi}-chapter_done`, level: 'success', message: `[Target ${bi + 1}] [${chapterIdx}/${chapters.length}] ${labelOf(ck)} ✓ ${normalizedContent.length} chars`, progress: 60, chapter: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length, chapterContent: normalizedContent });
                   } else {
                     perChapterFailCount++;
                     chapterContents[ck] = chapterContent || `_(${labelOf(ck)}: LLM 生成失败 — ${chapterError?.slice(0, 120) ?? 'unknown'})_`;
@@ -2191,10 +2198,12 @@ ${overlapSummary}${crossLitBlock}
                     const sysPrompt = buildChapterSystemPrompt();
                     const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession });
                     if (r.ok && validateChapterContent(ck, r.content).ok) {
-                      chapterContents[ck] = r.content;
+                      // Round 56: Normalize the rescued batch chapter too.
+                      const normalizedContent = normalizeEvalChapterContent(r.content, ck);
+                      chapterContents[ck] = normalizedContent;
                       perChapterOkCount++;
                       perChapterFailCount = Math.max(0, perChapterFailCount - 1);
-                      emit({ stage: `batch-${bi}-chapter_done`, level: 'success', message: `[Target ${bi + 1}] [补救] [${chapterIdx}/${chapters.length}] ${labelOf(ck)} ✓ ${r.content.length} chars`, progress: 88, chapter: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length, chapterContent: r.content });
+                      emit({ stage: `batch-${bi}-chapter_done`, level: 'success', message: `[Target ${bi + 1}] [补救] [${chapterIdx}/${chapters.length}] ${labelOf(ck)} ✓ ${normalizedContent.length} chars`, progress: 88, chapter: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length, chapterContent: normalizedContent });
                     } else {
                       emit({ stage: `batch-${bi}-chapter_done`, level: 'error', message: `[Target ${bi + 1}] [补救] [${chapterIdx}/${chapters.length}] ${labelOf(ck)} ✗ 仍失败`, progress: 88, chapter: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length });
                     }

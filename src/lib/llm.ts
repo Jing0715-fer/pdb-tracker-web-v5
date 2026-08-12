@@ -321,9 +321,88 @@ interface CliAdapter {
    * directly. Affects both the probe and the real call.
    */
   needsNode?: boolean;
+  /**
+   * Round 56: Optional parser that extracts the actual CLI-side session ID
+   * from the raw output of the FIRST call (the "create session" call).
+   * When defined, runCli/runCliInWsl will:
+   *   1. Before the first call: check SESSION_REGISTRY for a captured ID.
+   *      If found, pass `resume:<capturedId>` to callArgs so the adapter
+   *      switches to "resume session" mode.
+   *   2. After the first call: call parseSessionId(raw) to extract the
+   *      actual CLI session ID and store it in SESSION_REGISTRY so
+   *      subsequent calls with the same logical sessionId can resume.
+   *
+   * This fixes the bug where hermes/codex created a NEW session on every
+   * chapter call even though the caller passed a stable logical sessionId.
+   */
+  parseSessionId?: (rawOutput: string) => string | null;
 }
 
 const HERMES_BANNER_RE = /(?:^|\n)\s*session_id:\s*\S+\s*(?=\n|$)/i;
+/** Round 56: Extract the actual hermes session ID printed by `--pass-session-id`.
+ *  Hermes prints `session_id: <uuid>` on its own line (mixed in stdout/stderr). */
+const HERMES_SESSION_ID_RE = /session_id:\s*([A-Za-z0-9_\-]+)/i;
+function parseHermesSessionId(raw: string): string | null {
+  const m = raw.match(HERMES_SESSION_ID_RE);
+  return m ? m[1] : null;
+}
+/** Round 56: Extract codex session ID. Codex prints `session_id: <uuid>` or
+ *  `Session ID: <uuid>` or logs it as a JSON field after exec. */
+const CODEX_SESSION_ID_RE = /(?:session_id|Session ID|sid)["']?\s*[:=]\s*["']?([A-Za-z0-9_\-]{8,})/i;
+function parseCodexSessionId(raw: string): string | null {
+  const m = raw.match(CODEX_SESSION_ID_RE);
+  return m ? m[1] : null;
+}
+
+/**
+ * Round 56: In-memory session registry.
+ * Maps logical sessionId (caller-supplied, e.g. "eval-P68871-1234567890") to
+ * a per-provider map of actual CLI session IDs captured from the first call.
+ *
+ * Structure: logicalSid → providerId → actualCliSessionId
+ *
+ * When a caller passes `sessionId = "eval-P68871-1234567890"` and the hermes
+ * adapter has `parseSessionId` defined:
+ *   - First call: registry miss → hermes runs with `--pass-session-id` →
+ *     output contains `session_id: abc-123` → we store
+ *     "eval-P68871-1234567890" → "hermes" → "abc-123"
+ *   - Second call: registry hit → we pass `resume:abc-123` to callArgs →
+ *     hermes runs with `--resume abc-123` → reuses the same session context
+ *
+ * This is critical for chapter-mode report generation where 8-9 chapters
+ * need to share context. Without it, each chapter starts a fresh hermes
+ * session and the LLM re-reads the full system prompt every time (slow +
+ * loses cross-chapter context).
+ */
+const SESSION_REGISTRY = new Map<string, Map<string, string>>();
+
+/** Test-visible: clear the session registry (used by unit tests + dev reset). */
+export function _clearSessionRegistry(): void {
+  SESSION_REGISTRY.clear();
+}
+
+/** Resolve a logical sessionId to an effective sid for callArgs.
+ *  Returns `resume:<actualCliSid>` if the registry has a captured ID for
+ *  this (logicalSid, providerId) pair; otherwise returns the logicalSid
+ *  unchanged (first call). */
+function resolveSessionId(providerId: string, logicalSid: string | undefined): string | undefined {
+  if (!logicalSid) return undefined;
+  const inner = SESSION_REGISTRY.get(logicalSid);
+  if (!inner) return logicalSid;
+  const captured = inner.get(providerId);
+  return captured ? `resume:${captured}` : logicalSid;
+}
+
+/** Store a captured CLI session ID in the registry. */
+function storeCapturedSession(providerId: string, logicalSid: string, cliSid: string): void {
+  if (!logicalSid || !cliSid) return;
+  let inner = SESSION_REGISTRY.get(logicalSid);
+  if (!inner) {
+    inner = new Map();
+    SESSION_REGISTRY.set(logicalSid, inner);
+  }
+  inner.set(providerId, cliSid);
+}
 
 const CLI_ADAPTERS: CliAdapter[] = [
   {
@@ -360,6 +439,9 @@ const CLI_ADAPTERS: CliAdapter[] = [
     },
     outputStream: 'both',
     stripBanner: (raw) => raw.replace(HERMES_BANNER_RE, '').trim(),
+    // Round 56: Capture the actual hermes session ID from the first call's
+    // output so subsequent calls can --resume it.
+    parseSessionId: parseHermesSessionId,
     extraEnv: { PYTHONIOENCODING: 'utf-8' },
     probeTimeoutMs: 15_000,
     // Hermes CLI may need >5min for large reports (e.g. 4000-char full report).
@@ -449,6 +531,9 @@ const CLI_ADAPTERS: CliAdapter[] = [
     },
     outputStream: 'stdout',
     outputFile: '$OUTPUT_FILE',
+    // Round 56: Capture codex session ID from stderr/stdout of the first exec
+    // call so subsequent calls can `exec resume <id>`.
+    parseSessionId: parseCodexSessionId,
     probeTimeoutMs: 15_000,
     callTimeoutMs: 240_000,
   },
@@ -1339,7 +1424,14 @@ function computeCliTimeoutMs(adapter: CliAdapter, prompt: string): number {
 }
 
 function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string | undefined, sessionId?: string): Promise<string> {
-  const rawArgs = adapter.callArgs(prompt, model, sessionId);
+  // Round 56: Resolve the logical sessionId to an effective sid.
+  // If SESSION_REGISTRY has a captured CLI session ID for this (logicalSid,
+  // adapter.id) pair, pass `resume:<capturedId>` so the adapter switches to
+  // "resume session" mode. Otherwise pass the logicalSid unchanged (first call).
+  const effectiveSid = adapter.parseSessionId
+    ? resolveSessionId(adapter.id, sessionId)
+    : sessionId;
+  const rawArgs = adapter.callArgs(prompt, model, effectiveSid);
   const timeoutMs = computeCliTimeoutMs(adapter, prompt);
   // If the adapter declares an `outputFile`, the CLI writes its final
   // response to a file we control. Pre-create a unique temp file and
@@ -1400,11 +1492,26 @@ function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string 
           }
         } catch { /* fall through */ }
       }
+      // Compute raw for session-ID capture (BEFORE stripBanner removes it).
+      // For hermes (outputStream='both'), the session_id line lives in
+      // stdout+stderr; for codex (outputStream='stdout', outputFile set),
+      // the session ID is printed to stderr — so always capture from both.
+      const rawForCapture = (stdout + (stderr ? '\n' + stderr : '')).trim();
       if (!cleaned) {
         const raw = adapter.outputStream === 'stdout' ? stdout
                   : adapter.outputStream === 'stderr' ? stderr
                   : (stdout.trim() + (stderr.includes('\n') ? '\n' : '') + stderr).trim();
         cleaned = adapter.stripBanner ? adapter.stripBanner(raw) : raw.trim();
+      }
+      // Round 56: Capture the CLI session ID from the first call's output
+      // so subsequent calls with the same logical sessionId can resume it.
+      // Only capture when this was a "first call" (effectiveSid === logicalSid,
+      // i.e. not already in resume mode).
+      if (adapter.parseSessionId && sessionId && effectiveSid === sessionId) {
+        const captured = adapter.parseSessionId(rawForCapture);
+        if (captured) {
+          storeCapturedSession(adapter.id, sessionId, captured);
+        }
       }
       cleanup();
       if (cleaned.length > 0) {
@@ -1424,9 +1531,14 @@ function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string 
 }
 
 function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model: string | undefined, sessionId?: string): Promise<string> {
+  // Round 56: Resolve the logical sessionId to an effective sid (same logic
+  // as runCli — check SESSION_REGISTRY for a captured CLI session ID).
+  const effectiveSid = adapter.parseSessionId
+    ? resolveSessionId(adapter.id, sessionId)
+    : sessionId;
   // Build a single bash command string that runs the CLI with the same args,
   // then trim the trailing "session_id: ..." banner on stderr if needed.
-  const args = adapter.callArgs(prompt, model, sessionId);
+  const args = adapter.callArgs(prompt, model, effectiveSid);
   const escaped = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
   const timeoutSec = Math.max(1, Math.ceil((adapter.callTimeoutMs ?? 240_000) / 1000));
   // Use `timeout` (coreutils) to hard-cap total wall time inside WSL.
@@ -1449,6 +1561,13 @@ function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model:
       clearTimeout(killTimer);
       const raw = (stdout + (stderr ? '\n' + stderr : '')).trim();
       const cleaned = adapter.stripBanner ? adapter.stripBanner(raw) : raw.trim();
+      // Round 56: Capture the CLI session ID from the first call's output.
+      if (adapter.parseSessionId && sessionId && effectiveSid === sessionId) {
+        const captured = adapter.parseSessionId(raw);
+        if (captured) {
+          storeCapturedSession(adapter.id, sessionId, captured);
+        }
+      }
       // code === 124 → `timeout` killed it (still might have partial output)
       if (cleaned.length > 0) { resolve(cleaned); return; }
       reject(new Error(`${adapter.id} WSL returned empty output (exit=${code}, stderr=${stderr.slice(0, 300)})`));

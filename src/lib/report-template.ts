@@ -666,6 +666,83 @@ export function validateChapterContent(
   return { ok: true };
 }
 
+/**
+ * Round 56: Normalize an evaluation report chapter's LLM output so every
+ * chapter has a consistent heading structure, regardless of which LLM
+ * provider generated it.
+ *
+ * Fixes 4 common inconsistency bugs that caused "每次生成的格式不一致":
+ *
+ * 1. **Chapter heading level**: Some LLMs emit `# 1. 蛋白功能与生物学背景`
+ *    (H1) while others emit `## 1. ...` (H2). The report template specifies
+ *    H2 for chapters. We normalize: any heading containing the chapter title
+ *    becomes H2.
+ *
+ * 2. **Sub-section heading level**: Sub-sections like `§1.1 基本功能` should
+ *    always be H3. Some LLMs emit them as H2 or H4. We normalize any heading
+ *    matching the `§N.M` or `N.M` pattern to H3.
+ *
+ * 3. **§ prefix consistency**: Some LLMs write `### §1.1 基本功能`, others
+ *    write `### 1.1 基本功能`. We normalize to always include the § prefix
+ *    (matching the prompt template).
+ *
+ * 4. **Duplicate chapter heading**: If the LLM emits the chapter heading
+ *    twice, we keep only the first.
+ *
+ * Applied per-chapter before concatenation in the eval route.
+ */
+export function normalizeEvalChapterContent(
+  content: string,
+  chapterKey: ReportChapterKey,
+): string {
+  if (!content) return content;
+  let s = content.replace(/\r\n?/g, '\n');
+  const expectedTitle = chapterTitleZh(chapterKey);
+  const titleEsc = expectedTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 8);
+
+  // 1) Normalize ALL headings that contain the chapter title to H2.
+  //    This handles both "# 1. 蛋白功能与生物学背景" (H1) and
+  //    "### 1. 蛋白功能与生物学背景" (H3) → "## 1. 蛋白功能与生物学背景" (H2).
+  //    Also handles "执行摘要" (no number) and "## 8. 总结" (with number).
+  const titleHeadingRe = new RegExp(
+    `^(#{1,4})\\s+((?:\\d+\\.\\s*)?${titleEsc}[^\\n]*)$`,
+    'gm'
+  );
+  let firstTitleHeadingKept = false;
+  s = s.replace(titleHeadingRe, (match, _hashes, rest) => {
+    if (firstTitleHeadingKept) {
+      // Duplicate — drop it (and its trailing newline will be cleaned up by
+      // the blank-line collapse in step 5).
+      return '';
+    }
+    firstTitleHeadingKept = true;
+    return `## ${rest.trim()}`;
+  });
+
+  // 2) Normalize sub-section headings (§N.M or N.M) to H3 with § prefix.
+  //    Match: ^#{1,4}\s+§?\d+\.\d+[\.\s]
+  //    Replace with: ### §N.M. <rest>
+  //    Example: "## 1.1 基本功能" → "### §1.1. 基本功能"
+  //             "#### §2.1 拓扑模型" → "### §2.1. 拓扑模型"
+  s = s.replace(
+    /^#{1,4}\s+(§?)(\d+\.\d+)(\.\s+|\.\s+|\s+)(.+)$/gm,
+    (_match, _secPrefix, num, _sep, rest) => {
+      return `### §${num}. ${rest.trim()}`;
+    }
+  );
+
+  // 3) Strip any remaining H1 headings in the chapter body (H1 is reserved
+  //    for the report title, which is added separately by the route).
+  //    Only strip H1s that look like chapter headings or report titles.
+  s = s.replace(/^#\s+[^\n]+\n?/gm, '');
+
+  // 4) Collapse 3+ blank lines to 2 (cleanup after duplicate removal).
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  return s.trim();
+}
+
+
 
 /**
  * Render up to `maxRows` entries from a PdbEntryDetail[] to markdown table rows.

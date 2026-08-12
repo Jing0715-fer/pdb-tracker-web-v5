@@ -249,8 +249,12 @@ export function renderMarkdownToHtml(md: string): MarkdownRenderResult {
     // Headings
     const h3 = line.match(/^###\s+(.*)$/);
     if (h3) {
+      // Round 56: H3 sub-headings (A1, B1, §1.1 etc.) render distinctly smaller
+      // than H2 chapter headings — 12.5px (vs 17px for H2), muted color, no
+      // bottom border. This creates a clear visual hierarchy: report title (H1)
+      // > chapter (H2) > sub-section (H3) > paragraph.
       out.push(
-        `<h3 style="font-size:14px;font-weight:600;color:#4a4a4a;margin:18px 0 8px;">${renderInline(h3[1])}</h3>`
+        `<h3 style="font-size:12.5px;font-weight:600;color:#6b5d4f;margin:14px 0 6px;padding-left:8px;border-left:3px solid #d4c4b0;line-height:1.4;">${renderInline(h3[1])}</h3>`
       );
       hadHeading = true;
       i++;
@@ -602,7 +606,57 @@ export function sanitizeReport(md: string): string {
     })
     .join('\n');
 
+  // 7) Round 56: Deduplicate consecutive identical headings.
+  //    The LLM sometimes echoes the chapter heading at the start of its
+  //    output (e.g. "## B. 方法学突破..." followed by the same "## B. 方法学突破..."
+  //    from the merge step). normalizeWeeklyChapterContent handles the known
+  //    cases, but this is a safety net for any residual duplicates.
+  s = deduplicateConsecutiveHeadings(s);
+
   return s;
+}
+
+/**
+ * Round 56: Remove consecutive duplicate markdown headings.
+ *
+ * Handles two patterns:
+ *   1. Exact duplicate: `## B. Foo\n\n## B. Foo` → `## B. Foo`
+ *   2. Near-duplicate (same heading text, different level): `## B. Foo` followed
+ *      by `# B. Foo` or `### B. Foo` within 2 lines → keep only the first.
+ *
+ * Also collapses runs of 3+ blank lines that result from heading removal.
+ */
+export function deduplicateConsecutiveHeadings(md: string): string {
+  if (!md) return md;
+  const lines = md.split('\n');
+  const out: string[] = [];
+  /** Track the last heading line we kept (text without the # prefix). */
+  let lastHeadingText: string | null = null;
+  let lastHeadingIdx = -10; // index in `out` of the last heading we kept
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = line.match(/^(#{1,4})\s+(.+?)\s*$/);
+    if (m) {
+      const text = m[2].trim().toLowerCase();
+      // If this heading's text matches the last heading we kept AND they're
+      // close together (within 3 lines, allowing for blank lines between),
+      // skip this duplicate.
+      if (lastHeadingText && lastHeadingText === text && (i - lastHeadingIdx) <= 4) {
+        // Skip the duplicate. Also skip a trailing blank line if present
+        // so we don't leave a double-blank.
+        continue;
+      }
+      lastHeadingText = text;
+      lastHeadingIdx = i;
+      out.push(line);
+    } else {
+      out.push(line);
+    }
+  }
+  // Collapse 3+ consecutive blank lines to exactly 2.
+  let result = out.join('\n').replace(/\n{3,}/g, '\n\n');
+  return result;
 }
 
 /**

@@ -51,14 +51,18 @@ ${chapterDesc}
 ## 代表性 ${methodLabel} PDB 结构数据
 ${pdbSummary}
 
-请直接输出本章内容（${chapterKey}. ${chapterTitle} 标题下的正文），不要重复标题。内容充实、数据准确，使用 Markdown 格式。
+请直接输出本章正文内容。**严禁重复章节标题**（系统会自动在每章开头插入 \`## ${chapterKey}. ${chapterTitle}\`，你的输出不要再写这个标题）。内容充实、数据准确，使用 Markdown 格式。
 
-格式要求：
+格式要求（必须严格遵守）：
+- **不要输出任何 H2 标题**（\`##\`）。本章主标题由系统统一添加。
+- **子节标题统一使用 H3**（\`###\`），格式为 \`### ${chapterKey}1. 子节标题\`、\`### ${chapterKey}2. 子节标题\` 等。例如本章是 B 章，则子节为 \`### B1. xxx\`、\`### B2. xxx\`。
+- **不要输出 H1 标题**（\`#\`）。
 - 表格使用 GFM pipe table 格式（| 列1 | 列2 |）
 - 数据引用格式：PDB ID（4字符大写）、分辨率（X.XX Å）、DOI（10.xxxx/xxxxx）
 - 文献引用格式：作者 et al., *期刊名* (IF: XX.X), PDB XXXX, Y.YY Å
 - 缺失数据标注"暂无可靠数据"，不编造
-- 段落3-5句，逻辑清晰`;
+- 段落3-5句，逻辑清晰
+- **不重复其他章节的内容**——本章只写 "${chapterKey}. ${chapterTitle}" 范围内的内容`;
 }
 
 const WEEKLY_CHAPTER_SYSTEM_PROMPT = `你是结构生物学领域的资深研究员，具有丰富的学术写作经验。请用中文生成周报的某一章节内容，使用 Markdown 格式。
@@ -71,7 +75,14 @@ const WEEKLY_CHAPTER_SYSTEM_PROMPT = `你是结构生物学领域的资深研究
 5. **客观中立**: 避免主观评价，基于数据给出分析结论
 6. **缺失数据**: 未提供的字段标注"暂无可靠数据"，不编造
 7. **段落结构**: 每段3-5句，逻辑清晰，前后衔接
-8. **专业术语**: 保留英文专有名词（PDB ID、DOI、UniProt等），中文解释首次出现`
+8. **专业术语**: 保留英文专有名词（PDB ID、DOI、UniProt等），中文解释首次出现
+
+**标题层级规范（关键）**：
+- 你只负责写章节正文，**不要输出 \`## 章节标题\`**（系统会自动添加）
+- 子节使用 H3：\`### X1. 子节标题\`、\`### X2. 子节标题\`（X 为本章字母）
+- 严禁输出 H1（\`#\`）或 H2（\`##\`）标题
+- 严禁重复本章标题或本章子节标题
+- 严禁跨章引用（如本章是 B 章就不要写 A 章或 C 章的内容）`
 
 /** Generate a full method-specific weekly report via per-chapter LLM calls,
  *  streaming progress via emit(). Returns the merged markdown + per-chapter
@@ -162,10 +173,75 @@ async function generateMethodReport(opts: {
 
   // Merge chapters in order — sanitize to close unclosed bold/code spans
   // and fix any mid-table truncation from individual chapters.
-  const merged = sanitizeReport(WEEKLY_CHAPTERS.map(ch => `## ${ch.key}. ${ch.title}\n\n${chapterContents[ch.key] ?? ''}`).join('\n\n'));
+  // Round 56: Strip any leading duplicate H2/H1 heading from each chapter's
+  // content (the LLM often echoes "## B. 方法学突破..." even though the prompt
+  // says not to). Also normalize sub-section headings: if the LLM emitted
+  // "## B1. xxx" (H2 level for a sub-section), demote it to "### B1. xxx" (H3).
+  const merged = sanitizeReport(
+    WEEKLY_CHAPTERS.map(ch => {
+      const raw = chapterContents[ch.key] ?? '';
+      const cleaned = normalizeWeeklyChapterContent(raw, ch.key, ch.title);
+      return `## ${ch.key}. ${ch.title}\n\n${cleaned}`;
+    }).join('\n\n')
+  );
   const allOk = chaptersFailed === 0;
   emit({ stage: `${methodKey}-llm`, level: allOk ? 'success' : 'warn', message: `✓ [${methodLabel}] 分章报告完成 · ${chaptersOk}/${totalChapters} 章 · ${merged.length} chars${allOk ? '' : ` · ${chaptersFailed} 章失败`}`, progress: methodProgressBase + methodProgressSpan });
   return { content: merged, ok: allOk, chaptersOk, chaptersFailed, chapterDetails };
+}
+
+/**
+ * Round 56: Normalize a weekly chapter's LLM output.
+ *
+ * Fixes 3 common LLM formatting bugs that caused "duplicate headings from B
+ * onwards" and inconsistent sub-section levels:
+ *
+ * 1. **Duplicate chapter heading**: The LLM often starts its output with
+ *    `## B. 方法学突破...` even though the prompt says "don't repeat the
+ *    title". Without stripping, the merged report has:
+ *      `## B. 方法学突破...\n\n## B. 方法学突破...\n\n<content>`
+ *    We strip any leading `##? <letter>. <title-words>` line that matches
+ *    the chapter's letter + title.
+ *
+ * 2. **Sub-section heading level**: The LLM sometimes emits `## B1. xxx`
+ *    (H2) for sub-sections instead of `### B1. xxx` (H3). This makes B1
+ *    render at the same visual weight as the main B heading. We demote
+ *    any `## <chapterLetter>\d+\.` to `### `.
+ *
+ * 3. **H1 in chapter body**: The LLM sometimes starts with `# B. ...`.
+ *    We strip these too (the chapter heading is always H2, added by the
+ *    merge step).
+ */
+function normalizeWeeklyChapterContent(content: string, chapterKey: string, chapterTitle: string): string {
+  if (!content) return content;
+  let s = content.replace(/\r\n?/g, '\n');
+  // Build a regex that matches the chapter's own heading at H1 or H2 level,
+  // at the very start of the content (after optional whitespace).
+  // e.g. for chapter B "方法学突破与分辨率记录":
+  //   ^\s*##\s*B\.\s*方法学突破.*\n?    (H2 duplicate)
+  //   ^\s*#\s*B\.\s*方法学突破.*\n?     (H1 — wrong level)
+  const titleEsc = chapterTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 12);
+  const dupHeadingRe = new RegExp(
+    `^\\s*#{1,2}\\s*${chapterKey}\\.\\s*${titleEsc}[^\n]*\n+`,
+    'i'
+  );
+  s = s.replace(dupHeadingRe, '');
+  // Also strip a bare "## B." or "# B." heading (title too long / truncated)
+  const bareHeadingRe = new RegExp(
+    `^\\s*#{1,2}\\s*${chapterKey}\\.\\s*\n+`,
+    'i'
+  );
+  s = s.replace(bareHeadingRe, '');
+  // Demote sub-section headings: "## B1. xxx" → "### B1. xxx"
+  // Only demote headings that match the pattern <chapterLetter><digit>.
+  const subSectionRe = new RegExp(
+    `^(#{1,2})\\s+(${chapterKey}\\d+\\.\\s)`,
+    'gm'
+  );
+  s = s.replace(subSectionRe, '### $2');
+  // Strip any remaining H1 headings in the chapter body (H1 is reserved for
+  // the report title, which is added separately).
+  s = s.replace(/^#\s+[^\n]+\n?/gm, '');
+  return s.trim();
 }
 function isoWeek(d: Date) {
   const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));

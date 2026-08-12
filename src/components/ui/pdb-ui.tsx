@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Clock, ChevronLeft, ChevronRight, Download, FileText, FileCode, Copy, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { TagInfo, TagCategory } from '@/lib/pdb-types';
 import { PAGE_SIZE_OPTIONS, loadStoredPageSize } from '@/lib/pdb-utils';
-import { sanitizeReport, stripMarkdownFrontmatterAndTitle } from '@/lib/markdown-renderer';
+import { sanitizeReport, stripMarkdownFrontmatterAndTitle, renderMarkdownToFullPage } from '@/lib/markdown-renderer';
 import { ReportMarkdown } from '@/components/report-markdown';
 
 // ─── Tag Category Styles ──────────────────────────────────────────────────
@@ -57,11 +57,21 @@ export function TagPill({ tag, onClick, size = 'sm' }: { tag: TagInfo; onClick?:
 // ─── Report Modal Component ──────────────────────────────────────────────────
 
 export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boolean; onClose: () => void; title: string; content: string }) {
+  const [copied, setCopied] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     if (isOpen) window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
+
+  // Close export menu when clicking outside
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handleClick = () => setExportMenuOpen(false);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [exportMenuOpen]);
 
   // Pre-process: strip YAML frontmatter + first H1 (title duplication),
   // then sanitize (close unclosed **, fix mid-table truncation, collapse
@@ -73,6 +83,53 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
     const stripped = stripMarkdownFrontmatterAndTitle(content);
     return sanitizeReport(stripped);
   }, [content]);
+
+  // Round 56: Export handlers — Markdown / HTML / Copy
+  const safeTitle = useMemo(() => {
+    // Derive a filesystem-safe name from the modal title.
+    // "Weekly Report — 2026-W28" → "Weekly-Report-2026-W28"
+    return (title || 'report')
+      .replace(/[^\w\u4e00-\u9fa5\-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .slice(0, 60) || 'report';
+  }, [title]);
+
+  const downloadBlob = useCallback((data: string, mime: string, ext: string) => {
+    const blob = new Blob([data], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeTitle}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [safeTitle]);
+
+  const exportMarkdown = useCallback(() => {
+    const md = `# ${title}\n\n${processedContent}\n`;
+    downloadBlob(md, 'text/markdown;charset=utf-8', 'md');
+    setExportMenuOpen(false);
+  }, [title, processedContent, downloadBlob]);
+
+  const exportHtml = useCallback(() => {
+    const { html } = renderMarkdownToFullPage(processedContent, {
+      title,
+      bodyClassName: 'report-export',
+      maxWidth: 820,
+    });
+    downloadBlob(html, 'text/html;charset=utf-8', 'html');
+    setExportMenuOpen(false);
+  }, [title, processedContent, downloadBlob]);
+
+  const copyToClipboard = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(processedContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* ignore */ }
+  }, [processedContent]);
 
   return (
     <AnimatePresence>
@@ -94,12 +151,72 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-claude-border dark:border-[#3d3832] bg-gradient-to-r from-[#faf7f4] to-[#f5f0ea] dark:from-[#242220] dark:to-[#2b2926]">
-              <h2 className="text-base font-bold text-claude-text pl-2 border-l-4 border-claude-accent">
+              <h2 className="text-base font-bold text-claude-text pl-2 border-l-4 border-claude-accent flex-1 min-w-0 truncate">
                 {title}
               </h2>
-              <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-text hover:bg-claude-border-light dark:hover:bg-[#3d3832]/50">
-                <X className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center gap-1 shrink-0">
+                {/* Copy button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs gap-1 text-claude-text-muted hover:text-claude-text"
+                  onClick={copyToClipboard}
+                  title="复制到剪贴板"
+                >
+                  {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  <span className="hidden sm:inline">{copied ? '已复制' : '复制'}</span>
+                </Button>
+                {/* Export dropdown */}
+                <div className="relative" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs gap-1 text-claude-text-muted hover:text-claude-text"
+                    onClick={() => setExportMenuOpen(o => !o)}
+                    title="导出报告"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">导出</span>
+                  </Button>
+                  <AnimatePresence>
+                    {exportMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.96 }}
+                        transition={{ duration: 0.12 }}
+                        className="absolute right-0 top-full mt-1 w-44 rounded-md border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg z-10 overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors"
+                          onClick={exportMarkdown}
+                        >
+                          <FileText className="h-3.5 w-3.5 text-claude-accent" />
+                          <div className="flex flex-col">
+                            <span className="font-medium">Markdown (.md)</span>
+                            <span className="text-[10px] text-claude-text-muted">纯文本，可编辑</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50"
+                          onClick={exportHtml}
+                        >
+                          <FileCode className="h-3.5 w-3.5 text-claude-accent" />
+                          <div className="flex flex-col">
+                            <span className="font-medium">HTML (.html)</span>
+                            <span className="text-[10px] text-claude-text-muted">独立网页，可打印</span>
+                          </div>
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <Button variant="ghost" size="sm" onClick={onClose} className="h-7 w-7 p-0 text-claude-text-muted hover:text-claude-text hover:bg-claude-border-light dark:hover:bg-[#3d3832]/50">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-5 custom-scrollbar preview-scroll">
               <ReportMarkdown>{processedContent}</ReportMarkdown>
