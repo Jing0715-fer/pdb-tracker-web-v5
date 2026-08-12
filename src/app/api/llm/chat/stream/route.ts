@@ -101,8 +101,8 @@ Chain selection guidance:
 - If the structure has only one chain, use chain1=chain2="A".
 - If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B".
 
-Available analysis recipes (for analyze_run): ramachandran, sasa, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability, virtual_screening.
-Note: bfactor and secondary_structure are NOT available as analyze_run recipes. For B-factor info, use analyze_metadata. For secondary structure, use entity_analysis.
+Available analysis recipes (for analyze_run): ramachandran, sasa, bfactor_stats, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability, virtual_screening, ligand_interactions, detect_pockets, contact_map, oligomer_analysis, surface_residues, structure_validation, secondary_structure_simple, sequence_features, distances, rmsd, align_and_superpose.
+Note: bfactor and secondary_structure are NOT valid recipe names. Use bfactor_stats for B-factor analysis, entity_analysis for entity info, and secondary_structure_simple for secondary structure assignment.
 
 # EXAMPLES
 
@@ -497,9 +497,9 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
     'run_hydrophobic': 'hydrophobic_contacts',
     'all-interactions': 'all_interactions', 'all_interactions': 'all_interactions',
     'ramachandran': 'ramachandran',
-    'sasa': 'sasa',
-    'secondary-structure': 'entity_analysis', 'secondary_structure': 'entity_analysis',
-    'bfactor': 'bfactor', 'b-factor': 'bfactor',  // Round 51: bfactor recipe doesn't exist, will show clear error
+    'sasa': 'sasa', 'freesasa': 'sasa',
+    'secondary-structure': 'secondary_structure_simple', 'secondary_structure': 'secondary_structure_simple',
+    'bfactor': 'bfactor_stats', 'b-factor': 'bfactor_stats', 'bfactor_stats': 'bfactor_stats', 'b_factor': 'bfactor_stats',
     'interface-residues': 'interface_residues', 'interface_residues': 'interface_residues',
     'disulfide-bonds': 'disulfide_bonds', 'disulfide_bonds': 'disulfide_bonds',
     'aromatic-stacking': 'aromatic_stacking', 'aromatic_stacking': 'aromatic_stacking',
@@ -508,6 +508,21 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
     'binding-pocket': 'binding_pocket', 'binding_pocket': 'binding_pocket',
     'druggability': 'druggability', 'entity-analysis': 'entity_analysis',
     'entity_analysis': 'entity_analysis',
+    'virtual-screening': 'virtual_screening', 'virtual_screening': 'virtual_screening',
+    'ligand-interactions': 'ligand_interactions', 'ligand_interactions': 'ligand_interactions',
+    'detect-pockets': 'detect_pockets', 'detect_pockets': 'detect_pockets', 'pocket-detection': 'detect_pockets',
+    'contact-map': 'contact_map', 'contact_map': 'contact_map',
+    'oligomer-analysis': 'oligomer_analysis', 'oligomer_analysis': 'oligomer_analysis',
+    'surface-residues': 'surface_residues', 'surface_residues': 'surface_residues',
+    'structure-validation': 'structure_validation', 'structure_validation': 'structure_validation',
+    'secondary-structure-simple': 'secondary_structure_simple', 'secondary_structure_simple': 'secondary_structure_simple',
+    'sequence-features': 'sequence_features', 'sequence_features': 'sequence_features',
+    'distances': 'distances', 'distance': 'distances',
+    'rmsd': 'rmsd', 'per-residue-rmsd': 'rmsd',
+    'align-and-superpose': 'align_and_superpose', 'align_and_superpose': 'align_and_superpose', 'alignment': 'align_and_superpose',
+    // Round 52: metadata is NOT a recipe — it's a separate command type (analyze_metadata).
+    // If the LLM sends {"type":"analyze_run","recipe":"metadata"}, convert it to analyze_metadata.
+    'metadata': 'entity_analysis',  // Fallback: run entity_analysis instead of failing
   };
 
   for (const cmd of commands) {

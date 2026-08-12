@@ -528,6 +528,8 @@ export async function POST(req: Request) {
         if (generateReport) {
           emit({ stage: 'llm-report', level: 'info', message: `${prefix}生成 LLM 报告 (${provider})…`, progress: 55 });
           try {
+            // Round 52: Backfill PubMed before building literature info (same fix as primary path)
+            await backfillPubMedArticles(pdbDetails, emit);
             const litInfo = await buildLiteratureInfo(pdbDetails, maxLitCount);
             const pdbTable = pdbDetails.length > 0
               ? buildDetailedPdbTable(pdbDetails, 80)
@@ -687,6 +689,8 @@ ${top5 || '  （无 BLAST 命中）'}`;
                 : '无两两共有结构';
               // Aggregate literature across all sequences (cap at maxLitCount, IF desc).
               const allSeqPdbs: PdbEntryDetail[] = seqResults.flatMap(r => r.pdbDetails || []);
+              // Round 52: Backfill PubMed before building literature info
+              await backfillPubMedArticles(allSeqPdbs, emit);
               const crossLit = await buildLiteratureInfo(allSeqPdbs, maxLitCount);
               const crossLitBlock = crossLit.count > 0
                 ? `\n\n相关 PubMed 文献（聚合全部 ${seqResults.length} 条序列，共 ${crossLit.count} 篇，按 IF 降序）：\n${crossLit.text}`
@@ -1973,6 +1977,8 @@ ${overlapSummary}${crossLitBlock}
                   : (bShouldSkipBlast
                     ? '| PDB ID | UniProt | Identity | E-value | Description |\n|--------|---------|----------|---------|-------------|\n| (BLAST 已跳过) | - | - | - | - |'
                     : (bCached?.blastResults ? buildDetailedBlastTable(bCached.blastResults, BLAST_CAP) : '| PDB ID | UniProt | Identity | E-value | Description |\n|--------|---------|----------|---------|-------------|\n| (无 BLAST 数据) | - | - | - | - |'));
+                // Round 52: Backfill PubMed before building literature info for batch targets
+                await backfillPubMedArticles(bPdbDetails, emit);
                 const bLitInfo = await buildLiteratureInfo(bPdbDetails, maxLitCount);
                 const bLiteratureInfo = bLitInfo.count > 0
                   ? `共 ${bLitInfo.count} 篇相关文献（按期刊影响因子降序，已截取前 ${bLitInfo.count} 篇；摘要截取 200 字）：\n\n${bLitInfo.text}`
@@ -2304,6 +2310,8 @@ ${overlapSummary}${crossLitBlock}
               : '无两两共有结构';
             // Aggregate literature from ALL batch targets (cap at maxLitCount total, IF desc).
             const allBatchPdbs: PdbEntryDetail[] = batchResults.flatMap((r) => r.pdbDetails || []);
+            // Round 52: Backfill PubMed before building cross-batch literature info
+            await backfillPubMedArticles(allBatchPdbs, emit);
             const crossLit = await buildLiteratureInfo(allBatchPdbs, maxLitCount);
             const crossLitBlock = crossLit.count > 0
               ? `\n\n相关 PubMed 文献（聚合全部 ${batchResults.length} 个靶点，共 ${crossLit.count} 篇，按 IF 降序）：\n${crossLit.text}`
