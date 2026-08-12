@@ -404,6 +404,48 @@ function storeCapturedSession(providerId: string, logicalSid: string, cliSid: st
   inner.set(providerId, cliSid);
 }
 
+/**
+ * Round 58: Detect CLI error messages that are printed to stdout/stderr as
+ * content. Some CLIs (notably hermes) exit 0 but print an error message like
+ * "agent failed: No inference provider configured" to stdout. Without this
+ * check, the error message is treated as valid LLM output and the fallback
+ * chain never fires.
+ *
+ * Known error patterns:
+ *   - "agent failed:" (hermes — no model configured)
+ *   - "Error:" / "error:" (generic CLI errors)
+ *   - "No inference provider configured" (hermes)
+ *   - "Run 'hermes model' to" (hermes setup hint)
+ *   - "authentication required" / "not authenticated" (codex, claude)
+ *   - "rate limit" / "429" (handled separately by retry logic, but catch stragglers)
+ *
+ * Returns true if the content looks like a CLI error message rather than
+ * real LLM output. Conservative — only matches when the FIRST 300 chars are
+ * dominated by error keywords, so real content that happens to mention "error"
+ * won't be falsely flagged.
+ */
+function isCliErrorMessage(content: string, adapterId: string): boolean {
+  if (!content || content.length === 0) return false;
+  // Only check the first 300 chars — if the error is there, it's a CLI error.
+  // Real LLM output rarely starts with an error message.
+  const head = content.slice(0, 300).toLowerCase();
+  // Hermes-specific patterns
+  if (adapterId === 'hermes') {
+    if (/agent failed:/.test(head)) return true;
+    if (/no inference provider configured/.test(head)) return true;
+    if (/run 'hermes model' to/.test(head)) return true;
+    if (/hermes -z:/.test(head)) return true; // hermes echoes its own command on error
+  }
+  // Generic patterns — only flag if the content is SHORT (real reports are 1000+ chars)
+  // AND starts with the error keyword.
+  if (content.length < 500) {
+    if (/^(error|failed|fatal|exception|traceback)[:\s]/i.test(head)) return true;
+    if (/(not authenticated|authentication required|login required)/i.test(head)) return true;
+    if (/command not found|no such file|permission denied/i.test(head)) return true;
+  }
+  return false;
+}
+
 const CLI_ADAPTERS: CliAdapter[] = [
   {
     id: 'hermes',
@@ -1514,6 +1556,16 @@ function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string 
         }
       }
       cleanup();
+      // Round 58: Detect CLI error messages that are printed to stdout as
+      // content. Some CLIs (notably hermes) exit 0 but print an error message
+      // like "agent failed: No inference provider configured" to stdout. Without
+      // this check, the error message is treated as valid LLM output and the
+      // fallback chain never fires — the user sees the error message as the
+      // "report content".
+      if (cleaned.length > 0 && isCliErrorMessage(cleaned, adapter.id)) {
+        reject(new Error(`${adapter.id} CLI error: ${cleaned.slice(0, 200)}`));
+        return;
+      }
       if (cleaned.length > 0) {
         resolve(cleaned);
         return;
@@ -1567,6 +1619,11 @@ function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model:
         if (captured) {
           storeCapturedSession(adapter.id, sessionId, captured);
         }
+      }
+      // Round 58: Detect CLI error messages printed to stdout (same as runCli).
+      if (cleaned.length > 0 && isCliErrorMessage(cleaned, adapter.id)) {
+        reject(new Error(`${adapter.id} WSL CLI error: ${cleaned.slice(0, 200)}`));
+        return;
       }
       // code === 124 → `timeout` killed it (still might have partial output)
       if (cleaned.length > 0) { resolve(cleaned); return; }

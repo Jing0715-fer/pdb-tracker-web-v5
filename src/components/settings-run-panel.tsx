@@ -84,6 +84,7 @@ import {
   FilePlus2,
   FolderOpen,
   Code,
+  Columns2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DbSetupWizard, type DbStatus } from '@/components/db-setup-wizard';
@@ -1590,6 +1591,9 @@ export function SettingsRunPanel({
   const [litRunCount, setLitRunCount] = useState(0);
   const [evalRunCount, setEvalRunCount] = useState(0);
   const [weeklyRunCount, setWeeklyRunCount] = useState(0);
+  // Round 58: Weekly report comparison view state
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [compareData, setCompareData] = useState<{ cryoem: string; xray: string; weekId: string; loading: boolean } | null>(null);
   useEffect(() => {
     if (litStream.state.done) Promise.resolve().then(() => setLitRunCount(c => c + 1));
   }, [litStream.state.done]);
@@ -2052,6 +2056,7 @@ export function SettingsRunPanel({
   /* ──────────────────────────────────────────────────────────────────── */
 
   return (
+    <>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
@@ -2899,6 +2904,37 @@ export function SettingsRunPanel({
                     label={isRunning('weekly') ? (locale === 'zh' ? '运行中…' : 'Running…') : (locale === 'zh' ? '立即执行' : 'Run Now')}
                   />
 
+                  {/* Round 58: Compare Cryo-EM vs X-ray reports side-by-side */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1 text-xs"
+                    disabled={isRunning('weekly')}
+                    onClick={async () => {
+                      const wid = weeklyCustomWeek || weeklyWindow?.weekId || '';
+                      setCompareOpen(true);
+                      setCompareData({ cryoem: '', xray: '', weekId: wid, loading: true });
+                      try {
+                        const r = await fetch(`/api/weekly-report-file?weekId=${encodeURIComponent(wid)}`);
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        const d = await r.json();
+                        setCompareData({
+                          cryoem: d.cryoemContent || '',
+                          xray: d.xrayContent || '',
+                          weekId: wid,
+                          loading: false,
+                        });
+                      } catch (err: any) {
+                        setCompareData({ cryoem: '', xray: '', weekId: wid, loading: false });
+                        toast.error(locale === 'zh' ? '加载报告失败' : 'Failed to load report', { description: err?.message });
+                      }
+                    }}
+                    title={locale === 'zh' ? '对比 Cryo-EM 与 X-ray 周报' : 'Compare Cryo-EM vs X-ray reports'}
+                  >
+                    <Columns2 className="h-3.5 w-3.5" />
+                    {locale === 'zh' ? '对比报告' : 'Compare'}
+                  </Button>
+
                   <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
                     <Cpu className="h-3 w-3" />
                     {locale === 'zh' ? 'LLM →' : 'LLM →'} <code className="px-1 py-0.5 rounded bg-muted/60 font-mono">{effectiveProviderId || 'auto'}</code>
@@ -3038,6 +3074,100 @@ export function SettingsRunPanel({
 
       </DialogContent>
     </Dialog>
+
+      {/* ── Round 58: Weekly Report Comparison Modal ─────────────────────── */}
+      <AnimatePresence>
+        {compareOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+            onClick={() => setCompareOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 8 }}
+              transition={{ duration: 0.2 }}
+              className="bg-claude-surface dark:bg-[#242220] rounded-[10px] shadow-xl max-w-[90vw] w-full max-h-[90vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-3 border-b border-claude-border dark:border-[#3d3832] bg-gradient-to-r from-[#faf7f4] to-[#f5f0ea] dark:from-[#242220] dark:to-[#2b2926]">
+                <div className="flex items-center gap-2">
+                  <Columns2 className="h-4 w-4 text-claude-accent" />
+                  <h2 className="text-sm font-bold text-claude-text">
+                    {locale === 'zh' ? '周报对比' : 'Report Comparison'} — {compareData?.weekId || '…'}
+                  </h2>
+                  {compareData && !compareData.loading && (
+                    <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/30 bg-claude-accent/10 text-claude-accent">
+                      Cryo-EM vs X-ray
+                    </Badge>
+                  )}
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setCompareOpen(false)} className="h-7 w-7 p-0">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* Body — side-by-side comparison */}
+              <div className="flex-1 overflow-hidden p-4">
+                {compareData?.loading ? (
+                  <div className="flex items-center justify-center h-full min-h-[300px]">
+                    <Loader2 className="h-5 w-5 animate-spin text-claude-accent mr-2" />
+                    <span className="text-sm text-muted-foreground">{locale === 'zh' ? '加载报告中…' : 'Loading reports…'}</span>
+                  </div>
+                ) : compareData && (compareData.cryoem || compareData.xray) ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-full max-h-[calc(90vh-100px)]">
+                    {/* Cryo-EM panel */}
+                    <div className="flex flex-col rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 overflow-hidden bg-white/50 dark:bg-[#1a1917]/50">
+                      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-accent/8">
+                        <span className="text-xs font-semibold text-claude-accent">🧊 Cryo-EM</span>
+                        <span className="text-[10px] text-muted-foreground ml-auto">{compareData.cryoem.length} chars</span>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-3 thin-scroll text-xs leading-relaxed">
+                        {compareData.cryoem ? (
+                          <LazyMarkdown>{compareData.cryoem}</LazyMarkdown>
+                        ) : (
+                          <div className="text-muted-foreground text-center py-8">{locale === 'zh' ? '本周无 Cryo-EM 报告' : 'No Cryo-EM report this week'}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* X-ray panel */}
+                    <div className="flex flex-col rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 overflow-hidden bg-white/50 dark:bg-[#1a1917]/50">
+                      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-accent/8">
+                        <span className="text-xs font-semibold text-claude-accent">📐 X-ray</span>
+                        <span className="text-[10px] text-muted-foreground ml-auto">{compareData.xray.length} chars</span>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-3 thin-scroll text-xs leading-relaxed">
+                        {compareData.xray ? (
+                          <LazyMarkdown>{compareData.xray}</LazyMarkdown>
+                        ) : (
+                          <div className="text-muted-foreground text-center py-8">{locale === 'zh' ? '本周无 X-ray 报告' : 'No X-ray report this week'}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full min-h-[300px] gap-2">
+                    <AlertTriangle className="h-6 w-6 text-amber-500" />
+                    <div className="text-sm font-medium text-muted-foreground">
+                      {locale === 'zh' ? '未找到该周的周报数据' : 'No report data found for this week'}
+                    </div>
+                    <div className="text-xs text-muted-foreground/70">
+                      {locale === 'zh' ? '请先生成周报后再使用对比功能' : 'Please generate a weekly report first'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 

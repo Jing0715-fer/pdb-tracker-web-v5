@@ -11529,3 +11529,98 @@ Improvement Suggestions for Next Round:
 5. **Session registry persistence** — currently SESSION_REGISTRY is in-memory and resets on server restart. Consider persisting to disk for long-running sessions.
 
 6. **Eval report versioning** — store the normalized report alongside the raw LLM output so users can see the "before normalization" version for debugging.
+
+---
+Task ID: round-58-cli-error-fallback-qa
+Agent: main
+Task: QA + E2E test Round 56-57 changes, perform real task test, fix bugs found, commit and push.
+
+QA + E2E Test Results:
+
+### Browser E2E Test (agent-browser)
+- Page loads: HTTP 200, no console errors, no page errors ✅
+- Weekly report modal opens (via E sub-button on W31 snapshot) ✅
+- Report modal shows correct H2 headings (A-H, no duplicates) ✅
+- H3 sub-headings render at 12.5px (new smaller size) ✅
+- Export dropdown works: Markdown / HTML / Print-PDF all visible ✅
+- Sticky footer: root layout uses h-screen flex flex-col, footer at bottom ✅
+- Mobile responsive (375px viewport): no horizontal scroll, 128 visible buttons ✅
+- HMR: Fast Refresh working (rebuild in 1-3s) ✅
+
+### Real DB Content Verification
+- 5 weekly runs tested: 21 total duplicate H2 headings → 0 after sanitizeReport ✅
+- 5 eval reports tested: all recent ones (P68871, P00533) have 0 dups, 16/16 and 13/13 H3 with § prefix ✅
+- Older eval reports (Q9Y6K9, P07766) have H1 + no § prefix — these were generated BEFORE the normalizer existed (stored in DB as-is; render-time sanitizeReport handles dedup but not heading level normalization)
+
+### Real Task Test — LLM Generation
+- **BUG FOUND**: Hermes CLI returns "agent failed: No inference provider configured" as stdout content, but generateText reports ok:true → fallback chain never fires → user sees error message as "report content"
+- Root cause: hermes exits 0 but prints error to stdout. The CLI runner treated any non-empty output as success.
+- z.ai SDK works perfectly (replied "4" in 0.36s when called directly)
+
+Fix Applied (Round 58):
+
+### isCliErrorMessage() — detect CLI error output (src/lib/llm.ts)
+Added `isCliErrorMessage(content, adapterId)` function that detects CLI error messages
+printed to stdout/stderr as content. Known patterns:
+- Hermes: "agent failed:", "No inference provider configured", "Run 'hermes model' to", "hermes -z:"
+- Generic (only for short content <500 chars): "error:", "failed:", "not authenticated", "command not found"
+
+Integrated into both `runCli()` and `runCliInWsl()` — when detected, the call is rejected
+with an error message, which triggers the fallback chain (z.ai SDK).
+
+### Verification
+- Before fix: `generateText({provider:'auto'})` → ok:true, content="hermes -z: agent failed:..." (WRONG)
+- After fix: `generateText({provider:'auto'})` → ok:true, provider="zai", content="4" (CORRECT)
+- Report chapter generation test: z.ai generated 424 chars of high-quality Chinese content with correct §1.1/§1.2 headings in 4.6s ✅
+
+Stage Summary:
+- ✅ All Round 56-57 features verified working in browser
+- ✅ Sticky footer, mobile responsive, H3 visual hierarchy confirmed
+- ✅ Export dropdown (Markdown/HTML/Print-PDF) functional
+- ✅ Critical bug fixed: CLI error output no longer treated as valid LLM content
+- ✅ Fallback chain now correctly falls through to z.ai SDK when hermes fails
+- ✅ Real report generation verified end-to-end
+
+Improvement Suggestions for Next Round:
+1. Report comparison view (Cryo-EM vs X-ray side-by-side) — still pending
+2. Session registry persistence to disk — still pending
+3. Hermes auto-setup: detect unconfigured hermes and show a setup hint in the UI
+4. z.ai SDK as primary provider when no CLI is configured (currently CLI is tried first, wasting 15-20s on hermes timeout before falling back)
+
+---
+Task ID: round-58-compare-view
+Agent: main
+Task: Continue development based on Round 56-57 improvement suggestions. Add report comparison view. Commit and push.
+
+Development:
+
+### Report Comparison View (src/components/settings-run-panel.tsx)
+Added "对比报告 / Compare" button in the Weekly Report tab (next to Run Now).
+Clicking it opens a full-screen modal showing Cryo-EM and X-ray reports side-by-side:
+
+- Uses `/api/weekly-report-file?weekId=...` API (already existed)
+- Two-panel grid layout (responsive: 1 column on mobile, 2 columns on lg+)
+- Each panel shows: method icon (🧊/📐), char count, and the full report markdown
+- LazyMarkdown renderer used for consistent rendering
+- Loading state with spinner
+- Empty state with "请先生成周报" hint when no data
+- Uses existing LazyMarkdown, AnimatePresence, motion components
+- Added Columns2 icon import from lucide-react
+
+### Browser E2E Verification
+- Compare button visible in Weekly Report tab ✅
+- Clicking opens modal with "Report Comparison — 2026-W33" title ✅
+- Modal shows Cryo-EM and X-ray panel labels ✅
+- Shows "no data" message for weeks without reports (expected) ✅
+- Escape closes the modal ✅
+
+Stage Summary:
+- ✅ Report comparison view implemented and tested
+- ✅ CLI error detection fix verified (hermes error → z.ai fallback works)
+- ✅ Real report generation tested end-to-end (z.ai generated 424 chars quality content)
+- ✅ All Round 56-57 features verified in browser
+- ✅ Committed and pushed
+
+Git
+- Commit: "fix: Round 58 — CLI error detection + z.ai fallback + report comparison view"
+- Files: src/lib/llm.ts, src/components/settings-run-panel.tsx, worklog.md
