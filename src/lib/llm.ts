@@ -397,12 +397,37 @@ const CLI_ADAPTERS: CliAdapter[] = [
     /**
      * Codex 0.144+ uses `codex exec [PROMPT]` for non-interactive runs and
      * writes the agent's final message to a file passed via
-     * `--output-last-message <file>`. The earlier `codex exec --quiet`
-     * invocation is no longer supported (v0.144 rejects the flag).
+     * `--output-last-message <file>`.
+     *
+     * Round 54: Codex does NOT support `--session <id>` for creating new
+     * sessions. Instead, it uses `codex exec resume <SESSION_ID> [PROMPT]`
+     * to resume an existing session. The first call creates a session
+     * (persisted to disk by default), and subsequent calls use
+     * `codex exec resume <id> <prompt>` to continue.
+     *
+     * Since we can't know the session ID before the first call completes,
+     * we use a two-phase approach:
+     * 1. First call: `codex exec --output-last-message <file> <prompt>`
+     *    → Codex creates a session and prints the session ID to stderr
+     * 2. Subsequent calls: `codex exec resume <sessionId> <prompt>`
+     *    → Codex resumes the session with the new prompt
+     *
+     * For simplicity, we pass sessionId only when it's non-empty AND
+     * starts with "resume:" prefix (set by the caller after the first
+     * call). Without the prefix, we do a normal exec (first call).
+     *
      * The `$OUTPUT_FILE` token is replaced with a per-call temp file
      * path by the library before spawn (see `outputFile` field).
      */
-    callArgs: (q, _m, sid) => sid ? ['exec', '--output-last-message', '$OUTPUT_FILE', q, '--session', sid] : ['exec', '--output-last-message', '$OUTPUT_FILE', q],
+    callArgs: (q, _m, sid) => {
+      // If sid starts with "resume:", use `codex exec resume <id> <prompt>`
+      if (sid && sid.startsWith('resume:')) {
+        const resumeId = sid.slice(7);
+        return ['exec', 'resume', resumeId, '--output-last-message', '$OUTPUT_FILE', q];
+      }
+      // Normal first call (no session resume)
+      return ['exec', '--output-last-message', '$OUTPUT_FILE', q];
+    },
     outputStream: 'stdout',
     outputFile: '$OUTPUT_FILE',
     probeTimeoutMs: 15_000,
