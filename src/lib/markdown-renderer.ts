@@ -662,7 +662,12 @@ export function deduplicateConsecutiveHeadings(md: string): string {
 /**
  * Convenience: render markdown to a complete self-contained HTML page
  * (with <!DOCTYPE>, <html>, <head>, <body>). Used by EvalReportGenerator's
- * iframe srcDoc.
+ * iframe srcDoc and by the ReportModal HTML export.
+ *
+ * Round 57: Added print-optimized CSS (@media print) so exported HTML prints
+ * cleanly — page breaks before H2 chapters, no background colors, smaller
+ * margins. Also added consistent heading/table/blockquote styles that match
+ * the in-app ReportMarkdown renderer.
  */
 export function renderMarkdownToFullPage(
   md: string,
@@ -676,13 +681,113 @@ export function renderMarkdownToFullPage(
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; color: #2d2d2d; line-height: 1.7; max-width: ${maxWidth}px; margin: 0 auto; padding: 32px 28px; background: #fff; overflow-x: auto; }
-    a { color: #c96442; }
-    table { table-layout: fixed; word-break: break-word; overflow-wrap: anywhere; }
-    th, td { word-break: break-word; overflow-wrap: anywhere; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      color: #2d2d2d;
+      line-height: 1.7;
+      max-width: ${maxWidth}px;
+      margin: 0 auto;
+      padding: 32px 28px;
+      background: #fff;
+      overflow-x: auto;
+    }
+    a { color: #c96442; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 13px;
+      table-layout: fixed;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    th {
+      background: #f5f0ea;
+      font-weight: 600;
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 2px solid #e8e4dd;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #f0ece6;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a1a;
+      margin: 0 0 12px;
+    }
+    h2 {
+      font-size: 17px;
+      font-weight: 600;
+      color: #c96442;
+      margin: 28px 0 14px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #e8e4dd;
+    }
+    h3 {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #6b5d4f;
+      margin: 14px 0 6px;
+      padding-left: 8px;
+      border-left: 3px solid #d4c4b0;
+      line-height: 1.4;
+    }
+    p { margin: 8px 0 12px; font-size: 14px; line-height: 1.65; }
+    ul, ol { margin: 8px 0 12px 24px; font-size: 14px; }
+    li { margin-bottom: 4px; }
+    blockquote {
+      margin: 12px 0;
+      padding: 8px 16px;
+      border-left: 4px solid #d4c4b0;
+      background: #faf7f4;
+      color: #6b5d4f;
+      font-size: 13px;
+    }
+    hr { border: 0; border-top: 1px solid #e8e4dd; margin: 20px 0; }
+    code {
+      background: #f5f0ea;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.9em;
+      color: #c96442;
+    }
+
+    /* Round 57: Print-optimized styles */
+    @media print {
+      body {
+        max-width: none;
+        padding: 0;
+        font-size: 11pt;
+        line-height: 1.5;
+      }
+      h1 { font-size: 18pt; page-break-after: avoid; }
+      h2 {
+        font-size: 14pt;
+        page-break-before: auto;
+        page-break-after: avoid;
+        border-bottom: 1px solid #ccc;
+      }
+      h3 { font-size: 11pt; page-break-after: avoid; }
+      table { font-size: 9pt; page-break-inside: avoid; }
+      tr { page-break-inside: avoid; }
+      a { color: #333; text-decoration: underline; }
+      blockquote { page-break-inside: avoid; }
+      /* Avoid page break right after the metadata header table */
+      table:first-of-type { page-break-after: avoid; }
+    }
   </style>
 </head>
 <body>

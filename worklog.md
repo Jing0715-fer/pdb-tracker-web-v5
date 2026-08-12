@@ -11398,3 +11398,134 @@ Improvement Suggestions for Next Round:
 7. **Add tag-based session filtering** — filter sessions by tags.
 
 8. **Add analysis summary PDF export** — export as formatted PDF.
+
+---
+Task ID: round-56-hermes-session-dedup-export
+Agent: main
+Task: Fix weekly report heading duplication (B+ chapters have duplicate titles), make H3 sub-headings smaller in UI, add export functionality, stabilize eval report template, fix Hermes session reuse. QA + E2E test, commit and push.
+
+User Bug Reports:
+1. 周报结果从B开始的主标题都有重复 (weekly report headings from B onwards are duplicated)
+2. A1等次一级标题需要显示得小一些在UI中 (A1-level sub-headings need to be smaller in UI)
+3. 内容避免重复 (avoid content repetition)
+4. 增加导出功能 (add export functionality)
+5. 靶点评估的报告模板也优化一下，防止每次生成的格式不一致 (stabilize eval report template)
+6. 调用Hermes还是每次调用都启用了新session (Hermes creates a new session on every call)
+
+Root Cause Analysis:
+
+## Bug 1: Weekly report heading duplication
+The weekly report merge step prepends `## ${ch.key}. ${ch.title}` to each chapter's content:
+```
+WEEKLY_CHAPTERS.map(ch => `## ${ch.key}. ${ch.title}\n\n${chapterContents[ch.key]}`).join('\n\n')
+```
+But the LLM often echoes the chapter heading at the start of its output (e.g., `## B. 方法学突破...`), producing:
+```
+## B. 方法学突破...
+\n\n
+## B. 方法学突破...   ← duplicate from LLM
+\n\n
+<actual content>
+```
+DB analysis confirmed: the latest weekly report run had 5 duplicate H2 headings in cryoem (A, B, C, D, F all duplicated) and 2 in xray.
+
+## Bug 2: H3 sub-headings not visually distinct
+The markdown renderer used `font-size:14px` for H3, only 3px smaller than H2 (17px). This made sub-sections look almost as prominent as chapter headings.
+
+## Bug 5: Eval report format inconsistency
+Different LLM providers (hermes, codex, z.ai SDK) emit different heading levels:
+- hermes: `## 1. 蛋白功能与生物学背景` (H2) + `### §1.1 基本功能` (H3) ✓
+- codex: `# 1. 蛋白功能与生物学背景` (H1!) + `## 1.1 基本功能` (H2!)
+- z.ai: `#### §1.1 基本功能` (H4!)
+Without normalization, the same report template produces wildly different structures.
+
+## Bug 6: Hermes session reuse not working
+The hermes adapter's callArgs checked `sid.startsWith('resume:')`, but the eval route passed a plain logical sessionId (e.g., `eval-P68871-1234567890`). Since the logical ID never started with `resume:`, every chapter call took the "first call" branch (`--pass-session-id`), creating a new session each time. The captured session ID was never stored or reused.
+
+Fixes Applied:
+
+### 1. Hermes session reuse (src/lib/llm.ts)
+Added SESSION_REGISTRY (Map<logicalSid, Map<providerId, actualCliSid>>):
+- `parseHermesSessionId()` — extracts `session_id: <uuid>` from hermes output
+- `parseCodexSessionId()` — extracts codex session ID
+- `resolveSessionId()` — returns `resume:<capturedId>` if registry has a captured ID
+- `storeCapturedSession()` — stores CLI session ID after first call
+- Modified `runCli()` and `runCliInWsl()` to resolve/capture session IDs automatically
+- Added `parseSessionId` field to CliAdapter interface
+- Wired `parseSessionId` into hermes + codex adapters
+
+### 2. Weekly heading dedup (src/app/api/pdb-weekly/run/route.ts)
+- Added `normalizeWeeklyChapterContent()` — strips duplicate chapter heading from LLM output, demotes `## B1.` to `### B1.`, strips H1 headings
+- Updated chapter prompt: explicitly forbids H1/H2 output, specifies `### X1.` for sub-sections, forbids cross-chapter content repetition
+- Updated system prompt with heading hierarchy rules
+- Updated merge step to call normalizeWeeklyChapterContent on each chapter
+
+### 3. Render-time dedup safety net (src/lib/markdown-renderer.ts)
+- Added `deduplicateConsecutiveHeadings()` — removes consecutive identical headings (within 4 lines)
+- Integrated into `sanitizeReport()` as step 7
+- Verified on real DB content: 5 duplicates → 0 duplicates
+
+### 4. H3 visual hierarchy (src/lib/markdown-renderer.ts)
+- H3: 12.5px font (was 14px), muted color (#6b5d4f), left border accent (3px solid #d4c4b0)
+- Creates clear hierarchy: H1 (22px) > H2 (17px, orange, bottom border) > H3 (12.5px, muted, left border)
+
+### 5. Report export (src/components/ui/pdb-ui.tsx)
+- Added Copy button (copies markdown to clipboard)
+- Added Export dropdown with Markdown (.md) and HTML (.html) options
+- HTML export uses `renderMarkdownToFullPage()` for self-contained printable page
+- File-safe title derivation from modal title
+
+### 6. Eval report template stabilization (src/lib/report-template.ts)
+- Added `normalizeEvalChapterContent()`:
+  - Chapter headings → always H2 (regardless of LLM output level)
+  - Sub-section headings → always H3 with `§N.M.` prefix
+  - Strips duplicate chapter headings
+  - Strips H1 headings (reserved for report title)
+- Applied in eval route for all 4 code paths: primary target, rescue pass, batch targets, batch rescue
+
+Verification:
+
+### Unit Tests
+- deduplicateConsecutiveHeadings: consecutive dup → 1 (PASS), with content between → 1 (PASS), far-apart → 2 (PASS)
+- normalizeEvalChapterContent: H1→H2, sub-sections→H3 with § prefix (PASS)
+- normalizeWeeklyChapterContent: dup H2 stripped, H2 sub-sections→H3, H1 stripped (PASS)
+
+### Real DB Content Test
+- Latest weekly run (cryoem): 19 H2 headings, 5 duplicates → after sanitizeReport: 14 H2, 0 duplicates ✓
+- Latest eval (P68871): H1=0, H2=9, H3=16, 0 dups, 16/16 H3 with § prefix ✓
+- Older eval (P00533): H1=0, H2=8, H3=13, 0 dups, 13/13 H3 with § prefix ✓
+
+### Browser E2E Test
+- Page loads: HTTP 200, no console errors, no page errors
+- Run Center panel opens: all 3 tabs visible (Eval/Lit/Weekly)
+- Weekly Report tab: shows 5 history runs with chapter counts + provider info
+- HMR: Fast Refresh working (rebuild + done in ~1-3s)
+
+### Lint Check
+- All 6 modified files: 0 errors, 0 warnings
+
+### Git
+- Commit: 1de3c9b "fix: Round 56 — Hermes session reuse, weekly heading dedup, report export, eval template stability"
+- 6 files changed, 477 insertions(+), 25 deletions(-)
+
+Stage Summary:
+- ✅ Weekly heading duplication fixed (generation + render time)
+- ✅ H3 sub-headings visually smaller and distinct
+- ✅ Export functionality (Markdown + HTML + Copy) added to ReportModal
+- ✅ Eval report template stabilized across LLM providers
+- ✅ Hermes session reuse fixed (SESSION_REGISTRY + parseSessionId)
+- ✅ All unit tests pass, real DB content verified, browser E2E clean
+
+Improvement Suggestions for Next Round:
+
+1. **Add report header with metadata** — inject a styled header block (week ID, date, PDB count, method breakdown) at the top of weekly reports for a more professional look.
+
+2. **Print-optimized CSS for HTML export** — add @media print rules to the HTML export template so the exported HTML prints cleanly (page breaks before H2, no color backgrounds).
+
+3. **PDF export** — add a "Print to PDF" option that uses the browser's print dialog with the print-optimized CSS.
+
+4. **Report comparison view** — when multiple weekly reports exist for the same week, allow side-by-side comparison of Cryo-EM vs X-ray reports.
+
+5. **Session registry persistence** — currently SESSION_REGISTRY is in-memory and resets on server restart. Consider persisting to disk for long-running sessions.
+
+6. **Eval report versioning** — store the normalized report alongside the raw LLM output so users can see the "before normalization" version for debugging.

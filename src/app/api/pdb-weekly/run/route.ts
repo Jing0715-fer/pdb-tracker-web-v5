@@ -177,7 +177,14 @@ async function generateMethodReport(opts: {
   // content (the LLM often echoes "## B. 方法学突破..." even though the prompt
   // says not to). Also normalize sub-section headings: if the LLM emitted
   // "## B1. xxx" (H2 level for a sub-section), demote it to "### B1. xxx" (H3).
+  // Round 57: Inject a professional metadata header at the top of the report
+  // so the exported Markdown/HTML has proper context (week ID, date range,
+  // method, PDB count, generation timestamp).
+  const reportHeader = buildWeeklyReportHeader({
+    weekId, startDate, endDate, methodLabel, methodKey, pdbCount,
+  });
   const merged = sanitizeReport(
+    reportHeader + '\n\n' +
     WEEKLY_CHAPTERS.map(ch => {
       const raw = chapterContents[ch.key] ?? '';
       const cleaned = normalizeWeeklyChapterContent(raw, ch.key, ch.title);
@@ -242,6 +249,41 @@ function normalizeWeeklyChapterContent(content: string, chapterKey: string, chap
   // the report title, which is added separately).
   s = s.replace(/^#\s+[^\n]+\n?/gm, '');
   return s.trim();
+}
+
+/**
+ * Round 57: Build a professional metadata header for the weekly report.
+ * This is injected at the top of the merged report so the exported
+ * Markdown/HTML has proper context. The header uses H1 for the report title
+ * and a metadata table for the key facts.
+ */
+function buildWeeklyReportHeader(opts: {
+  weekId: string;
+  startDate: string;
+  endDate: string;
+  methodLabel: string;
+  methodKey: string;
+  pdbCount: number;
+}): string {
+  const { weekId, startDate, endDate, methodLabel, methodKey, pdbCount } = opts;
+  const now = new Date();
+  const genDate = now.toISOString().slice(0, 10);
+  const genTime = now.toTimeString().slice(0, 8);
+  return `# PDB 结构周报 — ${methodLabel} (${weekId})
+
+| 字段 | 值 |
+|------|------|
+| 周报编号 | ${weekId} |
+| 数据区间 | ${startDate} 至 ${endDate} |
+| 实验方法 | ${methodLabel} |
+| PDB 入库数 | ${pdbCount} |
+| 数据来源 | RCSB PDB |
+| 生成时间 | ${genDate} ${genTime} |
+
+---
+
+> 本报告由 PDB Structure Tracker 自动生成，数据来源于 RCSB Protein Data Bank。
+> 报告分为 A-H 共 8 个章节，涵盖期刊趋势、技术突破、研究热点、方法评估、代表性结构、质量评估、跨学科应用及参考文献。`;
 }
 function isoWeek(d: Date) {
   const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));

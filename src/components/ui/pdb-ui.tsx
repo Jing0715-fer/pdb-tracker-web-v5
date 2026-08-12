@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Clock, ChevronLeft, ChevronRight, Download, FileText, FileCode, Copy, Check } from 'lucide-react';
+import { X, Clock, ChevronLeft, ChevronRight, Download, FileText, FileCode, Copy, Check, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { TagInfo, TagCategory } from '@/lib/pdb-types';
@@ -123,6 +123,37 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
     setExportMenuOpen(false);
   }, [title, processedContent, downloadBlob]);
 
+  // Round 57: Print / PDF export — opens a new window with the print-optimized
+  // HTML and triggers the browser's print dialog. The user can then "Save as PDF"
+  // from the print dialog. This avoids needing a heavy PDF library (jsPDF/pdfmake)
+  // and leverages the browser's native PDF rendering which handles CJK fonts
+  // perfectly.
+  const exportPdf = useCallback(() => {
+    const { html } = renderMarkdownToFullPage(processedContent, {
+      title,
+      bodyClassName: 'report-export',
+      maxWidth: 820,
+    });
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) {
+      // Popup blocked — fall back to downloading the HTML
+      downloadBlob(html, 'text/html;charset=utf-8', 'html');
+      setExportMenuOpen(false);
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    // Wait for the window to finish loading before triggering print
+    printWindow.onload = () => {
+      setTimeout(() => {
+        printWindow.focus();
+        printWindow.print();
+      }, 300);
+    };
+    setExportMenuOpen(false);
+  }, [title, processedContent, downloadBlob]);
+
   const copyToClipboard = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(processedContent);
@@ -207,6 +238,17 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
                           <div className="flex flex-col">
                             <span className="font-medium">HTML (.html)</span>
                             <span className="text-[10px] text-claude-text-muted">独立网页，可打印</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50"
+                          onClick={exportPdf}
+                        >
+                          <Printer className="h-3.5 w-3.5 text-claude-accent" />
+                          <div className="flex flex-col">
+                            <span className="font-medium">打印 / PDF</span>
+                            <span className="text-[10px] text-claude-text-muted">浏览器打印对话框</span>
                           </div>
                         </button>
                       </motion.div>
