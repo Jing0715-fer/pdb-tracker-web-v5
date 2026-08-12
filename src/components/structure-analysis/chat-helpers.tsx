@@ -200,8 +200,85 @@ export function formatAnalysisResults(
     else if (recipe === "sasa") {
       sections.push(`### 🌐 SASA: ${rd?.total_sasa||rd?.total||"?"} Å²`);
     }
-    else if (recipe === "bfactor") {
-      sections.push(`### 🌡️ B-factor: Mean ${rd?.mean||"?"}, Min ${rd?.min||"?"}, Max ${rd?.max||"?"}`);
+    else if (recipe === "bfactor" || recipe === "bfactor_stats") {
+      sections.push(`### 🌡️ B-factor: Mean ${rd?.mean||rd?.mean_bfactor||"?"}, Min ${rd?.min||rd?.min_bfactor||"?"}, Max ${rd?.max||rd?.max_bfactor||"?"}`);
+    }
+    else if (recipe === "druggability") {
+      const score = rd?.druggability_score ?? "?";
+      const cls = rd?.classification ?? "?";
+      sections.push(`### 💊 Druggability: Score ${score}/100, Classification: ${cls}`);
+      if (rd?.pocket_volume_A3) sections.push(`- Pocket volume: ${rd.pocket_volume_A3} Å³`);
+      if (rd?.hydrophobic_pct) sections.push(`- Hydrophobic: ${rd.hydrophobic_pct}%, Polar: ${rd.polar_pct}%, Charged: ${rd.charged_pct}%`);
+    }
+    else if (recipe === "virtual_screening") {
+      const hits = rd?.ranked_hits || [];
+      sections.push(`### 🔬 Virtual Screening: ${rd?.num_fragments_screened||"?"} fragments screened, best Ki ${rd?.best_ki_uM||"?"} μM`);
+      if (hits.length > 0) {
+        sections.push(`**Top hits:**`);
+        sections.push(hits.slice(0, 5).map((h: any) => `- ${h.name} (Ki ${h.ki_uM} μM, score ${h.score})`).join('\n'));
+      }
+    }
+    else if (recipe === "ligand_interactions") {
+      const contacts = rd?.contacts || rd?.interactions || [];
+      sections.push(`### 🧪 Ligand Interactions: ${rd?.total_contacts||contacts.length||"?"} contacts`);
+      if (contacts.length > 0) {
+        sections.push(contacts.slice(0, 10).map((c: any) => `- ${c.resname||"?"}${c.resno||"?"}(${c.chain||"?"}) ${c.atom||""} ↔ ${c.ligand_atom||c.atom_name||""} (${c.distance_A||c.distance||"?"} Å)`).join('\n'));
+      }
+    }
+    else if (recipe === "detect_pockets") {
+      const pockets = rd?.pockets || [];
+      sections.push(`### 🔍 Pocket Detection: ${pockets.length} pockets found`);
+      if (pockets.length > 0) {
+        sections.push(pockets.slice(0, 5).map((p: any) => `- Pocket ${p.id||"?"}: volume ${p.volume||"?"} Å³, ${p.residue_count||"?"} residues`).join('\n'));
+      }
+    }
+    else if (recipe === "entity_analysis") {
+      sections.push(`### 📋 Entity Analysis: ${rd?.total_entities||"?"} entities, ${rd?.n_chains||"?"} chains`);
+      if (rd?.entities) {
+        sections.push(rd.entities.slice(0, 5).map((e: any) => `- ${e.entity_id}: ${e.type} (${e.description||e.header||"?"})`).join('\n'));
+      }
+    }
+    else if (recipe === "disulfide_bonds") {
+      const bonds = rd?.bonds || [];
+      sections.push(`### 🔗 Disulfide Bonds: ${rd?.count||bonds.length||"?"} bonds`);
+      if (bonds.length > 0) {
+        sections.push(bonds.slice(0, 10).map((b: any) => `- ${b.chain1||"?"}${b.resno1||"?"} ↔ ${b.chain2||"?"}${b.resno2||"?"} (${b.distance_A||"?"} Å)`).join('\n'));
+      }
+    }
+    else if (recipe === "aromatic_stacking") {
+      const stackings = rd?.stackings || rd?.interactions || [];
+      sections.push(`### 📐 Aromatic Stacking: ${rd?.total||stackings.length||"?"} interactions`);
+    }
+    else if (recipe === "water_bridges") {
+      const bridges = rd?.bridges || rd?.interactions || [];
+      sections.push(`### 💧 Water Bridges: ${rd?.total||bridges.length||"?"} bridges`);
+    }
+    else if (recipe === "metal_coordination") {
+      sections.push(`### ⚙️ Metal Coordination: ${rd?.total_metals||"?"} metals, ${rd?.total_sites||"?"} sites`);
+    }
+    else if (recipe === "contact_map") {
+      sections.push(`### 🗺️ Contact Map: ${rd?.total_contacts||"?"} contacts`);
+    }
+    else if (recipe === "oligomer_analysis") {
+      sections.push(`### 🧬 Oligomer Analysis: ${rd?.oligomeric_state||rd?.assembly||"?"}`);
+    }
+    else if (recipe === "surface_residues") {
+      sections.push(`### 🌐 Surface Residues: ${rd?.total||rd?.count||"?"} residues`);
+    }
+    else if (recipe === "structure_validation") {
+      sections.push(`### ✅ Structure Validation: ${rd?.clashscore||"?"} clashes, ${rd?.ramachandran_outliers||"?"}% outliers`);
+    }
+    else if (recipe === "secondary_structure_simple") {
+      const helices = rd?.helices || rd?.helix_count || 0;
+      const sheets = rd?.sheets || rd?.strand_count || rd?.beta_count || 0;
+      sections.push(`### 🧬 Secondary Structure: ${helices} helices, ${sheets} sheets`);
+    }
+    else if (recipe === "sequence_features") {
+      sections.push(`### 🧬 Sequence Features: ${rd?.length||"?"} residues, MW ${rd?.molecular_weight||rd?.mw||"?"} kDa`);
+    }
+    else if (recipe === "interface_residues") {
+      const residues = rd?.interface_residues || rd?.residues || [];
+      sections.push(`### 🔗 Interface Residues: ${residues.length||rd?.count||"?"} residues`);
     }
     else if (recipe) {
       sections.push(`### 📊 ${recipe}\n\`\`\`json\n${JSON.stringify(rd).slice(0,500)}\n\`\`\``);
