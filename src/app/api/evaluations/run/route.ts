@@ -8,6 +8,7 @@ import { fetchPdbIdsForUniprot, fetchPdbEntryDetails, fetchUniprotMeta, type Pdb
 import { runBlast, runBlastDb, fetchUniprotSequence } from '@/lib/blast';
 import { efetch } from '@/lib/pubmed';
 import { db } from '@/lib/db';
+import { Prisma } from "@prisma/client";
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { getActiveDbFsPath } from '@/lib/db';
 import { JOURNAL_IF_MAP } from '@/lib/journal-if-map';
@@ -26,6 +27,18 @@ export const dynamic = 'force-dynamic';
  * - Batches efetch calls (50 PMIDs per NCBI request).
  * - Failures are logged but never abort the evaluation.
  */
+
+/**
+ * Round 51: Safe placeholder helper for SQLite $queryRaw.
+ * Returns just the placeholder list `?, ?, ?, ...` (one `?` per value).
+ * Prisma.join(values) emits a Sql fragment of comma-separated placeholders,
+ * each bound to the corresponding value at execution time.
+ */
+function safeInPlaceholders(values: Array<string | number>): Prisma.Sql {
+  if (values.length === 0) return Prisma.sql`NULL`; // never matches
+  return Prisma.join(values);
+}
+
 async function backfillPubMedArticles(
   pdbDetails: PdbEntryDetail[],
   emit?: (e: SseEvent) => void,
@@ -40,7 +53,7 @@ async function backfillPubMedArticles(
   // Check which PMIDs are already in PubMedArticle.
   let existingPmids = new Set<string>();
   try {
-    const rows = await db.$queryRaw<any[]>`SELECT pubmedId FROM PubMedArticle WHERE pubmedId IN (${pmids})`;
+    const rows = await db.$queryRaw<any[]>`SELECT pubmedId FROM PubMedArticle WHERE pubmedId IN (${safeInPlaceholders(pmids)})`;
     existingPmids = new Set((rows as any[]).map(r => String(r.pubmedId)));
   } catch {
     // Table might not exist yet — treat all as missing.
@@ -125,7 +138,7 @@ async function buildLiteratureInfo(
   // Query PubMedArticle table for any matching articles.
   let articles: Array<{ pubmedId: string; title: string | null; journal: string | null; abstract: string | null }> = [];
   try {
-    const rows = await db.$queryRaw<any[]>`SELECT pubmedId, title, journal, abstract FROM PubMedArticle WHERE pubmedId IN (${pmids})`;
+    const rows = await db.$queryRaw<any[]>`SELECT pubmedId, title, journal, abstract FROM PubMedArticle WHERE pubmedId IN (${safeInPlaceholders(pmids)})`;
     articles = (rows as any[]).map((r) => ({ pubmedId: r.pubmedId, title: r.title, journal: r.journal, abstract: r.abstract }));
   } catch {
     // PubMedArticle table may not exist or be empty — degrade gracefully.
@@ -143,7 +156,7 @@ async function buildLiteratureInfo(
   if (nullIfPmids.length > 0) {
     // Try PdbStructure first (weekly report path)
     try {
-      const ifRows = await db.$queryRaw<any[]>`SELECT pubmedId, journalIf FROM PdbStructure WHERE pubmedId IN (${nullIfPmids}) AND journalIf IS NOT NULL`;
+      const ifRows = await db.$queryRaw<any[]>`SELECT pubmedId, journalIf FROM PdbStructure WHERE pubmedId IN (${safeInPlaceholders(nullIfPmids)}) AND journalIf IS NOT NULL`;
       for (const r of ifRows as any[]) {
         const pm = r.pubmedId?.toString();
         if (!pm) continue;
@@ -158,7 +171,7 @@ async function buildLiteratureInfo(
     const stillNullPmids = nullIfPmids.filter((pm) => pmidToIf.get(pm) == null);
     if (stillNullPmids.length > 0) {
       try {
-        const ifRows2 = await db.$queryRaw<any[]>`SELECT pubmedId, journalIf, journal FROM EvaluationPdbStructure WHERE pubmedId IN (${stillNullPmids}) AND journalIf IS NOT NULL`;
+        const ifRows2 = await db.$queryRaw<any[]>`SELECT pubmedId, journalIf, journal FROM EvaluationPdbStructure WHERE pubmedId IN (${safeInPlaceholders(stillNullPmids)}) AND journalIf IS NOT NULL`;
         for (const r of ifRows2 as any[]) {
           const pm = r.pubmedId?.toString();
           if (!pm) continue;
