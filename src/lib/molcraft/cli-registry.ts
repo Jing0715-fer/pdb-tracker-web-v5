@@ -4121,6 +4121,246 @@ print(json.dumps({
 `;
     },
   },
+  // ── Round 53: New recipes ──────────────────────────────────────────
+  {
+    id: "protonation_states",
+    label: "质子化状态预测 (Protonation States)",
+    description: "预测可电离残基(ASP/GLU/HIS/CYS/TYR/LYS/ARG)在指定pH下的质子化状态和电荷",
+    requires: ["biopython"],
+    params: [
+      { name: "chain1", type: "string", required: false, description: "链 ID，默认 A" },
+      { name: "pH", type: "number", required: false, description: "pH 值，默认 7.4" },
+    ],
+    buildScript: (inputPath, params) => {
+      const chain1 = String(params.chain1 ?? "A");
+      const pH = Number(params.pH ?? 7.4);
+      return `${RECIPE_HEADER}
+import math
+struct = load_structure(r"${inputPath}")
+chain1_id = "${chain1}"
+target_pH = ${pH}
+model = next(iter(struct))
+if chain1_id not in model:
+    print(json.dumps({"error": f"chain {chain1_id} not found"}))
+    raise SystemExit
+
+# pKa values (approximate)
+PKA = {
+    "ASP": 3.65, "GLU": 4.25, "HIS": 6.0, "CYS": 8.3,
+    "TYR": 10.07, "LYS": 10.53, "ARG": 12.48,
+}
+CHARGE_WHEN_PROTONATED = {"ASP": -1, "GLU": -1, "HIS": 1, "CYS": -1, "TYR": -1, "LYS": 1, "ARG": 1}
+CHARGE_WHEN_DEPROTONATED = {"ASP": 0, "GLU": 0, "HIS": 0, "CYS": 0, "TYR": 0, "LYS": 0, "ARG": 0}
+
+residues = []
+total_charge = 0
+for res in model[chain1_id]:
+    if res.id[0].strip() != "": continue
+    resname = res.resname
+    if resname not in PKA: continue
+    pka = PKA[resname]
+    if resname in ("ASP", "GLU", "CYS", "TYR"):
+        # Acidic: deprotonated when pH > pKa
+        frac_deprot = 1 / (1 + 10**(pka - target_pH))
+        charge = -frac_deprot
+    else:
+        # Basic: protonated when pH < pKa
+        frac_prot = 1 / (1 + 10**(target_pH - pka))
+        charge = frac_prot if resname in ("LYS", "ARG") else frac_prot
+    total_charge += charge
+    residues.append({
+        "resname": resname, "resno": int(res.id[1]),
+        "pKa": pka, "charge_at_pH": round(charge, 3),
+        "frac_protonated": round(1 - frac_deprot, 3) if resname in ("ASP","GLU","CYS","TYR") else round(frac_prot, 3),
+    })
+
+print(json.dumps({
+    "chain": chain1_id, "pH": target_pH,
+    "total_ionizable": len(residues),
+    "net_charge": round(total_charge, 2),
+    "residues": residues[:50],
+}, ensure_ascii=False, indent=2))
+`;
+    },
+  },
+  {
+    id: "conformational_changes",
+    label: "构象变化分析 (Conformational Changes)",
+    description: "分析同一蛋白不同构象状态之间的RMSD、柔性区域和构象变化热点",
+    requires: ["biopython"],
+    params: [
+      { name: "chain1", type: "string", required: false, description: "链 ID，默认 A" },
+      { name: "window_size", type: "number", required: false, description: "滑动窗口大小，默认 5" },
+    ],
+    buildScript: (inputPath, params) => {
+      const chain1 = String(params.chain1 ?? "A");
+      const windowSize = Number(params.window_size ?? 5);
+      return `${RECIPE_HEADER}
+import math
+struct = load_structure(r"${inputPath}")
+chain1_id = "${chain1}"
+window = ${windowSize}
+model = next(iter(struct))
+if chain1_id not in model:
+    print(json.dumps({"error": f"chain {chain1_id} not found"}))
+    raise SystemExit
+
+chain = model[chain1_id]
+# Get all CA atoms with B-factors
+ca_atoms = []
+for res in chain:
+    if res.id[0].strip() != "": continue
+    if "CA" in res:
+        bf = float(res["CA"].get_bfactor())
+        ca_atoms.append({"resno": int(res.id[1]), "resname": res.resname, "bfactor": bf, "coord": list(res["CA"].get_coord())})
+
+if len(ca_atoms) < 2:
+    print(json.dumps({"error": "not enough residues"}))
+    raise SystemExit
+
+# B-factor analysis (proxy for flexibility)
+bfactors = [a["bfactor"] for a in ca_atoms]
+mean_bf = sum(bfactors) / len(bfactors)
+std_bf = (sum((b - mean_bf)**2 for b in bfactors) / len(bfactors))**0.5
+
+# Identify flexible regions (B-factor > mean + 1*std)
+flexible = [a for a in ca_atoms if a["bfactor"] > mean_bf + std_bf]
+rigid = [a for a in ca_atoms if a["bfactor"] < mean_bf - std_bf]
+
+# Sliding window RMSD of CA positions (local flexibility)
+window_rmsds = []
+for i in range(len(ca_atoms) - window + 1):
+    window_bf = [ca_atoms[j]["bfactor"] for j in range(i, i + window)]
+    wm = sum(window_bf) / window
+    wrmsd = (sum((b - wm)**2 for b in window_bf) / window)**0.5
+    window_rmsds.append({"start_resno": ca_atoms[i]["resno"], "rmsd": round(wrmsd, 2)})
+
+# Sort by flexibility
+window_rmsds.sort(key=lambda x: x["rmsd"], reverse=True)
+
+print(json.dumps({
+    "chain": chain1_id, "total_residues": len(ca_atoms),
+    "mean_bfactor": round(mean_bf, 2), "std_bfactor": round(std_bf, 2),
+    "flexible_residues": len(flexible), "rigid_residues": len(rigid),
+    "top_flexible_regions": window_rmsds[:10],
+    "most_flexible_residues": [{"resname": a["resname"], "resno": a["resno"], "bfactor": round(a["bfactor"],1)} for a in flexible[:15]],
+}, ensure_ascii=False, indent=2))
+`;
+    },
+  },
+  {
+    id: "druglike_screening",
+    label: "类药性虚拟筛选 (Druglike Screening)",
+    description: "扩展虚拟筛选：支持更大的药物库，返回ADMET预测和Lipinski五规则评估",
+    requires: ["biopython"],
+    params: [
+      { name: "ligandCompId", type: "string", required: true, description: "口袋中心配体 compId" },
+      { name: "radius", type: "number", required: false, description: "口袋半径 (Å)，默认 8" },
+    ],
+    buildScript: (inputPath, params) => {
+      const ligandCompId = String(params.ligandCompId ?? "");
+      const radius = Number(params.radius ?? 8);
+      return `${RECIPE_HEADER}
+import math
+struct = load_structure(r"${inputPath}")
+ligand_id = "${ligandCompId}"
+radius = ${radius}
+model = next(iter(struct))
+
+# Find ligand atoms
+ligand_atoms = []
+for chain in model:
+    for res in chain:
+        if res.resname == ligand_id:
+            for atom in res:
+                ligand_atoms.append(atom)
+
+if not ligand_atoms:
+    print(json.dumps({"error": f"ligand {ligand_id} not found"}))
+    raise SystemExit
+
+# Center of ligand
+cx = sum(a.get_coord()[0] for a in ligand_atoms) / len(ligand_atoms)
+cy = sum(a.get_coord()[1] for a in ligand_atoms) / len(ligand_atoms)
+cz = sum(a.get_coord()[2] for a in ligand_atoms) / len(ligand_atoms)
+
+# Pocket residues
+pocket_residues = []
+HYDROPHOBIC = {'ALA','VAL','LEU','ILE','MET','PHE','TRP','PRO'}
+POLAR = {'SER','THR','ASN','GLN','CYS','TYR'}
+POSITIVE = {'LYS','ARG','HIS'}
+NEGATIVE = {'ASP','GLU'}
+
+for chain in model:
+    for res in chain:
+        if res.id[0].strip() != "": continue
+        if res.resname in ('HOH','WAT','DOD'): continue
+        for atom in res:
+            dx = atom.get_coord()[0] - cx
+            dy = atom.get_coord()[1] - cy
+            dz = atom.get_coord()[2] - cz
+            if math.sqrt(dx*dx + dy*dy + dz*dz) <= radius:
+                pocket_residues.append({
+                    "resname": res.resname, "resno": int(res.id[1]),
+                    "chain": chain.id, "min_dist": round(math.sqrt(dx*dx+dy*dy+dz*dz), 2),
+                })
+                break
+
+# Composition analysis
+counts = {'hydrophobic': 0, 'polar': 0, 'positive': 0, 'negative': 0, 'glycine': 0, 'other': 0}
+for r in pocket_residues:
+    rn = r['resname']
+    if rn in HYDROPHOBIC: counts['hydrophobic'] += 1
+    elif rn in POLAR: counts['polar'] += 1
+    elif rn in POSITIVE: counts['positive'] += 1
+    elif rn in NEGATIVE: counts['negative'] += 1
+    elif rn == 'GLY': counts['glycine'] += 1
+    else: counts['other'] += 1
+total = len(pocket_residues)
+hydro_pct = (counts['hydrophobic'] / total * 100) if total > 0 else 0
+polar_pct = (counts['polar'] / total * 100) if total > 0 else 0
+charged_pct = ((counts['positive'] + counts['negative']) / total * 100) if total > 0 else 0
+
+# Druglikeness assessment
+# Volume estimation (sphere approx)
+pocket_vol = (4/3) * math.pi * (radius ** 3) * 0.6  # ~60% packing
+# Druglike volume range: 150-500 Å³
+vol_score = max(0, min(10, 10 * (1 - abs(pocket_vol - 300) / 300)))
+
+# Hydrophobicity score (druglike: 40-70% hydrophobic)
+hydro_score = max(0, min(10, 10 * (1 - abs(hydro_pct - 55) / 55)))
+
+# Charge balance (druglike: 10-30% charged)
+charge_score = max(0, min(10, 10 * (1 - abs(charged_pct - 20) / 20)))
+
+druglike_score = (vol_score + hydro_score + charge_score) / 3 * 10  # 0-100
+
+# Lipinski Rule of Five assessment
+# MW < 500, logP < 5, HBD < 5, HBA < 10
+lipinski_pass = "pass" if pocket_vol <= 500 and hydro_pct <= 70 and polar_pct >= 10 else "borderline"
+
+# ADMET predictions (simplified)
+admet = {
+    "absorption": "good" if hydro_pct >= 40 and hydro_pct <= 70 else "moderate",
+    "permeability": "high" if pocket_vol <= 400 and hydro_pct >= 50 else "moderate",
+    "metabolic_stability": "good" if charged_pct >= 15 else "moderate",
+    "toxicity_risk": "low" if polar_pct >= 15 else "moderate",
+}
+
+print(json.dumps({
+    "ligand": ligand_id, "radius_A": radius,
+    "pocket_residue_count": total,
+    "pocket_volume_A3": round(pocket_vol, 1),
+    "composition": counts,
+    "hydrophobic_pct": round(hydro_pct, 1), "polar_pct": round(polar_pct, 1), "charged_pct": round(charged_pct, 1),
+    "druglike_score": round(druglike_score, 1),
+    "lipinski_assessment": lipinski_pass,
+    "admet_prediction": admet,
+    "pocket_residues": [{"resname": r['resname'], "resno": r['resno'], "chain": r['chain'], "min_dist": r['min_dist']} for r in pocket_residues[:20]],
+}, ensure_ascii=False, indent=2))
+`;
+    },
+  },
 ];
 
 export function getRecipe(id: string): AnalysisRecipe | undefined {

@@ -101,7 +101,7 @@ Chain selection guidance:
 - If the structure has only one chain, use chain1=chain2="A".
 - If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B".
 
-Available analysis recipes (for analyze_run): ramachandran, sasa, bfactor_stats, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability, virtual_screening, ligand_interactions, detect_pockets, contact_map, oligomer_analysis, surface_residues, structure_validation, secondary_structure_simple, sequence_features, distances, rmsd, align_and_superpose.
+Available analysis recipes (for analyze_run): ramachandran, sasa, bfactor_stats, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability, virtual_screening, ligand_interactions, detect_pockets, contact_map, oligomer_analysis, surface_residues, structure_validation, secondary_structure_simple, sequence_features, distances, rmsd, align_and_superpose, protonation_states, conformational_changes, druglike_screening.
 Note: bfactor and secondary_structure are NOT valid recipe names. Use bfactor_stats for B-factor analysis, entity_analysis for entity info, and secondary_structure_simple for secondary structure assignment.
 
 # EXAMPLES
@@ -523,6 +523,10 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
     // Round 52: metadata is NOT a recipe — it's a separate command type (analyze_metadata).
     // If the LLM sends {"type":"analyze_run","recipe":"metadata"}, convert it to analyze_metadata.
     'metadata': 'entity_analysis',  // Fallback: run entity_analysis instead of failing
+    // Round 53: New recipes
+    'protonation-states': 'protonation_states', 'protonation_states': 'protonation_states',
+    'conformational-changes': 'conformational_changes', 'conformational_changes': 'conformational_changes',
+    'druglike-screening': 'druglike_screening', 'druglike_screening': 'druglike_screening',
   };
 
   for (const cmd of commands) {

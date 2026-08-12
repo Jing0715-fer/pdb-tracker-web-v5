@@ -313,6 +313,29 @@ export function formatAnalysisResults(
       const total = rd?.total_atom_pairs ?? r1.length + r2.length ?? "?";
       sections.push(`### 🔗 Interface Residues: ${r1.length} on chain ${rd?.chain1||"?"}, ${r2.length} on chain ${rd?.chain2||"?"} (${total} atom pairs)`);
     }
+    else if (recipe === "protonation_states") {
+      sections.push(`### ⚗️ Protonation States (pH ${rd?.pH||"?"}): ${rd?.total_ionizable||"?"} ionizable residues, net charge ${rd?.net_charge||"?"}`);
+      if (rd?.residues && Array.isArray(rd.residues)) {
+        const charged = rd.residues.filter((r: any) => Math.abs(r.charge_at_pH) >= 0.5);
+        sections.push(`**Fully charged residues:** ${charged.map((r: any) => `${r.resname}${r.resno}(${r.charge_at_pH > 0 ? "+" : "-"})`).join(", ") || "none"}`);
+      }
+    }
+    else if (recipe === "conformational_changes") {
+      sections.push(`### 🔄 Conformational Changes: Mean B-factor ${rd?.mean_bfactor||"?"} ± ${rd?.std_bfactor||"?"}, ${rd?.flexible_residues||"?"} flexible, ${rd?.rigid_residues||"?"} rigid`);
+      const regions = rd?.top_flexible_regions;
+      if (Array.isArray(regions) && regions.length > 0) {
+        sections.push(`**Top flexible regions:**`);
+        sections.push(regions.slice(0, 5).map((r: any) => `- Residue ${r.start_resno}: RMSD ${r.rmsd}`).join('\n'));
+      }
+    }
+    else if (recipe === "druglike_screening") {
+      sections.push(`### 💊 Druglike Screening: Score ${rd?.druglike_score||"?"}/100, Lipinski: ${rd?.lipinski_assessment||"?"}`);
+      if (rd?.admet_prediction) {
+        const a = rd.admet_prediction;
+        sections.push(`**ADMET:** Absorption ${a.absorption||"?"}, Permeability ${a.permeability||"?"}, Stability ${a.metabolic_stability||"?"}, Toxicity ${a.toxicity_risk||"?"}`);
+      }
+      if (rd?.pocket_volume_A3) sections.push(`- Pocket volume: ${rd.pocket_volume_A3} Å³`);
+    }
     else if (recipe) {
       sections.push(`### 📊 ${recipe}\n\`\`\`json\n${JSON.stringify(rd).slice(0,500)}\n\`\`\``);
     }
