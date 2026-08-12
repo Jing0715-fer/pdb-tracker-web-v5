@@ -101,7 +101,8 @@ Chain selection guidance:
 - If the structure has only one chain, use chain1=chain2="A".
 - If the structure has multiple chains and the user wants interface analysis, use chain1="A", chain2="B".
 
-Available analysis recipes: ramachandran, bfactor, sasa, secondary_structure, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability.
+Available analysis recipes (for analyze_run): ramachandran, sasa, hbonds, salt_bridges, hydrophobic_contacts, all_interactions, interface_residues, disulfide_bonds, aromatic_stacking, water_bridges, metal_coordination, entity_analysis, binding_pocket, druggability, virtual_screening.
+Note: bfactor and secondary_structure are NOT available as analyze_run recipes. For B-factor info, use analyze_metadata. For secondary structure, use entity_analysis.
 
 # EXAMPLES
 
@@ -495,8 +496,10 @@ function sanitizeCommands(commands: unknown[]): unknown[] {
     'hydrophobic': 'hydrophobic_contacts', 'hydrophobic_contacts': 'hydrophobic_contacts',
     'run_hydrophobic': 'hydrophobic_contacts',
     'all-interactions': 'all_interactions', 'all_interactions': 'all_interactions',
-    'ramachandran': 'ramachandran', 'bfactor': 'bfactor', 'b-factor': 'bfactor',
-    'sasa': 'sasa', 'secondary-structure': 'secondary_structure',
+    'ramachandran': 'ramachandran',
+    'sasa': 'sasa',
+    'secondary-structure': 'entity_analysis', 'secondary_structure': 'entity_analysis',
+    'bfactor': 'bfactor', 'b-factor': 'bfactor',  // Round 51: bfactor recipe doesn't exist, will show clear error
     'interface-residues': 'interface_residues', 'interface_residues': 'interface_residues',
     'disulfide-bonds': 'disulfide_bonds', 'disulfide_bonds': 'disulfide_bonds',
     'aromatic-stacking': 'aromatic_stacking', 'aromatic_stacking': 'aromatic_stacking',

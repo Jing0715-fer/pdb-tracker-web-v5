@@ -1071,6 +1071,14 @@ ${overlapSummary}${crossLitBlock}
           : buildDetailedBlastTable(blastHits, BLAST_CAP);
 
         // ── Literature info: fetch PubMedArticle rows for the PDB structures' pubmedIds ──
+        // Round 51: Backfill PubMed articles BEFORE building literature info,
+        // so that newly-fetched articles are available to buildLiteratureInfo().
+        // Previously, backfill happened AFTER the report was generated, so the
+        // first run always had empty literature data.
+        const pmRes = await backfillPubMedArticles(pdbDetails, emit);
+        if (pmRes.fetched > 0) {
+          emit({ stage: 'pubmed-backfill', level: 'info', message: `PubMed 文献回填: ${pmRes.fetched} 篇新获取, ${pmRes.skipped} 篇已存在`, progress: 63 });
+        }
         // Sort by journal IF desc, cap at maxLitCount. Empty when no articles in DB.
         const litInfo = await buildLiteratureInfo(pdbDetails, maxLitCount);
         const literatureInfo = litInfo.count > 0
@@ -1769,11 +1777,14 @@ ${overlapSummary}${crossLitBlock}
         // API). Dedup is automatic — ON CONFLICT DO NOTHING skips existing.
         if (pdbDetails.length > 0) {
           try {
-            const pmRes = await backfillPubMedArticles(pdbDetails, emit);
-            if (pmRes.fetched > 0) {
-              emit({ stage: 'pubmed-backfill', level: 'success', message: `✓ 文献反查: 新增 ${pmRes.fetched} 篇 PubMed 文献到数据库（跳过已存在 ${pmRes.skipped} 篇）— 文献模块已同步`, progress: 99 });
-            } else if (pmRes.skipped > 0) {
-              emit({ stage: 'pubmed-backfill', level: 'info', message: `文献反查: ${pmRes.skipped} 篇 PubMed 文献已在数据库中（无需更新）`, progress: 99 });
+            // Round 51: This backfill is now redundant (already done before report
+            // generation), but we keep it as a verification step to ensure all
+            // PMIDs are in the database for the Literature module.
+            const pmRes2 = await backfillPubMedArticles(pdbDetails, emit);
+            if (pmRes2.fetched > 0) {
+              emit({ stage: 'pubmed-backfill', level: 'success', message: `✓ 文献反查: 新增 ${pmRes2.fetched} 篇 PubMed 文献到数据库（跳过已存在 ${pmRes2.skipped} 篇）— 文献模块已同步`, progress: 99 });
+            } else if (pmRes2.skipped > 0) {
+              emit({ stage: 'pubmed-backfill', level: 'info', message: `文献反查: ${pmRes2.skipped} 篇 PubMed 文献已在数据库中（无需更新）`, progress: 99 });
             }
           } catch (err: any) {
             emit({ stage: 'pubmed-backfill', level: 'warn', message: `文献反查失败（不影响评估结果）: ${err?.message}`, progress: 99 });

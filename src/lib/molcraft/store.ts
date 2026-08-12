@@ -771,6 +771,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatSessions: loadChatSessions(),
   activeSessionId: loadActiveSessionId(),
   createChatSession: (title) => {
+    // Round 51: Save current messages to the current session BEFORE creating a new one.
+    // Previously, creating a new session would lose the current session's messages
+    // because they were cleared without being saved.
+    const currentId = get().activeSessionId;
+    const currentMessages = get().chatMessages;
+    if (currentId && currentMessages.length > 0) {
+      const sessions = get().chatSessions.map((s) =>
+        s.id === currentId
+          ? { ...s, messages: currentMessages.filter((m) => !m.pending), updatedAt: Date.now() }
+          : s
+      );
+      persistChatSessions(sessions);
+      set({ chatSessions: sessions });
+    }
+
     const id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const now = Date.now();
     const session: ChatSession = {
