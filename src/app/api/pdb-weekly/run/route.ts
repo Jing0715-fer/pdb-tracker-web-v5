@@ -13,14 +13,14 @@ export const dynamic = 'force-dynamic';
 type WeeklyChapterKey = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
 
 const WEEKLY_CHAPTERS: Array<{ key: WeeklyChapterKey; label: string; title: string; desc: string }> = [
-  { key: 'A', label: 'A', title: '期刊趋势分析', desc: '本周 PDB 结构来自哪些期刊，高影响因子期刊的贡献比例，与近期趋势对比' },
-  { key: 'B', label: 'B', title: '技术突破', desc: '本周有哪些突破性的结构解析成果（如新方法、新分辨率记录、新蛋白家族首解析等）' },
-  { key: 'C', label: 'C', title: '研究热点', desc: '本周的热门研究方向（如病毒结构、膜蛋白、G蛋白偶联受体、激酶等）' },
-  { key: 'D', label: 'D', title: '方法创新', desc: '本周有哪些方法学上的创新或改进（如新的晶体制备方法、新的 Cryo-EM 样品制备、AI 辅助结构解析等）' },
-  { key: 'E', label: 'E', title: '重要结构 Top 20', desc: '列出本周最重要的 20 个 PDB 结构（按分辨率/期刊 IF/科学重要性排序），包含 PDB ID、方法、分辨率、标题、期刊' },
-  { key: 'F', label: 'F', title: '技术评估', desc: '本周各方法的分辨率分布、结构质量评估' },
-  { key: 'G', label: 'G', title: '跨学科应用', desc: '本周结构生物学与其他学科的交叉应用（如药物设计、合成生物学、疾病机制等）' },
-  { key: 'H', label: 'H', title: '参考文献', desc: '本周高 IF 期刊已正式发表的结构文献精选（列出标题、第一作者、PDB ID、DOI）' },
+  { key: 'A', label: 'A', title: '期刊分布与影响因子分析', desc: '本周 PDB 结构的期刊来源分布，按影响因子(IF)分层统计（IF≥20、10≤IF<20、5≤IF<10、IF<5），计算高影响力期刊贡献比例，与近4周趋势对比。使用表格呈现期刊分布，标注DOI和PMID（如有）。' },
+  { key: 'B', label: 'B', title: '方法学突破与分辨率记录', desc: '本周突破性结构解析成果：最高分辨率记录、新方法应用（如MicroED、Serial Femtosecond Crystallography）、AI辅助结构解析（AlphaFold3、RoseTTAFold2）案例。标注具体PDB ID、分辨率(Å)、所用方法和技术参数。' },
+  { key: 'C', label: 'C', title: '研究热点与靶点类别', desc: '按蛋白质功能分类统计本周结构（如激酶、GPCR、离子通道、病毒蛋白、膜蛋白、抗体等），标注每类结构的PDB ID和代表性靶点。分析与当前药物研发热点的关联。' },
+  { key: 'D', label: 'D', title: '技术方法学评估', desc: '本周各实验方法（X-ray、Cryo-EM、NMR）的分辨率分布统计：平均值、中位数、最高/最低分辨率。使用表格列出方法分布和分辨率统计。评估结构质量指标（R-work/R-free、map resolution、B-factor分布）。' },
+  { key: 'E', label: 'E', title: '代表性结构精选（Top 20）', desc: '按科学重要性排序的20个关键PDB结构。表格格式：| PDB ID | 方法 | 分辨率(Å) | 蛋白名称 | 物种 | 期刊(IF) | DOI | 简要科学意义 |。优先选择高分辨率、高IF期刊、新靶点或新折叠类型的结构。' },
+  { key: 'F', label: 'F', title: '结构质量与可靠性评估', desc: '本周结构的整体质量评估：分辨率分布直方图描述、完整性检查（缺失残基比例）、配体/辅因子存在率。与上周对比质量趋势。标注需要关注的质量问题。' },
+  { key: 'G', label: 'G', title: '跨学科应用与转化价值', desc: '本周结构在药物设计（靶点可成药性评估）、合成生物学（酶工程改造）、疾病机制（致病突变结构基础）等方面的应用潜力分析。标注具体PDB ID和相关药物/疾病信息。' },
+  { key: 'H', label: 'H', title: '核心参考文献', desc: '本周高影响力期刊（IF≥10）已正式发表的结构相关文献精选。格式：作者 et al., *期刊名* (IF: XX.X), PDB XXXX, Y.YY Å. DOI: 10.xxxx/xxxxx. PMID: 12345678.（每条一行，5-10篇）' },
 ];
 
 /** Build a per-chapter LLM prompt for the weekly report. */
@@ -51,10 +51,27 @@ ${chapterDesc}
 ## 代表性 ${methodLabel} PDB 结构数据
 ${pdbSummary}
 
-请直接输出本章内容（${chapterKey}. ${chapterTitle} 标题下的正文），不要重复标题。内容充实、数据准确，使用 Markdown 格式。如果涉及表格请使用 GFM pipe table 格式。`;
+请直接输出本章内容（${chapterKey}. ${chapterTitle} 标题下的正文），不要重复标题。内容充实、数据准确，使用 Markdown 格式。
+
+格式要求：
+- 表格使用 GFM pipe table 格式（| 列1 | 列2 |）
+- 数据引用格式：PDB ID（4字符大写）、分辨率（X.XX Å）、DOI（10.xxxx/xxxxx）
+- 文献引用格式：作者 et al., *期刊名* (IF: XX.X), PDB XXXX, Y.YY Å
+- 缺失数据标注"暂无可靠数据"，不编造
+- 段落3-5句，逻辑清晰`;
 }
 
-const WEEKLY_CHAPTER_SYSTEM_PROMPT = '你是结构生物学领域的资深研究员。请用中文生成周报的某一章节内容，使用 Markdown 格式。直接输出章节正文，不要重复章节标题。内容要充实、专业、数据准确。';
+const WEEKLY_CHAPTER_SYSTEM_PROMPT = `你是结构生物学领域的资深研究员，具有丰富的学术写作经验。请用中文生成周报的某一章节内容，使用 Markdown 格式。
+
+写作规范：
+1. **学术严谨性**: 所有数据必须引用具体的 PDB ID、分辨率(Å)、DOI、PMID 等标识符
+2. **量化分析**: 使用具体数字和百分比，避免模糊表述（如"约30%"而非"较多"）
+3. **表格规范**: 使用 GFM pipe table 格式，表头清晰，数据对齐
+4. **引用格式**: 作者 et al., *期刊名* (IF: XX.X), PDB XXXX, Y.YY Å
+5. **客观中立**: 避免主观评价，基于数据给出分析结论
+6. **缺失数据**: 未提供的字段标注"暂无可靠数据"，不编造
+7. **段落结构**: 每段3-5句，逻辑清晰，前后衔接
+8. **专业术语**: 保留英文专有名词（PDB ID、DOI、UniProt等），中文解释首次出现`
 
 /** Generate a full method-specific weekly report via per-chapter LLM calls,
  *  streaming progress via emit(). Returns the merged markdown + per-chapter

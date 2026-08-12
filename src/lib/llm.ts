@@ -332,13 +332,32 @@ const CLI_ADAPTERS: CliAdapter[] = [
     bin: 'hermes',
     icon: '🪶',
     wslBin: 'hermes',
-    probeArgs: ['--version'],
+    // Round 55: Hermes AI CLI is installed to ~/.local/bin/hermes by the
+    // install script from hermes-agent.nousresearch.com
+    extraProbePaths: (() => {
+      const home = process.env.HOME || process.env.USERPROFILE || '';
+      const paths: string[] = [];
+      if (home) {
+        paths.push(`${home}/.local/bin/hermes`);
+      }
+      return paths.length > 0 ? paths : undefined;
+    })(),
     // `hermes chat -q "..." -Q` runs a one-shot query in quiet mode (no TUI).
     // We KEEP the user's model/provider config (no `--ignore-user-config`)
     // so the agent honours whatever default the user has set (e.g. MiniMax).
-    // Round 54: Hermes supports `--session <id>` for session reuse.
-    // When sessionId is provided, multiple calls share the same context.
-    callArgs: (q, _model, sid) => sid ? ['chat', '-q', q, '-Q', '--session', sid] : ['chat', '-q', q, '-Q'],
+    // Round 55: Hermes AI CLI (v0.20.0) uses `-z <prompt> --cli` for one-shot
+    // queries and `--resume <session_id>` for session reuse.
+    // The old `chat -q -Q` syntax was for the wrong npm 'hermes' package.
+    // Session reuse: first call with --pass-session-id, subsequent calls
+    // with --resume <session_id>.
+    callArgs: (q, _model, sid) => {
+      if (sid && sid.startsWith('resume:')) {
+        const resumeId = sid.slice(7);
+        return ['-z', q, '--cli', '--resume', resumeId];
+      }
+      // First call: use --pass-session-id so the session ID is printed
+      return ['-z', q, '--cli', '--pass-session-id'];
+    },
     outputStream: 'both',
     stripBanner: (raw) => raw.replace(HERMES_BANNER_RE, '').trim(),
     extraEnv: { PYTHONIOENCODING: 'utf-8' },
