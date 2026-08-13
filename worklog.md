@@ -13208,3 +13208,52 @@ Improvement Suggestions for Next Round:
 2. **Configurable label count** — let users control label density
 3. **Image quality settings** — let users choose resolution
 4. **VLM progress indicator** — show when VLM analysis starts/completes
+
+---
+Task ID: round-80-configurable-labels-vlm-progress
+Agent: main
+Task: Add configurable label count, VLM progress indicator. QA + commit and push.
+
+Development:
+
+### 1. Configurable Label Count (src/components/structure-analysis/chat-tab.tsx)
+Added a dropdown selector in the chat toolbar for controlling how many residue
+labels are drawn on screenshots:
+- Options: No labels (0), 3, 5, 8 (default), 12, 20 labels
+- Selection persisted to localStorage ("pdb-tracker:max-labels")
+- Applied to both binding_pocket residues and hbonds residues extraction
+- The `maxLabels` state is used in `residueLabels.slice(0, maxLabels)` to
+  control the final label count passed to `capture_multi_angle`
+
+UI: A compact `<select>` dropdown between the sound toggle and the session
+toggle button in the chat toolbar. Styled to match the existing toolbar
+aesthetic.
+
+### 2. VLM Progress Indicator (src/components/structure-analysis/chat-tab.tsx)
+When VLM analysis completes, the chat message is updated to show:
+"*VLM analysis complete: best angle = front, confidence = medium.*"
+
+This tells the user:
+- VLM analysis has finished (not still running)
+- Which angle was selected as best
+- The confidence level (high/medium/low)
+
+The progress indicator appears inline in the chat message, continuing the
+pattern from Round 79 (capture progress indicator).
+
+### Lint
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Configurable label count: dropdown with 6 options (0/3/5/8/12/20)
+- ✅ VLM progress indicator: completion message with best angle + confidence
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** — verify full pipeline with all fixes
+2. **Image quality settings** — let users choose resolution
+3. **Screenshot timing display** — show capture duration in the message
+4. **Label font customization** — let users choose label text size

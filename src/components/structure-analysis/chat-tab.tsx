@@ -689,6 +689,14 @@ export function ChatTab() {
     }
   }, [autoScroll]);
 
+  // Round 80: Configurable label count for screenshot annotation
+  const [maxLabels, setMaxLabels] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem("pdb-tracker:max-labels") || "8", 10);
+      return isNaN(v) ? 8 : Math.max(0, Math.min(20, v));
+    } catch { return 8; }
+  });
+
   // Round 10: Sound notifications — play a beep when the agent finishes or errors
   const [soundEnabled, setSoundEnabled] = useState(() => {
     try {
@@ -1632,7 +1640,7 @@ export function ChatTab() {
                             const residues = analysisData.residues as Array<Record<string, unknown>> | undefined;
                             if (Array.isArray(residues)) {
                               // Label top 5 residues (closest to ligand)
-                              for (const r of residues.slice(0, 5)) {
+                              for (const r of residues.slice(0, maxLabels)) {
                                 const chain = r.chain as string | undefined;
                                 const resno = r.resno as number | undefined;
                                 const resname = r.resname as string | undefined;
@@ -1683,7 +1691,7 @@ export function ChatTab() {
                             height: 800,
                             vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
                             // Round 74: Pass residue labels for visual annotation
-                            labels: residueLabels.length > 0 ? residueLabels.slice(0, 8) : undefined,
+                            labels: residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined,
                           });
                           if (captureResult.ok && captureResult.data) {
                             const data = captureResult.data as {
@@ -1769,6 +1777,8 @@ export function ChatTab() {
                                     }));
                                     updateMessage(pendingId, {
                                       analysisImages: [...otherImages, ...updatedRecipeImages],
+                                      // Round 80: Update message to show VLM completion
+                                      content: `${reply || ""}\n\n*VLM analysis complete: best angle = ${updatedRecipeImages[vlmData!.bestIndex]?.angle || '?'}, confidence = ${vlmData!.confidence}.*`,
                                     } as Partial<ChatMessage>);
                                   } catch (updateErr) {
                                     console.warn("[auto-capture] VLM update failed:", updateErr);
@@ -2484,6 +2494,24 @@ export function ChatTab() {
               >
                 {soundEnabled ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
               </Button>
+              {/* Round 80: Label count selector for screenshot annotation */}
+              <select
+                value={maxLabels}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  setMaxLabels(v);
+                  try { localStorage.setItem("pdb-tracker:max-labels", String(v)); } catch { /* ignore */ }
+                }}
+                className="h-7 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                title="Number of residue labels on screenshots"
+              >
+                <option value={0}>No labels</option>
+                <option value={3}>3 labels</option>
+                <option value={5}>5 labels</option>
+                <option value={8}>8 labels</option>
+                <option value={12}>12 labels</option>
+                <option value={20}>20 labels</option>
+              </select>
               <Button
                 variant="ghost"
                 size="sm"
