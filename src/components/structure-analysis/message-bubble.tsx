@@ -238,6 +238,20 @@ export function MessageBubble({
       })()
     : message.content || "";
 
+  // Round 90: Wrap analysis sections in collapsible <details> blocks.
+  const collapsibleContent = useMemo(() => {
+    if (isUser || !displayedContent) return displayedContent;
+    const parts = displayedContent.split(/\n---\n(?=###\s)/);
+    if (parts.length < 2) return displayedContent;
+    const intro = parts[0];
+    const sections = parts.slice(1).map((section, i) => {
+      const titleMatch = section.match(/^###\s+(.+?)(\n|$)/);
+      const title = titleMatch ? titleMatch[1].trim() : `Section ${i + 1}`;
+      return `<details${i === 0 ? ' open' : ''}>\n<summary><strong>${title}</strong></summary>\n\n${section}\n\n</details>`;
+    });
+    return intro + "\n\n---\n\n" + sections.join("\n\n---\n\n");
+  }, [displayedContent, isUser]);
+
   // Round 3: Copy message content to clipboard
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content || "").then(
@@ -381,6 +395,13 @@ export function MessageBubble({
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
+                      // Round 90: Collapsible <details> sections for analysis results
+                      details({ children, ...props }: any) {
+                        return <details className="my-2 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden" {...props}>{children}</details>;
+                      },
+                      summary({ children, ...props }: any) {
+                        return <summary className="cursor-pointer px-2 py-1 text-[10px] font-semibold text-claude-text hover:bg-claude-border-light/20 select-none" {...props}>{children}</summary>;
+                      },
                       // Round 14: Enhanced code block rendering with language label + copy button
                       code({ node, className, children, ...props }: any) {
                         const match = /language-(\w+)/.exec(className || "");
@@ -463,7 +484,7 @@ export function MessageBubble({
                       },
                     }}
                   >
-                    {displayedContent}
+                    {collapsibleContent}
                   </ReactMarkdown>
                 )}
                 {/* Round 61/62: Render analysis screenshots as a carousel */}

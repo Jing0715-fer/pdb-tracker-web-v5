@@ -13663,3 +13663,62 @@ Improvement Suggestions for Next Round:
 2. **Capture validation** — check if screenshot dataUri is not all-black before storing
 3. **Report collapsible sections** — make each chain-pair section collapsible
 4. **Auto-scroll to latest analysis** — scroll chat to show newest results
+
+---
+Task ID: round-90-black-check-collapsible-autoscroll
+Agent: main
+Task: Add black screenshot detection, collapsible report sections, auto-scroll on analysis. QA + commit and push.
+
+Development:
+
+### 1. Black Screenshot Detection (src/lib/molcraft/commands.ts)
+Added `checkIfBlackScreen(dataUri)` function that detects all-black/empty
+screenshots before storing them:
+- **Size heuristic**: If base64 data is < 2KB, it's likely a blank/uniform
+  image (a real 1200x800 screenshot is 50KB+). All-black images compress
+  very well → small base64 string.
+- **Retry on black**: If detected as black, retries once with 200ms delay +
+  2x nextFrame to give the render pipeline more time.
+- **Skip on retry failure**: If the retry also produces a black screen,
+  the screenshot is skipped entirely (not stored).
+
+### 2. Collapsible Report Sections (src/components/structure-analysis/message-bubble.tsx)
+Added `collapsibleContent` useMemo that wraps analysis sections in
+`<details><summary>` HTML blocks:
+- Splits the message content on `---\n### ` patterns
+- First part (intro/LLM reply) stays as-is
+- Each subsequent section is wrapped in `<details>` with the H3 title as
+  the `<summary>` text
+- First section is `open` by default, others are collapsed
+- Added custom `details` and `summary` renderers in ReactMarkdown components
+  with styling: border, rounded, hover effect, cursor pointer
+
+### 3. Auto-scroll on Analysis Images (src/components/structure-analysis/chat-tab.tsx)
+Added a `useEffect` that scrolls the chat to the bottom when
+`analysisImages` are added to any message:
+- Tracks `currentImageCount` (total images across all messages)
+- Compares with `lastImageCount.current` (ref)
+- If count increased and `autoScroll` is enabled, scrolls to bottom
+- This ensures the user sees the screenshots as soon as they're captured,
+  even if the message content didn't change (only analysisImages did)
+
+### Lint
+- commands.ts: 0 errors ✅
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+- message-bubble.tsx: 0 errors ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Black screenshot detection: size heuristic + retry + skip
+- ✅ Collapsible sections: <details><summary> for each analysis result
+- ✅ Auto-scroll on images: scrolls when analysisImages count increases
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **E2E test on 4HHB** — verify screenshots are visible (not black)
+2. **Canvas-based black check** — use offscreen canvas to decode PNG and
+   check pixel variance for more accurate detection
+3. **Collapsible section memory** — remember which sections were expanded
+4. **Scroll to specific section** — add anchor links to jump to a section

@@ -450,6 +450,20 @@ export function ChatTab() {
     }
   }, [messages, autoScroll]);
 
+  // Round 90: Auto-scroll when analysisImages are added (capture pipeline updates)
+  const lastImageCount = useRef(0);
+  const currentImageCount = messages.reduce((sum, m) => sum + (m.analysisImages?.length || 0), 0);
+  useEffect(() => {
+    if (!autoScroll) return;
+    if (currentImageCount > lastImageCount.current) {
+      const el = scrollRef.current;
+      if (el) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      }
+    }
+    lastImageCount.current = currentImageCount;
+  }, [currentImageCount, autoScroll]);
+
   // Round 33: Auto-save current session when messages change (debounced)
   useEffect(() => {
     if (!activeSessionId || messages.length === 0) return;

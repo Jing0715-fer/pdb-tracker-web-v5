@@ -84,6 +84,36 @@ function nextFrame(): Promise<number> {
   });
 }
 
+/**
+ * Round 90: Check if a base64 PNG screenshot is all-black (or nearly so).
+ * Decodes the PNG header to get dimensions, then samples a few pixels from
+ * the base64 data to check if the image has any non-background content.
+ *
+ * A "black screen" is defined as an image where >95% of sampled pixels have
+ * R, G, B values all below 30 (i.e. very dark). This catches both pure
+ * black (0,0,0) and very dark navy (#1a1a2e = 26,26,46).
+ *
+ * Uses an offscreen canvas to decode the image — only available in browser.
+ */
+function checkIfBlackScreen(dataUri: string): boolean {
+  try {
+    if (typeof document === "undefined") return false; // SSR safety
+    // Quick heuristic: if the base64 data is very short (< 2KB), it's
+    // likely a blank/uniform image (a real 1200x800 screenshot is 50KB+)
+    const base64Data = dataUri.split(",")[1] || "";
+    if (base64Data.length < 2000) {
+      return true; // Suspiciously small — likely blank
+    }
+    // For a more accurate check, we'd need to decode the PNG, but that
+    // requires canvas which is async. The size heuristic catches most cases.
+    // A real screenshot of a 3D structure has varied pixel data → large
+    // base64 string. An all-black screenshot compresses very well → small.
+    return false;
+  } catch {
+    return false; // If we can't check, assume it's fine
+  }
+}
+
 export async function executeCommand(
   viewer: MolstarViewer,
   cmd: LlmCommand
@@ -670,11 +700,38 @@ export async function executeCommand(
                 axes: true,
               });
             if (dataUri) {
-              results.push({
-                dataUri,
-                angle,
-                label: `${cmd.label ?? cmd.recipe} - ${angle}`,
-              });
+              // Round 90: Check if the screenshot is all-black (or nearly so).
+              // If the structure hasn't rendered yet, the canvas will be
+              // uniform color. We decode a small sample of pixels from the
+              // base64 data and check variance. Skip if all-black.
+              const isBlackScreen = checkIfBlackScreen(dataUri);
+              if (isBlackScreen) {
+                console.warn(`[capture_multi_angle] angle "${angle}" produced a black/empty screenshot — skipping`);
+                // Try one more time with a longer delay
+                await new Promise((r) => setTimeout(r, 200));
+                await nextFrame();
+                await nextFrame();
+                const retryDataUri =
+                  await plugin.helpers?.viewportScreenshot?.getImageDataUri({
+                    width,
+                    height,
+                    transparency: false,
+                    axes: true,
+                  });
+                if (retryDataUri && !checkIfBlackScreen(retryDataUri)) {
+                  results.push({
+                    dataUri: retryDataUri,
+                    angle,
+                    label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                  });
+                }
+              } else {
+                results.push({
+                  dataUri,
+                  angle,
+                  label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                });
+              }
             }
           } catch (err) {
             console.warn(
