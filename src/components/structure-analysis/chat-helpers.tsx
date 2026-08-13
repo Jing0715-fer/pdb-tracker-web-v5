@@ -63,7 +63,7 @@ export function formatAnalysisResults(
       // Round 70: For large counts (>100), show summary instead of listing all
       const isLargeSet = count > 100;
       const displayCount = isLargeSet ? 10 : 20;
-      sections.push(`### 🤝 Hydrogen Bonds (${count} found${isLargeSet ? " — showing top 10 by distance" : ""})`);
+      sections.push(`### Hydrogen Bonds (${count} found${isLargeSet ? " — showing top 10 by distance" : ""})`);
       if (count > 0 && Array.isArray(bonds)) {
         const residues = new Set<string>();
         const pairs: string[] = bonds.slice(0, displayCount).map((c: any) => {
@@ -103,7 +103,7 @@ export function formatAnalysisResults(
     else if (recipe === "salt_bridges") {
       const bridges = (rd?.salt_bridges as unknown[]) || [];
       const count = (rd?.total_salt_bridges as number) ?? (Array.isArray(bridges) ? bridges.length : 0);
-      sections.push(`### ⚡ Salt Bridges (${count} found)`);
+      sections.push(`### Salt Bridges (${count} found)`);
       if (count > 0 && Array.isArray(bridges)) {
         const residues = new Set<string>();
         const pairs: string[] = bridges.slice(0, 15).map((c: any) => {
@@ -127,7 +127,7 @@ export function formatAnalysisResults(
     else if (recipe === "hydrophobic_contacts") {
       const total = (rd?.total_atom_contacts as number) ?? 0;
       const pairs = (rd?.total_residue_pairs as number) ?? 0;
-      sections.push(`### 💧 Hydrophobic Contacts (${total} atom contacts, ${pairs} residue pairs)`);
+      sections.push(`### Hydrophobic Contacts (${total} atom contacts, ${pairs} residue pairs)`);
       const top = rd?.top_residue_pairs as unknown[];
       if (Array.isArray(top) && top.length > 0) {
         sections.push("**Top residue pairs:**");
@@ -141,16 +141,16 @@ export function formatAnalysisResults(
       const hp = (rd?.hydrophobic as number) ?? 0;
       const chain1 = (rd?.chain1 as string) || "?";
       const chain2 = (rd?.chain2 as string) || "?";
-      sections.push(`### 🔄 All Interactions — ${chain1} ↔ ${chain2} (${total} total)`);
+      sections.push(`### All Interactions — ${chain1} ↔ ${chain2} (${total} total)`);
       if (total === 0) {
         sections.push("*No inter-chain contacts detected within cutoffs.*");
       } else {
         sections.push(`| Type | Count | % |`);
         sections.push(`|------|------|---|`);
         const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
-        sections.push(`| 🤝 H-bonds | ${hb} | ${pct(hb)}% |`);
-        sections.push(`| ⚡ Salt bridges | ${sb} | ${pct(sb)}% |`);
-        sections.push(`| 💧 Hydrophobic | ${hp} | ${pct(hp)}% |`);
+        sections.push(`| H-bonds | ${hb} | ${pct(hb)}% |`);
+        sections.push(`| Salt bridges | ${sb} | ${pct(sb)}% |`);
+        sections.push(`| Hydrophobic | ${hp} | ${pct(hp)}% |`);
         const interactions = rd?.interactions as unknown[];
         if (Array.isArray(interactions) && interactions.length > 0) {
           sections.push("");
@@ -159,7 +159,7 @@ export function formatAnalysisResults(
             const r1 = `${c.resname1||"?"}${c.resno1||"?"}(${c.chain1||"?"})`;
             const r2 = `${c.resname2||"?"}${c.resno2||"?"}(${c.chain2||"?"})`;
             const t = c.type || "?";
-            const icon = t === "hbond" ? "🤝" : t === "salt_bridge" ? "⚡" : t === "hydrophobic" ? "💧" : "•";
+            const icon = t === "hbond" ? "[H-bond]" : t === "salt_bridge" ? "[salt]" : t === "hydrophobic" ? "[hydro]" : "-";
             return `- ${icon} ${r1} ${c.atom1||""} ↔ ${r2} ${c.atom2||""} (${c.distance_A||"?"} Å)`;
           }).join("\n"));
           if (total > 20) sections.push(`\n*...and ${total - 20} more*`);
@@ -177,7 +177,7 @@ export function formatAnalysisResults(
             .slice(0, 10);
           if (hotspots.length > 0) {
             sections.push("");
-            sections.push(`🔑 **Interface hotspots** (≥2 contacts each):`);
+            sections.push(`**Interface hotspots** (≥2 contacts each):`);
             sections.push(hotspots.map(([r, n]) => `- ${r} — ${n} contacts`).join("\n"));
           }
         }
@@ -190,7 +190,7 @@ export function formatAnalysisResults(
       const radius = (rd?.radius_A as string|number) || (rd?.radius as string|number) || "?";
       const count = (rd?.pocket_residue_count as number) ?? (Array.isArray(residues) ? residues.length : 0);
       const composition = (rd?.composition as Record<string, number>) || {};
-      sections.push(`### 💊 Binding Pocket (${ligand}, ${radius} Å, ${count} residues, ~${volume} Å³)`);
+      sections.push(`### Binding Pocket (${ligand}, ${radius} Å, ${count} residues, ~${volume} Å³)`);
       sections.push(`| Property | Value |`);
       sections.push(`|----------|-------|`);
       sections.push(`| Total residues | ${count} |`);
@@ -216,17 +216,17 @@ export function formatAnalysisResults(
           return [41, 145].includes(n);
         });
         if (catalytic.length > 0) {
-          sections.push(`\n🔑 **Catalytic residues detected:** ${catalytic.map((r:any) => `${r.resname||"?"}${r.resno||r.residue_number||"?"}`).join(", ")}`);
+          sections.push(`\n**Catalytic residues detected:** ${catalytic.map((r:any) => `${r.resname||"?"}${r.resno||r.residue_number||"?"}`).join(", ")}`);
         }
       }
     }
     else if (recipe === "ramachandran") {
       const favoured = rd?.favoured ?? rd?.favoured_pct ?? rd?.favoured_percent ?? "?";
       const outliers = rd?.outliers ?? rd?.outlier_pct ?? rd?.outlier_count ?? 0;
-      sections.push(`### 📐 Ramachandran: Favoured ${favoured}%, Outliers ${outliers}%`);
+      sections.push(`### Ramachandran: Favoured ${favoured}%, Outliers ${outliers}%`);
     }
     else if (recipe === "sasa") {
-      sections.push(`### 🌐 SASA: ${rd?.total_sasa||rd?.total_sasa_A2||rd?.total||"?"} Å²`);
+      sections.push(`### SASA: ${rd?.total_sasa||rd?.total_sasa_A2||rd?.total||"?"} Å²`);
     }
     else if (recipe === "bfactor" || recipe === "bfactor_stats") {
       // Output format: { chains: { "A": { chain, mean, min, max, std, ... }, "B": {...} }, total_chains }
@@ -240,25 +240,25 @@ export function formatAnalysisResults(
           const mean = allMeans.length > 0 ? (allMeans.reduce((a: number, b: number) => a + b, 0) / allMeans.length).toFixed(1) : "?";
           const min = allMins.length > 0 ? Math.min(...allMins).toFixed(1) : "?";
           const max = allMaxs.length > 0 ? Math.max(...allMaxs).toFixed(1) : "?";
-          sections.push(`### 🌡️ B-factor: Mean ${mean}, Min ${min}, Max ${max}`);
+          sections.push(`### B-factor: Mean ${mean}, Min ${min}, Max ${max}`);
           sections.push(`**Per-chain:** ${chainEntries.map((c: any) => `Chain ${c.chain}: mean ${c.mean?.toFixed(1)||"?"}`).join(", ")}`);
         } else {
-          sections.push(`### 🌡️ B-factor: (no chain data)`);
+          sections.push(`### B-factor: (no chain data)`);
         }
       } else {
-        sections.push(`### 🌡️ B-factor: Mean ${rd?.mean||"?"}, Min ${rd?.min||"?"}, Max ${rd?.max||"?"}`);
+        sections.push(`### B-factor: Mean ${rd?.mean||"?"}, Min ${rd?.min||"?"}, Max ${rd?.max||"?"}`);
       }
     }
     else if (recipe === "druggability") {
       const score = rd?.druggability_score ?? "?";
       const cls = rd?.classification ?? "?";
-      sections.push(`### 💊 Druggability: Score ${score}/100, Classification: ${cls}`);
+      sections.push(`### Druggability: Score ${score}/100, Classification: ${cls}`);
       if (rd?.pocket_volume_A3) sections.push(`- Pocket volume: ${rd.pocket_volume_A3} Å³`);
       if (rd?.hydrophobic_pct) sections.push(`- Hydrophobic: ${rd.hydrophobic_pct}%, Polar: ${rd.polar_pct}%, Charged: ${rd.charged_pct}%`);
     }
     else if (recipe === "virtual_screening") {
       const hits = rd?.ranked_hits || [];
-      sections.push(`### 🔬 Virtual Screening: ${rd?.num_fragments_screened||"?"} fragments screened, best Ki ${rd?.best_ki_uM||"?"} μM`);
+      sections.push(`### Virtual Screening: ${rd?.num_fragments_screened||"?"} fragments screened, best Ki ${rd?.best_ki_uM||"?"} μM`);
       if (hits.length > 0) {
         sections.push(`**Top hits:**`);
         sections.push(hits.slice(0, 5).map((h: any) => `- ${h.name} (Ki ${h.ki_uM} μM, score ${h.score})`).join('\n'));
@@ -266,27 +266,27 @@ export function formatAnalysisResults(
     }
     else if (recipe === "ligand_interactions") {
       const contacts = rd?.contacts || rd?.interactions || [];
-      sections.push(`### 🧪 Ligand Interactions: ${rd?.total_contacts||contacts.length||"?"} contacts`);
+      sections.push(`### Ligand Interactions: ${rd?.total_contacts||contacts.length||"?"} contacts`);
       if (contacts.length > 0) {
         sections.push(contacts.slice(0, 10).map((c: any) => `- ${c.resname||"?"}${c.resno||"?"}(${c.chain||"?"}) ${c.atom||""} ↔ ${c.ligand_atom||c.atom_name||""} (${c.distance_A||c.distance||"?"} Å)`).join('\n'));
       }
     }
     else if (recipe === "detect_pockets") {
       const pockets = rd?.pockets || [];
-      sections.push(`### 🔍 Pocket Detection: ${rd?.num_pockets||pockets.length||"?"} pockets found`);
+      sections.push(`### Pocket Detection: ${rd?.num_pockets||pockets.length||"?"} pockets found`);
       if (pockets.length > 0) {
         sections.push(pockets.slice(0, 5).map((p: any) => `- Pocket ${p.id||"?"}: volume ${p.volume||"?"} Å³, ${p.residue_count||"?"} residues`).join('\n'));
       }
     }
     else if (recipe === "entity_analysis") {
-      sections.push(`### 📋 Entity Analysis: ${rd?.total_entities||"?"} entities, ${rd?.n_chains||rd?.total_chains||"?"} chains`);
+      sections.push(`### Entity Analysis: ${rd?.total_entities||"?"} entities, ${rd?.n_chains||rd?.total_chains||"?"} chains`);
       if (rd?.entities) {
         sections.push(rd.entities.slice(0, 5).map((e: any) => `- ${e.entity_id}: ${e.type} (${e.description||e.header||"?"})`).join('\n'));
       }
     }
     else if (recipe === "disulfide_bonds") {
       const bonds = rd?.bonds || [];
-      sections.push(`### 🔗 Disulfide Bonds: ${rd?.count||bonds.length||"?"} bonds`);
+      sections.push(`### Disulfide Bonds: ${rd?.count||bonds.length||"?"} bonds`);
       if (bonds.length > 0) {
         sections.push(bonds.slice(0, 10).map((b: any) => `- ${b.chain1||"?"}${b.resno1||"?"} ↔ ${b.chain2||"?"}${b.resno2||"?"} (${b.distance_A||"?"} Å)`).join('\n'));
       }
@@ -294,30 +294,30 @@ export function formatAnalysisResults(
     else if (recipe === "aromatic_stacking") {
       const stackings = rd?.interactions || rd?.stackings || [];
       const total = rd?.total_aromatic_interactions ?? rd?.total ?? stackings.length ?? "?";
-      sections.push(`### 📐 Aromatic Stacking: ${total} interactions (π-π: ${rd?.pi_pi_count||"?"}, cation-π: ${rd?.cation_pi_count||"?"})`);
+      sections.push(`### Aromatic Stacking: ${total} interactions (π-π: ${rd?.pi_pi_count||"?"}, cation-π: ${rd?.cation_pi_count||"?"})`);
     }
     else if (recipe === "water_bridges") {
       const bridges = rd?.bridges || rd?.interactions || [];
       const total = rd?.total_water_bridges ?? rd?.total ?? bridges.length ?? "?";
-      sections.push(`### 💧 Water Bridges: ${total} bridges`);
+      sections.push(`### Water Bridges: ${total} bridges`);
     }
     else if (recipe === "metal_coordination") {
-      sections.push(`### ⚙️ Metal Coordination: ${rd?.total_metals||"?"} metals, ${rd?.total_sites||rd?.total_metal_sites||"?"} sites`);
+      sections.push(`### Metal Coordination: ${rd?.total_metals||"?"} metals, ${rd?.total_sites||rd?.total_metal_sites||"?"} sites`);
     }
     else if (recipe === "contact_map") {
-      sections.push(`### 🗺️ Contact Map: ${rd?.total_ca_contacts||rd?.total_contacts||"?"} Cα contacts`);
+      sections.push(`### Contact Map: ${rd?.total_ca_contacts||rd?.total_contacts||"?"} Cα contacts`);
     }
     else if (recipe === "oligomer_analysis") {
-      sections.push(`### 🧬 Oligomer Analysis: ${rd?.oligomer_type||rd?.oligomeric_state||rd?.assembly||"?"} (${rd?.is_homomer ? "homomer" : "heteromer"}, ${rd?.n_interfaces||"?"} interfaces)`);
+      sections.push(`### Oligomer Analysis: ${rd?.oligomer_type||rd?.oligomeric_state||rd?.assembly||"?"} (${rd?.is_homomer ? "homomer" : "heteromer"}, ${rd?.n_interfaces||"?"} interfaces)`);
     }
     else if (recipe === "surface_residues") {
-      sections.push(`### 🌐 Surface Residues: ${rd?.surface_count||rd?.total||rd?.count||"?"} surface, ${rd?.buried_count||"?"} buried (${rd?.surface_pct||"?"}% surface)`);
+      sections.push(`### Surface Residues: ${rd?.surface_count||rd?.total||rd?.count||"?"} surface, ${rd?.buried_count||"?"} buried (${rd?.surface_pct||"?"}% surface)`);
     }
     else if (recipe === "structure_validation") {
-      sections.push(`### ✅ Structure Validation: ${rd?.quality||"?"} quality, ${rd?.clash_count||rd?.clashscore||"?"} clashes, ${rd?.rama_outlier_pct||rd?.ramachandran_outliers||"?"}% outliers`);
+      sections.push(`### Structure Validation: ${rd?.quality||"?"} quality, ${rd?.clash_count||rd?.clashscore||"?"} clashes, ${rd?.rama_outlier_pct||rd?.ramachandran_outliers||"?"}% outliers`);
     }
     else if (recipe === "secondary_structure_simple") {
-      sections.push(`### 🧬 Secondary Structure: ${rd?.alpha_helix_pct||"?"}% α-helix, ${rd?.beta_sheet_pct||"?"}% β-sheet, ${rd?.coil_pct||"?"}% coil, ${rd?.turn_pct||"?"}% turn`);
+      sections.push(`### Secondary Structure: ${rd?.alpha_helix_pct||"?"}% α-helix, ${rd?.beta_sheet_pct||"?"}% β-sheet, ${rd?.coil_pct||"?"}% coil, ${rd?.turn_pct||"?"}% turn`);
     }
     else if (recipe === "sequence_features") {
       // Output format: { chains: [{ chain, sequence_length, molecular_weight_Da, isoelectric_point_pI, ... }], n_chains_analyzed }
@@ -326,10 +326,10 @@ export function formatAnalysisResults(
         const totalLen = chains.reduce((s: number, c: any) => s + (c.sequence_length || c.length || 0), 0);
         const totalMw = chains.reduce((s: number, c: any) => s + (c.molecular_weight_Da || c.mw || c.molecular_weight || 0), 0);
         const mwKDa = totalMw > 1000 ? (totalMw / 1000).toFixed(1) : totalMw.toFixed(1);
-        sections.push(`### 🧬 Sequence Features: ${totalLen} residues, MW ${mwKDa} kDa (${chains.length} chains)`);
+        sections.push(`### Sequence Features: ${totalLen} residues, MW ${mwKDa} kDa (${chains.length} chains)`);
         sections.push(chains.slice(0, 5).map((c: any) => `- Chain ${c.chain}: ${c.sequence_length||c.length||"?"} aa, MW ${((c.molecular_weight_Da||c.mw||0)/1000).toFixed(1)} kDa, pI ${c.isoelectric_point_pI?.toFixed(1)||c.pi?.toFixed(1)||"?"}`).join('\n'));
       } else {
-        sections.push(`### 🧬 Sequence Features: ${rd?.length||rd?.sequence_length||"?"} residues, MW ${rd?.molecular_weight||rd?.mw||"?"} kDa`);
+        sections.push(`### Sequence Features: ${rd?.length||rd?.sequence_length||"?"} residues, MW ${rd?.molecular_weight||rd?.mw||"?"} kDa`);
       }
     }
     else if (recipe === "interface_residues") {
@@ -337,17 +337,17 @@ export function formatAnalysisResults(
       const r1 = rd?.chain1_interface_residues || rd?.interface_residues || rd?.residues || [];
       const r2 = rd?.chain2_interface_residues || [];
       const total = rd?.total_atom_pairs ?? r1.length + r2.length ?? "?";
-      sections.push(`### 🔗 Interface Residues: ${r1.length} on chain ${rd?.chain1||"?"}, ${r2.length} on chain ${rd?.chain2||"?"} (${total} atom pairs)`);
+      sections.push(`### Interface Residues: ${r1.length} on chain ${rd?.chain1||"?"}, ${r2.length} on chain ${rd?.chain2||"?"} (${total} atom pairs)`);
     }
     else if (recipe === "protonation_states") {
-      sections.push(`### ⚗️ Protonation States (pH ${rd?.pH||"?"}): ${rd?.total_ionizable||"?"} ionizable residues, net charge ${rd?.net_charge||"?"}`);
+      sections.push(`### Protonation States (pH ${rd?.pH||"?"}): ${rd?.total_ionizable||"?"} ionizable residues, net charge ${rd?.net_charge||"?"}`);
       if (rd?.residues && Array.isArray(rd.residues)) {
         const charged = rd.residues.filter((r: any) => Math.abs(r.charge_at_pH) >= 0.5);
         sections.push(`**Fully charged residues:** ${charged.map((r: any) => `${r.resname}${r.resno}(${r.charge_at_pH > 0 ? "+" : "-"})`).join(", ") || "none"}`);
       }
     }
     else if (recipe === "conformational_changes") {
-      sections.push(`### 🔄 Conformational Changes: Mean B-factor ${rd?.mean_bfactor||"?"} ± ${rd?.std_bfactor||"?"}, ${rd?.flexible_residues||"?"} flexible, ${rd?.rigid_residues||"?"} rigid`);
+      sections.push(`### Conformational Changes: Mean B-factor ${rd?.mean_bfactor||"?"} ± ${rd?.std_bfactor||"?"}, ${rd?.flexible_residues||"?"} flexible, ${rd?.rigid_residues||"?"} rigid`);
       const regions = rd?.top_flexible_regions;
       if (Array.isArray(regions) && regions.length > 0) {
         sections.push(`**Top flexible regions:**`);
@@ -355,7 +355,7 @@ export function formatAnalysisResults(
       }
     }
     else if (recipe === "druglike_screening") {
-      sections.push(`### 💊 Druglike Screening: Score ${rd?.druglike_score||"?"}/100, Lipinski: ${rd?.lipinski_assessment||"?"}`);
+      sections.push(`### Druglike Screening: Score ${rd?.druglike_score||"?"}/100, Lipinski: ${rd?.lipinski_assessment||"?"}`);
       if (rd?.admet_prediction) {
         const a = rd.admet_prediction;
         sections.push(`**ADMET:** Absorption ${a.absorption||"?"}, Permeability ${a.permeability||"?"}, Stability ${a.metabolic_stability||"?"}, Toxicity ${a.toxicity_risk||"?"}`);
@@ -363,7 +363,7 @@ export function formatAnalysisResults(
       if (rd?.pocket_volume_A3) sections.push(`- Pocket volume: ${rd.pocket_volume_A3} Å³`);
     }
     else if (recipe) {
-      sections.push(`### 📊 ${recipe}\n\`\`\`json\n${JSON.stringify(rd).slice(0,500)}\n\`\`\``);
+      sections.push(`### ${recipe}\n\`\`\`json\n${JSON.stringify(rd).slice(0,500)}\n\`\`\``);
     }
   }
   return sections.length > 0 ? sections.join("\n") : "";

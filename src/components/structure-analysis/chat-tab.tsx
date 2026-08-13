@@ -88,25 +88,25 @@ async function waitForConfirmation(
 
 const SUGGESTIONS = [
   {
-    icon: "🔬",
+    icon: "",
     title: "Analyze complex",
     prompt:
       "Load 1CBS and analyze its structure: get metadata, run hydrogen bond and salt bridge analysis on chain A, and summarize the key interactions.",
   },
   {
-    icon: "🧪",
+    icon: "",
     title: "Active site analysis",
     prompt:
       "Load 6LU7 (SARS-CoV-2 Mpro) and analyze the ligand binding pocket — run hydrogen bonds and salt bridges between chain A and the ligand, then focus the camera on the ligand.",
   },
   {
-    icon: "🧬",
+    icon: "",
     title: "Oligomer analysis",
     prompt:
       "Load 4HHB (hemoglobin) and analyze all chain-chain interactions. Set the representation to cartoon with chain coloring.",
   },
   {
-    icon: "🎨",
+    icon: "",
     title: "Visualize",
     prompt:
       "Load 1CBS, set the representation to ball-and-stick, color by element, then focus on residue ARG30.",
@@ -126,42 +126,42 @@ interface ChatTemplate {
 
 const TEMPLATE_LIBRARY: ChatTemplate[] = [
   // ── Structure Loading ──
-  { icon: "📥", title: "Load PDB", prompt: "Load PDB structure {ID} and show its basic information.", category: "Loading" },
-  { icon: "🧬", title: "Load AlphaFold", prompt: "Load AlphaFold model for UniProt ID {UNIPROT_ID} and analyze its confidence.", category: "Loading" },
-  { icon: "📦", title: "Load EMDB", prompt: "Load EMDB volume {EMDB_ID} at detail level 3.", category: "Loading" },
+  { icon: "", title: "Load PDB", prompt: "Load PDB structure {ID} and show its basic information.", category: "Loading" },
+  { icon: "", title: "Load AlphaFold", prompt: "Load AlphaFold model for UniProt ID {UNIPROT_ID} and analyze its confidence.", category: "Loading" },
+  { icon: "", title: "Load EMDB", prompt: "Load EMDB volume {EMDB_ID} at detail level 3.", category: "Loading" },
 
   // ── Visualization ──
-  { icon: "🎨", title: "Cartoon + Chain", prompt: "Load {ID}, set representation to cartoon, color by chain.", category: "Visualization" },
-  { icon: "⚛️", title: "Ball & Stick", prompt: "Load {ID}, set representation to ball-and-stick, color by element.", category: "Visualization" },
-  { icon: "🌈", title: "Surface + Hydrophobicity", prompt: "Load {ID}, set representation to molecular-surface, color by hydrophobicity.", category: "Visualization" },
-  { icon: "🎯", title: "Focus Residue", prompt: "Load {ID} and focus the camera on residue {CHAIN}{RESNO}.", category: "Visualization" },
-  { icon: "💊", title: "Focus Ligand", prompt: "Load {ID} and focus the camera on ligand {COMPID}.", category: "Visualization" },
+  { icon: "", title: "Cartoon + Chain", prompt: "Load {ID}, set representation to cartoon, color by chain.", category: "Visualization" },
+  { icon: "", title: "Ball & Stick", prompt: "Load {ID}, set representation to ball-and-stick, color by element.", category: "Visualization" },
+  { icon: "", title: "Surface + Hydrophobicity", prompt: "Load {ID}, set representation to molecular-surface, color by hydrophobicity.", category: "Visualization" },
+  { icon: "", title: "Focus Residue", prompt: "Load {ID} and focus the camera on residue {CHAIN}{RESNO}.", category: "Visualization" },
+  { icon: "", title: "Focus Ligand", prompt: "Load {ID} and focus the camera on ligand {COMPID}.", category: "Visualization" },
 
   // ── Analysis ──
-  { icon: "📊", title: "Metadata", prompt: "Get metadata for PDB {ID} including resolution, chains, and ligands.", category: "Analysis" },
-  { icon: "🤝", title: "H-bonds", prompt: "Load {ID} and run hydrogen bond analysis on chain {CHAIN}.", category: "Analysis" },
-  { icon: "⚡", title: "Salt Bridges", prompt: "Load {ID} and run salt bridge analysis on chain {CHAIN}.", category: "Analysis" },
-  { icon: "💧", title: "Hydrophobic", prompt: "Load {ID} and run hydrophobic contacts analysis on chain {CHAIN}.", category: "Analysis" },
-  { icon: "🔄", title: "All Interactions", prompt: "Load {ID} and run all_interactions analysis on chain {CHAIN}.", category: "Analysis" },
-  { icon: "📐", title: "Ramachandran", prompt: "Load {ID} and run Ramachandran analysis to check structure quality.", category: "Analysis" },
-  { icon: "🌡️", title: "B-factor", prompt: "Load {ID} and run B-factor analysis to identify flexible regions.", category: "Analysis" },
-  { icon: "🌐", title: "SASA", prompt: "Load {ID} and run SASA (solvent accessible surface area) analysis.", category: "Analysis" },
-  { icon: "🧩", title: "Secondary Structure", prompt: "Load {ID} and run secondary structure analysis.", category: "Analysis" },
-  { icon: "🔗", title: "Disulfide Bonds", prompt: "Load {ID} and detect all disulfide bonds.", category: "Analysis" },
-  { icon: "⚛️", title: "Aromatic Stacking", prompt: "Load {ID} and detect aromatic stacking interactions.", category: "Analysis" },
-  { icon: "💧", title: "Water Bridges", prompt: "Load {ID} and detect water-bridged hydrogen bonds.", category: "Analysis" },
+  { icon: "", title: "Metadata", prompt: "Get metadata for PDB {ID} including resolution, chains, and ligands.", category: "Analysis" },
+  { icon: "", title: "H-bonds", prompt: "Load {ID} and run hydrogen bond analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "", title: "Salt Bridges", prompt: "Load {ID} and run salt bridge analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "", title: "Hydrophobic", prompt: "Load {ID} and run hydrophobic contacts analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "", title: "All Interactions", prompt: "Load {ID} and run all_interactions analysis on chain {CHAIN}.", category: "Analysis" },
+  { icon: "", title: "Ramachandran", prompt: "Load {ID} and run Ramachandran analysis to check structure quality.", category: "Analysis" },
+  { icon: "", title: "B-factor", prompt: "Load {ID} and run B-factor analysis to identify flexible regions.", category: "Analysis" },
+  { icon: "", title: "SASA", prompt: "Load {ID} and run SASA (solvent accessible surface area) analysis.", category: "Analysis" },
+  { icon: "", title: "Secondary Structure", prompt: "Load {ID} and run secondary structure analysis.", category: "Analysis" },
+  { icon: "", title: "Disulfide Bonds", prompt: "Load {ID} and detect all disulfide bonds.", category: "Analysis" },
+  { icon: "", title: "Aromatic Stacking", prompt: "Load {ID} and detect aromatic stacking interactions.", category: "Analysis" },
+  { icon: "", title: "Water Bridges", prompt: "Load {ID} and detect water-bridged hydrogen bonds.", category: "Analysis" },
 
   // ── Drug Discovery ──
-  { icon: "💊", title: "Binding Pocket", prompt: "Load {ID} and analyze the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
-  { icon: "🎯", title: "Druggability", prompt: "Load {ID} and predict the druggability of the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
-  { icon: "🔍", title: "Detect Pockets", prompt: "Load {ID} and detect all binding pockets on the protein surface.", category: "Drug Discovery" },
-  { icon: "🧪", title: "Virtual Screening", prompt: "Load {ID} and run virtual screening on the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
-  { icon: "⚡", title: "Electrostatic Surface", prompt: "Load {ID} and show the electrostatic surface potential.", category: "Drug Discovery" },
+  { icon: "", title: "Binding Pocket", prompt: "Load {ID} and analyze the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
+  { icon: "", title: "Druggability", prompt: "Load {ID} and predict the druggability of the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
+  { icon: "", title: "Detect Pockets", prompt: "Load {ID} and detect all binding pockets on the protein surface.", category: "Drug Discovery" },
+  { icon: "", title: "Virtual Screening", prompt: "Load {ID} and run virtual screening on the binding pocket around ligand {COMPID}.", category: "Drug Discovery" },
+  { icon: "", title: "Electrostatic Surface", prompt: "Load {ID} and show the electrostatic surface potential.", category: "Drug Discovery" },
 
   // ── Comprehensive ──
-  { icon: "📋", title: "Full Report", prompt: "Load {ID} and generate a comprehensive analysis report: metadata, quality, interactions, and binding pocket analysis.", category: "Comprehensive" },
-  { icon: "🔬", title: "Enzyme Analysis", prompt: "Load {ID} (enzyme) and analyze: active site residues, catalytic mechanism, ligand interactions, and generate a report.", category: "Comprehensive" },
-  { icon: "🦠", title: "Antibody Analysis", prompt: "Load {ID} (antibody) and analyze: CDR regions, antigen-binding interface, and paratope characterization.", category: "Comprehensive" },
+  { icon: "", title: "Full Report", prompt: "Load {ID} and generate a comprehensive analysis report: metadata, quality, interactions, and binding pocket analysis.", category: "Comprehensive" },
+  { icon: "", title: "Enzyme Analysis", prompt: "Load {ID} (enzyme) and analyze: active site residues, catalytic mechanism, ligand interactions, and generate a report.", category: "Comprehensive" },
+  { icon: "", title: "Antibody Analysis", prompt: "Load {ID} (antibody) and analyze: CDR regions, antigen-binding interface, and paratope characterization.", category: "Comprehensive" },
 ];
 
 /**
@@ -319,7 +319,7 @@ export function ChatTab() {
   const [favoriteTemplates, setFavoriteTemplates] = useState<string[]>(() => loadFavoriteTemplates());
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [newTemplateTitle, setNewTemplateTitle] = useState("");
-  const [newTemplateIcon, setNewTemplateIcon] = useState("📝");
+  const [newTemplateIcon, setNewTemplateIcon] = useState("");
   // Round 13: Voice input state
   const [isListening, setIsListening] = useState(false);
   // Round 15: Markdown preview + unread badge state
@@ -388,13 +388,13 @@ export function ChatTab() {
         const result = await executeCommand(viewer, cmd);
         toast(
           result.ok
-            ? `✓ Re-executed: ${describeCommand(cmd)}`
-            : `✗ Failed: ${result.detail || "Unknown error"}`,
+            ? `[OK] Re-executed: ${describeCommand(cmd)}`
+            : `[X] Failed: ${result.detail || "Unknown error"}`,
           result.ok ? "success" : "error"
         );
         logCommand({ type: cmd.type, ok: result.ok, detail: result.detail });
       } catch (err) {
-        toast(`✗ Error: ${err instanceof Error ? err.message : String(err)}`, "error");
+        toast(`Error: ${err instanceof Error ? err.message : String(err)}`, "error");
       }
     };
     window.addEventListener(REEXEC_EVENT, handler);
@@ -505,7 +505,7 @@ export function ChatTab() {
         const preview = lastAssistant?.content?.slice(0, 100) || "Response received";
         const notif = new Notification("Molcraft AI Agent", {
           body: `${preview}${preview.length >= 100 ? "..." : ""}`,
-          icon: "/logo.svg",
+          icon: "",
           tag: "chat-response",
         });
         notif.onclick = () => {
@@ -664,7 +664,7 @@ export function ChatTab() {
         addMessage({
           id: `a-summary-${Date.now()}`,
           role: "assistant",
-          content: `📋 **Chat Summary**\n\n${summary.trim()}`,
+          content: `**Chat Summary**\n\n${summary.trim()}`,
           ts: Date.now(),
           provider: chatProvider,
         });
@@ -957,7 +957,7 @@ export function ChatTab() {
     ];
     for (const m of messages) {
       if (m.role === "user") {
-        lines.push(`## 👤 User`);
+        lines.push(`## User`);
         lines.push("");
         lines.push(m.content);
         lines.push("");
@@ -966,7 +966,7 @@ export function ChatTab() {
         const durationInfo = m.durationMs != null
           ? ` · ${m.durationMs < 1000 ? `${m.durationMs}ms` : `${(m.durationMs / 1000).toFixed(1)}s`}`
           : "";
-        lines.push(`## 🤖 Assistant${modelInfo ? ` (${modelInfo}${durationInfo})` : ""}`);
+        lines.push(`## Assistant${modelInfo ? ` (${modelInfo}${durationInfo})` : ""}`);
         lines.push("");
         if (m.content) {
           lines.push(m.content);
@@ -979,7 +979,7 @@ export function ChatTab() {
             const c = cmd as { type?: string; status?: string; error?: string; durationMs?: number };
             const desc = describeCommand(c as unknown as LlmCommand);
             const status = c.status || (c.error ? "error" : "done");
-            const icon = status === "error" ? "❌" : status === "done" ? "✅" : "⏳";
+            const icon = status === "error" ? "[error]" : status === "done" ? "[done]" : "[...]";
             const time = c.durationMs != null
               ? ` (${c.durationMs < 1000 ? `${c.durationMs}ms` : `${(c.durationMs / 1000).toFixed(1)}s`})`
               : "";
@@ -988,15 +988,15 @@ export function ChatTab() {
           lines.push("");
         }
         if (m.isError) {
-          lines.push(`> ⚠️ **Error** — click Retry in the chat to re-send this request.`);
+          lines.push(`> [!]️ **Error** — click Retry in the chat to re-send this request.`);
           lines.push("");
         }
         // Round 5: Export reaction/pin/bookmark status
         const meta: string[] = [];
-        if (m.pinned) meta.push("📌 Pinned");
-        if (m.bookmarked) meta.push("🔖 Bookmarked");
-        if (m.reaction === "thumbs-up") meta.push("👍 Liked");
-        if (m.reaction === "thumbs-down") meta.push("👎 Disliked");
+        if (m.pinned) meta.push("[pin] Pinned");
+        if (m.bookmarked) meta.push("Bookmarked");
+        if (m.reaction === "thumbs-up") meta.push("[like] Liked");
+        if (m.reaction === "thumbs-down") meta.push("[dislike] Disliked");
         if (meta.length > 0) {
           lines.push(`> ${meta.join(" · ")}`);
           lines.push("");
@@ -1163,7 +1163,7 @@ export function ChatTab() {
       return;
     }
     const newTemplate: ChatTemplate = {
-      icon: newTemplateIcon || "📝",
+      icon: newTemplateIcon || "",
       title: trimmedTitle,
       prompt: trimmedInput,
       category: "Custom",
@@ -1173,7 +1173,7 @@ export function ChatTab() {
     saveCustomTemplates(updated);
     setShowSaveTemplate(false);
     setNewTemplateTitle("");
-    setNewTemplateIcon("📝");
+    setNewTemplateIcon("");
     toast(`Template "${trimmedTitle}" saved`, "success");
   }, [input, newTemplateTitle, newTemplateIcon, customTemplates, toast]);
 
@@ -1236,7 +1236,7 @@ export function ChatTab() {
           .filter(t => t && typeof t.title === "string" && typeof t.prompt === "string")
           .filter(t => !existingTitles.has(t.title))
           .map(t => ({
-            icon: typeof t.icon === "string" ? t.icon : "📝",
+            icon: typeof t.icon === "string" ? t.icon : "",
             title: t.title,
             prompt: t.prompt,
             category: typeof t.category === "string" ? t.category : "Custom",
@@ -1363,7 +1363,7 @@ export function ChatTab() {
           // first SSE chunk arrives (accumulatedReply replaces it).
           if (round > 0) {
             updateMessage(pendingId, {
-              content: `🔍 Round ${round + 1}: continuing analysis (${allCommands.length} commands executed, ${allAnalysisResults.length} results so far)…`,
+              content: `Round ${round + 1}: continuing analysis (${allCommands.length} commands executed, ${allAnalysisResults.length} results so far)…`,
               commands: allCommands,
               pending: true,
               agentStep: "calling-llm",
@@ -1422,7 +1422,7 @@ export function ChatTab() {
             }
             if (attempt < 2) {
               updateMessage(pendingId, {
-                content: `⚠️ Retrying… (attempt ${attempt + 2}/3)`,
+                content: `Retrying… (attempt ${attempt + 2}/3)`,
                 pending: true,
               });
               await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
@@ -1432,7 +1432,7 @@ export function ChatTab() {
           if (!res || !res.ok) {
             // Improvement #3: Mark as error so the Retry button shows
             updateMessage(pendingId, {
-              content: `❌ LLM call failed: ${lastErr || "unknown error"}`,
+              content: `LLM call failed: ${lastErr || "unknown error"}`,
               pending: false,
               agentStep: "error",
               isError: true,
@@ -1493,7 +1493,7 @@ export function ChatTab() {
           if (streamError) {
             // Improvement #3: Mark as error so the Retry button shows
             updateMessage(pendingId, {
-              content: `❌ ${streamError}`,
+              content: `${streamError}`,
               pending: false,
               agentStep: "error",
               isError: true,
@@ -1522,7 +1522,7 @@ export function ChatTab() {
 
             if (hasDestructive) {
               updateMessage(pendingId, {
-                content: `${reply || ""}\n\n⚠️ **Confirmation required** — the agent wants to execute: ${cmdSummary}\n\nClick ✓ to proceed or ✗ to skip these commands.`,
+                content: `${reply || ""}\n\n**Confirmation required** — the agent wants to execute: ${cmdSummary}\n\nClick [Yes] to proceed or [No] to skip these commands.`,
                 commands: [...allCommands, ...commands],
                 pending: true,
                 provider,
@@ -1554,7 +1554,7 @@ export function ChatTab() {
               });
               allCommands.push(...pendingCmds);
               updateMessage(pendingId, {
-                content: `${reply || `⚡ Executing ${commands.length} command(s)…`}`,
+                content: `${reply || `Executing ${commands.length} command(s)…`}`,
                 commands: [...allCommands],
                 pending: true,
                 provider,
@@ -1807,7 +1807,7 @@ export function ChatTab() {
             const needsAction = userLower.includes("load") || userLower.includes("analyze") ||
               userLower.includes("run") || userLower.includes("show") || userLower.includes("focus");
             if (needsAction) {
-              finalReply += "\n\n⚠️ **No commands were generated.** The LLM may not have returned commands in the expected JSON format. Try rephrasing your request or switching to a different provider (e.g., 'Auto' instead of 'cli:hermes').";
+              finalReply += "\n\n**No commands were generated.** The LLM may not have returned commands in the expected JSON format. Try rephrasing your request or switching to a different provider (e.g., 'Auto' instead of 'cli:hermes').";
             }
           }
           // Round 27: Append formatted analysis results to the reply
@@ -1842,7 +1842,7 @@ export function ChatTab() {
         } else {
           // Improvement #3: Mark as error so the Retry button shows
           updateMessage(pendingId, {
-            content: `❌ Error: ${err instanceof Error ? err.message : String(err)}`,
+            content: `Error: ${err instanceof Error ? err.message : String(err)}`,
             pending: false,
             agentStep: "error",
             isError: true,
@@ -1901,7 +1901,7 @@ export function ChatTab() {
     return () => window.removeEventListener(EDIT_EVENT, handler);
   }, [updateMessage, toast, send]);
 
-  // Round 5: Listen for reaction events (👍/👎)
+  // Round 5: Listen for reaction events ([like]/[dislike])
   useEffect(() => {
     const handler = (e: Event) => {
       const { messageId, reaction } = (e as CustomEvent<{ messageId: string; reaction: "thumbs-up" | "thumbs-down" | null }>).detail;
@@ -1929,7 +1929,7 @@ export function ChatTab() {
         localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
       } catch { /* ignore */ }
       const pinCount = updated.filter(m => m.pinned).length;
-      toast(pinned ? `📌 Message pinned (${pinCount} total)` : "Message unpinned", "info");
+      toast(pinned ? `Message pinned (${pinCount} total)` : "Message unpinned", "info");
     };
     window.addEventListener(PIN_EVENT, handler);
     return () => window.removeEventListener(PIN_EVENT, handler);
@@ -1941,7 +1941,7 @@ export function ChatTab() {
       const { messageId, bookmarked } = (e as CustomEvent<{ messageId: string; bookmarked: boolean }>).detail;
       if (!messageId) return;
       updateMessage(messageId, { bookmarked });
-      toast(bookmarked ? "🔖 Message bookmarked" : "Bookmark removed", "info");
+      toast(bookmarked ? "Message bookmarked" : "Bookmark removed", "info");
     };
     window.addEventListener(BOOKMARK_EVENT, handler);
     return () => window.removeEventListener(BOOKMARK_EVENT, handler);
@@ -1953,7 +1953,7 @@ export function ChatTab() {
       const { messageId, folder } = (e as CustomEvent<{ messageId: string; folder: string | undefined }>).detail;
       if (!messageId) return;
       updateMessage(messageId, { bookmarkFolder: folder });
-      toast(folder ? `📁 Moved to folder: ${folder}` : "Removed from folder", "info");
+      toast(folder ? `Moved to folder: ${folder}` : "Removed from folder", "info");
     };
     window.addEventListener(FOLDER_EVENT, handler);
     return () => window.removeEventListener(FOLDER_EVENT, handler);
@@ -1984,7 +1984,7 @@ export function ChatTab() {
       try {
         localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(keptMsgs.filter(m => !m.pending).slice(-50)));
       } catch { /* ignore */ }
-      toast(`🌿 Branched from message ${branchIndex + 1} — "${branchName}" saved`, "success");
+      toast(`Branched from message ${branchIndex + 1} — "${branchName}" saved`, "success");
     };
     window.addEventListener(BRANCH_EVENT, handler);
     return () => window.removeEventListener(BRANCH_EVENT, handler);
@@ -1996,7 +1996,7 @@ export function ChatTab() {
       const { messageId, tags } = (e as CustomEvent<{ messageId: string; tags: string[] }>).detail;
       if (!messageId) return;
       updateMessage(messageId, { tags });
-      toast(tags.length > 0 ? `🏷️ Tagged: ${tags.join(", ")}` : "Tags cleared", "info");
+      toast(tags.length > 0 ? `Tagged: ${tags.join(", ")}` : "Tags cleared", "info");
     };
     window.addEventListener(TAG_EVENT, handler);
     return () => window.removeEventListener(TAG_EVENT, handler);
@@ -2023,7 +2023,7 @@ export function ChatTab() {
       const toSave = updated.filter((m) => !m.pending).slice(-50);
       localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
     } catch { /* ignore */ }
-    toast(`🏷️ Renamed #${oldTag} → #${sanitized} (${count} messages)`, "success");
+    toast(`Renamed #${oldTag} → #${sanitized} (${count} messages)`, "success");
   }, [toast]);
 
   // Round 22: Delete a tag from all messages
@@ -2042,7 +2042,7 @@ export function ChatTab() {
       const toSave = updated.filter((m) => !m.pending).slice(-50);
       localStorage.setItem("pdb-tracker:chat-messages:v1", JSON.stringify(toSave));
     } catch { /* ignore */ }
-    toast(`🏷️ Deleted #${tag} from ${count} messages`, "info");
+    toast(`Deleted #${tag} from ${count} messages`, "info");
   }, [toast]);
 
   // Round 19: Listen for pin-note events
@@ -2051,7 +2051,7 @@ export function ChatTab() {
       const { messageId, note } = (e as CustomEvent<{ messageId: string; note: string }>).detail;
       if (!messageId) return;
       updateMessage(messageId, { pinNote: note || undefined });
-      toast(note ? `📌 Pin note: ${note}` : "Pin note cleared", "info");
+      toast(note ? `Pin note: ${note}` : "Pin note cleared", "info");
     };
     window.addEventListener(PIN_NOTE_EVENT, handler);
     return () => window.removeEventListener(PIN_NOTE_EVENT, handler);
@@ -2288,7 +2288,7 @@ export function ChatTab() {
                   </div>
                   {p.available && (
                     <Badge variant="outline" className="h-3.5 px-1 text-[7px] bg-green-500/10 text-green-600 border-green-500/30">
-                      ✓
+                      [OK]
                     </Badge>
                   )}
                 </button>
@@ -2604,7 +2604,7 @@ export function ChatTab() {
                       if (!preview) return null;
                       return (
                         <div className="text-[7px] text-claude-text-muted/40 truncate mt-0.5 italic">
-                          {lastMsg.role === 'user' ? '👤' : '🤖'} {preview}{preview.length >= 50 ? '…' : ''}
+                          {lastMsg.role === 'user' ? '[User]' : '[AI]'} {preview}{preview.length >= 50 ? '…' : ''}
                         </div>
                       );
                     })()}
@@ -2732,7 +2732,7 @@ export function ChatTab() {
                 }`}
                 title={mode === "all" ? "Show all messages" : mode === "bookmarked" ? "Show only bookmarked" : "Show only reacted"}
               >
-                {mode === "all" ? "All" : mode === "bookmarked" ? "🔖 Bookmarked" : "👍👎 Reacted"}
+                {mode === "all" ? "All" : mode === "bookmarked" ? "Bookmarked" : "[like]Reacted"}
               </button>
             ))}
             <span className="text-[8px] font-semibold uppercase tracking-wide text-claude-text-muted/70 ml-2">Sort:</span>
@@ -2747,7 +2747,7 @@ export function ChatTab() {
                 }`}
                 title={mode === "default" ? "Pinned first, then chronological" : mode === "reactions" ? "Most liked first" : "Most recent first"}
               >
-                {mode === "default" ? "Default" : mode === "reactions" ? "👍 Reactions" : "Recent"}
+                {mode === "default" ? "Default" : mode === "reactions" ? "Reactions" : "Recent"}
               </button>
             ))}
           </div>
@@ -2816,7 +2816,7 @@ export function ChatTab() {
                   className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
                   title="Clear command filter"
                 >
-                  ✕ Clear
+                  x Clear
                 </button>
               )}
             </div>
@@ -2856,7 +2856,7 @@ export function ChatTab() {
                   className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
                   title="Clear tag filter"
                 >
-                  ✕ Clear
+                  x Clear
                 </button>
               )}
             </div>
@@ -2876,7 +2876,7 @@ export function ChatTab() {
                   }`}
                   title={folderFilter === folder ? `Remove filter: ${folder}` : `Filter by folder: ${folder}`}
                 >
-                  📁 {folder}
+                  {folder}
                 </button>
               ))}
               {folderFilter && (
@@ -2885,7 +2885,7 @@ export function ChatTab() {
                   className="px-1 py-0.5 rounded text-[8px] text-destructive hover:bg-destructive/10 transition-colors ml-1"
                   title="Clear folder filter"
                 >
-                  ✕ Clear
+                  x Clear
                 </button>
               )}
             </div>
@@ -3075,7 +3075,7 @@ export function ChatTab() {
                   return (
                     <div key={folder} className="flex items-center gap-1 text-[9px]">
                       <span className="inline-flex items-center rounded px-1 py-0 text-[8px] font-mono bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                        📁 {folder}
+                        {folder}
                       </span>
                       <span className="ml-auto font-mono font-semibold text-claude-text">{count}</span>
                       <span className="text-[7px] text-claude-text-muted">msg{count > 1 ? "s" : ""}</span>
@@ -3112,7 +3112,7 @@ export function ChatTab() {
           ) : (
             <div className="space-y-0.5">
               {commandHistory.map((cmd, i) => {
-                const statusIcon = cmd.status === "pending" ? "⏳" : cmd.status === "running" ? "🔄" : cmd.status === "error" ? "❌" : "✅";
+                const statusIcon = cmd.status === "pending" ? "[...]" : cmd.status === "running" ? "[running]" : cmd.status === "error" ? "[error]" : "[done]";
                 const time = cmd.durationMs != null
                   ? (cmd.durationMs < 1000 ? `${cmd.durationMs}ms` : `${(cmd.durationMs / 1000).toFixed(1)}s`)
                   : "";
@@ -3278,7 +3278,7 @@ export function ChatTab() {
                 )}
                 {/* Category filter */}
                 <div className="flex items-center gap-0.5 flex-wrap mb-1.5 pb-1 border-b border-claude-border-light/30 dark:border-[#3d3832]/30">
-                  {["All", "★ Favorites", ...Array.from(new Set([...TEMPLATE_LIBRARY.map(t => t.category), ...customTemplates.map(t => t.category)]))].map((cat) => (
+                  {["All", "Favorites", ...Array.from(new Set([...TEMPLATE_LIBRARY.map(t => t.category), ...customTemplates.map(t => t.category)]))].map((cat) => (
                     <button
                       key={cat}
                       onClick={() => setTemplateCategory(cat)}
@@ -3297,7 +3297,7 @@ export function ChatTab() {
                   {[...TEMPLATE_LIBRARY, ...customTemplates]
                     .filter(t => {
                       if (templateCategory === "All") return true;
-                      if (templateCategory === "★ Favorites") return favoriteTemplates.includes(t.title);
+                      if (templateCategory === "Favorites") return favoriteTemplates.includes(t.title);
                       return t.category === templateCategory;
                     })
                     .map((t, i) => {

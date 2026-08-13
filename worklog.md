@@ -12967,3 +12967,67 @@ Improvement Suggestions for Next Round:
    screenshots to improve label contrast
 4. **Capture timing optimization** — reduce the 300ms+100ms delays to speed
    up the capture pipeline
+
+---
+Task ID: round-76-remove-emoji-from-chat-templates
+Agent: main
+Task: Remove all emoji from chat templates and analysis result formatting. QA + commit and push.
+
+User Request:
+"chat的模板避免用emoj图标"
+
+Changes Applied:
+
+### 1. chat-helpers.tsx — Analysis result formatting (36 replacements)
+Removed all emoji from section headers, table entries, and inline icons:
+- Section headers: "### Hydrogen Bonds" (was "### 🤝 Hydrogen Bonds")
+- Table entries: "| H-bonds |" (was "| 🤝 H-bonds |")
+- Inline icons: "[H-bond]" (was "🤝"), "[salt]" (was "⚡"), "[hydro]" (was "💧")
+- Catalytic markers: "**Catalytic residues" (was "🔑 **Catalytic residues")
+- All 26+ recipe type headers cleaned (Binding Pocket, Ramachandran, SASA, etc.)
+
+### 2. chat-tab.tsx — Template suggestions + UI text (71+ replacements)
+- All template suggestion icons set to empty string: `icon: ""` (was emoji)
+- Template icon defaults: `""` (was "📝")
+- Toast messages: removed emoji prefixes (📌, 🔖, 📁, 🌿, 🏷️, etc.)
+- Chat summary export: "## User" (was "## 👤 User"), "## Assistant" (was "## 🤖 Assistant")
+- Status indicators: "[done]" (was "✅"), "[error]" (was "❌"), "[running]" (was "🔄")
+- Reaction indicators: "[like]" (was "👍"), "[dislike]" (was "👎")
+- Session preview: "[User]" (was "👤"), "[AI]" (was "🤖")
+- Pin/bookmark indicators: "[pin]" (was "📌"), text-only
+- Clear buttons: "x Clear" (was "✕ Clear")
+- Confirmation dialog: "Click [Yes] to proceed or [No] to skip" (was "Click ✓ to proceed or ✗ to skip")
+
+### 3. message-bubble.tsx — Already clean (only ★ score indicators remain)
+The ★ character is a standard Unicode star, not an emoji — kept for score display.
+
+### Verification
+
+#### Unit Test
+```
+formatAnalysisResults output:
+### Hydrogen Bonds (5 found)
+**Key residues:** CYS145(A), HIS41(A)
+...
+Contains emoji: PASS (no emoji found)
+```
+
+#### Lint
+- chat-helpers.tsx: 0 errors ✅
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+- message-bubble.tsx: 0 errors ✅
+
+#### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ All emoji removed from analysis result formatting (chat-helpers.tsx)
+- ✅ All emoji removed from chat templates, toasts, and UI text (chat-tab.tsx)
+- ✅ Verified: formatAnalysisResults output contains zero emoji
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Chat screenshot display verification** — run a real analysis on 6LU7
+2. **Capture timing optimization** — reduce delays to speed up pipeline
+3. **Background color for screenshots** — consistent dark background for contrast
+4. **Configurable label count** — let users control label density
