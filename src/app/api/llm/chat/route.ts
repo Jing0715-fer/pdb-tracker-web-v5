@@ -37,6 +37,8 @@ interface ChatRequestBody {
   messages: ChatMessage[];
   context?: ChatContext;
   provider?: string;
+  /** Round 62: Session id for cross-turn session reuse. */
+  sessionId?: string;
 }
 
 const SYSTEM_PROMPT = `You are Molcraft AI, a structural biology assistant integrated into a PDB structure analysis web app.
@@ -117,10 +119,19 @@ export async function POST(request: NextRequest) {
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
     const userPrompt = buildUserPrompt(messages, context);
 
+    // Round 62: Derive stable session id for chat reuse.
+    const firstUserMsg2 = messages.find((m) => m.role === 'user');
+    const chatSessionId = body.sessionId
+      ? `chat-${body.sessionId}`
+      : firstUserMsg2
+        ? `chat-${(firstUserMsg2.content || '').slice(0, 200).split('').reduce((h, c) => ((h * 31 + c.charCodeAt(0)) | 0) >>> 0, 0).toString(16)}`
+        : `chat-oneshot-${Date.now()}`;
+
     // Resolve the LLM config with the provider override.
     const cfg: LlmConfig = {
       provider: provider || undefined,
       system: SYSTEM_PROMPT,
+      sessionId: chatSessionId,
     };
 
     // Call the LLM via the run-center provider system.

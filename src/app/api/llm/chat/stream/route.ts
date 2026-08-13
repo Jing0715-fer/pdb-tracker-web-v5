@@ -140,6 +140,9 @@ interface ChatRequestBody {
   messages: ChatMessage[];
   context?: ChatContext;
   provider?: string;
+  /** Round 62: Session id for cross-turn session reuse.
+   *  If absent, derived from first user message. */
+  sessionId?: string;
 }
 
 export async function POST(request: NextRequest) {
@@ -166,9 +169,20 @@ export async function POST(request: NextRequest) {
           send({ type: 'thinking' });
 
           const userPrompt = buildUserPrompt(messages, context);
+          // Round 62: Derive a stable session id for cross-turn chat reuse.
+          // Prefer the client-supplied sessionId; otherwise hash the first
+          // user message so follow-ups in the same conversation share context.
+          const firstUserMsg = messages.find((m) => m.role === 'user');
+          const chatSessionId = body.sessionId
+            ? `chat-${body.sessionId}`
+            : firstUserMsg
+              ? `chat-${(firstUserMsg.content || '').slice(0, 200).split('').reduce((h, c) => ((h * 31 + c.charCodeAt(0)) | 0) >>> 0, 0).toString(16)}`
+              : `chat-oneshot-${Date.now()}`;
+
           const cfg: LlmConfig = {
             provider: provider || undefined,
             system: SYSTEM_PROMPT,
+            sessionId: chatSessionId,
           };
 
           const r = await generateText(SYSTEM_PROMPT, userPrompt, {

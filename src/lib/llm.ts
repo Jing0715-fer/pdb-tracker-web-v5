@@ -717,9 +717,21 @@ const CLI_ADAPTERS: CliAdapter[] = [
      *  For streaming, append `--output-format stream-json` (NDJSON events).
      *  For interactive TUI/REPL, omit `--print`. */
     callArgs: (q, model, sid) => {
+      // Round 62: codebuddy CLI's session flag is '--session-id <uuid>' or
+      // '--resume <sessionId>'. We use --session-id for the first call (when
+      // sid is just the logicalSid) and --resume for subsequent calls.
+      // But: codebuddy currently doesn't print a session id in --print mode,
+      // so capture won't work (no parseSessionId). The sessionId here is
+      // passed-through but the registry stays empty until codebuddy emits
+      // a session id in some output mode (e.g. --output-format json).
       const m = model || process.env.CODEBUDDY_MODEL || 'deepseek-v4-pro';
       const base = ['--print', '--model', m, q];
-      return sid ? [...base, '--session', sid] : base;
+      if (sid && sid.startsWith('resume:')) {
+        const resumeId = sid.slice(7);
+        return [...base, '--resume', resumeId];
+      }
+      // First call: use the logical sid as a stable --session-id if provided
+      return sid ? [...base, '--session-id', sid] : base;
     },
     outputStream: 'stdout',
     probeTimeoutMs: 15_000,
@@ -1435,7 +1447,6 @@ async function callAnyLlm(
 ): Promise<LlmResult> {
   const probes = await probeAll();
   const order = decideProviderOrder(cfg.resolvedProvider, cfg.model);
-
   const errors: string[] = [];
   for (const item of order) {
     const id = item.id;
