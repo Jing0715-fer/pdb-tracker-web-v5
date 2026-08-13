@@ -362,10 +362,12 @@ interface CliAdapter {
   parseSessionId?: (rawOutput: string) => string | null;
 }
 
-const HERMES_BANNER_RE = /(?:^|\n)\s*session_id:\s*\S+\s*(?=\n|$)/i;
-/** Round 56: Extract the actual hermes session ID printed by `--pass-session-id`.
- *  Hermes prints `session_id: <uuid>` on its own line (mixed in stdout/stderr). */
-const HERMES_SESSION_ID_RE = /session_id:\s*([A-Za-z0-9_\-]+)/i;
+const HERMES_BANNER_RE = /(?:^|\n)\s*session[_ ]?id["\']?\s*[:=]\s*\S+\s*(?=\n|$)/i;  // Round 60: also match Session ID: and JSON
+/** Round 56/60: Extract the actual hermes session ID printed by `hermes chat -q -Q`.
+ *  Hermes prints `session_id: <uuid>` on its own line (mixed in stdout/stderr).
+ *  Round 60: Also match "Session ID:" (capitalized, with space) and JSON-style
+ *  "session_id":"<uuid>" in case hermes changes its output format. */
+const HERMES_SESSION_ID_RE = /session[_ ]?id["\']?\s*[:=]\s*["\']?([A-Za-z0-9_\-]{8,})/i;  // Round 60: match session_id:, Session ID:, session_id=, JSON
 function parseHermesSessionId(raw: string): string | null {
   const m = raw.match(HERMES_SESSION_ID_RE);
   return m ? m[1] : null;
@@ -554,6 +556,10 @@ const CLI_ADAPTERS: CliAdapter[] = [
     stripBanner: (raw) => raw.replace(HERMES_BANNER_RE, '').trim(),
     // Round 56: Capture the actual hermes session ID from the first call's
     // output so subsequent calls can --resume it.
+    // Round 60: parseHermesSessionId matches session_id:, Session ID:, and
+    // session_id= formats; the capture works for both 'chat -q -Q' and
+    // '-z --cli' invocations, but the latter doesn't print session_id at
+    // all on hermes v0.20, so we use 'chat -q -Q' as the actual call.
     parseSessionId: parseHermesSessionId,
     extraEnv: { PYTHONIOENCODING: 'utf-8' },
     probeTimeoutMs: 15_000,

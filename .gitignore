@@ -57,4 +57,5 @@ server.log
 /tool-results/
 
 # Downloaded/generated images during QA
-/tmp/*.png
+/tmp/*.pngdb/*.db
+db/*.db-*

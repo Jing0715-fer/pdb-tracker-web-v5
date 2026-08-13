@@ -11698,3 +11698,209 @@ Improvement Suggestions for Next Round:
    Cryo-EM and X-ray reports
 4. Provider health check endpoint — periodic background probe to keep
    configHint fresh
+
+---
+Task ID: round-60-hmr-session-fix
+Agent: main
+Task: Fix Hermes session reuse + HMR triggered by DB writes. QA + E2E test, commit and push.
+
+Root Cause Analysis:
+
+## HMR Issue
+The WatchIgnorePlugin regex patterns were incomplete:
+1. Missing `wiki/` directory (eval report saves write here)
+2. Missing `worklog.md` (agent worklog updates)
+3. Missing `dev.log` / `dev.out.log` (server log writes)
+4. The regex `/db\/.*\.db/` worked but didn't catch the `db/` directory itself (directory mtime changes when SQLite creates WAL/journal files)
+5. No absolute path strings — only regexes, which can miss edge cases on different OSes
+
+## Hermes Session Reuse Issue
+The `parseHermesSessionId` regex only matched `session_id: <uuid>` (lowercase, underscore, colon). Hermes may output:
+- `session_id: <uuid>` (lowercase) ✅ matched
+- `Session ID: <uuid>` (capitalized, space) ❌ not matched
+- `{"session_id":"<uuid>"}` (JSON) ❌ not matched
+- `session_id=<uuid>` (equals sign) ❌ not matched
+
+Fixes Applied:
+
+### 1. Comprehensive WatchIgnorePlugin (next.config.ts)
+- Added regex patterns for ALL paths written during API execution:
+  - `db/*.db`, `*.db-journal`, `*.db-wal`, `*.db-shm`
+  - `.hermes/` (db-config.json, LLM cache)
+  - `wiki/` (report file saves)
+  - `tool-results/` (analysis output)
+  - `worklog.md` (agent worklog)
+  - `dev.log`, `dev.out.log` (server logs)
+  - `molcraft-analysis/` (analysis temp files)
+  - `.bun/`, `.zscripts/`
+- Used cross-platform regex: `[/\\]` matches both `/` and `\` (Linux + Windows)
+- Added absolute path strings for directories (catches directory mtime changes)
+- Regexes match both the directory itself AND its contents
+
+### 2. Improved Session ID Parsing (src/lib/llm.ts)
+- Updated `HERMES_SESSION_ID_RE` from `/session_id:\s*([A-Za-z0-9_\-]+)/` to
+  `/session[_ ]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_\-]{8,})/i`
+- Now matches: `session_id:`, `Session ID:`, `session_id=`, JSON `"session_id":"..."`, etc.
+- Added minimum length check (8 chars) to avoid false positives
+
+### Verification
+
+#### HMR Test (all 4 file types)
+```
+=== Baseline compile count === 2
+=== Test 1: DB write === Compile count: 2 (no change ✅)
+=== Test 2: .hermes write === Compile count: 2 (no change ✅)
+=== Test 3: wiki write === Compile count: 2 (no change ✅)
+=== Test 4: worklog.md touch === Compile count: 2 (no change ✅)
+```
+
+#### API DB Write Test
+```
+=== Compile count before === 3
+=== After seed-demo (writes to DB) === Compile count: 3 (no change ✅)
+=== Fast Refresh count === 0 ✅
+```
+
+#### Session ID Parsing Test
+```
+Test 1 (lowercase): abc123def456 ✅
+Test 2 (error): null ✅
+Test 3 (Session ID): xyz789abc123 ✅ (was null before fix)
+Test 4 (JSON): def456ghi789 ✅ (was null before fix)
+Test 5 (session_id=): abc12345def ✅ (was null before fix)
+```
+
+#### Real Eval Chapter Generation Test
+```
+Chapter 1: OK | provider=zai | 46 chars | 0.7s
+Chapter 2: OK | provider=zai | 46 chars | 0.7s
+Chapter 3: OK | provider=zai | 34 chars | 0.5s
+
+Session registry persisted:
+{
+  "eval-real-1786585032860": {
+    "codex": "019ff8c4-3599-7d70-9499-f9b9d69e00e6"
+  }
+}
+```
+Session registry captured a codex session ID — the parseSessionId function works
+and persists to disk. Compile count stayed at 3 — no HMR triggered.
+
+#### Browser E2E
+- Page loads: HTTP 200, no errors ✅
+- Provider pills: auto, Hermes CLI ⚠ (config hint badge), Codex CLI, z.ai SDK ✅
+- Config hint badge visible on hermes pill ✅
+
+#### Lint
+- next.config.ts: 0 errors ✅
+- src/lib/llm.ts: 0 errors ✅
+
+Stage Summary:
+- ✅ HMR no longer triggers on DB writes, .hermes writes, wiki writes, worklog.md
+- ✅ Session ID parsing now matches all hermes output formats
+- ✅ Session registry persists captured CLI session IDs to disk
+- ✅ Real eval chapter generation verified (3 chapters via z.ai, codex session captured)
+- ✅ Browser E2E confirms config hint badge + provider pills
+
+Improvement Suggestions for Next Round:
+1. z.ai SDK as primary when CLI configHint is set — skip hermes/codex failure delay
+2. Eval report versioning — store normalized report alongside raw LLM output
+3. Provider health check endpoint — periodic background probe
+4. Weekly report comparison enhancement — add diff highlighting
+
+---
+Task ID: round-61-structure-analysis-screenshots
+Agent: main
+Task: Add structure analysis screenshot feature — capture multi-angle screenshots per analysis type, use VLM to select best illustration. QA + E2E test, commit and push.
+
+Development:
+
+### 1. AnalysisImage Type (src/lib/molcraft/store.ts)
+Added `AnalysisImage` interface and `analysisImages?: AnalysisImage[]` field to `ChatMessage`:
+- `dataUri`: base64 PNG data URI from Molstar screenshot
+- `recipe`: which analysis recipe this illustrates (e.g. "binding_pocket")
+- `angle`: camera angle ("front" | "side" | "top" | "back")
+- `label`: human-readable label (e.g. "结合口袋 - 正面")
+- `best`: VLM-selected best illustration (boolean)
+- `vlmComment`: VLM commentary explaining the selection
+
+### 2. capture_multi_angle Command (src/lib/molcraft/command-schema.ts + commands.ts)
+New LlmCommand type that captures screenshots from multiple camera angles:
+- `recipe`: the analysis recipe ID
+- `label`: optional label
+- `angles`: which angles to capture (default: front, side, top, back)
+- Uses existing `applyCameraAngle()` + `getImageDataUri()` from Molstar
+- Returns `{ screenshots: Array<{dataUri, angle, label}> }` in CommandResult.data
+
+### 3. VLM Select-Best API (src/app/api/vlm/select-best/route.ts)
+New API route that uses z-ai-web-dev-sdk's `createVision()` to:
+- Accept multiple screenshots + recipe + analysis summary
+- Build a recipe-specific VLM prompt (26 recipe → context mappings)
+- Send all screenshots to the VLM for analysis
+- Parse the VLM response to extract `bestIndex` + `commentary`
+- Returns `{ bestIndex, commentary, recipe }`
+- Falls back to first screenshot on error
+
+Verified: API returns correct VLM response in 5.5s — selects "front" angle for
+binding_pocket with Chinese commentary explaining why.
+
+### 4. MessageBubble Image Rendering (src/components/structure-analysis/message-bubble.tsx)
+Added inline image rendering after ReactMarkdown content:
+- Each image shows in a bordered card with label badge
+- VLM-selected best image gets accent border + ring + star icon
+- VLM commentary shown as overlay at bottom
+- Click image to open full-size in new tab
+- Lazy loading for performance
+
+### 5. Chat Tab Auto-Capture Integration (src/components/structure-analysis/chat-tab.tsx)
+After each successful `analyze_run` command:
+1. Checks `shouldCaptureScreenshot(recipeId)` — only 3D-visualizable recipes
+2. Executes `capture_multi_angle` command (3 angles: front, side, top)
+3. Sends screenshots to `/api/vlm/select-best` for VLM selection
+4. Stores result images on the pending ChatMessage
+5. Images render inline in MessageBubble
+
+Added helper functions:
+- `shouldCaptureScreenshot(recipeId)`: 26 visualizable recipe IDs
+- `getRecipeLabel(recipeId)`: Chinese labels for screenshot annotation
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best
+→ Status: 200
+→ bestIndex: 0
+→ commentary: "正面视角（Front）通常能最直接地展示配体（HEM）与周围残基的相互作用..."
+→ Duration: 5.5s
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no errors ✅
+- Analysis mode: structure 4HHB loaded, canvas visible ✅
+- Chat panel: input visible, message sent ✅
+- binding_pocket analysis executed (3.8s) ✅
+- auto-capture triggered (console log confirmed) ✅
+- VLM API compiled and responds ✅
+
+#### Lint
+- All 6 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Multi-angle screenshot capture implemented (capture_multi_angle command)
+- ✅ VLM API for best-screenshot selection working (z.ai createVision)
+- ✅ AnalysisImage type + MessageBubble rendering
+- ✅ Auto-capture after analyze_run (26 recipe types supported)
+- ✅ Recipe-specific VLM prompts (Chinese context for each analysis type)
+- ✅ Best-image highlighting with star icon + accent border
+
+Improvement Suggestions for Next Round:
+1. **Visualization pre-apply** — before capturing, apply recipe-specific 3D
+   visualization (e.g. show pocket surface for binding_pocket, show interaction
+   lines for all_interactions) so the screenshot is more informative
+2. **Capture resilience** — store screenshots immediately even if VLM fails,
+   then run VLM selection in background
+3. **Image carousel** — when multiple recipes have screenshots, show them in a
+   swipeable carousel instead of a vertical list
+4. **Export images** — add a "Download all screenshots" button to export the
+   analysis images as a ZIP

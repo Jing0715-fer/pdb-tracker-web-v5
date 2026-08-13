@@ -19,7 +19,7 @@ import {
   AlertCircle, Copy, Play, RotateCcw, Pencil, ThumbsUp, ThumbsDown,
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
-  GitBranch, ChevronDown, ChevronUp, Download,
+  GitBranch, ChevronDown, ChevronUp, Download, Star,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -449,6 +449,48 @@ export function MessageBubble({
                   >
                     {displayedContent}
                   </ReactMarkdown>
+                )}
+                {/* Round 61: Render analysis screenshots (multi-angle captures) */}
+                {!isUser && message.analysisImages && message.analysisImages.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {message.analysisImages.map((img, idx) => (
+                      <div
+                        key={idx}
+                        className={`relative rounded-lg overflow-hidden border ${
+                          img.best
+                            ? "border-claude-accent/50 ring-1 ring-claude-accent/30"
+                            : "border-claude-border-light/40 dark:border-[#3d3832]/40"
+                        }`}
+                      >
+                        {/* Image label badge */}
+                        <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-[9px] font-medium">
+                          {img.best && <Star className="h-2.5 w-2.5 text-claude-accent" />}
+                          <span>{img.label}</span>
+                        </div>
+                        {/* VLM commentary badge */}
+                        {img.vlmComment && (
+                          <div className="absolute bottom-1.5 left-1.5 right-1.5 z-10 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm text-white/90 text-[9px] leading-tight">
+                            {img.vlmComment}
+                          </div>
+                        )}
+                        <img
+                          src={img.dataUri}
+                          alt={img.label}
+                          className="w-full h-auto max-h-64 object-contain bg-claude-bg dark:bg-[#1a1917]"
+                          loading="lazy"
+                          onClick={(e) => {
+                            // Click to open full-size in new tab
+                            const w = window.open('');
+                            if (w) {
+                              w.document.write(`<img src="${img.dataUri}" style="max-width:100%;max-height:100vh;margin:auto;display:block;" />`);
+                              w.document.title = img.label;
+                            }
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 )}
                 {/* Round 15: Show more/less button for long messages */}
                 {isLongMessage && (

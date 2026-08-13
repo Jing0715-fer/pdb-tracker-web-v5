@@ -312,6 +312,29 @@ export interface ChatMessage {
   originalContent?: string;
   /** Round 24: Bookmark folder name for organization. */
   bookmarkFolder?: string;
+  /** Round 61: Structured analysis screenshots captured by the multi-angle
+   *  capture pipeline. Each entry is a base64 data URI (PNG) with metadata
+   *  about the analysis recipe, camera angle, and whether the VLM selected
+   *  it as the best illustration. Rendered as inline images in MessageBubble. */
+  analysisImages?: AnalysisImage[];
+}
+
+/** Round 61: A screenshot captured during structure analysis, with optional
+ *  VLM selection metadata. */
+export interface AnalysisImage {
+  /** Base64 data URI of the screenshot (e.g. "data:image/png;base64,..."). */
+  dataUri: string;
+  /** The analysis recipe this screenshot illustrates (e.g. "binding_pocket"). */
+  recipe: string;
+  /** Camera angle used for this capture. */
+  angle: "front" | "side" | "top" | "back";
+  /** Human-readable label for the screenshot (e.g. "结合口袋 - 正面"). */
+  label: string;
+  /** When true, the VLM selected this as the best illustration for the analysis.
+   *  Only one image per recipe should have this set. */
+  best?: boolean;
+  /** Optional VLM commentary explaining why this angle was selected. */
+  vlmComment?: string;
 }
 
 /** Round 33: A chat session — a named conversation with its own message history. */
