@@ -697,6 +697,13 @@ export function ChatTab() {
     } catch { return 8; }
   });
 
+  // Round 81: Configurable screenshot resolution
+  const [screenshotSize, setScreenshotSize] = useState(() => {
+    try {
+      return localStorage.getItem("pdb-tracker:screenshot-size") || "1200x800";
+    } catch { return "1200x800"; }
+  });
+
   // Round 10: Sound notifications — play a beep when the agent finishes or errors
   const [soundEnabled, setSoundEnabled] = useState(() => {
     try {
@@ -1608,6 +1615,7 @@ export function ChatTab() {
                       const recipeId = (cmd as { recipe?: string }).recipe;
                       if (recipeId && shouldCaptureScreenshot(recipeId)) {
                         // Round 79: Show capture progress indicator
+                        const captureStartTime = Date.now();
                         updateMessage(pendingId, {
                           agentStep: "executing",
                           content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*`,
@@ -1687,8 +1695,8 @@ export function ChatTab() {
                             recipe: recipeId,
                             label: getRecipeLabel(recipeId),
                             angles: ["front", "side", "top"],
-                            width: 1200,
-                            height: 800,
+                            width: parseInt(screenshotSize.split("x")[0], 10) || 1200,
+                            height: parseInt(screenshotSize.split("x")[1], 10) || 800,
                             vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
                             // Round 74: Pass residue labels for visual annotation
                             labels: residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined,
@@ -1699,9 +1707,10 @@ export function ChatTab() {
                               recipe: string;
                             };
 
-                            // Round 79: Update message to show capture success
+                            // Round 79: Update message to show capture success + duration
+                            const captureDuration = ((Date.now() - captureStartTime) / 1000).toFixed(1);
                             updateMessage(pendingId, {
-                              content: `${reply || ""}\n\n*Captured ${data.screenshots.length} screenshots for ${getRecipeLabel(recipeId)}. VLM analysis running...*`,
+                              content: `${reply || ""}\n\n*Captured ${data.screenshots.length} screenshots for ${getRecipeLabel(recipeId)} in ${captureDuration}s. VLM analysis running...*`,
                             });
 
                             // Round 62: Store images IMMEDIATELY (without VLM
@@ -2511,6 +2520,21 @@ export function ChatTab() {
                 <option value={8}>8 labels</option>
                 <option value={12}>12 labels</option>
                 <option value={20}>20 labels</option>
+              </select>
+              {/* Round 81: Screenshot resolution selector */}
+              <select
+                value={screenshotSize}
+                onChange={(e) => {
+                  setScreenshotSize(e.target.value);
+                  try { localStorage.setItem("pdb-tracker:screenshot-size", e.target.value); } catch { /* ignore */ }
+                }}
+                className="h-7 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                title="Screenshot resolution"
+              >
+                <option value="800x600">800x600</option>
+                <option value="1200x800">1200x800</option>
+                <option value="1600x1000">1600x1000</option>
+                <option value="1920x1080">1920x1080</option>
               </select>
               <Button
                 variant="ghost"

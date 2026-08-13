@@ -13257,3 +13257,49 @@ Improvement Suggestions for Next Round:
 2. **Image quality settings** — let users choose resolution
 3. **Screenshot timing display** — show capture duration in the message
 4. **Label font customization** — let users choose label text size
+
+---
+Task ID: round-81-image-quality-settings-capture-duration
+Agent: main
+Task: Add image quality settings (resolution selector) and capture duration display. QA + commit and push.
+
+Development:
+
+### 1. Image Quality Settings (src/components/structure-analysis/chat-tab.tsx)
+Added a screenshot resolution selector in the chat toolbar:
+- 4 resolution options: 800x600, 1200x800 (default), 1600x1000, 1920x1080
+- Selection persisted to localStorage ("pdb-tracker:screenshot-size")
+- The selected resolution is parsed and passed to `capture_multi_angle`
+  as `width` and `height` parameters
+- Higher resolutions produce sharper screenshots but take slightly longer
+  to capture and use more memory/IndexedDB storage
+- Lower resolutions are faster and use less storage
+
+UI: A compact `<select>` dropdown next to the label count selector,
+styled to match the existing toolbar aesthetic.
+
+### 2. Capture Duration Display (src/components/structure-analysis/chat-tab.tsx)
+Added timing information to the capture progress messages:
+- Records `captureStartTime` before the capture begins
+- After capture success, computes duration: `(Date.now() - captureStartTime) / 1000`
+- Success message now shows: "*Captured 3 screenshots for [recipe] in 1.2s.
+  VLM analysis running...*"
+- This gives users feedback on how long the capture pipeline took,
+  helping them understand the performance characteristics
+
+### Lint
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Image quality settings: 4 resolution options (800x600 to 1920x1080)
+- ✅ Capture duration display: timing in success message
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** — verify full pipeline with all improvements
+2. **Label font customization** — let users choose label text size
+3. **Capture progress bar** — visual progress bar during multi-angle capture
+4. **Auto-resolution** — detect screen size and suggest optimal resolution
