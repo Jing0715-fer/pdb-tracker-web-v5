@@ -11807,3 +11807,100 @@ Improvement Suggestions for Next Round:
 2. Eval report versioning — store normalized report alongside raw LLM output
 3. Provider health check endpoint — periodic background probe
 4. Weekly report comparison enhancement — add diff highlighting
+
+---
+Task ID: round-61-structure-analysis-screenshots
+Agent: main
+Task: Add structure analysis screenshot feature — capture multi-angle screenshots per analysis type, use VLM to select best illustration. QA + E2E test, commit and push.
+
+Development:
+
+### 1. AnalysisImage Type (src/lib/molcraft/store.ts)
+Added `AnalysisImage` interface and `analysisImages?: AnalysisImage[]` field to `ChatMessage`:
+- `dataUri`: base64 PNG data URI from Molstar screenshot
+- `recipe`: which analysis recipe this illustrates (e.g. "binding_pocket")
+- `angle`: camera angle ("front" | "side" | "top" | "back")
+- `label`: human-readable label (e.g. "结合口袋 - 正面")
+- `best`: VLM-selected best illustration (boolean)
+- `vlmComment`: VLM commentary explaining the selection
+
+### 2. capture_multi_angle Command (src/lib/molcraft/command-schema.ts + commands.ts)
+New LlmCommand type that captures screenshots from multiple camera angles:
+- `recipe`: the analysis recipe ID
+- `label`: optional label
+- `angles`: which angles to capture (default: front, side, top, back)
+- Uses existing `applyCameraAngle()` + `getImageDataUri()` from Molstar
+- Returns `{ screenshots: Array<{dataUri, angle, label}> }` in CommandResult.data
+
+### 3. VLM Select-Best API (src/app/api/vlm/select-best/route.ts)
+New API route that uses z-ai-web-dev-sdk's `createVision()` to:
+- Accept multiple screenshots + recipe + analysis summary
+- Build a recipe-specific VLM prompt (26 recipe → context mappings)
+- Send all screenshots to the VLM for analysis
+- Parse the VLM response to extract `bestIndex` + `commentary`
+- Returns `{ bestIndex, commentary, recipe }`
+- Falls back to first screenshot on error
+
+Verified: API returns correct VLM response in 5.5s — selects "front" angle for
+binding_pocket with Chinese commentary explaining why.
+
+### 4. MessageBubble Image Rendering (src/components/structure-analysis/message-bubble.tsx)
+Added inline image rendering after ReactMarkdown content:
+- Each image shows in a bordered card with label badge
+- VLM-selected best image gets accent border + ring + star icon
+- VLM commentary shown as overlay at bottom
+- Click image to open full-size in new tab
+- Lazy loading for performance
+
+### 5. Chat Tab Auto-Capture Integration (src/components/structure-analysis/chat-tab.tsx)
+After each successful `analyze_run` command:
+1. Checks `shouldCaptureScreenshot(recipeId)` — only 3D-visualizable recipes
+2. Executes `capture_multi_angle` command (3 angles: front, side, top)
+3. Sends screenshots to `/api/vlm/select-best` for VLM selection
+4. Stores result images on the pending ChatMessage
+5. Images render inline in MessageBubble
+
+Added helper functions:
+- `shouldCaptureScreenshot(recipeId)`: 26 visualizable recipe IDs
+- `getRecipeLabel(recipeId)`: Chinese labels for screenshot annotation
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best
+→ Status: 200
+→ bestIndex: 0
+→ commentary: "正面视角（Front）通常能最直接地展示配体（HEM）与周围残基的相互作用..."
+→ Duration: 5.5s
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no errors ✅
+- Analysis mode: structure 4HHB loaded, canvas visible ✅
+- Chat panel: input visible, message sent ✅
+- binding_pocket analysis executed (3.8s) ✅
+- auto-capture triggered (console log confirmed) ✅
+- VLM API compiled and responds ✅
+
+#### Lint
+- All 6 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Multi-angle screenshot capture implemented (capture_multi_angle command)
+- ✅ VLM API for best-screenshot selection working (z.ai createVision)
+- ✅ AnalysisImage type + MessageBubble rendering
+- ✅ Auto-capture after analyze_run (26 recipe types supported)
+- ✅ Recipe-specific VLM prompts (Chinese context for each analysis type)
+- ✅ Best-image highlighting with star icon + accent border
+
+Improvement Suggestions for Next Round:
+1. **Visualization pre-apply** — before capturing, apply recipe-specific 3D
+   visualization (e.g. show pocket surface for binding_pocket, show interaction
+   lines for all_interactions) so the screenshot is more informative
+2. **Capture resilience** — store screenshots immediately even if VLM fails,
+   then run VLM selection in background
+3. **Image carousel** — when multiple recipes have screenshots, show them in a
+   swipeable carousel instead of a vertical list
+4. **Export images** — add a "Download all screenshots" button to export the
+   analysis images as a ZIP

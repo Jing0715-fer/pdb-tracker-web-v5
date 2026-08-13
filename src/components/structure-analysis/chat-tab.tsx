@@ -34,7 +34,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
+import { useAppStore, type ChatMessage, type AnalysisImage } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
 import ReactMarkdown from "react-markdown";
@@ -203,6 +203,60 @@ function saveFavoriteTemplates(titles: string[]): void {
   try {
     localStorage.setItem(STORAGE_KEY_FAVORITE_TEMPLATES, JSON.stringify(titles));
   } catch { /* ignore */ }
+}
+
+/**
+ * Round 61: Determine if a recipe should have an automatic screenshot taken.
+ * Only recipes that produce 3D-visualizable results get screenshots — pure
+ * data recipes (sequence alignment, Ramachandran plot, etc.) are skipped.
+ */
+function shouldCaptureScreenshot(recipeId: string): boolean {
+  const visualizable = new Set([
+    "binding_pocket", "druggability", "all_interactions", "hbonds",
+    "salt_bridges", "hydrophobic_contacts", "ligand_interactions",
+    "disulfide_bonds", "metal_coordination", "aromatic_stacking",
+    "water_bridges", "sasa", "electrostatic", "apbs_electrostatic",
+    "virtual_screening", "druglike_screening", "interface_residues",
+    "secondary_structure_simple", "bfactor_stats", "rmsd",
+    "detect_pockets", "oligomer_analysis", "surface_residues",
+    "conformational_changes", "protonation_states", "summary",
+  ]);
+  return visualizable.has(recipeId);
+}
+
+/**
+ * Round 61: Get a human-readable Chinese label for a recipe (for screenshot annotation).
+ */
+function getRecipeLabel(recipeId: string): string {
+  const labels: Record<string, string> = {
+    binding_pocket: "结合口袋",
+    druggability: "可成药性",
+    all_interactions: "全互作",
+    hbonds: "氢键",
+    salt_bridges: "盐桥",
+    hydrophobic_contacts: "疏水接触",
+    ligand_interactions: "配体互作",
+    disulfide_bonds: "二硫键",
+    metal_coordination: "金属配位",
+    aromatic_stacking: "芳香堆积",
+    water_bridges: "水桥",
+    sasa: "溶剂可及面积",
+    electrostatic: "静电势",
+    apbs_electrostatic: "APBS静电势",
+    virtual_screening: "虚拟筛选",
+    druglike_screening: "类药性筛选",
+    interface_residues: "界面残基",
+    secondary_structure_simple: "二级结构",
+    bfactor_stats: "B因子",
+    rmsd: "RMSD",
+    detect_pockets: "口袋检测",
+    oligomer_analysis: "寡聚体",
+    surface_residues: "表面残基",
+    conformational_changes: "构象变化",
+    protonation_states: "质子化状态",
+    summary: "结构摘要",
+  };
+  return labels[recipeId] || recipeId;
 }
 
 
@@ -1522,6 +1576,66 @@ export function ChatTab() {
                       detail: result.detail,
                       data: (result as { analysisResult?: unknown }).analysisResult,
                     });
+
+                    // Round 61: After a successful analyze_run, automatically
+                    // capture multi-angle screenshots and use VLM to select the
+                    // best one. This gives the user a visual illustration of
+                    // the analysis results.
+                    if (cmd.type === "analyze_run" && result.ok) {
+                      const recipeId = (cmd as { recipe?: string }).recipe;
+                      if (recipeId && shouldCaptureScreenshot(recipeId)) {
+                        try {
+                          const captureResult = await executeCommand(viewer, {
+                            type: "capture_multi_angle",
+                            recipe: recipeId,
+                            label: getRecipeLabel(recipeId),
+                            angles: ["front", "side", "top"],
+                            width: 1200,
+                            height: 800,
+                          });
+                          if (captureResult.ok && captureResult.data) {
+                            const data = captureResult.data as {
+                              screenshots: Array<{ dataUri: string; angle: string; label: string }>;
+                              recipe: string;
+                            };
+                            // Send screenshots to VLM for best-angle selection
+                            const vlmResponse = await fetch("/api/vlm/select-best", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                screenshots: data.screenshots,
+                                recipe: recipeId,
+                                analysisSummary: JSON.stringify(
+                                  (result as { analysisResult?: unknown }).analysisResult
+                                ).slice(0, 2000),
+                              }),
+                            });
+                            if (vlmResponse.ok) {
+                              const vlmData = await vlmResponse.json() as {
+                                bestIndex: number;
+                                commentary: string;
+                              };
+                              const images: AnalysisImage[] = data.screenshots.map((s, i) => ({
+                                dataUri: s.dataUri,
+                                recipe: recipeId,
+                                angle: s.angle as "front" | "side" | "top" | "back",
+                                label: s.label,
+                                best: i === vlmData.bestIndex,
+                                vlmComment: i === vlmData.bestIndex ? vlmData.commentary : undefined,
+                              }));
+                              // Store images on the pending message
+                              const existingMsg = useAppStore.getState().messages.find(m => m.id === pendingId);
+                              const existingImages = existingMsg?.analysisImages || [];
+                              updateMessage(pendingId, {
+                                analysisImages: [...existingImages, ...images],
+                              } as Partial<ChatMessage>);
+                            }
+                          }
+                        } catch (captureErr) {
+                          console.warn("[auto-capture] Failed:", captureErr);
+                        }
+                      }
+                    }
                   }
                   // Round 26: After load_pdb, wait 2s for structure to fully load
                   // before executing subsequent commands (analyze_run, focus_ligand, etc.)

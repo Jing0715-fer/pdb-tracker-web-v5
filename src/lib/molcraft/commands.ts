@@ -565,6 +565,63 @@ export async function executeCommand(
         };
       }
 
+      // ---------- Multi-angle capture (Round 61) ----------
+      // Captures screenshots from multiple camera angles for the same analysis
+      // recipe. Returns an array of {dataUri, angle} pairs. The caller
+      // (chat-tab.tsx) sends these to the VLM API to select the best one.
+      case "capture_multi_angle": {
+        const angles = cmd.angles ?? (["front", "side", "top", "back"] as const);
+        const width = cmd.width ?? 1200;
+        const height = cmd.height ?? 800;
+        const results: Array<{
+          dataUri: string;
+          angle: string;
+          label: string;
+        }> = [];
+
+        for (const angle of angles) {
+          try {
+            // Apply camera angle
+            await applyCameraAngle(plugin, angle);
+            // Allow the view to settle after camera move
+            await new Promise((r) => setTimeout(r, 150));
+            // Capture
+            const dataUri =
+              await plugin.helpers?.viewportScreenshot?.getImageDataUri({
+                width,
+                height,
+                transparency: false,
+                axes: true,
+              });
+            if (dataUri) {
+              results.push({
+                dataUri,
+                angle,
+                label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+              });
+            }
+          } catch (err) {
+            console.warn(
+              `[capture_multi_angle] angle "${angle}" failed:`,
+              err
+            );
+          }
+        }
+
+        if (results.length === 0) {
+          return { ok: false, detail: "All captures failed" };
+        }
+        return {
+          ok: true,
+          detail: `Captured ${results.length} angles for ${cmd.recipe}`,
+          data: {
+            recipe: cmd.recipe,
+            label: cmd.label ?? cmd.recipe,
+            screenshots: results,
+          },
+        };
+      }
+
       // ---------- Alignment ----------
       case "align_structures": {
         const result = await alignStructures(

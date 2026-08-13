@@ -80,6 +80,17 @@ export type LlmCommand =
       height?: number;
     }
   | {
+      type: "capture_multi_angle";
+      /** The analysis recipe this screenshot set illustrates. */
+      recipe: string;
+      /** Human-readable label for the screenshot set. */
+      label?: string;
+      /** Which camera angles to capture. Default: all 4. */
+      angles?: Array<"front" | "side" | "top" | "back">;
+      width?: number;
+      height?: number;
+    }
+  | {
       type: "select";
       target: ResidueRef | "ligand" | "all";
       action?: "set" | "add" | "remove";
