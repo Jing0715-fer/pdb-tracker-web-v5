@@ -141,10 +141,11 @@ export function formatAnalysisResults(
       const hp = (rd?.hydrophobic as number) ?? 0;
       const chain1 = (rd?.chain1 as string) || "?";
       const chain2 = (rd?.chain2 as string) || "?";
-      // Round 86: Brief header for quick scanning, full breakdown below
-      const headerBits: string[] = [`**${chain1} ↔ ${chain2}:**`];
-      headerBits.push(`total ${total} (H-bonds ${hb} · salt bridges ${sb} · hydrophobic ${hp})`);
-      sections.push(headerBits.join(" "));
+      // Round 88: Clean section header with separator for readability
+      sections.push(`---`);
+      sections.push(`### All Interactions — ${chain1} ↔ ${chain2}`);
+      sections.push(`**Summary:** ${total} total contacts (H-bonds: ${hb}, Salt bridges: ${sb}, Hydrophobic: ${hp})`);
+      sections.push("");
       if (total === 0) {
         sections.push("*No inter-chain contacts detected within cutoffs.*");
         return; // Skip the rest of the body

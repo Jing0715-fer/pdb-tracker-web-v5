@@ -713,12 +713,15 @@ export async function executeCommand(
             // doesn't see a jarring black viewer post-capture.
             // 0 = pure BLACK in Molstar, so we avoid that value entirely.
             const w = window as unknown as { __viewerBgDark?: boolean };
-            const restoreColor = w.__viewerBgDark ? 0x1a1a2e : 0x1a1a2e;
+            // Round 88: Fix — restore to light cream for light mode, dark navy for dark mode
+            const restoreColor = w.__viewerBgDark === false ? 0xfaf7f4 : 0x1a1a2e;
             canvas3d.setProps((p: unknown) => {
               const props = p as { renderer?: { backgroundColor?: unknown } };
               props.renderer = props.renderer ?? {};
               props.renderer.backgroundColor = restoreColor;
             });
+            // Round 88: Wait for restore to render
+            await nextFrame();
           }
         } catch { /* best-effort */ }
 
