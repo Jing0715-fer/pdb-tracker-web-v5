@@ -12514,3 +12514,87 @@ Improvement Suggestions for Next Round:
 3. **Session export** — add a button to export a session's full conversation as
    Markdown/JSON
 4. **Session merge** — allow merging two sessions into one
+
+---
+Task ID: round-70-fix-hbonds-saltbridges-bindingpocket-formatting
+Agent: main
+Task: Fix analysis result formatting bugs: hbonds/salt_bridges showing ??(?), binding_pocket distances showing ?Å, excessive hbonds count. QA + commit and push.
+
+User Bug Reports:
+1. 氢键分析显示 1439 条过多，且残基显示为 ??(?)
+2. 盐桥也显示 ??(?)
+3. binding_pocket 残基距离显示 ?Å
+
+Root Cause Analysis:
+
+## Bug 1: hbonds ??(?) — field name mismatch
+The hbonds recipe outputs fields: `donor_resname`, `donor_resno`, `donor_chain`,
+`donor_atom`, `acceptor_resname`, `acceptor_resno`, `acceptor_chain`,
+`acceptor_atom`, `distance_A`, `angle_deg`.
+
+But the formatter in chat-helpers.tsx was reading: `resname1`, `resno1`, `chain1`,
+`atom1`, `resname2`, `resno2`, `chain2`, `atom2`, `distance_A`.
+
+Since the recipe doesn't output `resname1` etc., all values fell back to "?",
+producing `??(?)`.
+
+## Bug 2: salt_bridges ??(?) — same issue
+The salt_bridges recipe outputs: `pos_resname`, `pos_resno`, `pos_chain`,
+`pos_atom`, `neg_resname`, `neg_resno`, `neg_chain`, `neg_atom`, `distance_A`.
+
+But the formatter was reading `resname1`, `resno1`, etc.
+
+## Bug 3: binding_pocket ?Å — distance field mismatch
+The binding_pocket recipe outputs `min_dist_A` (line 3140 of cli-registry.ts),
+but the formatter was reading `min_dist`. All distances fell back to "?".
+
+## Bug 4: 1439 hbonds too many
+The hbonds recipe auto-enables intra-chain mode when chain1==chain2, which is
+correct for single-chain structures like 6LU7. 1439 H-bonds is actually a
+valid count for a ~300 residue protein (backbone N-H...O=C bonds). The issue
+was displaying all 1439 instead of summarizing.
+
+Fixes Applied (src/components/structure-analysis/chat-helpers.tsx):
+
+### 1. hbonds formatter — field name fix + large set handling
+- Map `donor_resname`→`resname1`, `donor_resno`→`resno1`, etc.
+- Also show `angle_deg` when available (e.g. "120.5°")
+- For counts >100: show "top 10 by distance" instead of 20
+- For large sets: show "Unique residues involved: N residues across M H-bonds"
+  instead of listing all key residues
+- Show top 10 hotspot pairs (up from 8)
+
+### 2. salt_bridges formatter — field name fix
+- Map `pos_resname`→`resname1`, `pos_resno`→`resno1`, etc.
+- Show (+)/(−) charge indicators: "ARG40(A)(+) ↔ ASP187(A)(−)"
+
+### 3. binding_pocket formatter — distance field fix
+- Read `min_dist_A` first (recipe output), then fall back to `min_dist`
+- Now shows "CYS145(A) 1.79Å" instead of "CYS145(A) ?Å"
+
+### Verification
+
+Unit test with actual recipe output format:
+```
+hbonds: Contains ?(?): PASS, Contains CYS145: PASS, Contains HIS41: PASS, Contains 'top 10': PASS
+salt_bridges: Contains ?(?): PASS, Contains ARG40: PASS
+binding_pocket: Contains '?Å': PASS, Contains '1.79Å': PASS, Contains '4.04Å': PASS
+```
+
+#### Lint
+- chat-helpers.tsx: 0 errors, 0 warnings ✅
+
+Stage Summary:
+- ✅ hbonds: field names fixed (donor_*/acceptor_*), large set summary
+- ✅ salt_bridges: field names fixed (pos_*/neg_*), charge indicators
+- ✅ binding_pocket: distance field fixed (min_dist_A)
+- ✅ All unit tests pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on screenshots before VLM analysis
+2. **Chat screenshot display** — show the captured screenshots inline in the chat
+   alongside the text analysis results
+3. **Recipe output validation** — add a schema check that validates recipe output
+   field names match what the formatter expects
+4. **Smart recipe selection** — for single-chain structures, suggest all_interactions
+   instead of hbonds to avoid overwhelming counts

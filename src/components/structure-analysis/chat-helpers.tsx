@@ -60,25 +60,43 @@ export function formatAnalysisResults(
     if (recipe === "hbonds") {
       const bonds = (rd?.hbonds as unknown[]) || (rd?.bonds as unknown[]) || [];
       const count = (rd?.total_hbonds as number) ?? (rd?.count as number) ?? (Array.isArray(bonds) ? bonds.length : 0);
-      sections.push(`### 🤝 Hydrogen Bonds (${count} found)`);
+      // Round 70: For large counts (>100), show summary instead of listing all
+      const isLargeSet = count > 100;
+      const displayCount = isLargeSet ? 10 : 20;
+      sections.push(`### 🤝 Hydrogen Bonds (${count} found${isLargeSet ? " — showing top 10 by distance" : ""})`);
       if (count > 0 && Array.isArray(bonds)) {
         const residues = new Set<string>();
-        const pairs: string[] = bonds.slice(0, 20).map((c: any) => {
-          const r1 = `${c.resname1||"?"}${c.resno1||"?"}(${c.chain1||"?"})`;
-          const r2 = `${c.resname2||"?"}${c.resno2||"?"}(${c.chain2||"?"})`;
+        const pairs: string[] = bonds.slice(0, displayCount).map((c: any) => {
+          // Round 70: Fix field name mapping — recipe outputs donor_*/acceptor_* fields
+          const r1name = c.donor_resname || c.resname1 || "?";
+          const r1no = c.donor_resno || c.resno1 || "?";
+          const r1chain = c.donor_chain || c.chain1 || "?";
+          const r2name = c.acceptor_resname || c.resname2 || "?";
+          const r2no = c.acceptor_resno || c.resno2 || "?";
+          const r2chain = c.acceptor_chain || c.chain2 || "?";
+          const a1 = c.donor_atom || c.atom1 || "";
+          const a2 = c.acceptor_atom || c.atom2 || "";
+          const r1 = `${r1name}${r1no}(${r1chain})`;
+          const r2 = `${r2name}${r2no}(${r2chain})`;
           residues.add(r1); residues.add(r2);
-          return `- ${r1} ${c.atom1||""} → ${r2} ${c.atom2||""} (${c.distance_A||c.distance||"?"} Å)`;
+          const angleStr = c.angle_deg != null ? `, ${c.angle_deg}°` : "";
+          return `- ${r1} ${a1} → ${r2} ${a2} (${c.distance_A||c.distance||"?"} Å${angleStr})`;
         });
-        sections.push(`**Key residues:** ${[...residues].slice(0, 15).join(", ")}`);
-        sections.push(""); sections.push("**Top interactions:**");
+        // For large sets, show unique residue count instead of all residues
+        if (isLargeSet) {
+          sections.push(`**Unique residues involved:** ${residues.size} residues across ${count} H-bonds`);
+        } else {
+          sections.push(`**Key residues:** ${[...residues].slice(0, 15).join(", ")}`);
+        }
+        sections.push(""); sections.push(`**Top ${displayCount} interactions:**`);
         sections.push(pairs.join("\n"));
-        if (count > 20) sections.push(`\n*...and ${count - 20} more*`);
+        if (count > displayCount) sections.push(`\n*...and ${count - displayCount} more*`);
         // Top residue pairs (frequency) from the recipe
         const topPairs = rd?.top_residue_pairs as unknown[];
         if (Array.isArray(topPairs) && topPairs.length > 0) {
           sections.push("");
-          sections.push("**Hotspot residue pairs:**");
-          sections.push(topPairs.slice(0, 8).map((p: any) => `- ${p.pair} (${p.count} contacts)`).join("\n"));
+          sections.push("**Hotspot residue pairs (by frequency):**");
+          sections.push(topPairs.slice(0, 10).map((p: any) => `- ${p.pair} (${p.count} contacts)`).join("\n"));
         }
       } else { sections.push("*No hydrogen bonds detected.*"); }
     }
@@ -89,10 +107,17 @@ export function formatAnalysisResults(
       if (count > 0 && Array.isArray(bridges)) {
         const residues = new Set<string>();
         const pairs: string[] = bridges.slice(0, 15).map((c: any) => {
-          const r1 = `${c.resname1||"?"}${c.resno1||"?"}(${c.chain1||"?"})`;
-          const r2 = `${c.resname2||"?"}${c.resno2||"?"}(${c.chain2||"?"})`;
+          // Round 70: Fix field name mapping — recipe outputs pos_*/neg_* fields
+          const r1name = c.pos_resname || c.resname1 || "?";
+          const r1no = c.pos_resno || c.resno1 || "?";
+          const r1chain = c.pos_chain || c.chain1 || "?";
+          const r2name = c.neg_resname || c.resname2 || "?";
+          const r2no = c.neg_resno || c.resno2 || "?";
+          const r2chain = c.neg_chain || c.chain2 || "?";
+          const r1 = `${r1name}${r1no}(${r1chain})`;
+          const r2 = `${r2name}${r2no}(${r2chain})`;
           residues.add(r1); residues.add(r2);
-          return `- ${r1} ↔ ${r2} (${c.distance_A||c.distance||"?"} Å)`;
+          return `- ${r1}(+) ↔ ${r2}(−) (${c.distance_A||c.distance||"?"} Å)`;
         });
         sections.push(`**Key residues:** ${[...residues].join(", ")}`);
         sections.push(""); sections.push("**Interactions:**");
@@ -179,7 +204,8 @@ export function formatAnalysisResults(
           const name = r.resname || r.residue_name || r.amino_acid || r.name || "?";
           const num = r.resno || r.residue_number || r.resNum || "?";
           const chain = r.chain || r.chain_id || "A";
-          const dist = r.min_dist || r.distance || r.dist || "?";
+          // Round 70: Fix distance field — recipe outputs min_dist_A, not min_dist
+          const dist = r.min_dist_A ?? r.min_dist ?? r.distance ?? r.dist ?? "?";
           return `${name}${num}(${chain}) ${dist}Å`;
         });
         sections.push(`**Pocket residues:** ${residueList.join(", ")}`);
