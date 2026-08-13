@@ -1250,7 +1250,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           <AnimatePresence mode="popLayout">
             {visibleImages.map((img, idx) => (
               <motion.button
-                key={`${img.recipe}-${img.angle}`}
+                key={`${img.recipe}-${img.angle}-${idx}`}
                 layout
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}

@@ -1818,8 +1818,9 @@ export function ChatTab() {
                                     }));
                                     updateMessage(pendingId, {
                                       analysisImages: [...otherImages, ...updatedRecipeImages],
-                                      // Round 80: Update message to show VLM completion
-                                      content: `${reply || ""}\n\n*VLM analysis complete: best angle = ${updatedRecipeImages[vlmData!.bestIndex]?.angle || '?'}, confidence = ${vlmData!.confidence}.*`,
+                                      // Round 89: Only update analysisImages, don't overwrite content
+                                      // — the final message with full analysis results is set by
+                                      // the main flow after all commands complete.
                                     } as Partial<ChatMessage>);
                                   } catch (updateErr) {
                                     console.warn("[auto-capture] VLM update failed:", updateErr);

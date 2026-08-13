@@ -1385,11 +1385,36 @@ async function applyRecipeVisualization(
       }
     };
 
-    // Round 63: Helper to apply a representation preset (cartoon, surface, etc.)
+    // Round 63/89: Helper to apply a representation preset (cartoon, surface, etc.)
+    // Round 89: Only apply if the current representation is different —
+    // re-applying the same preset can cause a brief structure removal that
+    // results in black screenshots.
     const applyPreset = async (preset: string) => {
       const structs = getStructures(plugin);
       if (structs.length === 0) return;
+      // Check if the preset is already applied — skip if so
+      try {
+        const components = collectComponents(plugin, structs);
+        if (components.length > 0) {
+          const currentTypes = components.map((c: any) =>
+            c?.cell?.transform?.params?.type ||
+            c?.cell?.obj?.data?.type ||
+            c?.cell?.obj?.label?.toLowerCase() || ''
+          );
+          const presetLower = preset.toLowerCase();
+          const alreadyApplied = currentTypes.some((t: string) =>
+            t.includes(presetLower) || (presetLower === 'cartoon' && t.includes('cartoon')) ||
+            (presetLower === 'surface' && t.includes('surface')) ||
+            (presetLower === 'putty' && t.includes('putty')) ||
+            (presetLower === 'ball-and-stick' && t.includes('ball'))
+          );
+          if (alreadyApplied) return; // Skip — already showing this representation
+        }
+      } catch { /* fall through to applyPreset */ }
       await plugin.managers.structure.component.applyPreset(structs, preset);
+      // Round 89: Wait for the new representation to render
+      await nextFrame();
+      await nextFrame();
     };
 
     // Round 63: Helper to apply a color theme
@@ -1451,8 +1476,9 @@ async function applyRecipeVisualization(
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
           }
         }, "show_interactions");
-        // Round 63: Cartoon + chain-id color to distinguish interacting chains
-        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        // Round 89: Don't re-apply preset — it can remove the existing
+        // structure representation and cause black screenshots. Just apply
+        // color theme to the existing components.
         await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;
       }

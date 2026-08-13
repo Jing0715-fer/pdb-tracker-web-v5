@@ -13592,3 +13592,74 @@ Improvement Suggestions for Next Round:
 3. **Report collapsible sections** — make each chain-pair section collapsible
 4. **Auto-scroll to latest section** — scroll chat to show the newest
    analysis result
+
+---
+Task ID: round-89-fix-duplicate-keys-black-screens-short-text
+Agent: main
+Task: Fix duplicate React keys, black screenshots, and short analysis text. QA + commit and push.
+
+User Bug Reports:
+1. Console error: "Encountered two children with the same key, `all_interactions-front`"
+2. 截图都是黑色的 — screenshots are all black
+3. 生成的分析结果文字部分很短 — analysis result text is very short
+
+Root Cause Analysis:
+
+## Bug 1: Duplicate React keys
+The `AnalysisImageCarousel` thumbnail strip used `key={`${img.recipe}-${img.angle}`}`.
+When multiple `all_interactions` runs (A-B, A-C, A-D, etc.) each produce a
+"front" screenshot, they all get key `all_interactions-front` — a duplicate.
+
+**Fix**: Changed key to `${img.recipe}-${img.angle}-${idx}` (added index suffix).
+
+## Bug 2: Black screenshots
+The `applyRecipeVisualization` function called `applyPreset("cartoon")` which
+uses `plugin.managers.structure.component.applyPreset(structs, preset)`. This
+REPLACES the current representation — during the replacement, the structure
+briefly disappears from the canvas. If the screenshot is captured during this
+brief window, it captures a black/empty canvas.
+
+**Fix (two parts)**:
+1. For `all_interactions`/`hbonds`/`salt_bridges`/`hydrophobic_contacts`:
+   Removed `applyPreset("cartoon")` entirely — just apply color theme.
+   The user already set their representation; we shouldn't override it.
+2. For all other recipes: Modified `applyPreset` to check if the current
+   representation already matches the requested preset. If so, skip the
+   `applyPreset` call entirely (avoiding the brief structure removal).
+   Also added `await nextFrame(); await nextFrame()` after applying to
+   ensure the new representation renders before proceeding.
+
+## Bug 3: Short analysis result text
+The VLM background update was overwriting the message `content` with just
+`reply + VLM completion message`, discarding the `formatAnalysisResults`
+output that was appended later by the main flow.
+
+The sequence was:
+1. Main flow sets `finalReply = reply + analysisResults` (line 1886)
+2. Main flow calls `updateMessage(pendingId, { content: finalReply })` (line 1890)
+3. Background VLM completes and calls `updateMessage(pendingId, { content: reply + VLM msg })` (line 1822)
+4. Step 3 OVERWRITES step 2, losing the analysis results!
+
+**Fix**: Removed the `content` update from the VLM completion handler.
+Now it only updates `analysisImages`, leaving the message content (with
+full analysis results) intact.
+
+### Lint
+- commands.ts: 0 errors ✅
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+- message-bubble.tsx: 0 errors ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Fixed duplicate keys: added index suffix to thumbnail keys
+- ✅ Fixed black screenshots: skip applyPreset if already applied, removed for interactions
+- ✅ Fixed short text: VLM update no longer overwrites content
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** — verify 4HHB analysis produces visible screenshots
+2. **Capture validation** — check if screenshot dataUri is not all-black before storing
+3. **Report collapsible sections** — make each chain-pair section collapsible
+4. **Auto-scroll to latest analysis** — scroll chat to show newest results
