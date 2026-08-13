@@ -100,6 +100,8 @@ export type LlmCommand =
         resno?: number;
         compId?: string;
       }>;
+      /** Round 82: Font size for residue labels (default 1.0). */
+      labelFontSize?: number;
     }
   | {
       type: "select";

@@ -597,7 +597,8 @@ export async function executeCommand(
                   // Round 75: Use larger font size for better screenshot readability
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     customText: lbl.text ?? "",
-                    textSize: 1.0,
+                    // Round 75/82: Font size configurable via labelFontSize param
+                    textSize: cmd.labelFontSize ?? 1.0,
                   } as any);
                 }
               }

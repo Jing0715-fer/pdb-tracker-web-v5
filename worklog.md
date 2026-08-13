@@ -13303,3 +13303,51 @@ Improvement Suggestions for Next Round:
 2. **Label font customization** — let users choose label text size
 3. **Capture progress bar** — visual progress bar during multi-angle capture
 4. **Auto-resolution** — detect screen size and suggest optimal resolution
+
+---
+Task ID: round-82-label-font-customization
+Agent: main
+Task: Add label font customization. QA + commit and push.
+
+Development:
+
+### Label Font Customization (command-schema.ts + commands.ts + chat-tab.tsx)
+
+**Command schema**: Added `labelFontSize?: number` to `capture_multi_angle`.
+Default is 1.0 (set in commands.ts).
+
+**commands.ts**: `addLabel` now uses `cmd.labelFontSize ?? 1.0` instead of
+hardcoded `1.0`. This allows the caller to control the text size of residue
+labels drawn on 3D screenshots.
+
+**chat-tab.tsx**:
+- New `labelFontSize` state (default 1.0, persisted to localStorage)
+- Options: Small (0.5), Medium (1.0), Large (1.5), X-Large (2.0)
+- Passed to `capture_multi_angle` command as `labelFontSize`
+- UI: Compact `<select>` dropdown next to the resolution selector
+
+This gives users control over how large residue labels appear in screenshots:
+- Small (0.5): good for high-density labels (many residues visible)
+- Medium (1.0): default, balanced readability
+- Large (1.5): good for presentations
+- X-Large (2.0): good for accessibility / small screens
+
+### Lint
+- command-schema.ts: 0 errors ✅
+- commands.ts: 0 errors ✅
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Label font customization: 4 size options (Small/Medium/Large/X-Large)
+- ✅ Persisted to localStorage
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** — verify full pipeline with all settings
+2. **Capture progress bar** — visual progress bar during multi-angle capture
+3. **Auto-resolution** — detect screen size and suggest optimal resolution
+4. **Settings panel** — consolidate all settings (labels, resolution, font)
+   into a dedicated settings dropdown

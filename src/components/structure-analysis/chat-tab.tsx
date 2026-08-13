@@ -704,6 +704,14 @@ export function ChatTab() {
     } catch { return "1200x800"; }
   });
 
+  // Round 82: Configurable label font size for screenshot annotation
+  const [labelFontSize, setLabelFontSize] = useState(() => {
+    try {
+      const v = parseFloat(localStorage.getItem("pdb-tracker:label-font-size") || "1.0");
+      return isNaN(v) ? 1.0 : Math.max(0.3, Math.min(3.0, v));
+    } catch { return 1.0; }
+  });
+
   // Round 10: Sound notifications — play a beep when the agent finishes or errors
   const [soundEnabled, setSoundEnabled] = useState(() => {
     try {
@@ -1700,6 +1708,7 @@ export function ChatTab() {
                             vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
                             // Round 74: Pass residue labels for visual annotation
                             labels: residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined,
+                            labelFontSize,
                           });
                           if (captureResult.ok && captureResult.data) {
                             const data = captureResult.data as {
@@ -2535,6 +2544,22 @@ export function ChatTab() {
                 <option value="1200x800">1200x800</option>
                 <option value="1600x1000">1600x1000</option>
                 <option value="1920x1080">1920x1080</option>
+              </select>
+              {/* Round 82: Label font size selector */}
+              <select
+                value={labelFontSize}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setLabelFontSize(v);
+                  try { localStorage.setItem("pdb-tracker:label-font-size", String(v)); } catch { /* ignore */ }
+                }}
+                className="h-7 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                title="Label font size on screenshots"
+              >
+                <option value={0.5}>Small</option>
+                <option value={1.0}>Medium</option>
+                <option value={1.5}>Large</option>
+                <option value={2.0}>X-Large</option>
               </select>
               <Button
                 variant="ghost"
