@@ -21,7 +21,7 @@ import {
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
   GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
-  Maximize2, ZoomIn, ZoomOut, Filter, ArrowUpDown, FileJson, FileSpreadsheet,
+  Maximize2, ZoomIn, ZoomOut, Filter, ArrowUpDown, FileJson, FileSpreadsheet, FileText,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -1230,34 +1230,41 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
         </AnimatePresence>
       </div>
 
-      {/* Thumbnail strip (only if >1 image) */}
+      {/* Thumbnail strip (only if >1 image) — Round 68: layout animation on sort */}
       {visibleImages.length > 1 && (
         <div className="flex gap-1 p-1.5 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-x-auto thin-scroll">
-          {visibleImages.map((img, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => setActiveIdx(idx)}
-              className={`relative shrink-0 h-12 w-16 rounded overflow-hidden border-2 transition-all ${
-                idx === currentIdx
-                  ? "border-claude-accent opacity-100"
-                  : "border-transparent opacity-60 hover:opacity-100"
-              }`}
-              title={img.label}
-            >
-              <img
-                src={img.dataUri}
-                alt={img.label}
-                className="w-full h-full object-cover"
-                loading="lazy"
-              />
-              {img.best && (
-                <div className="absolute top-0 right-0 bg-claude-accent rounded-bl px-0.5">
-                  <Star className="h-2 w-2 text-white" />
-                </div>
-              )}
-            </button>
-          ))}
+          <AnimatePresence mode="popLayout">
+            {visibleImages.map((img, idx) => (
+              <motion.button
+                key={`${img.recipe}-${img.angle}`}
+                layout
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                type="button"
+                onClick={() => setActiveIdx(idx)}
+                className={`relative shrink-0 h-12 w-16 rounded overflow-hidden border-2 transition-colors ${
+                  idx === currentIdx
+                    ? "border-claude-accent opacity-100"
+                    : "border-transparent opacity-60 hover:opacity-100"
+                }`}
+                title={img.label}
+              >
+                <img
+                  src={img.dataUri}
+                  alt={img.label}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+                {img.best && (
+                  <div className="absolute top-0 right-0 bg-claude-accent rounded-bl px-0.5">
+                    <Star className="h-2 w-2 text-white" />
+                  </div>
+                )}
+              </motion.button>
+            ))}
+          </AnimatePresence>
         </div>
       )}
 
@@ -1401,6 +1408,85 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
                     >
                       <FileSpreadsheet className="h-3 w-3 text-claude-accent" />
                       <span>CSV</span>
+                    </button>
+                    {/* Round 68: Markdown report export */}
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-[9px] text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50"
+                      onClick={() => {
+                        // Export as Markdown report with embedded images
+                        const now = new Date().toISOString();
+                        const recipe = images[0]?.recipe || 'report';
+                        const bestImg = images.find(img => img.best);
+                        const scoredImages = images.filter(img => img.score != null);
+                        const avgScore = scoredImages.length > 0
+                          ? (scoredImages.reduce((sum, img) => sum + (img.score || 0), 0) / scoredImages.length).toFixed(1)
+                          : 'N/A';
+
+                        let md = `# VLM 分析报告 — ${recipe}\n\n`;
+                        md += `**导出时间**: ${now}\n`;
+                        md += `**截图总数**: ${images.length}\n`;
+                        md += `**平均评分**: ${avgScore}/10\n`;
+                        if (bestImg?.confidence) {
+                          md += `**置信度**: ${bestImg.confidence}\n`;
+                        }
+                        md += `\n---\n\n`;
+
+                        // Summary table
+                        md += `## 评分汇总\n\n`;
+                        md += `| # | 角度 | 标签 | 评分 | 置信度 | 最佳 | VLM 评语 |\n`;
+                        md += `|---|------|------|------|--------|------|----------|\n`;
+                        images.forEach((img, i) => {
+                          md += `| ${i + 1} | ${img.angle} | ${img.label} | ${img.score ?? '-'} | ${img.confidence ?? '-'} | ${img.best ? '⭐' : ''} | ${(img.vlmComment || '-').replace(/\|/g, '\\|').substring(0, 60)} |\n`;
+                        });
+                        md += `\n---\n\n`;
+
+                        // Best image section
+                        if (bestImg) {
+                          md += `## 最佳截图\n\n`;
+                          md += `**角度**: ${bestImg.angle}\n`;
+                          md += `**评分**: ${bestImg.score ?? '-'}/10\n`;
+                          if (bestImg.vlmComment) {
+                            md += `**VLM 评语**: ${bestImg.vlmComment}\n`;
+                          }
+                          md += `\n![最佳截图 - ${bestImg.label}](${bestImg.dataUri})\n\n`;
+                        }
+
+                        // All images
+                        md += `## 所有截图\n\n`;
+                        images.forEach((img, i) => {
+                          md += `### ${i + 1}. ${img.label}\n\n`;
+                          if (img.score != null) {
+                            md += `- **评分**: ${img.score}/10\n`;
+                          }
+                          if (img.confidence) {
+                            md += `- **置信度**: ${img.confidence}\n`;
+                          }
+                          if (img.best) {
+                            md += `- **最佳**: ⭐\n`;
+                          }
+                          if (img.vlmComment) {
+                            md += `- **VLM 评语**: ${img.vlmComment}\n`;
+                          }
+                          md += `\n![${img.label}](${img.dataUri})\n\n`;
+                        });
+
+                        md += `---\n\n*本报告由 PDB Structure Tracker VLM 分析模块自动生成*\n`;
+
+                        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `vlm-report-${recipe}-${Date.now()}.md`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        setExportMenuOpen(false);
+                      }}
+                    >
+                      <FileText className="h-3 w-3 text-claude-accent" />
+                      <span>Markdown</span>
                     </button>
                   </motion.div>
                 )}

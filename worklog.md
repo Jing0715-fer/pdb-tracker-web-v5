@@ -12379,3 +12379,71 @@ Improvement Suggestions for Next Round:
    human-readable Markdown report with embedded images
 4. **Score history** — track score trends across multiple analysis runs of
    the same recipe
+
+---
+Task ID: round-68-markdown-export-thumbnail-animation
+Agent: main
+Task: Continue development based on Round 67 improvement suggestions. Add Markdown report export, thumbnail sort animation. QA + commit and push.
+
+Development:
+
+### 1. Markdown Report Export (src/components/structure-analysis/message-bubble.tsx)
+Added a third export option in the dropdown menu — Markdown report with
+embedded images:
+
+**Report structure**:
+- Header: recipe name, export timestamp, total image count, average score, confidence
+- Summary table: all images with angle, label, score, confidence, best flag, VLM commentary
+- Best screenshot section: highlighted with details + embedded image (base64 data URI)
+- All screenshots section: each image with metadata + embedded image
+
+**Features**:
+- Uses base64 data URIs for embedded images (works offline, no external dependencies)
+- Proper Markdown table escaping (pipes escaped with backslash)
+- VLM commentary truncated to 60 chars in table for readability
+- FileText icon from lucide-react
+- Filename: `vlm-report-{recipe}-{timestamp}.md`
+
+### 2. Thumbnail Sort Animation (src/components/structure-analysis/message-bubble.tsx)
+Added smooth layout animation to the thumbnail strip when sorting changes:
+- Wrapped thumbnails in `<AnimatePresence mode="popLayout">`
+- Each thumbnail is now a `<motion.button>` with:
+  - `layout` prop: animates position when reordering
+  - `initial`: opacity 0, scale 0.8
+  - `animate`: opacity 1, scale 1
+  - `exit`: opacity 0, scale 0.8
+  - `transition`: 200ms easeOut
+- Key changed from `idx` to `${img.recipe}-${img.angle}` so framer-motion
+  can track individual thumbnails across sort operations
+- When sortByScore toggles, thumbnails smoothly slide to their new positions
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, binding_pocket)
+→ bestIndex: 0
+→ scores: [1, 1]
+→ confidence: low
+```
+
+#### Browser E2E
+- Page loads: HTTP 200 ✅
+- No new errors introduced (pre-existing "Failed to fetch entries" is unrelated DB issue) ✅
+- Server compiles successfully ✅
+
+#### Lint
+- message-bubble.tsx: 0 errors, 0 warnings ✅
+
+Stage Summary:
+- ✅ Markdown report export: 3rd dropdown option with embedded images + summary table
+- ✅ Thumbnail sort animation: smooth layout transitions using framer-motion
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Score history tracking** — persist scores across sessions to show trends
+3. **Keyboard shortcut help** — add a "?" button that shows all keyboard shortcuts
+4. **Image comparison overlay** — overlay two images with a slider for pixel-level
+   comparison instead of side-by-side
