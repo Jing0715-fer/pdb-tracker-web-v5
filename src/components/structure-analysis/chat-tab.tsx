@@ -2436,6 +2436,8 @@ export function ChatTab() {
                     saveCurrentSession();
                   }
                   createChatSession();
+                  // Round 69: Auto-open session panel so user can see history
+                  setSessionOpen(true);
                   toast("New chat session created", "success");
                 }}
                 title="New chat session"
@@ -2478,6 +2480,8 @@ export function ChatTab() {
               onClick={() => {
                 if (activeSessionId && messages.length > 0) saveCurrentSession();
                 createChatSession();
+                // Round 69: Keep panel open
+                setSessionOpen(true);
                 toast("New chat session created", "success");
               }}
             >
@@ -2531,7 +2535,7 @@ export function ChatTab() {
                   }`}
                   onClick={() => {
                     switchChatSession(s.id);
-                    setSessionOpen(false);
+                    // Round 69: Keep panel open so user can switch back easily
                     toast(`Switched to "${s.title}"`, "info");
                   }}
                 >
@@ -2544,6 +2548,17 @@ export function ChatTab() {
                     <div className="text-[7px] text-claude-text-muted/60">
                       {s.messages.length} msgs · {new Date(s.updatedAt).toLocaleDateString()} {new Date(s.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </div>
+                    {/* Round 69: Last message preview so user can identify the conversation */}
+                    {s.messages.length > 0 && (() => {
+                      const lastMsg = s.messages[s.messages.length - 1];
+                      const preview = lastMsg.content?.replace(/[#*`>\-]/g, '').trim().substring(0, 50) || '';
+                      if (!preview) return null;
+                      return (
+                        <div className="text-[7px] text-claude-text-muted/40 truncate mt-0.5 italic">
+                          {lastMsg.role === 'user' ? '👤' : '🤖'} {preview}{preview.length >= 50 ? '…' : ''}
+                        </div>
+                      );
+                    })()}
                     {/* Round 47: Session tags */}
                     {s.tags && s.tags.length > 0 && (
                       <div className="flex flex-wrap gap-0.5 mt-0.5">

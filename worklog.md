@@ -12447,3 +12447,70 @@ Improvement Suggestions for Next Round:
 3. **Keyboard shortcut help** — add a "?" button that shows all keyboard shortcuts
 4. **Image comparison overlay** — overlay two images with a slider for pixel-level
    comparison instead of side-by-side
+
+---
+Task ID: round-69-session-history-review
+Agent: main
+Task: Fix bug where creating a new chat session makes previous sessions inaccessible. Add history review to session panel. QA + commit and push.
+
+User Bug Report:
+"chat部分点击加号新建session后，之前的session对话好像没有办法重新查看了，把history部分中加上历史session会话回顾"
+
+Root Cause Analysis:
+
+## Bug: New session hides previous sessions
+When the user clicks "+" to create a new chat session:
+1. `createChatSession()` saves the current messages to the old session and clears the chat
+2. BUT the session panel (`sessionOpen`) defaults to `false` — it's collapsed
+3. So after creating a new session, the user sees an empty chat with no visible way
+   to switch back to the previous session
+4. Even if the panel was open, clicking a session item called `setSessionOpen(false)`
+   which closed the panel — making it hard to browse multiple sessions
+
+## Fix Applied:
+
+### 1. Auto-open session panel on new session (chat-tab.tsx)
+Both the toolbar "+" button and the panel "New" button now call `setSessionOpen(true)`
+after `createChatSession()`. This ensures the user immediately sees the session list
+with their previous session visible at the top.
+
+### 2. Keep panel open when switching sessions (chat-tab.tsx)
+Removed `setSessionOpen(false)` from the session item click handler. The panel
+now stays open after switching, so the user can quickly browse between sessions
+without having to re-open the panel each time.
+
+### 3. Last message preview in session list (chat-tab.tsx)
+Each session item now shows a preview of the last message (first 50 chars, with
+👤/🤖 emoji to indicate role). This helps the user identify which session contains
+which conversation, especially when session titles are auto-generated.
+
+Preview formatting:
+- Strips markdown formatting characters (#, *, `, >, -)
+- Shows role emoji (👤 for user, 🤖 for assistant)
+- Truncates to 50 chars with "…" suffix
+- Italic, muted style to distinguish from the title
+
+### Verification
+
+#### Lint
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+#### Code Review
+- createChatSession in store.ts already saves current messages before clearing ✅
+- switchChatSession in store.ts already loads target session messages ✅
+- The bug was purely UI — the panel was collapsed, not a data loss issue ✅
+
+Stage Summary:
+- ✅ Auto-open session panel when creating new session
+- ✅ Keep panel open when switching sessions
+- ✅ Last message preview in session list for easy identification
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Session panel default open** — consider defaulting sessionOpen to true when
+   there are saved sessions, so users see their history immediately
+2. **Session count badge** — show a badge on the MessageSquare button indicating
+   the number of saved sessions
+3. **Session export** — add a button to export a session's full conversation as
+   Markdown/JSON
+4. **Session merge** — allow merging two sessions into one
