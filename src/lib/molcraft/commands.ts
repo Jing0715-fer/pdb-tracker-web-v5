@@ -1281,6 +1281,27 @@ async function applyRecipeVisualization(
       }
     };
 
+    // Round 63: Helper to apply a representation preset (cartoon, surface, etc.)
+    const applyPreset = async (preset: string) => {
+      const structs = getStructures(plugin);
+      if (structs.length === 0) return;
+      await plugin.managers.structure.component.applyPreset(structs, preset);
+    };
+
+    // Round 63: Helper to apply a color theme
+    const applyColorTheme = async (theme: string) => {
+      const structs = getStructures(plugin);
+      const components = collectComponents(plugin, structs);
+      if (components.length === 0) return;
+      const normalized = normalizeColorTheme(theme);
+      if (normalized) {
+        plugin.managers.structure.component.updateRepresentationsTheme(
+          components,
+          { color: normalized }
+        );
+      }
+    };
+
     switch (recipe) {
       case "binding_pocket":
       case "ligand_interactions": {
@@ -1308,6 +1329,9 @@ async function applyRecipeVisualization(
             }
           }, "focus_all_ligands");
         }
+        // Round 63: Use cartoon + residue-name color for pocket context
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;
       }
 
@@ -1317,19 +1341,15 @@ async function applyRecipeVisualization(
       case "hydrophobic_contacts": {
         // Show interactions (dashed lines for H-bonds, salt bridges, etc.)
         await safe(async () => {
-          // Try to show interactions around the ligand or selection
-          const target = params?.target ?? "ligand";
-          const radius = params?.radius ?? 5;
-          // Use the show_interactions command logic by calling executeCommand
-          // recursively — but that's complex. Instead, just focus on the
-          // interface region if we have chain info.
           const chain1 = params?.chain1 as string | undefined;
-          const chain2 = params?.chain2 as string | undefined;
           if (chain1) {
             const loci = await lociFromResidue(viewer, { chain: chain1 });
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
           }
         }, "show_interactions");
+        // Round 63: Cartoon + chain-id color to distinguish interacting chains
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;
       }
 
@@ -1342,6 +1362,9 @@ async function applyRecipeVisualization(
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 18 });
           }, "focus_druggable_pocket");
         }
+        // Round 63: Surface representation for pocket visualization
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("hydrophobicity"); }, "color_hydrophobicity");
         break;
       }
 
@@ -1355,6 +1378,9 @@ async function applyRecipeVisualization(
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 16 });
           }, "focus_screening_pocket");
         }
+        // Round 63: Cartoon + element-symbol for ligand detail
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("element-symbol"); }, "color_element");
         break;
       }
 
@@ -1380,32 +1406,59 @@ async function applyRecipeVisualization(
             }
           }
         }, "focus_chain_for_special_bonds");
+        // Round 63: Stick representation for bond detail
+        await safe(async () => { await applyPreset("ball-and-stick"); }, "preset_stick");
+        await safe(async () => { await applyColorTheme("element-symbol"); }, "color_element");
         break;
       }
 
       case "sasa":
-      case "surface_residues":
-      case "electrostatic":
-      case "apbs_electrostatic": {
-        // These benefit from a full-structure view — reset camera
+      case "surface_residues": {
+        // Round 63: Surface representation for solvent accessibility
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("hydrophobicity"); }, "color_hydrophobicity");
         await safe(async () => {
           plugin.managers.camera.reset();
         }, "reset_for_surface");
         break;
       }
 
-      case "bfactor_stats":
-      case "secondary_structure_simple": {
-        // These benefit from a cartoon view — reset camera for full structure
+      case "electrostatic":
+      case "apbs_electrostatic": {
+        // Round 63: Surface + charge color for electrostatic
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("partial-charge"); }, "color_charge");
         await safe(async () => {
           plugin.managers.camera.reset();
-        }, "reset_for_global_stats");
+        }, "reset_for_electrostatic");
+        break;
+      }
+
+      case "bfactor_stats": {
+        // Round 63: Putty representation for B-factor (Molstar uses "putty" preset)
+        await safe(async () => { await applyPreset("putty"); }, "preset_putty");
+        await safe(async () => { await applyColorTheme("bfactor"); }, "color_bfactor");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_bfactor");
+        break;
+      }
+
+      case "secondary_structure_simple": {
+        // Round 63: Cartoon + secondary-structure color
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("secondary-structure"); }, "color_ss");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_ss");
         break;
       }
 
       case "interface_residues":
       case "oligomer_analysis": {
-        // Focus on the full assembly (interface between chains)
+        // Round 63: Cartoon + chain-id for assembly/interface
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         await safe(async () => {
           plugin.managers.camera.reset();
         }, "reset_for_assembly");
@@ -1415,7 +1468,9 @@ async function applyRecipeVisualization(
       case "rmsd":
       case "conformational_changes":
       case "per_residue_rmsd_two": {
-        // Focus on the full structure for RMSD comparison
+        // Round 63: Putty for RMSD deviation visualization
+        await safe(async () => { await applyPreset("putty"); }, "preset_putty");
+        await safe(async () => { await applyColorTheme("uncertainty"); }, "color_rmsd");
         await safe(async () => {
           plugin.managers.camera.reset();
         }, "reset_for_rmsd");
@@ -1423,7 +1478,9 @@ async function applyRecipeVisualization(
       }
 
       case "detect_pockets": {
-        // Full structure view for pocket detection
+        // Round 63: Surface for pocket detection
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         await safe(async () => {
           plugin.managers.camera.reset();
         }, "reset_for_pocket_detection");
@@ -1431,7 +1488,9 @@ async function applyRecipeVisualization(
       }
 
       case "summary": {
-        // Full structure overview
+        // Round 63: Cartoon + spectrum for overview
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("sequence-id"); }, "color_spectrum");
         await safe(async () => {
           plugin.managers.camera.reset();
         }, "reset_for_summary");

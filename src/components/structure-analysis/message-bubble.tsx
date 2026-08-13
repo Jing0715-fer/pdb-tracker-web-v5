@@ -13,7 +13,7 @@
  * display-related props.
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import {
   User, Bot, Check, X, Clock, Loader2, Terminal, Brain, Cog, Timer,
   AlertCircle, Copy, Play, RotateCcw, Pencil, ThumbsUp, ThumbsDown,
@@ -1053,6 +1053,38 @@ export function MessageBubble({
  */
 function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/store").AnalysisImage[] }) {
   const [activeIdx, setActiveIdx] = useState(0);
+  const [downloaded, setDownloaded] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Round 63: Keyboard navigation — left/right arrows to navigate,
+  // but only when the carousel container is focused or hovered.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setActiveIdx(i => Math.max(0, i - 1));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setActiveIdx(i => Math.min(images.length - 1, i + 1));
+    }
+  }, [images.length]);
+
+  // Round 63: Download the current screenshot as a PNG file.
+  const handleDownload = useCallback(() => {
+    // We read currentImg from the closure — it's computed below, but
+    // useCallback needs to be called unconditionally (before any early return).
+    const bestIdx = images.findIndex(img => img.best);
+    const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, images.length - 1);
+    const img = images[currentIdx];
+    if (!img) return;
+    const a = document.createElement("a");
+    a.href = img.dataUri;
+    a.download = `${img.recipe}-${img.angle}-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setDownloaded(true);
+    setTimeout(() => setDownloaded(false), 1500);
+  }, [images, activeIdx]);
 
   // Round 62: Auto-select the best image when VLM selection completes.
   // Instead of using useEffect + setState (which triggers lint warning),
@@ -1068,7 +1100,12 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
   const goToNext = () => setActiveIdx(i => Math.min(images.length - 1, i + 1));
 
   return (
-    <div className="mt-3 rounded-lg border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden bg-claude-bg dark:bg-[#1a1917]">
+    <div
+      ref={containerRef}
+      className="mt-3 rounded-lg border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden bg-claude-bg dark:bg-[#1a1917] focus:outline-none"
+      tabIndex={0}
+      onKeyDown={images.length > 1 ? handleKeyDown : undefined}
+    >
       {/* Main image area */}
       <div className="relative group">
         {/* Label badge (top-left) */}
@@ -1077,6 +1114,16 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           <span>{currentImg.label}</span>
           <span className="text-white/50 ml-1">{currentIdx + 1}/{images.length}</span>
         </div>
+
+        {/* Download button (top-right) — Round 63 */}
+        <button
+          type="button"
+          onClick={handleDownload}
+          className="absolute top-2 right-2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors"
+          title={downloaded ? "已下载" : "下载截图"}
+        >
+          {downloaded ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Download className="h-3.5 w-3.5" />}
+        </button>
 
         {/* VLM commentary overlay (bottom) */}
         {currentImg.vlmComment && (
@@ -1094,7 +1141,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               onClick={goToPrev}
               disabled={currentIdx === 0}
               className="absolute left-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Previous"
+              title="Previous (←)"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -1103,7 +1150,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               onClick={goToNext}
               disabled={currentIdx === images.length - 1}
               className="absolute right-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Next"
+              title="Next (→)"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -1155,6 +1202,13 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               )}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Keyboard hint (only if >1 image) — Round 63 */}
+      {images.length > 1 && (
+        <div className="px-2 py-1 text-[8px] text-claude-text-muted/50 text-center border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
+          ← → 键切换 · 点击图片全屏查看 · 点击下载按钮保存
         </div>
       )}
     </div>

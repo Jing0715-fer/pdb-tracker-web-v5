@@ -11996,3 +11996,93 @@ Improvement Suggestions for Next Round:
 3. **Recipe-specific Molstar representations** — not just camera focus, but
    also set representation (e.g. surface for SASA, putty for B-factor)
 4. **VLM retry** — if VLM selection fails, retry once after 5s
+
+---
+Task ID: round-63-keyboard-nav-download-representation-vlm-retry
+Agent: main
+Task: Continue development based on Round 62 improvement suggestions. Add keyboard navigation, download button, recipe-specific Molstar representations, VLM retry. QA + commit and push.
+
+Development:
+
+### 1. Keyboard Navigation (src/components/structure-analysis/message-bubble.tsx)
+Added left/right arrow key navigation to the AnalysisImageCarousel:
+- Container has `tabIndex={0}` so it can receive focus
+- `onKeyDown` handler: ArrowLeft → prev, ArrowRight → next
+- Only active when >1 image
+- Navigation arrow buttons now show keyboard hint in title: "Previous (←)" / "Next (→)"
+- Added keyboard hint text at the bottom: "← → 键切换 · 点击图片全屏查看 · 点击下载按钮保存"
+- Fixed React Hooks rules-of-hooks error: moved `useCallback` hooks before the early return
+
+### 2. Download Button (src/components/structure-analysis/message-bubble.tsx)
+Added a download button (top-right corner of the main image):
+- Downloads the current screenshot as `{recipe}-{angle}-{timestamp}.png`
+- Uses `<a download>` element for reliable cross-browser download
+- Shows checkmark icon for 1.5s after download to confirm
+- Button is always visible (even for single images)
+- `handleDownload` callback computes currentIdx from images+activeIdx (not from closure) to avoid stale state
+
+### 3. Recipe-Specific Molstar Representations (src/lib/molcraft/commands.ts)
+Enhanced `applyRecipeVisualization()` to not only focus the camera but also
+apply the appropriate representation preset + color theme:
+
+| Recipe | Representation | Color Theme |
+|--------|---------------|-------------|
+| binding_pocket, ligand_interactions | cartoon | chain-id |
+| all_interactions, hbonds, salt_bridges, hydrophobic_contacts | cartoon | chain-id |
+| druggability | surface | hydrophobicity |
+| virtual_screening, druglike_screening | cartoon | element-symbol |
+| disulfide_bonds, metal_coordination, aromatic_stacking, water_bridges | ball-and-stick | element-symbol |
+| sasa, surface_residues | surface | hydrophobicity |
+| electrostatic, apbs_electrostatic | surface | partial-charge |
+| bfactor_stats | putty | bfactor |
+| secondary_structure_simple | cartoon | secondary-structure |
+| interface_residues, oligomer_analysis | cartoon | chain-id |
+| rmsd, conformational_changes, per_residue_rmsd_two | putty | uncertainty |
+| detect_pockets | surface | chain-id |
+| summary | cartoon | sequence-id |
+
+Added `applyPreset()` and `applyColorTheme()` helper functions that use the
+existing `plugin.managers.structure.component.applyPreset()` and
+`updateRepresentationsTheme()` APIs. All steps are best-effort (wrapped in `safe()`).
+
+### 4. VLM Retry (src/components/structure-analysis/chat-tab.tsx)
+Added retry logic to the background VLM selection:
+- Extracted `fetchVlm()` helper function that returns the VLM result or null
+- First attempt: call fetchVlm() immediately
+- If first attempt fails: wait 5s, then retry once
+- If retry also fails: log warning, images remain visible without best highlight
+- All errors are caught and logged — the chat flow is never blocked
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, druggability)
+→ bestIndex: 0
+→ commentary: "两张截图均为空白图像，无法显示任何蛋白质结构特征..."
+(VLM correctly identifies test images as blank — proves it's actually analyzing)
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 3 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Keyboard navigation (← →) for carousel
+- ✅ Download button with confirmation feedback
+- ✅ Recipe-specific Molstar representations (13 preset+color combinations)
+- ✅ VLM retry after 5s on first failure
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Full-screen lightbox** — click image to open in a modal lightbox with
+   zoom/pan instead of a new tab
+2. **Batch download** — "Download all" button to save all screenshots as ZIP
+3. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues
+4. **VLM quality scoring** — have the VLM also score each screenshot's quality
+   (1-10) in addition to selecting the best
