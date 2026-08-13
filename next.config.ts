@@ -110,23 +110,58 @@ const nextConfig: NextConfig = {
       // immutablePaths: webpack caches these and never re-reads them
       config.snapshot.immutablePaths = (config.snapshot.immutablePaths || []).concat(ignoredPaths);
 
-      // Round 54: Also directly configure the watchOptions plugin to ignore
-      // db/*.db* files at the webpack level. This is the most reliable way
-      // to prevent HMR from triggering when SQLite writes to the database.
+      // Round 60: Comprehensive WatchIgnorePlugin configuration.
+      // The regex patterns match against the FULL absolute file path, so we
+      // use patterns that match both the directory and its contents.
+      //
+      // Key insight: managedPaths only affects webpack's module resolution
+      // cache. The ACTUAL file watcher that triggers HMR rebuilds is
+      // WatchIgnorePlugin. We must include ALL paths that get written during
+      // API route execution:
+      //   - db/*.db, *.db-journal, *.db-wal, *.db-shm (SQLite writes)
+      //   - .hermes/ (db-config.json, LLM cache)
+      //   - wiki/ (report file saves)
+      //   - tool-results/ (analysis output)
+      //   - worklog.md (agent worklog)
+      //   - dev.log, dev.out.log (server logs)
+      //   - molcraft-analysis/ (analysis temp files — may be in project on some setups)
+      //   - node_modules/.prisma (Prisma client regeneration)
+      //
+      // We also add the absolute path strings directly — WatchIgnorePlugin
+      // accepts both regex and string paths. Strings are matched exactly
+      // (file or directory), regexes are tested against the full path.
       const webpack = localRequire('webpack');
       if (webpack) {
         config.plugins = config.plugins || [];
+        // Build ignore list: regexes for flexible matching + absolute paths for exact matching
+        const ignorePatterns: (RegExp | string)[] = [
+          // Regex patterns (match against full absolute path)
+          /node_modules\/\.prisma/,
+          /[/\\]db[/\\].*\.db$/,
+          /[/\\]db[/\\].*\.db-journal$/,
+          /[/\\]db[/\\].*\.db-wal$/,
+          /[/\\]db[/\\].*\.db-shm$/,
+          /[/\\]\.hermes[/\\]?$/,
+          /[/\\]\.hermes[/\\].*/,
+          /[/\\]wiki[/\\]?$/,
+          /[/\\]wiki[/\\].*/,
+          /[/\\]tool-results[/\\]?$/,
+          /[/\\]tool-results[/\\].*/,
+          /[/\\]molcraft-analysis[/\\]?$/,
+          /[/\\]molcraft-analysis[/\\].*/,
+          /[/\\]worklog\.md$/,
+          /[/\\]dev\.log$/,
+          /[/\\]dev\.out\.log$/,
+          /[/\\]\.bun[/\\]?$/,
+          /[/\\]\.zscripts[/\\]?$/,
+        ];
+        // Also add absolute path strings for the directories themselves
+        // (WatchIgnorePlugin matches these exactly, catching the directory mtime change)
+        for (const p of ignoredPaths) {
+          ignorePatterns.push(p);
+        }
         config.plugins.push(new webpack.WatchIgnorePlugin({
-          paths: [
-            /node_modules\/\.prisma/,
-            /db\/.*\.db/,
-            /db\/.*\.db-journal/,
-            /db\/.*\.db-wal/,
-            /db\/.*\.db-shm/,
-            /\.hermes/,
-            /tool-results/,
-            /molcraft-analysis/,
-          ],
+          paths: ignorePatterns,
         }));
       }
     }

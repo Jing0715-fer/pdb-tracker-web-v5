@@ -363,9 +363,11 @@ interface CliAdapter {
 }
 
 const HERMES_BANNER_RE = /(?:^|\n)\s*session_id:\s*\S+\s*(?=\n|$)/i;
-/** Round 56: Extract the actual hermes session ID printed by `--pass-session-id`.
- *  Hermes prints `session_id: <uuid>` on its own line (mixed in stdout/stderr). */
-const HERMES_SESSION_ID_RE = /session_id:\s*([A-Za-z0-9_\-]+)/i;
+/** Round 56/60: Extract the actual hermes session ID printed by `--pass-session-id`.
+ *  Hermes prints `session_id: <uuid>` on its own line (mixed in stdout/stderr).
+ *  Round 60: Also match "Session ID:" (capitalized, with space) and JSON-style
+ *  "session_id":"<uuid>" in case hermes changes its output format. */
+const HERMES_SESSION_ID_RE = /session[_ ]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_\-]{8,})/i;
 function parseHermesSessionId(raw: string): string | null {
   const m = raw.match(HERMES_SESSION_ID_RE);
   return m ? m[1] : null;
