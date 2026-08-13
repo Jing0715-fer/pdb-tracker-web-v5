@@ -1643,7 +1643,7 @@ export function ChatTab() {
                             if (data.screenshots.length > 1) {
                               // Don't await — fire and forget
                               (async () => {
-                                const fetchVlm = async (): Promise<{ bestIndex: number; commentary: string } | null> => {
+                                const fetchVlm = async (): Promise<{ bestIndex: number; commentary: string; scores?: number[] } | null> => {
                                   try {
                                     const vlmResponse = await fetch("/api/vlm/select-best", {
                                       method: "POST",
@@ -1657,7 +1657,7 @@ export function ChatTab() {
                                       }),
                                     });
                                     if (vlmResponse.ok) {
-                                      return await vlmResponse.json() as { bestIndex: number; commentary: string };
+                                      return await vlmResponse.json() as { bestIndex: number; commentary: string; scores?: number[] };
                                     }
                                     return null;
                                   } catch {
@@ -1675,7 +1675,7 @@ export function ChatTab() {
 
                                 if (vlmData) {
                                   try {
-                                    // Update the images with VLM selection
+                                    // Update the images with VLM selection + scores
                                     const msg = useAppStore.getState().messages.find(m => m.id === pendingId);
                                     const currentImages = msg?.analysisImages || [];
                                     // Find the images for this recipe
@@ -1685,6 +1685,8 @@ export function ChatTab() {
                                       ...img,
                                       best: i === vlmData!.bestIndex,
                                       vlmComment: i === vlmData!.bestIndex ? vlmData!.commentary : undefined,
+                                      // Round 64: Store VLM quality score (1-10)
+                                      score: vlmData!.scores && i < vlmData!.scores.length ? vlmData!.scores[i] : undefined,
                                     }));
                                     updateMessage(pendingId, {
                                       analysisImages: [...otherImages, ...updatedRecipeImages],

@@ -59,7 +59,12 @@ export async function POST(req: NextRequest) {
 3. 构图是否平衡、视觉上是否易于理解
 
 请以JSON格式回复（不要其他内容）：
-{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张>"}`;
+{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张>", "scores": [<截图1分数>, <截图2分数>, ...]}
+
+每张截图的分数为1-10的整数，10分最佳。评分标准：
+- 结构特征清晰可见程度 (0-4分)
+- 关键信息未被遮挡 (0-3分)
+- 构图平衡和视觉清晰度 (0-3分)`;
 
     const userPrompt = prompt || defaultPrompt;
 
@@ -93,9 +98,10 @@ export async function POST(req: NextRequest) {
 
     const vlmResponse = response.choices?.[0]?.message?.content || '';
 
-    // Parse the VLM response to extract bestIndex
+    // Parse the VLM response to extract bestIndex + scores
     let bestIndex = 0;
     let commentary = vlmResponse;
+    let scores: number[] = [];
 
     // Try to extract JSON from the response
     const jsonMatch = vlmResponse.match(/\{[\s\S]*?"bestIndex"[\s\S]*?\}/);
@@ -107,6 +113,13 @@ export async function POST(req: NextRequest) {
         }
         if (parsed.reason) {
           commentary = parsed.reason;
+        }
+        // Round 64: Extract quality scores (1-10 per screenshot)
+        if (Array.isArray(parsed.scores)) {
+          scores = parsed.scores
+            .map((s: unknown) => typeof s === 'number' ? s : parseInt(String(s), 10))
+            .filter((s: number) => !isNaN(s) && s >= 1 && s <= 10)
+            .slice(0, screenshots.length);
         }
       } catch {
         // JSON parse failed — use the raw response as commentary
@@ -125,6 +138,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       bestIndex,
       commentary,
+      scores,
       recipe,
       vlmResponse,
     });

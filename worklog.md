@@ -12086,3 +12086,84 @@ Improvement Suggestions for Next Round:
    analysis so the VLM can reference specific residues
 4. **VLM quality scoring** — have the VLM also score each screenshot's quality
    (1-10) in addition to selecting the best
+
+---
+Task ID: round-64-lightbox-batch-download-vlm-scoring
+Agent: main
+Task: Continue development based on Round 63 improvement suggestions. Add full-screen lightbox, batch download, VLM quality scoring. QA + commit and push.
+
+Development:
+
+### 1. Full-Screen Lightbox (src/components/structure-analysis/message-bubble.tsx)
+Replaced the "open in new tab" behavior with a full-screen modal lightbox:
+- **Zoom controls**: ZoomIn/ZoomOut buttons (0.5x to 4x), percentage display
+- **Mouse wheel zoom**: scroll to zoom in/out (0.1 step)
+- **Double-click zoom**: toggle between 100% and 200%
+- **Drag to pan**: drag the image to move it when zoomed in
+- **Reset button**: reset zoom + pan to defaults
+- **Navigation arrows**: ← → to switch images (larger buttons for touch)
+- **Keyboard support**: Esc to close, ← → to navigate
+- **VLM commentary overlay**: shown at the bottom of the lightbox
+- **Download button**: download current image from within lightbox
+- **Bottom hint**: "滚轮缩放 · 双击切换 100%/200% · 拖拽平移 · ← → 切换 · Esc 关闭"
+- Clicking the main carousel image now opens the lightbox (instead of new tab)
+
+### 2. Batch Download (src/components/structure-analysis/message-bubble.tsx)
+Added "下载全部 (N)" button in the action bar below thumbnails:
+- Downloads all screenshots with 200ms delay between each (avoids browser blocking)
+- Filename format: `{recipe}-{angle}-{timestamp}-{index}.png`
+- Also added "全屏" button to open lightbox from the action bar
+
+### 3. VLM Quality Scoring (src/app/api/vlm/select-best/route.ts + store.ts + chat-tab.tsx)
+Enhanced the VLM API to also score each screenshot's quality (1-10):
+
+**VLM Prompt**: Added scoring criteria to the prompt:
+- Structure feature visibility (0-4 points)
+- Key information not occluded (0-3 points)
+- Composition balance and visual clarity (0-3 points)
+
+**API Response**: Now returns `scores: number[]` alongside `bestIndex` + `commentary`
+
+**AnalysisImage.score**: New field on the AnalysisImage interface
+
+**Chat Tab**: Updated VLM background selection to store scores on each image
+
+**UI Display**: Score badge shown on the carousel (below label):
+- Green badge for scores ≥8 (excellent)
+- Amber badge for scores 5-7 (acceptable)
+- Red badge for scores <5 (poor)
+- Also shown in the lightbox toolbar
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (3 screenshots, binding_pocket)
+→ bestIndex: 0 (front)
+→ scores: [8, 6, 5]  ← front=8/10, side=6/10, top=5/10
+→ commentary: "正面视角（Front）通常能最直接地展示配体与结合口袋的相对位置关系..."
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 5 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Full-screen lightbox with zoom/pan/wheel/drag
+- ✅ Batch download with staggered timing
+- ✅ VLM quality scoring (1-10 per screenshot)
+- ✅ Score badges with color coding (green/amber/red)
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Score-based filtering** — auto-hide screenshots with score < 3
+3. **Comparison view** — show 2 screenshots side-by-side in the lightbox for
+   detailed comparison
+4. **VLM confidence** — have the VLM also report a confidence level for its
+   best-index selection

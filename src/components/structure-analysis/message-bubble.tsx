@@ -20,6 +20,7 @@ import {
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
   GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
+  Maximize2, ZoomIn, ZoomOut,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -1054,6 +1055,10 @@ export function MessageBubble({
 function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/store").AnalysisImage[] }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [downloaded, setDownloaded] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Round 63: Keyboard navigation — left/right arrows to navigate,
@@ -1115,6 +1120,17 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           <span className="text-white/50 ml-1">{currentIdx + 1}/{images.length}</span>
         </div>
 
+        {/* Score badge (top-left, below label) — Round 64 */}
+        {currentImg.score != null && (
+          <div className={`absolute top-9 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md backdrop-blur-sm text-[9px] font-bold ${
+            currentImg.score >= 8 ? 'bg-emerald-500/80 text-white' :
+            currentImg.score >= 5 ? 'bg-amber-500/80 text-white' :
+            'bg-red-500/80 text-white'
+          }`}>
+            <span>★ {currentImg.score}/10</span>
+          </div>
+        )}
+
         {/* Download button (top-right) — Round 63 */}
         <button
           type="button"
@@ -1164,11 +1180,11 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           className="w-full h-auto max-h-80 object-contain"
           loading="lazy"
           onClick={() => {
-            const w = window.open('');
-            if (w) {
-              w.document.write(`<img src="${currentImg.dataUri}" style="max-width:100%;max-height:100vh;margin:auto;display:block;" />`);
-              w.document.title = currentImg.label;
-            }
+            // Round 64: Open in full-screen lightbox instead of new tab
+            setZoom(1);
+            setPanX(0);
+            setPanY(0);
+            setLightboxOpen(true);
           }}
           style={{ cursor: 'pointer' }}
         />
@@ -1205,10 +1221,205 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
         </div>
       )}
 
+      {/* Action bar — Round 64: batch download + expand */}
+      <div className="flex items-center justify-between px-2 py-1 bg-claude-surface/40 dark:bg-[#242220]/40 border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
+        <button
+          type="button"
+          onClick={() => {
+            // Round 64: Batch download all screenshots
+            images.forEach((img, i) => {
+              setTimeout(() => {
+                const a = document.createElement("a");
+                a.href = img.dataUri;
+                a.download = `${img.recipe}-${img.angle}-${Date.now()}-${i}.png`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              }, i * 200); // 200ms delay between downloads to avoid browser blocking
+            });
+          }}
+          className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+          title="下载所有截图"
+        >
+          <Download className="h-2.5 w-2.5" />
+          下载全部 ({images.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setZoom(1);
+            setPanX(0);
+            setPanY(0);
+            setLightboxOpen(true);
+          }}
+          className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+          title="全屏查看"
+        >
+          <Maximize2 className="h-2.5 w-2.5" />
+          全屏
+        </button>
+      </div>
+
       {/* Keyboard hint (only if >1 image) — Round 63 */}
       {images.length > 1 && (
         <div className="px-2 py-1 text-[8px] text-claude-text-muted/50 text-center border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
           ← → 键切换 · 点击图片全屏查看 · 点击下载按钮保存
+        </div>
+      )}
+
+      {/* Round 64: Full-screen lightbox with zoom/pan */}
+      {lightboxOpen && currentImg && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm"
+          onClick={() => setLightboxOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setLightboxOpen(false);
+            if (e.key === "ArrowLeft" && images.length > 1) {
+              e.stopPropagation();
+              setActiveIdx(i => Math.max(0, i - 1));
+              setZoom(1); setPanX(0); setPanY(0);
+            }
+            if (e.key === "ArrowRight" && images.length > 1) {
+              e.stopPropagation();
+              setActiveIdx(i => Math.min(images.length - 1, i + 1));
+              setZoom(1); setPanX(0); setPanY(0);
+            }
+          }}
+          tabIndex={0}
+          style={{ outline: 'none' }}
+        >
+          {/* Top toolbar */}
+          <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-xs">
+              {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+              <span className="font-medium">{currentImg.label}</span>
+              {images.length > 1 && <span className="text-white/50 ml-1">{currentIdx + 1}/{images.length}</span>}
+              {currentImg.score != null && (
+                <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  currentImg.score >= 8 ? 'bg-emerald-500/30 text-emerald-300' :
+                  currentImg.score >= 5 ? 'bg-amber-500/30 text-amber-300' :
+                  'bg-red-500/30 text-red-300'
+                }`}>
+                  ★ {currentImg.score}/10
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {/* Zoom controls */}
+              <button
+                type="button"
+                onClick={() => setZoom(z => Math.max(0.5, z - 0.25))}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                title="缩小"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </button>
+              <span className="text-white text-xs w-12 text-center font-mono">{Math.round(zoom * 100)}%</span>
+              <button
+                type="button"
+                onClick={() => setZoom(z => Math.min(4, z + 0.25))}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                title="放大"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setZoom(1); setPanX(0); setPanY(0); }}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors ml-1"
+                title="重置"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors ml-1"
+                title="下载"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxOpen(false)}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors ml-1"
+                title="关闭 (Esc)"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Navigation arrows */}
+          {images.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setActiveIdx(i => Math.max(0, i - 1)); setZoom(1); setPanX(0); setPanY(0); }}
+                disabled={currentIdx === 0}
+                className="absolute left-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="上一张 (←)"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setActiveIdx(i => Math.min(images.length - 1, i + 1)); setZoom(1); setPanX(0); setPanY(0); }}
+                disabled={currentIdx === images.length - 1}
+                className="absolute right-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="下一张 (→)"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </>
+          )}
+
+          {/* The zoomable image */}
+          <img
+            src={currentImg.dataUri}
+            alt={currentImg.label}
+            className="max-w-[90vw] max-h-[85vh] object-contain transition-transform"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => {
+              e.preventDefault();
+              const delta = e.deltaY > 0 ? -0.1 : 0.1;
+              setZoom(z => Math.max(0.5, Math.min(4, z + delta)));
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setZoom(z => z === 1 ? 2 : 1);
+              setPanX(0);
+              setPanY(0);
+            }}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDrag={(e) => {
+              if (e.clientX !== 0 || e.clientY !== 0) {
+                setPanX(x => x + e.movementX);
+                setPanY(y => y + e.movementY);
+              }
+            }}
+            style={{
+              transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+              cursor: zoom > 1 ? 'move' : 'pointer',
+              transition: 'transform 0.1s ease-out',
+            }}
+          />
+
+          {/* VLM commentary in lightbox */}
+          {currentImg.vlmComment && (
+            <div className="absolute bottom-4 left-4 right-4 z-10 px-4 py-2 rounded-md bg-black/70 backdrop-blur-sm text-white/95 text-xs leading-relaxed max-w-2xl mx-auto" onClick={(e) => e.stopPropagation()}>
+              <span className="text-claude-accent font-medium">VLM: </span>
+              {currentImg.vlmComment}
+            </div>
+          )}
+
+          {/* Bottom hint */}
+          <div className="absolute bottom-2 left-0 right-0 text-center text-white/40 text-[10px]" onClick={(e) => e.stopPropagation()}>
+            滚轮缩放 · 双击切换 100%/200% · 拖拽平移 · ← → 切换 · Esc 关闭
+          </div>
         </div>
       )}
     </div>

@@ -335,6 +335,9 @@ export interface AnalysisImage {
   best?: boolean;
   /** Optional VLM commentary explaining why this angle was selected. */
   vlmComment?: string;
+  /** Round 64: VLM quality score (1-10, 10=best). Based on structure feature
+   *  visibility, occlusion, and composition balance. */
+  score?: number;
 }
 
 /** Round 33: A chat session — a named conversation with its own message history. */
