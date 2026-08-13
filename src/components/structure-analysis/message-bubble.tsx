@@ -14,13 +14,14 @@
  */
 
 import { useState, useCallback, useMemo, useRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   User, Bot, Check, X, Clock, Loader2, Terminal, Brain, Cog, Timer,
   AlertCircle, Copy, Play, RotateCcw, Pencil, ThumbsUp, ThumbsDown,
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
   GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
-  Maximize2, ZoomIn, ZoomOut, Filter,
+  Maximize2, ZoomIn, ZoomOut, Filter, ArrowUpDown, FileJson,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -1061,15 +1062,30 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
   const [panY, setPanY] = useState(0);
   const [showAll, setShowAll] = useState(false); // Round 65: score filter
   const [compareMode, setCompareMode] = useState(false); // Round 65: comparison view
+  const [sortByScore, setSortByScore] = useState(false); // Round 66: score sorting
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Round 65: Score-based filtering — hide screenshots with score < 3
   // unless showAll is true. Best images are always shown.
+  // Round 66: Optionally sort by score (best first). When sortByScore is true,
+  // images are sorted by score descending; best image is always first.
   const visibleImages = useMemo(() => {
-    if (showAll) return images;
-    return images.filter(img => img.best || (img.score == null) || img.score >= 3);
-  }, [images, showAll]);
-  const hiddenCount = images.length - visibleImages.length;
+    let result = showAll
+      ? [...images]
+      : images.filter(img => img.best || (img.score == null) || img.score >= 3);
+    if (sortByScore) {
+      // Sort: best first, then by score descending, then by original order
+      result.sort((a, b) => {
+        if (a.best && !b.best) return -1;
+        if (!a.best && b.best) return 1;
+        const sa = a.score ?? 0;
+        const sb = b.score ?? 0;
+        return sb - sa;
+      });
+    }
+    return result;
+  }, [images, showAll, sortByScore]);
+  const hiddenCount = images.length - (showAll ? 0 : images.filter(img => img.best || (img.score == null) || img.score >= 3).length);
 
   // Round 63: Keyboard navigation — left/right arrows to navigate,
   // but only when the carousel container is focused or hovered.
@@ -1186,21 +1202,31 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           </>
         )}
 
-        {/* The image */}
-        <img
-          src={currentImg.dataUri}
-          alt={currentImg.label}
-          className="w-full h-auto max-h-80 object-contain"
-          loading="lazy"
-          onClick={() => {
-            // Round 64: Open in full-screen lightbox instead of new tab
-            setZoom(1);
-            setPanX(0);
-            setPanY(0);
-            setLightboxOpen(true);
-          }}
-          style={{ cursor: 'pointer' }}
-        />
+        {/* The image — Round 66: AnimatePresence for smooth slide transitions */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={currentIdx}
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+          >
+            <img
+              src={currentImg.dataUri}
+              alt={currentImg.label}
+              className="w-full h-auto max-h-80 object-contain"
+              loading="lazy"
+              onClick={() => {
+                // Round 64: Open in full-screen lightbox instead of new tab
+                setZoom(1);
+                setPanX(0);
+                setPanY(0);
+                setLightboxOpen(true);
+              }}
+              style={{ cursor: 'pointer' }}
+            />
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {/* Thumbnail strip (only if >1 image) */}
@@ -1268,6 +1294,56 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
             >
               <Filter className="h-2.5 w-2.5" />
               {showAll ? `隐藏低分` : `+${hiddenCount} 低分`}
+            </button>
+          )}
+          {/* Round 66: Score sorting toggle */}
+          {visibleImages.some(img => img.score != null) && (
+            <button
+              type="button"
+              onClick={() => setSortByScore(s => !s)}
+              className={`flex items-center gap-1 text-[9px] transition-colors ${
+                sortByScore ? 'text-claude-accent' : 'text-claude-text-muted hover:text-claude-accent'
+              }`}
+              title={sortByScore ? "按评分排序（已启用）" : "按评分排序"}
+            >
+              <ArrowUpDown className="h-2.5 w-2.5" />
+              {sortByScore ? '评分排序' : '排序'}
+            </button>
+          )}
+          {/* Round 66: VLM analysis export */}
+          {visibleImages.some(img => img.score != null || img.vlmComment) && (
+            <button
+              type="button"
+              onClick={() => {
+                // Export VLM analysis report as JSON
+                const report = {
+                  exportedAt: new Date().toISOString(),
+                  totalImages: images.length,
+                  images: images.map(img => ({
+                    recipe: img.recipe,
+                    angle: img.angle,
+                    label: img.label,
+                    score: img.score,
+                    confidence: img.confidence,
+                    best: img.best,
+                    vlmComment: img.vlmComment,
+                  })),
+                };
+                const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `vlm-analysis-${images[0]?.recipe || 'report'}-${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}
+              className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+              title="导出 VLM 分析报告 (JSON)"
+            >
+              <FileJson className="h-2.5 w-2.5" />
+              导出报告
             </button>
           )}
         </div>

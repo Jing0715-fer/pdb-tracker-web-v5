@@ -12248,3 +12248,70 @@ Improvement Suggestions for Next Round:
    between images
 4. **VLM analysis export** — export the VLM commentary + scores as a JSON/CSV
    report for documentation
+
+---
+Task ID: round-66-score-sorting-animations-export
+Agent: main
+Task: Continue development based on Round 65 improvement suggestions. Add score-based sorting, carousel transition animations, VLM analysis export. QA + commit and push.
+
+Development:
+
+### 1. Score-Based Sorting (src/components/structure-analysis/message-bubble.tsx)
+Added optional sorting of screenshots by VLM quality score:
+- `sortByScore` state (default: false)
+- When enabled, `visibleImages` is sorted: best image first, then by score
+  descending, preserving original order for ties
+- "排序" / "评分排序" toggle button in the action bar (ArrowUpDown icon)
+- Only visible when at least one image has a score
+- Active state highlighted with accent color
+- Fixed `hiddenCount` computation to be independent of sort state
+
+### 2. Carousel Transition Animations (src/components/structure-analysis/message-bubble.tsx)
+Added smooth slide transitions between images:
+- Wrapped the main carousel image in `<AnimatePresence mode="wait">` + `<motion.div>`
+- Transition: opacity 0→1 + x: 20px→0 (slide in from right)
+- Exit: opacity 1→0 + x: 0→-20px (slide out to left)
+- Duration: 200ms, easeOut
+- `key={currentIdx}` ensures animation triggers on image change
+- Added `framer-motion` import (AnimatePresence + motion)
+
+### 3. VLM Analysis Export (src/components/structure-analysis/message-bubble.tsx)
+Added "导出报告" button to export the VLM analysis as a JSON file:
+- Exports a report containing: export timestamp, total image count, and per-image
+  details (recipe, angle, label, score, confidence, best flag, VLM commentary)
+- Filename: `vlm-analysis-{recipe}-{timestamp}.json`
+- Uses Blob + URL.createObjectURL for reliable download
+- Only visible when at least one image has a score or VLM commentary
+- Added `FileJson` icon import from lucide-react
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, binding_pocket)
+→ bestIndex: 0
+→ scores: [7, 6]
+→ confidence: low
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- message-bubble.tsx: 0 errors, 0 warnings ✅
+
+Stage Summary:
+- ✅ Score-based sorting: toggle to sort by score (best first)
+- ✅ Carousel transition animations: smooth slide in/out (200ms)
+- ✅ VLM analysis export: JSON report with all scores + commentary
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Thumbnail transition** — animate thumbnail strip when sorting changes
+3. **Export format options** — add CSV export in addition to JSON
+4. **Score distribution chart** — mini bar chart showing score distribution
+   in the action bar
