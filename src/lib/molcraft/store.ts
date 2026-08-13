@@ -335,6 +335,13 @@ export interface AnalysisImage {
   best?: boolean;
   /** Optional VLM commentary explaining why this angle was selected. */
   vlmComment?: string;
+  /** Round 64: VLM quality score (1-10, 10=best). Based on structure feature
+   *  visibility, occlusion, and composition balance. */
+  score?: number;
+  /** Round 65: VLM confidence level for the best-index selection.
+   *  "high" = best clearly better (score gap ≥3), "medium" = gap 1-2,
+   *  "low" = scores similar. Same for all images in a recipe. */
+  confidence?: "high" | "medium" | "low";
 }
 
 /** Round 33: A chat session — a named conversation with its own message history. */

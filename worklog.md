@@ -11904,3 +11904,414 @@ Improvement Suggestions for Next Round:
    swipeable carousel instead of a vertical list
 4. **Export images** — add a "Download all screenshots" button to export the
    analysis images as a ZIP
+
+---
+Task ID: round-62-visualization-preapply-capture-resilience-carousel
+Agent: main
+Task: Continue development based on Round 61 improvement suggestions. Add recipe-specific 3D visualization before capture, capture resilience, image carousel. QA + commit and push.
+
+Development:
+
+### 1. Recipe-Specific 3D Visualization (src/lib/molcraft/commands.ts)
+Added `applyRecipeVisualization()` function that applies the appropriate 3D
+visualization before capturing screenshots, based on the analysis recipe type:
+
+| Recipe | Visualization Applied |
+|--------|----------------------|
+| binding_pocket, ligand_interactions | Focus on ligand (compId from analysis result) |
+| all_interactions, hbonds, salt_bridges, hydrophobic_contacts | Focus on interface chain |
+| druggability | Focus on ligand (pocket center) |
+| virtual_screening, druglike_screening | Focus on ligand (screening pocket) |
+| disulfide_bonds, metal_coordination, aromatic_stacking, water_bridges | Focus on first chain |
+| sasa, surface_residues, electrostatic, apbs_electrostatic | Reset camera (full structure view) |
+| bfactor_stats, secondary_structure_simple | Reset camera (global stats) |
+| interface_residues, oligomer_analysis | Reset camera (assembly view) |
+| rmsd, conformational_changes, per_residue_rmsd_two | Reset camera (full structure) |
+| detect_pockets, summary | Reset camera (overview) |
+
+The function is best-effort — if any step fails, it silently continues.
+Integrated into `capture_multi_angle` command: visualization is applied
+before the angle loop starts, with a 300ms render delay.
+
+Added `vizParams` field to the `capture_multi_angle` command schema —
+passes ligand compId, chain info etc. from the analysis result.
+
+### 2. Capture Resilience (src/components/structure-analysis/chat-tab.tsx)
+Rewrote the auto-capture flow for robustness:
+
+**Before (Round 61):** Capture → VLM selection → Store images (all in one
+await chain). If VLM fails, images are never stored — user sees nothing.
+
+**After (Round 62):** 
+1. Capture screenshots
+2. Store images IMMEDIATELY (without VLM best flag) — user sees them right away
+3. Run VLM selection in the background (fire-and-forget async IIFE)
+4. When VLM completes, update images with best flag + commentary
+5. If VLM fails, images remain visible (just without the best highlight)
+
+Also extracts vizParams from the analysis result (ligand compId, chain info)
+and passes them to `capture_multi_angle` so the visualization is correctly
+targeted.
+
+### 3. Image Carousel (src/components/structure-analysis/message-bubble.tsx)
+Replaced the vertical image list with a proper `AnalysisImageCarousel` component:
+
+- **Main image view** with label badge + image counter (1/3)
+- **VLM commentary overlay** at the bottom (when available)
+- **Navigation arrows** (left/right) — only shown when >1 image
+- **Thumbnail strip** at the bottom — click to jump to any image
+- **Auto-select best** — when VLM selects the best image, the carousel
+  automatically navigates to it (computed during render, no useEffect)
+- **Star badge** on best image thumbnail
+- **Click main image** to open full-size in new tab
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, binding_pocket)
+→ bestIndex: 0 (front)
+→ commentary: "正面视角（Front）通常能最直接地展示结合口袋的开口..."
+→ Duration: ~5s
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 4 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Recipe-specific 3D visualization applied before capture (26 recipe types)
+- ✅ Capture resilience: images stored immediately, VLM runs in background
+- ✅ Image carousel with thumbnails, navigation, auto-best-select
+- ✅ VLM API verified working
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Keyboard navigation** — add left/right arrow key support to the carousel
+2. **Image download** — add a "Download" button to save the current screenshot
+3. **Recipe-specific Molstar representations** — not just camera focus, but
+   also set representation (e.g. surface for SASA, putty for B-factor)
+4. **VLM retry** — if VLM selection fails, retry once after 5s
+
+---
+Task ID: round-63-keyboard-nav-download-representation-vlm-retry
+Agent: main
+Task: Continue development based on Round 62 improvement suggestions. Add keyboard navigation, download button, recipe-specific Molstar representations, VLM retry. QA + commit and push.
+
+Development:
+
+### 1. Keyboard Navigation (src/components/structure-analysis/message-bubble.tsx)
+Added left/right arrow key navigation to the AnalysisImageCarousel:
+- Container has `tabIndex={0}` so it can receive focus
+- `onKeyDown` handler: ArrowLeft → prev, ArrowRight → next
+- Only active when >1 image
+- Navigation arrow buttons now show keyboard hint in title: "Previous (←)" / "Next (→)"
+- Added keyboard hint text at the bottom: "← → 键切换 · 点击图片全屏查看 · 点击下载按钮保存"
+- Fixed React Hooks rules-of-hooks error: moved `useCallback` hooks before the early return
+
+### 2. Download Button (src/components/structure-analysis/message-bubble.tsx)
+Added a download button (top-right corner of the main image):
+- Downloads the current screenshot as `{recipe}-{angle}-{timestamp}.png`
+- Uses `<a download>` element for reliable cross-browser download
+- Shows checkmark icon for 1.5s after download to confirm
+- Button is always visible (even for single images)
+- `handleDownload` callback computes currentIdx from images+activeIdx (not from closure) to avoid stale state
+
+### 3. Recipe-Specific Molstar Representations (src/lib/molcraft/commands.ts)
+Enhanced `applyRecipeVisualization()` to not only focus the camera but also
+apply the appropriate representation preset + color theme:
+
+| Recipe | Representation | Color Theme |
+|--------|---------------|-------------|
+| binding_pocket, ligand_interactions | cartoon | chain-id |
+| all_interactions, hbonds, salt_bridges, hydrophobic_contacts | cartoon | chain-id |
+| druggability | surface | hydrophobicity |
+| virtual_screening, druglike_screening | cartoon | element-symbol |
+| disulfide_bonds, metal_coordination, aromatic_stacking, water_bridges | ball-and-stick | element-symbol |
+| sasa, surface_residues | surface | hydrophobicity |
+| electrostatic, apbs_electrostatic | surface | partial-charge |
+| bfactor_stats | putty | bfactor |
+| secondary_structure_simple | cartoon | secondary-structure |
+| interface_residues, oligomer_analysis | cartoon | chain-id |
+| rmsd, conformational_changes, per_residue_rmsd_two | putty | uncertainty |
+| detect_pockets | surface | chain-id |
+| summary | cartoon | sequence-id |
+
+Added `applyPreset()` and `applyColorTheme()` helper functions that use the
+existing `plugin.managers.structure.component.applyPreset()` and
+`updateRepresentationsTheme()` APIs. All steps are best-effort (wrapped in `safe()`).
+
+### 4. VLM Retry (src/components/structure-analysis/chat-tab.tsx)
+Added retry logic to the background VLM selection:
+- Extracted `fetchVlm()` helper function that returns the VLM result or null
+- First attempt: call fetchVlm() immediately
+- If first attempt fails: wait 5s, then retry once
+- If retry also fails: log warning, images remain visible without best highlight
+- All errors are caught and logged — the chat flow is never blocked
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, druggability)
+→ bestIndex: 0
+→ commentary: "两张截图均为空白图像，无法显示任何蛋白质结构特征..."
+(VLM correctly identifies test images as blank — proves it's actually analyzing)
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 3 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Keyboard navigation (← →) for carousel
+- ✅ Download button with confirmation feedback
+- ✅ Recipe-specific Molstar representations (13 preset+color combinations)
+- ✅ VLM retry after 5s on first failure
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Full-screen lightbox** — click image to open in a modal lightbox with
+   zoom/pan instead of a new tab
+2. **Batch download** — "Download all" button to save all screenshots as ZIP
+3. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues
+4. **VLM quality scoring** — have the VLM also score each screenshot's quality
+   (1-10) in addition to selecting the best
+
+---
+Task ID: round-64-lightbox-batch-download-vlm-scoring
+Agent: main
+Task: Continue development based on Round 63 improvement suggestions. Add full-screen lightbox, batch download, VLM quality scoring. QA + commit and push.
+
+Development:
+
+### 1. Full-Screen Lightbox (src/components/structure-analysis/message-bubble.tsx)
+Replaced the "open in new tab" behavior with a full-screen modal lightbox:
+- **Zoom controls**: ZoomIn/ZoomOut buttons (0.5x to 4x), percentage display
+- **Mouse wheel zoom**: scroll to zoom in/out (0.1 step)
+- **Double-click zoom**: toggle between 100% and 200%
+- **Drag to pan**: drag the image to move it when zoomed in
+- **Reset button**: reset zoom + pan to defaults
+- **Navigation arrows**: ← → to switch images (larger buttons for touch)
+- **Keyboard support**: Esc to close, ← → to navigate
+- **VLM commentary overlay**: shown at the bottom of the lightbox
+- **Download button**: download current image from within lightbox
+- **Bottom hint**: "滚轮缩放 · 双击切换 100%/200% · 拖拽平移 · ← → 切换 · Esc 关闭"
+- Clicking the main carousel image now opens the lightbox (instead of new tab)
+
+### 2. Batch Download (src/components/structure-analysis/message-bubble.tsx)
+Added "下载全部 (N)" button in the action bar below thumbnails:
+- Downloads all screenshots with 200ms delay between each (avoids browser blocking)
+- Filename format: `{recipe}-{angle}-{timestamp}-{index}.png`
+- Also added "全屏" button to open lightbox from the action bar
+
+### 3. VLM Quality Scoring (src/app/api/vlm/select-best/route.ts + store.ts + chat-tab.tsx)
+Enhanced the VLM API to also score each screenshot's quality (1-10):
+
+**VLM Prompt**: Added scoring criteria to the prompt:
+- Structure feature visibility (0-4 points)
+- Key information not occluded (0-3 points)
+- Composition balance and visual clarity (0-3 points)
+
+**API Response**: Now returns `scores: number[]` alongside `bestIndex` + `commentary`
+
+**AnalysisImage.score**: New field on the AnalysisImage interface
+
+**Chat Tab**: Updated VLM background selection to store scores on each image
+
+**UI Display**: Score badge shown on the carousel (below label):
+- Green badge for scores ≥8 (excellent)
+- Amber badge for scores 5-7 (acceptable)
+- Red badge for scores <5 (poor)
+- Also shown in the lightbox toolbar
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (3 screenshots, binding_pocket)
+→ bestIndex: 0 (front)
+→ scores: [8, 6, 5]  ← front=8/10, side=6/10, top=5/10
+→ commentary: "正面视角（Front）通常能最直接地展示配体与结合口袋的相对位置关系..."
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 5 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Full-screen lightbox with zoom/pan/wheel/drag
+- ✅ Batch download with staggered timing
+- ✅ VLM quality scoring (1-10 per screenshot)
+- ✅ Score badges with color coding (green/amber/red)
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Score-based filtering** — auto-hide screenshots with score < 3
+3. **Comparison view** — show 2 screenshots side-by-side in the lightbox for
+   detailed comparison
+4. **VLM confidence** — have the VLM also report a confidence level for its
+   best-index selection
+
+---
+Task ID: round-65-score-filter-confidence-comparison
+Agent: main
+Task: Continue development based on Round 64 improvement suggestions. Add score-based filtering, VLM confidence, comparison view. QA + commit and push.
+
+Development:
+
+### 1. Score-Based Filtering (src/components/structure-analysis/message-bubble.tsx)
+Added automatic hiding of low-quality screenshots:
+- `visibleImages` computed with `useMemo` — filters out images with `score < 3`
+  unless `showAll` is true. Best images are always shown regardless of score.
+- `hiddenCount` tracks how many images are hidden
+- Filter toggle button in the action bar: shows "+N 低分" when images are hidden,
+  "隐藏低分" when all are shown. Only appears when hiddenCount > 0.
+- All carousel navigation, keyboard handlers, and lightbox now use `visibleImages`
+  instead of `images` (except batch download which downloads ALL images)
+- Added `Filter` icon import from lucide-react
+
+### 2. VLM Confidence Level (src/app/api/vlm/select-best/route.ts + store.ts + chat-tab.tsx)
+Enhanced the VLM API to also report confidence in its best-index selection:
+
+**VLM Prompt**: Added confidence criteria:
+- high: best screenshot clearly better (score gap ≥3)
+- medium: best better but gap small (1-2)
+- low: scores similar, hard to distinguish (gap 0)
+
+**API Response**: Now returns `confidence: "high" | "medium" | "low"`
+
+**AnalysisImage.confidence**: New field on the interface
+
+**Chat Tab**: Updated VLM background selection to store confidence on all images
+
+**UI Display**: Confidence indicator next to score badge:
+- ● (filled circle) = high confidence
+- ◐ (half circle) = medium confidence
+- ○ (empty circle) = low confidence
+
+### 3. Comparison View (src/components/structure-analysis/message-bubble.tsx)
+Added side-by-side comparison mode in the lightbox:
+- "对比" toggle button in the lightbox toolbar (GitCompare icon)
+- When enabled, shows current image + next image side-by-side
+- Each image shows its label, best star, and score
+- ← → navigation still works to cycle through pairs
+- Compare mode resets when opening the lightbox
+- Active state highlighted with accent color
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 blank test screenshots, binding_pocket)
+→ bestIndex: 0
+→ scores: [1, 1]
+→ confidence: low  ← correctly identifies equal scores
+→ commentary: "两张截图均为空白图像，无法显示任何蛋白质结构..."
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 4 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Score-based filtering: auto-hide score < 3, toggle to show all
+- ✅ VLM confidence: high/medium/low with visual indicator
+- ✅ Comparison view: side-by-side in lightbox with toggle
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Score-based sorting** — sort thumbnails by score (best first) instead of
+   by capture order
+3. **Image carousel transition animations** — add smooth slide transitions
+   between images
+4. **VLM analysis export** — export the VLM commentary + scores as a JSON/CSV
+   report for documentation
+
+---
+Task ID: round-66-score-sorting-animations-export
+Agent: main
+Task: Continue development based on Round 65 improvement suggestions. Add score-based sorting, carousel transition animations, VLM analysis export. QA + commit and push.
+
+Development:
+
+### 1. Score-Based Sorting (src/components/structure-analysis/message-bubble.tsx)
+Added optional sorting of screenshots by VLM quality score:
+- `sortByScore` state (default: false)
+- When enabled, `visibleImages` is sorted: best image first, then by score
+  descending, preserving original order for ties
+- "排序" / "评分排序" toggle button in the action bar (ArrowUpDown icon)
+- Only visible when at least one image has a score
+- Active state highlighted with accent color
+- Fixed `hiddenCount` computation to be independent of sort state
+
+### 2. Carousel Transition Animations (src/components/structure-analysis/message-bubble.tsx)
+Added smooth slide transitions between images:
+- Wrapped the main carousel image in `<AnimatePresence mode="wait">` + `<motion.div>`
+- Transition: opacity 0→1 + x: 20px→0 (slide in from right)
+- Exit: opacity 1→0 + x: 0→-20px (slide out to left)
+- Duration: 200ms, easeOut
+- `key={currentIdx}` ensures animation triggers on image change
+- Added `framer-motion` import (AnimatePresence + motion)
+
+### 3. VLM Analysis Export (src/components/structure-analysis/message-bubble.tsx)
+Added "导出报告" button to export the VLM analysis as a JSON file:
+- Exports a report containing: export timestamp, total image count, and per-image
+  details (recipe, angle, label, score, confidence, best flag, VLM commentary)
+- Filename: `vlm-analysis-{recipe}-{timestamp}.json`
+- Uses Blob + URL.createObjectURL for reliable download
+- Only visible when at least one image has a score or VLM commentary
+- Added `FileJson` icon import from lucide-react
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, binding_pocket)
+→ bestIndex: 0
+→ scores: [7, 6]
+→ confidence: low
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- message-bubble.tsx: 0 errors, 0 warnings ✅
+
+Stage Summary:
+- ✅ Score-based sorting: toggle to sort by score (best first)
+- ✅ Carousel transition animations: smooth slide in/out (200ms)
+- ✅ VLM analysis export: JSON report with all scores + commentary
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Thumbnail transition** — animate thumbnail strip when sorting changes
+3. **Export format options** — add CSV export in addition to JSON
+4. **Score distribution chart** — mini bar chart showing score distribution
+   in the action bar

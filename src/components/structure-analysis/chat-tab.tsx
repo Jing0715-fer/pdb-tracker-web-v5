@@ -1577,14 +1577,33 @@ export function ChatTab() {
                       data: (result as { analysisResult?: unknown }).analysisResult,
                     });
 
-                    // Round 61: After a successful analyze_run, automatically
+                    // Round 61/62: After a successful analyze_run, automatically
                     // capture multi-angle screenshots and use VLM to select the
                     // best one. This gives the user a visual illustration of
                     // the analysis results.
+                    // Round 62: Recipe-specific visualization is now applied
+                    // inside capture_multi_angle (via applyRecipeVisualization).
+                    // Images are stored IMMEDIATELY (even if VLM fails), then
+                    // VLM selection runs in the background and updates the
+                    // best flag + commentary when it completes.
                     if (cmd.type === "analyze_run" && result.ok) {
                       const recipeId = (cmd as { recipe?: string }).recipe;
                       if (recipeId && shouldCaptureScreenshot(recipeId)) {
                         try {
+                          // Extract viz params from the analysis result
+                          const analysisData = (result as { analysisResult?: unknown }).analysisResult as Record<string, unknown> | undefined;
+                          const vizParams: Record<string, unknown> = {};
+                          if (analysisData) {
+                            // Extract ligand compId for pocket-related recipes
+                            const bp = analysisData.bindingPocket as Record<string, unknown> | undefined;
+                            const ligand = bp?.ligand as string | undefined;
+                            if (ligand) vizParams.ligandCompId = ligand;
+                            // Extract chain info for interaction recipes
+                            const ai = analysisData.allInteractions as Record<string, unknown> | undefined;
+                            if (ai?.chain1) vizParams.chain1 = ai.chain1;
+                            if (ai?.chain2) vizParams.chain2 = ai.chain2;
+                          }
+
                           const captureResult = await executeCommand(viewer, {
                             type: "capture_multi_angle",
                             recipe: recipeId,
@@ -1592,47 +1611,99 @@ export function ChatTab() {
                             angles: ["front", "side", "top"],
                             width: 1200,
                             height: 800,
+                            vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
                           });
                           if (captureResult.ok && captureResult.data) {
                             const data = captureResult.data as {
                               screenshots: Array<{ dataUri: string; angle: string; label: string }>;
                               recipe: string;
                             };
-                            // Send screenshots to VLM for best-angle selection
-                            const vlmResponse = await fetch("/api/vlm/select-best", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                screenshots: data.screenshots,
-                                recipe: recipeId,
-                                analysisSummary: JSON.stringify(
-                                  (result as { analysisResult?: unknown }).analysisResult
-                                ).slice(0, 2000),
-                              }),
-                            });
-                            if (vlmResponse.ok) {
-                              const vlmData = await vlmResponse.json() as {
-                                bestIndex: number;
-                                commentary: string;
-                              };
-                              const images: AnalysisImage[] = data.screenshots.map((s, i) => ({
-                                dataUri: s.dataUri,
-                                recipe: recipeId,
-                                angle: s.angle as "front" | "side" | "top" | "back",
-                                label: s.label,
-                                best: i === vlmData.bestIndex,
-                                vlmComment: i === vlmData.bestIndex ? vlmData.commentary : undefined,
-                              }));
-                              // Store images on the pending message
-                              const existingMsg = useAppStore.getState().messages.find(m => m.id === pendingId);
-                              const existingImages = existingMsg?.analysisImages || [];
-                              updateMessage(pendingId, {
-                                analysisImages: [...existingImages, ...images],
-                              } as Partial<ChatMessage>);
+
+                            // Round 62: Store images IMMEDIATELY (without VLM
+                            // selection) so the user sees them right away.
+                            // VLM selection runs in the background.
+                            const initialImages: AnalysisImage[] = data.screenshots.map((s) => ({
+                              dataUri: s.dataUri,
+                              recipe: recipeId,
+                              angle: s.angle as "front" | "side" | "top" | "back",
+                              label: s.label,
+                              // No best flag yet — VLM will set it
+                            }));
+                            const existingMsg = useAppStore.getState().messages.find(m => m.id === pendingId);
+                            const existingImages = existingMsg?.analysisImages || [];
+                            updateMessage(pendingId, {
+                              analysisImages: [...existingImages, ...initialImages],
+                            } as Partial<ChatMessage>);
+
+                            // Round 62: Run VLM selection in the background.
+                            // When it completes, update the images with the
+                            // best flag + commentary. If it fails, the images
+                            // are still visible (just without the best highlight).
+                            // Round 63: Retry once after 5s if the first attempt fails.
+                            if (data.screenshots.length > 1) {
+                              // Don't await — fire and forget
+                              (async () => {
+                                const fetchVlm = async (): Promise<{ bestIndex: number; commentary: string; scores?: number[]; confidence?: "high" | "medium" | "low" } | null> => {
+                                  try {
+                                    const vlmResponse = await fetch("/api/vlm/select-best", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({
+                                        screenshots: data.screenshots,
+                                        recipe: recipeId,
+                                        analysisSummary: JSON.stringify(
+                                          (result as { analysisResult?: unknown }).analysisResult
+                                        ).slice(0, 2000),
+                                      }),
+                                    });
+                                    if (vlmResponse.ok) {
+                                      return await vlmResponse.json() as { bestIndex: number; commentary: string; scores?: number[]; confidence?: "high" | "medium" | "low" };
+                                    }
+                                    return null;
+                                  } catch {
+                                    return null;
+                                  }
+                                };
+
+                                let vlmData = await fetchVlm();
+                                // Round 63: Retry once after 5s if the first attempt failed
+                                if (!vlmData) {
+                                  console.warn("[auto-capture] VLM first attempt failed, retrying in 5s…");
+                                  await new Promise(r => setTimeout(r, 5000));
+                                  vlmData = await fetchVlm();
+                                }
+
+                                if (vlmData) {
+                                  try {
+                                    // Update the images with VLM selection + scores
+                                    const msg = useAppStore.getState().messages.find(m => m.id === pendingId);
+                                    const currentImages = msg?.analysisImages || [];
+                                    // Find the images for this recipe
+                                    const recipeImages = currentImages.filter(img => img.recipe === recipeId);
+                                    const otherImages = currentImages.filter(img => img.recipe !== recipeId);
+                                    const updatedRecipeImages = recipeImages.map((img, i) => ({
+                                      ...img,
+                                      best: i === vlmData!.bestIndex,
+                                      vlmComment: i === vlmData!.bestIndex ? vlmData!.commentary : undefined,
+                                      // Round 64: Store VLM quality score (1-10)
+                                      score: vlmData!.scores && i < vlmData!.scores.length ? vlmData!.scores[i] : undefined,
+                                      // Round 65: Store VLM confidence level
+                                      confidence: vlmData!.confidence,
+                                    }));
+                                    updateMessage(pendingId, {
+                                      analysisImages: [...otherImages, ...updatedRecipeImages],
+                                    } as Partial<ChatMessage>);
+                                  } catch (updateErr) {
+                                    console.warn("[auto-capture] VLM update failed:", updateErr);
+                                  }
+                                } else {
+                                  console.warn("[auto-capture] VLM selection failed after retry (images still visible)");
+                                }
+                              })();
                             }
                           }
                         } catch (captureErr) {
-                          console.warn("[auto-capture] Failed:", captureErr);
+                          console.warn("[auto-capture] Capture failed:", captureErr);
                         }
                       }
                     }

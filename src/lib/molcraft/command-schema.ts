@@ -89,6 +89,9 @@ export type LlmCommand =
       angles?: Array<"front" | "side" | "top" | "back">;
       width?: number;
       height?: number;
+      /** Round 62: Optional visualization parameters passed to
+       *  applyRecipeVisualization (e.g. { ligandCompId: "HEM" } for binding_pocket). */
+      vizParams?: Record<string, unknown>;
     }
   | {
       type: "select";

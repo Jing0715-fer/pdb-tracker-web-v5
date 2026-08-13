@@ -569,10 +569,20 @@ export async function executeCommand(
       // Captures screenshots from multiple camera angles for the same analysis
       // recipe. Returns an array of {dataUri, angle} pairs. The caller
       // (chat-tab.tsx) sends these to the VLM API to select the best one.
+      // Round 62: Applies recipe-specific 3D visualization before capturing
+      // so the screenshot is more informative (e.g. focus on ligand for
+      // binding_pocket, show interactions for all_interactions, etc.)
       case "capture_multi_angle": {
         const angles = cmd.angles ?? (["front", "side", "top", "back"] as const);
         const width = cmd.width ?? 1200;
         const height = cmd.height ?? 800;
+
+        // Round 62: Apply recipe-specific visualization before capturing
+        const vizParams = cmd.vizParams as Record<string, unknown> | undefined;
+        await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
+        // Allow visualization to render
+        await new Promise((r) => setTimeout(r, 300));
+
         const results: Array<{
           dataUri: string;
           angle: string;
@@ -1236,6 +1246,270 @@ function setTrackballAnimate(
  * previous implementation used a 250ms spin hack that landed at an
  * indeterminate angle.
  */
+
+/**
+ * Round 62: Apply recipe-specific 3D visualization before capturing screenshots.
+ *
+ * This function inspects the recipe ID and the analysis result data to
+ * determine the best visualization, then applies it via the Molstar API.
+ * For example:
+ *   - binding_pocket → focus on ligand + set representation to show pocket
+ *   - all_interactions → show interactions + focus on interface
+ *   - druggability → show druggable pocket surface
+ *   - hbonds → show interactions (H-bonds)
+ *   - virtual_screening → show top hit pose
+ *
+ * The function is best-effort — if any visualization step fails, it silently
+ * continues to the next one. The screenshot will still be captured even if
+ * visualization is not applied.
+ */
+async function applyRecipeVisualization(
+  viewer: MolstarViewer,
+  recipe: string,
+  params?: Record<string, unknown>
+): Promise<void> {
+  try {
+    const plugin = (viewer as unknown as { plugin?: MolstarPlugin }).plugin;
+    if (!plugin) return;
+
+    // Helper: safely execute a visualization step, ignoring errors
+    const safe = async (fn: () => Promise<void>, label: string) => {
+      try {
+        await fn();
+      } catch (err) {
+        console.warn(`[viz:${recipe}] ${label} failed:`, err);
+      }
+    };
+
+    // Round 63: Helper to apply a representation preset (cartoon, surface, etc.)
+    const applyPreset = async (preset: string) => {
+      const structs = getStructures(plugin);
+      if (structs.length === 0) return;
+      await plugin.managers.structure.component.applyPreset(structs, preset);
+    };
+
+    // Round 63: Helper to apply a color theme
+    const applyColorTheme = async (theme: string) => {
+      const structs = getStructures(plugin);
+      const components = collectComponents(plugin, structs);
+      if (components.length === 0) return;
+      const normalized = normalizeColorTheme(theme);
+      if (normalized) {
+        plugin.managers.structure.component.updateRepresentationsTheme(
+          components,
+          { color: normalized }
+        );
+      }
+    };
+
+    switch (recipe) {
+      case "binding_pocket":
+      case "ligand_interactions": {
+        // Focus on the ligand if we know its compId, otherwise focus on all ligands
+        const ligandCompId = params?.ligandCompId as string | undefined;
+        if (ligandCompId) {
+          await safe(async () => {
+            const loci = await lociFromResidue(viewer, { compId: ligandCompId });
+            if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
+          }, "focus_ligand");
+        } else {
+          // Focus on all non-polymer entities (ligands)
+          await safe(async () => {
+            const data = getFirstStructureData(plugin);
+            if (!data) return;
+            const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+            if (Q) {
+              const expr = Q.struct.generator.atomGroups({
+                'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.entityType(), 'non-polymer'])
+              });
+              const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
+              if (loci && !isLociEmpty(loci)) {
+                plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
+              }
+            }
+          }, "focus_all_ligands");
+        }
+        // Round 63: Use cartoon + residue-name color for pocket context
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
+        break;
+      }
+
+      case "all_interactions":
+      case "hbonds":
+      case "salt_bridges":
+      case "hydrophobic_contacts": {
+        // Show interactions (dashed lines for H-bonds, salt bridges, etc.)
+        await safe(async () => {
+          const chain1 = params?.chain1 as string | undefined;
+          if (chain1) {
+            const loci = await lociFromResidue(viewer, { chain: chain1 });
+            if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
+          }
+        }, "show_interactions");
+        // Round 63: Cartoon + chain-id color to distinguish interacting chains
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
+        break;
+      }
+
+      case "druggability": {
+        // Focus on the ligand (pocket center)
+        const ligandCompId = params?.ligandCompId as string | undefined;
+        if (ligandCompId) {
+          await safe(async () => {
+            const loci = await lociFromResidue(viewer, { compId: ligandCompId });
+            if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 18 });
+          }, "focus_druggable_pocket");
+        }
+        // Round 63: Surface representation for pocket visualization
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("hydrophobicity"); }, "color_hydrophobicity");
+        break;
+      }
+
+      case "virtual_screening":
+      case "druglike_screening": {
+        // Focus on the ligand (where screening happens)
+        const ligandCompId = params?.ligandCompId as string | undefined;
+        if (ligandCompId) {
+          await safe(async () => {
+            const loci = await lociFromResidue(viewer, { compId: ligandCompId });
+            if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 16 });
+          }, "focus_screening_pocket");
+        }
+        // Round 63: Cartoon + element-symbol for ligand detail
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("element-symbol"); }, "color_element");
+        break;
+      }
+
+      case "disulfide_bonds":
+      case "metal_coordination":
+      case "aromatic_stacking":
+      case "water_bridges": {
+        // Focus on the first chain (these are intra-chain features)
+        await safe(async () => {
+          const data = getFirstStructureData(plugin);
+          if (!data) return;
+          const structs = getStructures(plugin);
+          if (structs.length > 0 && structs[0].components) {
+            for (const c of structs[0].components) {
+              const tags = c?.cell?.transform?.tags;
+              if (Array.isArray(tags) && tags.includes("structure-component-static-chain")) {
+                const loci = c.cell?.obj?.data?.sourceSelection?.loci;
+                if (loci && !isLociEmpty(loci)) {
+                  plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
+                  return;
+                }
+              }
+            }
+          }
+        }, "focus_chain_for_special_bonds");
+        // Round 63: Stick representation for bond detail
+        await safe(async () => { await applyPreset("ball-and-stick"); }, "preset_stick");
+        await safe(async () => { await applyColorTheme("element-symbol"); }, "color_element");
+        break;
+      }
+
+      case "sasa":
+      case "surface_residues": {
+        // Round 63: Surface representation for solvent accessibility
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("hydrophobicity"); }, "color_hydrophobicity");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_surface");
+        break;
+      }
+
+      case "electrostatic":
+      case "apbs_electrostatic": {
+        // Round 63: Surface + charge color for electrostatic
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("partial-charge"); }, "color_charge");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_electrostatic");
+        break;
+      }
+
+      case "bfactor_stats": {
+        // Round 63: Putty representation for B-factor (Molstar uses "putty" preset)
+        await safe(async () => { await applyPreset("putty"); }, "preset_putty");
+        await safe(async () => { await applyColorTheme("bfactor"); }, "color_bfactor");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_bfactor");
+        break;
+      }
+
+      case "secondary_structure_simple": {
+        // Round 63: Cartoon + secondary-structure color
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("secondary-structure"); }, "color_ss");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_ss");
+        break;
+      }
+
+      case "interface_residues":
+      case "oligomer_analysis": {
+        // Round 63: Cartoon + chain-id for assembly/interface
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_assembly");
+        break;
+      }
+
+      case "rmsd":
+      case "conformational_changes":
+      case "per_residue_rmsd_two": {
+        // Round 63: Putty for RMSD deviation visualization
+        await safe(async () => { await applyPreset("putty"); }, "preset_putty");
+        await safe(async () => { await applyColorTheme("uncertainty"); }, "color_rmsd");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_rmsd");
+        break;
+      }
+
+      case "detect_pockets": {
+        // Round 63: Surface for pocket detection
+        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_pocket_detection");
+        break;
+      }
+
+      case "summary": {
+        // Round 63: Cartoon + spectrum for overview
+        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        await safe(async () => { await applyColorTheme("sequence-id"); }, "color_spectrum");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_summary");
+        break;
+      }
+
+      default: {
+        // Unknown recipe — just reset camera for a clean shot
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_default");
+        break;
+      }
+    }
+  } catch (err) {
+    console.warn(`[applyRecipeVisualization:${recipe}] overall error:`, err);
+  }
+}
+
 async function applyCameraAngle(
   plugin: MolstarPlugin,
   angle: "front" | "side" | "top" | "back"

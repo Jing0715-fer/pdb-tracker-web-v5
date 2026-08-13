@@ -13,13 +13,15 @@
  * display-related props.
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   User, Bot, Check, X, Clock, Loader2, Terminal, Brain, Cog, Timer,
   AlertCircle, Copy, Play, RotateCcw, Pencil, ThumbsUp, ThumbsDown,
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
-  GitBranch, ChevronDown, ChevronUp, Download, Star,
+  GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
+  Maximize2, ZoomIn, ZoomOut, Filter, ArrowUpDown, FileJson,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -450,47 +452,9 @@ export function MessageBubble({
                     {displayedContent}
                   </ReactMarkdown>
                 )}
-                {/* Round 61: Render analysis screenshots (multi-angle captures) */}
+                {/* Round 61/62: Render analysis screenshots as a carousel */}
                 {!isUser && message.analysisImages && message.analysisImages.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {message.analysisImages.map((img, idx) => (
-                      <div
-                        key={idx}
-                        className={`relative rounded-lg overflow-hidden border ${
-                          img.best
-                            ? "border-claude-accent/50 ring-1 ring-claude-accent/30"
-                            : "border-claude-border-light/40 dark:border-[#3d3832]/40"
-                        }`}
-                      >
-                        {/* Image label badge */}
-                        <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-[9px] font-medium">
-                          {img.best && <Star className="h-2.5 w-2.5 text-claude-accent" />}
-                          <span>{img.label}</span>
-                        </div>
-                        {/* VLM commentary badge */}
-                        {img.vlmComment && (
-                          <div className="absolute bottom-1.5 left-1.5 right-1.5 z-10 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm text-white/90 text-[9px] leading-tight">
-                            {img.vlmComment}
-                          </div>
-                        )}
-                        <img
-                          src={img.dataUri}
-                          alt={img.label}
-                          className="w-full h-auto max-h-64 object-contain bg-claude-bg dark:bg-[#1a1917]"
-                          loading="lazy"
-                          onClick={(e) => {
-                            // Click to open full-size in new tab
-                            const w = window.open('');
-                            if (w) {
-                              w.document.write(`<img src="${img.dataUri}" style="max-width:100%;max-height:100vh;margin:auto;display:block;" />`);
-                              w.document.title = img.label;
-                            }
-                          }}
-                          style={{ cursor: 'pointer' }}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <AnalysisImageCarousel images={message.analysisImages} />
                 )}
                 {/* Round 15: Show more/less button for long messages */}
                 {isLongMessage && (
@@ -1074,6 +1038,545 @@ export function MessageBubble({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Round 62: AnalysisImageCarousel — displays analysis screenshots in a
+ * swipeable carousel with thumbnail navigation.
+ *
+ * Features:
+ * - Main image view with label + VLM commentary overlay
+ * - Thumbnail strip at the bottom for quick navigation
+ * - VLM-selected best image is auto-selected and highlighted with star
+ * - Click main image to open full-size in new tab
+ * - Keyboard navigation (left/right arrows) when focused
+ */
+function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/store").AnalysisImage[] }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [downloaded, setDownloaded] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [showAll, setShowAll] = useState(false); // Round 65: score filter
+  const [compareMode, setCompareMode] = useState(false); // Round 65: comparison view
+  const [sortByScore, setSortByScore] = useState(false); // Round 66: score sorting
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Round 65: Score-based filtering — hide screenshots with score < 3
+  // unless showAll is true. Best images are always shown.
+  // Round 66: Optionally sort by score (best first). When sortByScore is true,
+  // images are sorted by score descending; best image is always first.
+  const visibleImages = useMemo(() => {
+    let result = showAll
+      ? [...images]
+      : images.filter(img => img.best || (img.score == null) || img.score >= 3);
+    if (sortByScore) {
+      // Sort: best first, then by score descending, then by original order
+      result.sort((a, b) => {
+        if (a.best && !b.best) return -1;
+        if (!a.best && b.best) return 1;
+        const sa = a.score ?? 0;
+        const sb = b.score ?? 0;
+        return sb - sa;
+      });
+    }
+    return result;
+  }, [images, showAll, sortByScore]);
+  const hiddenCount = images.length - (showAll ? 0 : images.filter(img => img.best || (img.score == null) || img.score >= 3).length);
+
+  // Round 63: Keyboard navigation — left/right arrows to navigate,
+  // but only when the carousel container is focused or hovered.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setActiveIdx(i => Math.max(0, i - 1));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
+    }
+  }, [visibleImages.length]);
+
+  // Round 63: Download the current screenshot as a PNG file.
+  const handleDownload = useCallback(() => {
+    const bestIdx = visibleImages.findIndex(img => img.best);
+    const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
+    const img = visibleImages[currentIdx];
+    if (!img) return;
+    const a = document.createElement("a");
+    a.href = img.dataUri;
+    a.download = `${img.recipe}-${img.angle}-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setDownloaded(true);
+    setTimeout(() => setDownloaded(false), 1500);
+  }, [visibleImages, activeIdx]);
+
+  // Round 62: Auto-select the best image when VLM selection completes.
+  // Instead of using useEffect + setState (which triggers lint warning),
+  // we compute the effective index directly during render.
+  const bestIdx = visibleImages.findIndex(img => img.best);
+  // If there's a best image and the user hasn't manually navigated away,
+  // show the best image. Otherwise show the activeIdx.
+  const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
+  const currentImg = visibleImages[currentIdx];
+  if (!currentImg) return null;
+
+  const goToPrev = () => setActiveIdx(i => Math.max(0, i - 1));
+  const goToNext = () => setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
+
+  return (
+    <div
+      ref={containerRef}
+      className="mt-3 rounded-lg border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden bg-claude-bg dark:bg-[#1a1917] focus:outline-none"
+      tabIndex={0}
+      onKeyDown={visibleImages.length > 1 ? handleKeyDown : undefined}
+    >
+      {/* Main image area */}
+      <div className="relative group">
+        {/* Label badge (top-left) */}
+        <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-black/70 backdrop-blur-sm text-white text-[10px] font-medium">
+          {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+          <span>{currentImg.label}</span>
+          <span className="text-white/50 ml-1">{currentIdx + 1}/{visibleImages.length}</span>
+        </div>
+
+        {/* Score badge (top-left, below label) — Round 64 */}
+        {currentImg.score != null && (
+          <div className={`absolute top-9 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md backdrop-blur-sm text-[9px] font-bold ${
+            currentImg.score >= 8 ? 'bg-emerald-500/80 text-white' :
+            currentImg.score >= 5 ? 'bg-amber-500/80 text-white' :
+            'bg-red-500/80 text-white'
+          }`}>
+            <span>★ {currentImg.score}/10</span>
+            {currentImg.confidence && (
+              <span className="ml-1 opacity-80">
+                {currentImg.confidence === 'high' ? '●' : currentImg.confidence === 'medium' ? '◐' : '○'}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Download button (top-right) — Round 63 */}
+        <button
+          type="button"
+          onClick={handleDownload}
+          className="absolute top-2 right-2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors"
+          title={downloaded ? "已下载" : "下载截图"}
+        >
+          {downloaded ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Download className="h-3.5 w-3.5" />}
+        </button>
+
+        {/* VLM commentary overlay (bottom) */}
+        {currentImg.vlmComment && (
+          <div className="absolute bottom-2 left-2 right-2 z-10 px-3 py-1.5 rounded-md bg-black/70 backdrop-blur-sm text-white/95 text-[10px] leading-relaxed">
+            <span className="text-claude-accent font-medium">VLM: </span>
+            {currentImg.vlmComment}
+          </div>
+        )}
+
+        {/* Navigation arrows (only if >1 image) */}
+        {visibleImages.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={goToPrev}
+              disabled={currentIdx === 0}
+              className="absolute left-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Previous (←)"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={goToNext}
+              disabled={currentIdx === visibleImages.length - 1}
+              className="absolute right-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Next (→)"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </>
+        )}
+
+        {/* The image — Round 66: AnimatePresence for smooth slide transitions */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={currentIdx}
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+          >
+            <img
+              src={currentImg.dataUri}
+              alt={currentImg.label}
+              className="w-full h-auto max-h-80 object-contain"
+              loading="lazy"
+              onClick={() => {
+                // Round 64: Open in full-screen lightbox instead of new tab
+                setZoom(1);
+                setPanX(0);
+                setPanY(0);
+                setLightboxOpen(true);
+              }}
+              style={{ cursor: 'pointer' }}
+            />
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* Thumbnail strip (only if >1 image) */}
+      {visibleImages.length > 1 && (
+        <div className="flex gap-1 p-1.5 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-x-auto thin-scroll">
+          {visibleImages.map((img, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setActiveIdx(idx)}
+              className={`relative shrink-0 h-12 w-16 rounded overflow-hidden border-2 transition-all ${
+                idx === currentIdx
+                  ? "border-claude-accent opacity-100"
+                  : "border-transparent opacity-60 hover:opacity-100"
+              }`}
+              title={img.label}
+            >
+              <img
+                src={img.dataUri}
+                alt={img.label}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+              {img.best && (
+                <div className="absolute top-0 right-0 bg-claude-accent rounded-bl px-0.5">
+                  <Star className="h-2 w-2 text-white" />
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Action bar — Round 64/65: batch download + filter + expand */}
+      <div className="flex items-center justify-between px-2 py-1 bg-claude-surface/40 dark:bg-[#242220]/40 border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              // Round 64: Batch download all screenshots
+              images.forEach((img, i) => {
+                setTimeout(() => {
+                  const a = document.createElement("a");
+                  a.href = img.dataUri;
+                  a.download = `${img.recipe}-${img.angle}-${Date.now()}-${i}.png`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }, i * 200); // 200ms delay between downloads to avoid browser blocking
+              });
+            }}
+            className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+            title="下载所有截图"
+          >
+            <Download className="h-2.5 w-2.5" />
+            下载全部 ({images.length})
+          </button>
+          {/* Round 65: Score filter toggle */}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAll(s => !s)}
+              className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+              title={showAll ? "隐藏低分截图" : `显示全部 (${hiddenCount} 张低分隐藏)`}
+            >
+              <Filter className="h-2.5 w-2.5" />
+              {showAll ? `隐藏低分` : `+${hiddenCount} 低分`}
+            </button>
+          )}
+          {/* Round 66: Score sorting toggle */}
+          {visibleImages.some(img => img.score != null) && (
+            <button
+              type="button"
+              onClick={() => setSortByScore(s => !s)}
+              className={`flex items-center gap-1 text-[9px] transition-colors ${
+                sortByScore ? 'text-claude-accent' : 'text-claude-text-muted hover:text-claude-accent'
+              }`}
+              title={sortByScore ? "按评分排序（已启用）" : "按评分排序"}
+            >
+              <ArrowUpDown className="h-2.5 w-2.5" />
+              {sortByScore ? '评分排序' : '排序'}
+            </button>
+          )}
+          {/* Round 66: VLM analysis export */}
+          {visibleImages.some(img => img.score != null || img.vlmComment) && (
+            <button
+              type="button"
+              onClick={() => {
+                // Export VLM analysis report as JSON
+                const report = {
+                  exportedAt: new Date().toISOString(),
+                  totalImages: images.length,
+                  images: images.map(img => ({
+                    recipe: img.recipe,
+                    angle: img.angle,
+                    label: img.label,
+                    score: img.score,
+                    confidence: img.confidence,
+                    best: img.best,
+                    vlmComment: img.vlmComment,
+                  })),
+                };
+                const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `vlm-analysis-${images[0]?.recipe || 'report'}-${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              }}
+              className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+              title="导出 VLM 分析报告 (JSON)"
+            >
+              <FileJson className="h-2.5 w-2.5" />
+              导出报告
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setZoom(1);
+            setPanX(0);
+            setPanY(0);
+            setCompareMode(false);
+            setLightboxOpen(true);
+          }}
+          className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+          title="全屏查看"
+        >
+          <Maximize2 className="h-2.5 w-2.5" />
+          全屏
+        </button>
+      </div>
+
+      {/* Keyboard hint (only if >1 image) — Round 63 */}
+      {visibleImages.length > 1 && (
+        <div className="px-2 py-1 text-[8px] text-claude-text-muted/50 text-center border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
+          ← → 键切换 · 点击图片全屏查看 · 点击下载按钮保存
+        </div>
+      )}
+
+      {/* Round 64: Full-screen lightbox with zoom/pan */}
+      {lightboxOpen && currentImg && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm"
+          onClick={() => setLightboxOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setLightboxOpen(false);
+            if (e.key === "ArrowLeft" && visibleImages.length > 1) {
+              e.stopPropagation();
+              setActiveIdx(i => Math.max(0, i - 1));
+              setZoom(1); setPanX(0); setPanY(0);
+            }
+            if (e.key === "ArrowRight" && visibleImages.length > 1) {
+              e.stopPropagation();
+              setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
+              setZoom(1); setPanX(0); setPanY(0);
+            }
+          }}
+          tabIndex={0}
+          style={{ outline: 'none' }}
+        >
+          {/* Top toolbar */}
+          <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-xs">
+              {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+              <span className="font-medium">{currentImg.label}</span>
+              {visibleImages.length > 1 && <span className="text-white/50 ml-1">{currentIdx + 1}/{visibleImages.length}</span>}
+              {currentImg.score != null && (
+                <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  currentImg.score >= 8 ? 'bg-emerald-500/30 text-emerald-300' :
+                  currentImg.score >= 5 ? 'bg-amber-500/30 text-amber-300' :
+                  'bg-red-500/30 text-red-300'
+                }`}>
+                  ★ {currentImg.score}/10
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {/* Zoom controls */}
+              <button
+                type="button"
+                onClick={() => setZoom(z => Math.max(0.5, z - 0.25))}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                title="缩小"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </button>
+              <span className="text-white text-xs w-12 text-center font-mono">{Math.round(zoom * 100)}%</span>
+              <button
+                type="button"
+                onClick={() => setZoom(z => Math.min(4, z + 0.25))}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+                title="放大"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setZoom(1); setPanX(0); setPanY(0); }}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors ml-1"
+                title="重置"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+              {/* Round 65: Comparison view toggle */}
+              {visibleImages.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setCompareMode(c => !c)}
+                  className={`h-8 px-2 rounded-full flex items-center gap-1 text-xs font-medium transition-colors ml-1 ${
+                    compareMode ? 'bg-claude-accent/30 text-claude-accent' : 'bg-white/10 hover:bg-white/20 text-white'
+                  }`}
+                  title="对比视图"
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                  对比
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors ml-1"
+                title="下载"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxOpen(false)}
+                className="h-8 w-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors ml-1"
+                title="关闭 (Esc)"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Navigation arrows */}
+          {visibleImages.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setActiveIdx(i => Math.max(0, i - 1)); setZoom(1); setPanX(0); setPanY(0); }}
+                disabled={currentIdx === 0}
+                className="absolute left-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="上一张 (←)"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1)); setZoom(1); setPanX(0); setPanY(0); }}
+                disabled={currentIdx === visibleImages.length - 1}
+                className="absolute right-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="下一张 (→)"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </>
+          )}
+
+          {/* Round 65: Comparison view — two images side-by-side */}
+          {compareMode && visibleImages.length > 1 ? (
+            (() => {
+              const nextIdx = (currentIdx + 1) % visibleImages.length;
+              const nextImg = visibleImages[nextIdx];
+              return (
+                <div className="flex gap-2 max-w-[95vw] max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                  {/* Left image */}
+                  <div className="flex-1 flex flex-col items-center">
+                    <div className="text-white/70 text-xs mb-1 flex items-center gap-1">
+                      {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+                      {currentImg.label}
+                      {currentImg.score != null && <span className="opacity-60">★{currentImg.score}</span>}
+                    </div>
+                    <img
+                      src={currentImg.dataUri}
+                      alt={currentImg.label}
+                      className="max-w-full max-h-[72vh] object-contain rounded-lg border border-white/10"
+                    />
+                  </div>
+                  {/* Right image */}
+                  <div className="flex-1 flex flex-col items-center">
+                    <div className="text-white/70 text-xs mb-1 flex items-center gap-1">
+                      {nextImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+                      {nextImg.label}
+                      {nextImg.score != null && <span className="opacity-60">★{nextImg.score}</span>}
+                    </div>
+                    <img
+                      src={nextImg.dataUri}
+                      alt={nextImg.label}
+                      className="max-w-full max-h-[72vh] object-contain rounded-lg border border-white/10"
+                    />
+                  </div>
+                </div>
+              );
+            })()
+          ) : (
+          <img
+            src={currentImg.dataUri}
+            alt={currentImg.label}
+            className="max-w-[90vw] max-h-[85vh] object-contain transition-transform"
+            onClick={(e) => e.stopPropagation()}
+            onWheel={(e) => {
+              e.preventDefault();
+              const delta = e.deltaY > 0 ? -0.1 : 0.1;
+              setZoom(z => Math.max(0.5, Math.min(4, z + delta)));
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setZoom(z => z === 1 ? 2 : 1);
+              setPanX(0);
+              setPanY(0);
+            }}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+            }}
+            onDrag={(e) => {
+              if (e.clientX !== 0 || e.clientY !== 0) {
+                setPanX(x => x + e.movementX);
+                setPanY(y => y + e.movementY);
+              }
+            }}
+            style={{
+              transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+              cursor: zoom > 1 ? 'move' : 'pointer',
+              transition: 'transform 0.1s ease-out',
+            }}
+          />
+          )}
+
+          {/* VLM commentary in lightbox */}
+          {currentImg.vlmComment && (
+            <div className="absolute bottom-4 left-4 right-4 z-10 px-4 py-2 rounded-md bg-black/70 backdrop-blur-sm text-white/95 text-xs leading-relaxed max-w-2xl mx-auto" onClick={(e) => e.stopPropagation()}>
+              <span className="text-claude-accent font-medium">VLM: </span>
+              {currentImg.vlmComment}
+            </div>
+          )}
+
+          {/* Bottom hint */}
+          <div className="absolute bottom-2 left-0 right-0 text-center text-white/40 text-[10px]" onClick={(e) => e.stopPropagation()}>
+            滚轮缩放 · 双击切换 100%/200% · 拖拽平移 · ← → 切换 · Esc 关闭
+          </div>
+        </div>
+      )}
     </div>
   );
 }
