@@ -141,18 +141,22 @@ export function formatAnalysisResults(
       const hp = (rd?.hydrophobic as number) ?? 0;
       const chain1 = (rd?.chain1 as string) || "?";
       const chain2 = (rd?.chain2 as string) || "?";
-      sections.push(`### All Interactions — ${chain1} ↔ ${chain2} (${total} total)`);
+      // Round 86: Brief header for quick scanning, full breakdown below
+      const headerBits: string[] = [`**${chain1} ↔ ${chain2}:**`];
+      headerBits.push(`total ${total} (H-bonds ${hb} · salt bridges ${sb} · hydrophobic ${hp})`);
+      sections.push(headerBits.join(" "));
       if (total === 0) {
         sections.push("*No inter-chain contacts detected within cutoffs.*");
-      } else {
-        sections.push(`| Type | Count | % |`);
-        sections.push(`|------|------|---|`);
-        const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
-        sections.push(`| H-bonds | ${hb} | ${pct(hb)}% |`);
-        sections.push(`| Salt bridges | ${sb} | ${pct(sb)}% |`);
-        sections.push(`| Hydrophobic | ${hp} | ${pct(hp)}% |`);
-        const interactions = rd?.interactions as unknown[];
-        if (Array.isArray(interactions) && interactions.length > 0) {
+        return; // Skip the rest of the body
+      }
+      sections.push(`| Type | Count | % |`);
+      sections.push(`|------|------|---|`);
+      const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+      sections.push(`| H-bonds | ${hb} | ${pct(hb)}% |`);
+      sections.push(`| Salt bridges | ${sb} | ${pct(sb)}% |`);
+      sections.push(`| Hydrophobic | ${hp} | ${pct(hp)}% |`);
+      const interactions = rd?.interactions as unknown[];
+      if (Array.isArray(interactions) && interactions.length > 0) {
           sections.push("");
           sections.push("**Top interactions (sorted by distance):**");
           sections.push(interactions.slice(0, 20).map((c: any) => {
@@ -182,7 +186,6 @@ export function formatAnalysisResults(
           }
         }
       }
-    }
     else if (recipe === "binding_pocket") {
       const residues = (rd?.residues as unknown[]) || [];
       const volume = (rd?.estimated_volume_A3 as string|number) || (rd?.estimated_volume as string|number) || "?";

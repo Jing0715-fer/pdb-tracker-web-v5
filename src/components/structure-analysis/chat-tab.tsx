@@ -1755,7 +1755,7 @@ export function ChatTab() {
                               label: s.label,
                               // No best flag yet — VLM will set it
                             }));
-                            const existingMsg = useAppStore.getState().messages.find(m => m.id === pendingId);
+                            const existingMsg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
                             const existingImages = existingMsg?.analysisImages || [];
                             updateMessage(pendingId, {
                               analysisImages: [...existingImages, ...initialImages],
@@ -1802,7 +1802,7 @@ export function ChatTab() {
                                 if (vlmData) {
                                   try {
                                     // Update the images with VLM selection + scores
-                                    const msg = useAppStore.getState().messages.find(m => m.id === pendingId);
+                                    const msg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
                                     const currentImages = msg?.analysisImages || [];
                                     // Find the images for this recipe
                                     const recipeImages = currentImages.filter(img => img.recipe === recipeId);

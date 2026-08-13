@@ -55,6 +55,12 @@ export function AnalysisToolbar() {
   const logCommand = useAppStore((s) => s.logCommand);
   const viewerBgDark = useAppStore((s) => s.viewerBgDark);
   const setViewerBgDark = useAppStore((s) => s.setViewerBgDark);
+  // Round 86: Sync viewerBgDark to a window-level hint so capture commands
+  // (in commands.ts) can read it without coupling the toolbar to the
+  // executeCommand internals. Restoring the post-capture background uses this.
+  useEffect(() => {
+    (window as unknown as { __viewerBgDark?: boolean }).__viewerBgDark = viewerBgDark;
+  }, [viewerBgDark]);
   const structures = useAppStore((s) => s.structures);
 
   const handleLoadPdb = useCallback(

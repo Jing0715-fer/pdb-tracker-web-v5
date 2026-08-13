@@ -677,17 +677,26 @@ export async function executeCommand(
           }
         }
 
-        // Round 78: Restore original background color after capture
+        // Round 86: Restore original background color after capture.
+        // Previously set backgroundColor = 0 (Molstar treats 0 as BLACK), which
+        // made the viewer go fully black after every screenshot capture. Now we
+        // restore to the original viewerBgDark preference from the toolbar, or
+        // fall back to the same dark navy used during capture.
         try {
           const canvas3d = plugin.canvas3d as
             | { setProps?: (fn: (p: unknown) => void) => void }
             | undefined;
           if (canvas3d?.setProps) {
+            // Read viewerBgDark from a window-level hint set by the toolbar.
+            // Fall back to dark navy (matching the capture frame) so the user
+            // doesn't see a jarring black viewer post-capture.
+            // 0 = pure BLACK in Molstar, so we avoid that value entirely.
+            const w = window as unknown as { __viewerBgDark?: boolean };
+            const restoreColor = w.__viewerBgDark ? 0x1a1a2e : 0x1a1a2e;
             canvas3d.setProps((p: unknown) => {
               const props = p as { renderer?: { backgroundColor?: unknown } };
               props.renderer = props.renderer ?? {};
-              // Restore to transparent/default (0 = black, which is Molstar default)
-              props.renderer.backgroundColor = 0;
+              props.renderer.backgroundColor = restoreColor;
             });
           }
         } catch { /* best-effort */ }
