@@ -1089,7 +1089,21 @@ function persistChatMessages(messages: ChatMessage[]): void {
   if (typeof window === "undefined") return;
   try {
     // Cap at 50 messages, strip pending messages (they're transient)
-    const toSave = messages.filter((m) => !m.pending).slice(-50);
+    // Round 71: Strip analysisImages (base64 data URIs) to avoid localStorage
+    // overflow. A single screenshot is ~100KB in base64; 60 screenshots across
+    // 20 messages would exceed the 5-10MB localStorage limit, causing all
+    // session data to be lost silently.
+    const toSave = messages.filter((m) => !m.pending).slice(-50).map(m => {
+      if (!m.analysisImages || m.analysisImages.length === 0) return m;
+      // Keep image metadata but strip the dataUri (which is the large part)
+      return {
+        ...m,
+        analysisImages: m.analysisImages.map(img => ({
+          ...img,
+          dataUri: '', // Strip base64 data — too large for localStorage
+        })),
+      };
+    });
     localStorage.setItem(STORAGE_KEY_CHAT_MESSAGES, JSON.stringify(toSave));
   } catch { /* ignore */ }
 }
@@ -1112,9 +1126,26 @@ function persistChatSessions(sessions: ChatSession[]): void {
   if (typeof window === "undefined") return;
   try {
     // Cap at 20 sessions
-    const toSave = sessions.slice(0, 20);
+    // Round 71: Strip analysisImages dataUri from session messages to avoid
+    // localStorage overflow (same issue as persistChatMessages)
+    const toSave = sessions.slice(0, 20).map(s => ({
+      ...s,
+      messages: s.messages.map(m => {
+        if (!m.analysisImages || m.analysisImages.length === 0) return m;
+        return {
+          ...m,
+          analysisImages: m.analysisImages.map(img => ({
+            ...img,
+            dataUri: '', // Strip base64 data — too large for localStorage
+          })),
+        };
+      }),
+    }));
     localStorage.setItem(STORAGE_KEY_CHAT_SESSIONS, JSON.stringify(toSave));
-  } catch { /* ignore */ }
+  } catch (err) {
+    // Round 71: Log the error so we know if localStorage is full
+    console.warn('[persistChatSessions] Failed to save sessions:', err);
+  }
 }
 
 function loadActiveSessionId(): string | null {

@@ -598,6 +598,18 @@ print(json.dumps({
         required: false,
         description: "是否允许链内氢键（chain1==chain2 时自动启用），默认 false",
       },
+      {
+        name: "ligandCompId",
+        type: "string",
+        required: false,
+        description: "配体 compId（如 N3, PJE）。设置后仅返回配体附近的氢键，避免全结构氢键过多",
+      },
+      {
+        name: "ligand_radius",
+        type: "number",
+        required: false,
+        description: "配体附近截断半径 (Å)，默认 5.0。仅当 ligandCompId 设置时生效",
+      },
     ],
     buildScript: (inputPath, params) => {
       const chain1 = String(params.chain1 ?? "A");
@@ -606,6 +618,9 @@ print(json.dumps({
       const angleTol = Number(params.angleTolerance ?? 20.0);
       // Auto-enable intra-chain mode when chain1==chain2, or if explicitly requested
       const intraChain = params.intra_chain === true || chain1 === chain2;
+      // Round 71: Optional ligand filter — when set, only H-bonds near the ligand are returned
+      const ligandCompId = params.ligandCompId ? String(params.ligandCompId) : "";
+      const ligandRadius = Number(params.ligand_radius ?? 5.0);
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 import numpy as np
@@ -859,6 +874,36 @@ for h in sorted(hbonds, key=lambda x: x['distance_A']):
         seen.add(key)
         unique_hbonds.append(h)
 
+# Round 71: Optional ligand filter — when ligandCompId is set, only keep
+# H-bonds where either the donor or acceptor residue is near the ligand.
+# This prevents returning 1000+ H-bonds for large single-chain structures.
+ligand_filter_id = "${ligandCompId}"
+ligand_cutoff = ${ligandRadius}
+if ligand_filter_id:
+    ligand_residues = [r for r in model.get_residues() if r.resname == ligand_filter_id]
+    if ligand_residues:
+        ligand_atoms = [a for r in ligand_residues for a in r]
+        ligand_ns = NeighborSearch(ligand_atoms)
+        filtered = []
+        for h in unique_hbonds:
+            # Check if donor or acceptor atom is near any ligand atom
+            donor_near = False
+            acceptor_near = False
+            for x in info1 + info2:
+                if x['chain'] == h['donor_chain'] and x['res'].id[1] == h['donor_resno'] and x['name'] == h['donor_atom']:
+                    nearby = ligand_ns.search(x['atom'].coord, ligand_cutoff, level="A")
+                    if nearby:
+                        donor_near = True
+                if x['chain'] == h['acceptor_chain'] and x['res'].id[1] == h['acceptor_resno'] and x['name'] == h['acceptor_atom']:
+                    nearby = ligand_ns.search(x['atom'].coord, ligand_cutoff, level="A")
+                    if nearby:
+                        acceptor_near = True
+            if donor_near or acceptor_near:
+                filtered.append(h)
+        unique_hbonds = filtered
+    else:
+        pass  # ligand not found — return all H-bonds
+
 # Summary by residue pair
 residue_pairs = {}
 for h in unique_hbonds:
@@ -871,6 +916,8 @@ print(json.dumps({
     "method": "Mills-Dean geometric criteria (ChimeraX-style)",
     "dist_tolerance": dist_tolerance,
     "angle_tolerance": angle_tolerance,
+    "ligand_filter": ligand_filter_id if ligand_filter_id else None,
+    "ligand_cutoff": ligand_cutoff if ligand_filter_id else None,
     "total_hbonds": len(unique_hbonds),
     "hbonds": unique_hbonds[:40],
     "top_residue_pairs": [{"pair": p, "count": c} for p, c in top_pairs],
