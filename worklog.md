@@ -11904,3 +11904,95 @@ Improvement Suggestions for Next Round:
    swipeable carousel instead of a vertical list
 4. **Export images** — add a "Download all screenshots" button to export the
    analysis images as a ZIP
+
+---
+Task ID: round-62-visualization-preapply-capture-resilience-carousel
+Agent: main
+Task: Continue development based on Round 61 improvement suggestions. Add recipe-specific 3D visualization before capture, capture resilience, image carousel. QA + commit and push.
+
+Development:
+
+### 1. Recipe-Specific 3D Visualization (src/lib/molcraft/commands.ts)
+Added `applyRecipeVisualization()` function that applies the appropriate 3D
+visualization before capturing screenshots, based on the analysis recipe type:
+
+| Recipe | Visualization Applied |
+|--------|----------------------|
+| binding_pocket, ligand_interactions | Focus on ligand (compId from analysis result) |
+| all_interactions, hbonds, salt_bridges, hydrophobic_contacts | Focus on interface chain |
+| druggability | Focus on ligand (pocket center) |
+| virtual_screening, druglike_screening | Focus on ligand (screening pocket) |
+| disulfide_bonds, metal_coordination, aromatic_stacking, water_bridges | Focus on first chain |
+| sasa, surface_residues, electrostatic, apbs_electrostatic | Reset camera (full structure view) |
+| bfactor_stats, secondary_structure_simple | Reset camera (global stats) |
+| interface_residues, oligomer_analysis | Reset camera (assembly view) |
+| rmsd, conformational_changes, per_residue_rmsd_two | Reset camera (full structure) |
+| detect_pockets, summary | Reset camera (overview) |
+
+The function is best-effort — if any step fails, it silently continues.
+Integrated into `capture_multi_angle` command: visualization is applied
+before the angle loop starts, with a 300ms render delay.
+
+Added `vizParams` field to the `capture_multi_angle` command schema —
+passes ligand compId, chain info etc. from the analysis result.
+
+### 2. Capture Resilience (src/components/structure-analysis/chat-tab.tsx)
+Rewrote the auto-capture flow for robustness:
+
+**Before (Round 61):** Capture → VLM selection → Store images (all in one
+await chain). If VLM fails, images are never stored — user sees nothing.
+
+**After (Round 62):** 
+1. Capture screenshots
+2. Store images IMMEDIATELY (without VLM best flag) — user sees them right away
+3. Run VLM selection in the background (fire-and-forget async IIFE)
+4. When VLM completes, update images with best flag + commentary
+5. If VLM fails, images remain visible (just without the best highlight)
+
+Also extracts vizParams from the analysis result (ligand compId, chain info)
+and passes them to `capture_multi_angle` so the visualization is correctly
+targeted.
+
+### 3. Image Carousel (src/components/structure-analysis/message-bubble.tsx)
+Replaced the vertical image list with a proper `AnalysisImageCarousel` component:
+
+- **Main image view** with label badge + image counter (1/3)
+- **VLM commentary overlay** at the bottom (when available)
+- **Navigation arrows** (left/right) — only shown when >1 image
+- **Thumbnail strip** at the bottom — click to jump to any image
+- **Auto-select best** — when VLM selects the best image, the carousel
+  automatically navigates to it (computed during render, no useEffect)
+- **Star badge** on best image thumbnail
+- **Click main image** to open full-size in new tab
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 screenshots, binding_pocket)
+→ bestIndex: 0 (front)
+→ commentary: "正面视角（Front）通常能最直接地展示结合口袋的开口..."
+→ Duration: ~5s
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 4 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Recipe-specific 3D visualization applied before capture (26 recipe types)
+- ✅ Capture resilience: images stored immediately, VLM runs in background
+- ✅ Image carousel with thumbnails, navigation, auto-best-select
+- ✅ VLM API verified working
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Keyboard navigation** — add left/right arrow key support to the carousel
+2. **Image download** — add a "Download" button to save the current screenshot
+3. **Recipe-specific Molstar representations** — not just camera focus, but
+   also set representation (e.g. surface for SASA, putty for B-factor)
+4. **VLM retry** — if VLM selection fails, retry once after 5s

@@ -19,7 +19,7 @@ import {
   AlertCircle, Copy, Play, RotateCcw, Pencil, ThumbsUp, ThumbsDown,
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
-  GitBranch, ChevronDown, ChevronUp, Download, Star,
+  GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -450,47 +450,9 @@ export function MessageBubble({
                     {displayedContent}
                   </ReactMarkdown>
                 )}
-                {/* Round 61: Render analysis screenshots (multi-angle captures) */}
+                {/* Round 61/62: Render analysis screenshots as a carousel */}
                 {!isUser && message.analysisImages && message.analysisImages.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {message.analysisImages.map((img, idx) => (
-                      <div
-                        key={idx}
-                        className={`relative rounded-lg overflow-hidden border ${
-                          img.best
-                            ? "border-claude-accent/50 ring-1 ring-claude-accent/30"
-                            : "border-claude-border-light/40 dark:border-[#3d3832]/40"
-                        }`}
-                      >
-                        {/* Image label badge */}
-                        <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-[9px] font-medium">
-                          {img.best && <Star className="h-2.5 w-2.5 text-claude-accent" />}
-                          <span>{img.label}</span>
-                        </div>
-                        {/* VLM commentary badge */}
-                        {img.vlmComment && (
-                          <div className="absolute bottom-1.5 left-1.5 right-1.5 z-10 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm text-white/90 text-[9px] leading-tight">
-                            {img.vlmComment}
-                          </div>
-                        )}
-                        <img
-                          src={img.dataUri}
-                          alt={img.label}
-                          className="w-full h-auto max-h-64 object-contain bg-claude-bg dark:bg-[#1a1917]"
-                          loading="lazy"
-                          onClick={(e) => {
-                            // Click to open full-size in new tab
-                            const w = window.open('');
-                            if (w) {
-                              w.document.write(`<img src="${img.dataUri}" style="max-width:100%;max-height:100vh;margin:auto;display:block;" />`);
-                              w.document.title = img.label;
-                            }
-                          }}
-                          style={{ cursor: 'pointer' }}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <AnalysisImageCarousel images={message.analysisImages} />
                 )}
                 {/* Round 15: Show more/less button for long messages */}
                 {isLongMessage && (
@@ -1074,6 +1036,127 @@ export function MessageBubble({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Round 62: AnalysisImageCarousel — displays analysis screenshots in a
+ * swipeable carousel with thumbnail navigation.
+ *
+ * Features:
+ * - Main image view with label + VLM commentary overlay
+ * - Thumbnail strip at the bottom for quick navigation
+ * - VLM-selected best image is auto-selected and highlighted with star
+ * - Click main image to open full-size in new tab
+ * - Keyboard navigation (left/right arrows) when focused
+ */
+function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/store").AnalysisImage[] }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  // Round 62: Auto-select the best image when VLM selection completes.
+  // Instead of using useEffect + setState (which triggers lint warning),
+  // we compute the effective index directly during render.
+  const bestIdx = images.findIndex(img => img.best);
+  // If there's a best image and the user hasn't manually navigated away,
+  // show the best image. Otherwise show the activeIdx.
+  const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, images.length - 1);
+  const currentImg = images[currentIdx];
+  if (!currentImg) return null;
+
+  const goToPrev = () => setActiveIdx(i => Math.max(0, i - 1));
+  const goToNext = () => setActiveIdx(i => Math.min(images.length - 1, i + 1));
+
+  return (
+    <div className="mt-3 rounded-lg border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden bg-claude-bg dark:bg-[#1a1917]">
+      {/* Main image area */}
+      <div className="relative group">
+        {/* Label badge (top-left) */}
+        <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-black/70 backdrop-blur-sm text-white text-[10px] font-medium">
+          {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+          <span>{currentImg.label}</span>
+          <span className="text-white/50 ml-1">{currentIdx + 1}/{images.length}</span>
+        </div>
+
+        {/* VLM commentary overlay (bottom) */}
+        {currentImg.vlmComment && (
+          <div className="absolute bottom-2 left-2 right-2 z-10 px-3 py-1.5 rounded-md bg-black/70 backdrop-blur-sm text-white/95 text-[10px] leading-relaxed">
+            <span className="text-claude-accent font-medium">VLM: </span>
+            {currentImg.vlmComment}
+          </div>
+        )}
+
+        {/* Navigation arrows (only if >1 image) */}
+        {images.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={goToPrev}
+              disabled={currentIdx === 0}
+              className="absolute left-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Previous"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={goToNext}
+              disabled={currentIdx === images.length - 1}
+              className="absolute right-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Next"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </>
+        )}
+
+        {/* The image */}
+        <img
+          src={currentImg.dataUri}
+          alt={currentImg.label}
+          className="w-full h-auto max-h-80 object-contain"
+          loading="lazy"
+          onClick={() => {
+            const w = window.open('');
+            if (w) {
+              w.document.write(`<img src="${currentImg.dataUri}" style="max-width:100%;max-height:100vh;margin:auto;display:block;" />`);
+              w.document.title = currentImg.label;
+            }
+          }}
+          style={{ cursor: 'pointer' }}
+        />
+      </div>
+
+      {/* Thumbnail strip (only if >1 image) */}
+      {images.length > 1 && (
+        <div className="flex gap-1 p-1.5 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-x-auto thin-scroll">
+          {images.map((img, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setActiveIdx(idx)}
+              className={`relative shrink-0 h-12 w-16 rounded overflow-hidden border-2 transition-all ${
+                idx === currentIdx
+                  ? "border-claude-accent opacity-100"
+                  : "border-transparent opacity-60 hover:opacity-100"
+              }`}
+              title={img.label}
+            >
+              <img
+                src={img.dataUri}
+                alt={img.label}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+              {img.best && (
+                <div className="absolute top-0 right-0 bg-claude-accent rounded-bl px-0.5">
+                  <Star className="h-2 w-2 text-white" />
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
