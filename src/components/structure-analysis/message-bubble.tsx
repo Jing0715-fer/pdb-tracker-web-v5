@@ -21,7 +21,7 @@ import {
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
   GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
-  Maximize2, ZoomIn, ZoomOut, Filter, ArrowUpDown, FileJson,
+  Maximize2, ZoomIn, ZoomOut, Filter, ArrowUpDown, FileJson, FileSpreadsheet,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -1063,6 +1063,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
   const [showAll, setShowAll] = useState(false); // Round 65: score filter
   const [compareMode, setCompareMode] = useState(false); // Round 65: comparison view
   const [sortByScore, setSortByScore] = useState(false); // Round 66: score sorting
+  const [exportMenuOpen, setExportMenuOpen] = useState(false); // Round 67: export dropdown
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Round 65: Score-based filtering — hide screenshots with score < 3
@@ -1310,58 +1311,142 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               {sortByScore ? '评分排序' : '排序'}
             </button>
           )}
-          {/* Round 66: VLM analysis export */}
+          {/* Round 67: VLM analysis export — JSON + CSV dropdown */}
           {visibleImages.some(img => img.score != null || img.vlmComment) && (
-            <button
-              type="button"
-              onClick={() => {
-                // Export VLM analysis report as JSON
-                const report = {
-                  exportedAt: new Date().toISOString(),
-                  totalImages: images.length,
-                  images: images.map(img => ({
-                    recipe: img.recipe,
-                    angle: img.angle,
-                    label: img.label,
-                    score: img.score,
-                    confidence: img.confidence,
-                    best: img.best,
-                    vlmComment: img.vlmComment,
-                  })),
-                };
-                const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `vlm-analysis-${images[0]?.recipe || 'report'}-${Date.now()}.json`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(() => URL.revokeObjectURL(url), 1000);
-              }}
-              className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
-              title="导出 VLM 分析报告 (JSON)"
-            >
-              <FileJson className="h-2.5 w-2.5" />
-              导出报告
-            </button>
+            <div className="relative" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                onClick={() => setExportMenuOpen(o => !o)}
+                className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+                title="导出 VLM 分析报告"
+              >
+                <FileJson className="h-2.5 w-2.5" />
+                导出报告
+                <ChevronDown className="h-2 w-2" />
+              </button>
+              <AnimatePresence>
+                {exportMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.96 }}
+                    transition={{ duration: 0.12 }}
+                    className="absolute left-0 top-full mt-1 w-36 rounded-md border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-lg z-20 overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-[9px] text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors"
+                      onClick={() => {
+                        // Export as JSON
+                        const report = {
+                          exportedAt: new Date().toISOString(),
+                          totalImages: images.length,
+                          images: images.map(img => ({
+                            recipe: img.recipe,
+                            angle: img.angle,
+                            label: img.label,
+                            score: img.score,
+                            confidence: img.confidence,
+                            best: img.best,
+                            vlmComment: img.vlmComment,
+                          })),
+                        };
+                        const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `vlm-analysis-${images[0]?.recipe || 'report'}-${Date.now()}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        setExportMenuOpen(false);
+                      }}
+                    >
+                      <FileJson className="h-3 w-3 text-claude-accent" />
+                      <span>JSON</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-[9px] text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50"
+                      onClick={() => {
+                        // Export as CSV
+                        const headers = ['recipe', 'angle', 'label', 'score', 'confidence', 'best', 'vlmComment'];
+                        const escapeCsv = (v: unknown) => {
+                          const s = String(v ?? '');
+                          if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+                            return `"${s.replace(/"/g, '""')}"`;
+                          }
+                          return s;
+                        };
+                        const rows = images.map(img => [
+                          img.recipe, img.angle, img.label,
+                          img.score ?? '', img.confidence ?? '',
+                          img.best ? 'yes' : 'no',
+                          img.vlmComment ?? '',
+                        ].map(escapeCsv).join(','));
+                        const csv = [headers.join(','), ...rows].join('\n');
+                        const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `vlm-analysis-${images[0]?.recipe || 'report'}-${Date.now()}.csv`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        setExportMenuOpen(false);
+                      }}
+                    >
+                      <FileSpreadsheet className="h-3 w-3 text-claude-accent" />
+                      <span>CSV</span>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setZoom(1);
-            setPanX(0);
-            setPanY(0);
-            setCompareMode(false);
-            setLightboxOpen(true);
-          }}
-          className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
-          title="全屏查看"
-        >
-          <Maximize2 className="h-2.5 w-2.5" />
-          全屏
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Round 67: Score distribution mini bar chart */}
+          {visibleImages.some(img => img.score != null) && visibleImages.length > 1 && (
+            <div className="flex items-end gap-0.5 h-4" title="评分分布">
+              {visibleImages.map((img, idx) => (
+                <div
+                  key={idx}
+                  className={`w-1.5 rounded-sm transition-all ${
+                    idx === currentIdx ? 'ring-1 ring-claude-accent' : ''
+                  } ${
+                    img.score != null
+                      ? img.score >= 8 ? 'bg-emerald-500'
+                      : img.score >= 5 ? 'bg-amber-500'
+                      : 'bg-red-500'
+                      : 'bg-claude-text-muted/30'
+                  }`}
+                  style={{
+                    height: img.score != null ? `${Math.max(20, (img.score / 10) * 100)}%` : '20%',
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setZoom(1);
+              setPanX(0);
+              setPanY(0);
+              setCompareMode(false);
+              setLightboxOpen(true);
+            }}
+            className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+            title="全屏查看"
+          >
+            <Maximize2 className="h-2.5 w-2.5" />
+            全屏
+          </button>
+        </div>
       </div>
 
       {/* Keyboard hint (only if >1 image) — Round 63 */}

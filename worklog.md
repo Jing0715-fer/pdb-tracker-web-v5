@@ -12315,3 +12315,67 @@ Improvement Suggestions for Next Round:
 3. **Export format options** — add CSV export in addition to JSON
 4. **Score distribution chart** — mini bar chart showing score distribution
    in the action bar
+
+---
+Task ID: round-67-csv-export-score-chart
+Agent: main
+Task: Continue development based on Round 66 improvement suggestions. Add CSV export format, score distribution mini chart. QA + commit and push.
+
+Development:
+
+### 1. CSV Export Format (src/components/structure-analysis/message-bubble.tsx)
+Replaced the single JSON export button with a dropdown menu offering both
+JSON and CSV export:
+
+**Dropdown menu** (AnimatePresence + motion):
+- "导出报告 ▼" button toggles the dropdown
+- JSON option: exports the full report (same as before) as .json
+- CSV option: exports a spreadsheet-friendly .csv with headers:
+  recipe, angle, label, score, confidence, best, vlmComment
+- CSV uses proper escaping (quotes for commas, double-quotes for embedded quotes)
+- BOM prefix (\ufeff) for correct UTF-8 encoding in Excel
+- Filename: `vlm-analysis-{recipe}-{timestamp}.csv`
+- Dropdown closes after selection
+
+Added imports: FileSpreadsheet icon, exportMenuOpen state.
+
+### 2. Score Distribution Mini Bar Chart (src/components/structure-analysis/message-bubble.tsx)
+Added a mini bar chart in the action bar showing the score distribution:
+- One bar per visible image
+- Bar height proportional to score (20% min for score=0, 100% for score=10)
+- Color-coded: green ≥8, amber 5-7, red <5, gray for unscored
+- Current image highlighted with accent ring
+- Only shown when >1 image and at least one has a score
+- Hover shows "评分分布" tooltip
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (3 screenshots, binding_pocket)
+→ bestIndex: 0 (front)
+→ scores: [8, 6, 5]
+→ confidence: medium
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- message-bubble.tsx: 0 errors, 0 warnings ✅
+
+Stage Summary:
+- ✅ CSV export format added alongside JSON (dropdown menu)
+- ✅ Score distribution mini bar chart in action bar
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Thumbnail transition animation** — animate thumbnail strip when sorting changes
+3. **Export Markdown report** — add a third export option that generates a
+   human-readable Markdown report with embedded images
+4. **Score history** — track score trends across multiple analysis runs of
+   the same recipe
