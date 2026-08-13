@@ -1601,19 +1601,27 @@ export function ChatTab() {
                       if (recipeId && shouldCaptureScreenshot(recipeId)) {
                         try {
                           // Extract viz params from the analysis result
-                          const analysisData = (result as { analysisResult?: unknown }).analysisResult as Record<string, unknown> | undefined;
+                          // Round 77: Fix — analysisResult is { kind: "recipe", recipe, data }
+                          // The actual recipe output is in .data, not directly on analysisResult
+                          const analysisResultRaw = (result as { analysisResult?: unknown }).analysisResult as Record<string, unknown> | undefined;
+                          const analysisData = (analysisResultRaw?.data as Record<string, unknown> | undefined) || analysisResultRaw;
                           const vizParams: Record<string, unknown> = {};
                           // Round 74: Extract residue labels for screenshot annotation
                           const residueLabels: Array<{ text: string; chain?: string; resno?: number }> = [];
                           if (analysisData) {
                             // Extract ligand compId for pocket-related recipes
-                            const bp = analysisData.bindingPocket as Record<string, unknown> | undefined;
-                            const ligand = bp?.ligand as string | undefined;
+                            // Round 77: binding_pocket recipe outputs 'ligand' directly,
+                            // not nested under 'bindingPocket'
+                            const ligand = (analysisData.ligand as string | undefined) ||
+                                          (analysisData.bindingPocket as Record<string, unknown> | undefined)?.ligand as string | undefined;
                             if (ligand) vizParams.ligandCompId = ligand;
                             // Extract chain info for interaction recipes
                             const ai = analysisData.allInteractions as Record<string, unknown> | undefined;
                             if (ai?.chain1) vizParams.chain1 = ai.chain1;
                             if (ai?.chain2) vizParams.chain2 = ai.chain2;
+                            // Also check direct chain1/chain2 on analysisData
+                            if (!vizParams.chain1 && analysisData.chain1) vizParams.chain1 = analysisData.chain1;
+                            if (!vizParams.chain2 && analysisData.chain2) vizParams.chain2 = analysisData.chain2;
 
                             // Round 74: Extract top residues for labeling
                             const residues = analysisData.residues as Array<Record<string, unknown>> | undefined;
