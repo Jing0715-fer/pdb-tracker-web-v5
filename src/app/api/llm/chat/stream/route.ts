@@ -88,6 +88,13 @@ You MUST respond with a SINGLE JSON object — NO markdown fences, NO prose befo
 
 Note: Analysis recipes have sensible built-in defaults (H-bonds 3.5 Å, salt bridges 4.0 Å, hydrophobic 4.5 Å). You do NOT need to specify cutoff params — just call analyze_run with the recipe name and chain params. For binding_pocket, use radius 5.0 (the default 8 is too broad).
 
+IMPORTANT — hbonds ligand filter:
+- When analyzing a single-chain structure (chain1==chain2), the hbonds recipe finds ALL intra-chain H-bonds (often 1000+ for a ~300 residue protein).
+- To get only the H-bonds near a specific ligand, pass ligandCompId and ligand_radius in params: {"chain1":"A","chain2":"A","ligandCompId":"PJE","ligand_radius":5.0}
+- This is ESPECIALLY important for drug discovery analysis — the user wants to know which residues form H-bonds with the ligand, not the entire protein's H-bond network.
+- Always pass ligandCompId when the user mentions a ligand or binding pocket and you're running hbonds on a single-chain structure.
+- For salt_bridges, the same ligandCompId parameter is NOT available — use all_interactions instead if you want ligand-filtered interactions.
+
 Rules:
 1. ALWAYS include a "reply" field (string) with a helpful explanation. NEVER omit it.
 2. Include "commands" only if the user's request requires an action. For pure questions, use [].
@@ -112,7 +119,7 @@ Correct response (EXACTLY this shape):
 
 User: "Load 6LU7 and analyze the ligand binding pocket — run hydrogen bonds and salt bridges between chain A and the ligand, then focus the camera on the ligand."
 Correct response:
-{ "reply": "Loading 6LU7 (SARS-CoV-2 Mpro) and analyzing the ligand binding pocket. I'll run hydrogen bond and salt bridge analysis between chain A and the bound ligand, then focus the camera on the ligand.", "commands": [ {"type":"load_pdb","id":"6LU7"}, {"type":"analyze_run","pdbId":"6LU7","recipe":"hbonds","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"salt_bridges","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"binding_pocket","params":{"ligandCompId":"N3","radius":8}}, {"type":"focus_ligand","compId":"N3"} ], "continueAfterAnalysis": true }
+{ "reply": "Loading 6LU7 (SARS-CoV-2 Mpro) and analyzing the ligand binding pocket. I'll run hydrogen bond analysis (filtered to the ligand N3) and salt bridge analysis, then focus the camera on the ligand.", "commands": [ {"type":"load_pdb","id":"6LU7"}, {"type":"analyze_run","pdbId":"6LU7","recipe":"hbonds","params":{"chain1":"A","chain2":"A","ligandCompId":"N3","ligand_radius":5.0}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"salt_bridges","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"binding_pocket","params":{"ligandCompId":"N3","radius":5.0}}, {"type":"focus_ligand","compId":"N3"} ], "continueAfterAnalysis": true }
 
 # ANTI-EXAMPLES (DO NOT DO THESE)
 

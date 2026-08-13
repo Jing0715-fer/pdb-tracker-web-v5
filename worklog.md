@@ -12701,3 +12701,72 @@ Improvement Suggestions for Next Round:
 3. **Image persistence via IndexedDB** — store base64 images in IndexedDB
    (larger quota) instead of stripping them for localStorage
 4. **Recipe output schema validation** — validate field names match formatter
+
+---
+Task ID: round-72-system-prompt-indexeddb-image-restore
+Agent: main
+Task: Update system prompt for hbonds ligand filter, add IndexedDB image persistence for session restore. QA + commit and push.
+
+Development:
+
+### 1. System Prompt Update (src/app/api/llm/chat/stream/route.ts)
+Added IMPORTANT guidance to the system prompt about the hbonds ligand filter:
+
+- When analyzing a single-chain structure (chain1==chain2), hbonds finds ALL
+  intra-chain H-bonds (often 1000+). To get only ligand-nearby H-bonds, pass
+  ligandCompId and ligand_radius in params.
+- Always pass ligandCompId when the user mentions a ligand or binding pocket
+  and running hbonds on a single-chain structure.
+- Updated the 6LU7 example to show ligandCompId usage:
+  `"params":{"chain1":"A","chain2":"A","ligandCompId":"N3","ligand_radius":5.0}`
+- Also changed binding_pocket radius from 8 to 5.0 in the example (the prompt
+  already says "use radius 5.0 (the default 8 is too broad)")
+
+### 2. IndexedDB Image Persistence (src/lib/molcraft/image-db.ts + store.ts)
+Created a new IndexedDB wrapper module (`image-db.ts`) with:
+- `storeImage(key, dataUri, meta)`: stores an image in IndexedDB
+- `getImage(key)`: retrieves a single image
+- `getImagesForMessage(messageId)`: retrieves all images for a message
+- `deleteImagesForMessage(messageId)`: deletes images for a message
+- `clearAllImages()`: clears all stored images
+
+Updated `persistChatSessions` in store.ts:
+- Before stripping dataUri for localStorage, stores each image in IndexedDB
+  with key `{messageId}:{imageIndex}`
+- Images are still stripped from localStorage (to prevent overflow)
+- But now they can be restored from IndexedDB on page reload
+
+Updated `loadChatSessions` in store.ts:
+- After loading sessions from localStorage, fires `restoreSessionImages()`
+  asynchronously
+- `restoreSessionImages` iterates all sessions/messages, loads images from
+  IndexedDB, and updates the store when restoration is complete
+- Uses `useAppStore.setState()` to update sessions and active session messages
+
+This means screenshots are now persisted across page reloads — users can
+close the browser, reopen, and their analysis screenshots will still be
+visible in the chat history.
+
+### Verification
+
+#### Lint
+- store.ts: 0 errors ✅
+- image-db.ts: 0 errors ✅
+- chat/stream/route.ts: 0 errors ✅
+
+#### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ System prompt updated with hbonds ligand filter guidance + example
+- ✅ IndexedDB image persistence: images survive page reload
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Chat screenshot display verification** — run a real analysis on 6LU7 to
+   verify the auto-capture pipeline works end-to-end
+2. **Image cleanup** — add a cleanup function to delete old IndexedDB images
+   when sessions are deleted
+3. **Recipe output schema validation** — validate field names match formatter
+4. **VLM prompt update** — include residue label information in the VLM prompt
+   so it can reference specific residues by name

@@ -15,6 +15,7 @@
 
 import { create } from "zustand";
 import type { MolstarViewer, MolstarPlugin } from "./types";
+import { storeImage, getImagesForMessage, deleteImagesForMessage } from "./image-db";
 
 // ---- localStorage persistence helpers ----
 const STORAGE_KEY_REPORTS = "pdb-tracker:molcraft-reports";
@@ -1116,9 +1117,67 @@ function loadChatSessions(): ChatSession[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.slice(0, 20); // Cap at 20 sessions
+    // Round 72: Mark messages that have stripped images for async restoration
+    const sessions = parsed.slice(0, 20).map((s: ChatSession) => ({
+      ...s,
+      messages: s.messages.map((m: ChatMessage) => ({
+        ...m,
+        // Images have dataUri='' (stripped during save). They will be
+        // restored from IndexedDB by the restoreImages function below.
+        analysisImages: m.analysisImages?.map(img => ({ ...img, dataUri: img.dataUri || '' })),
+      })),
+    }));
+    // Fire-and-forget: restore images from IndexedDB asynchronously
+    if (typeof window !== 'undefined') {
+      restoreSessionImages(sessions);
+    }
+    return sessions;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Round 72: Asynchronously restore analysis images from IndexedDB.
+ * Called after loadChatSessions — iterates all sessions/messages and
+ * replaces stripped dataUri with the actual image from IndexedDB.
+ * Updates the store when restoration is complete.
+ */
+async function restoreSessionImages(sessions: ChatSession[]): Promise<void> {
+  try {
+    let updated = false;
+    for (const session of sessions) {
+      for (const msg of session.messages) {
+        if (!msg.analysisImages || msg.analysisImages.length === 0) continue;
+        const hasStripped = msg.analysisImages.some(img => !img.dataUri);
+        if (!hasStripped) continue;
+        // Load images from IndexedDB
+        const storedImages = await getImagesForMessage(msg.id);
+        if (storedImages.size > 0) {
+          msg.analysisImages = msg.analysisImages.map((img, idx) => {
+            const stored = storedImages.get(idx);
+            return stored ? { ...img, dataUri: stored.dataUri } : img;
+          });
+          updated = true;
+        }
+      }
+    }
+    if (updated) {
+      // Update the store with restored images
+      const store = useAppStore.getState();
+      const currentSessionId = store.activeSessionId;
+      // Update sessions in store
+      useAppStore.setState({ chatSessions: sessions });
+      // If the active session was updated, also update chatMessages
+      if (currentSessionId) {
+        const activeSession = sessions.find(s => s.id === currentSessionId);
+        if (activeSession) {
+          useAppStore.setState({ chatMessages: activeSession.messages });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[restoreSessionImages] Failed:', err);
   }
 }
 
@@ -1127,23 +1186,35 @@ function persistChatSessions(sessions: ChatSession[]): void {
   try {
     // Cap at 20 sessions
     // Round 71: Strip analysisImages dataUri from session messages to avoid
-    // localStorage overflow (same issue as persistChatMessages)
+    // localStorage overflow.
+    // Round 72: Store images in IndexedDB (larger quota) before stripping.
+    // This allows images to be restored when the session is reloaded.
     const toSave = sessions.slice(0, 20).map(s => ({
       ...s,
       messages: s.messages.map(m => {
         if (!m.analysisImages || m.analysisImages.length === 0) return m;
+        // Round 72: Store each image in IndexedDB (fire-and-forget)
+        m.analysisImages.forEach((img, idx) => {
+          if (img.dataUri) {
+            storeImage(`${m.id}:${idx}`, img.dataUri, {
+              recipe: img.recipe,
+              angle: img.angle,
+              label: img.label,
+            });
+          }
+        });
+        // Strip base64 data for localStorage — will be restored from IndexedDB on load
         return {
           ...m,
           analysisImages: m.analysisImages.map(img => ({
             ...img,
-            dataUri: '', // Strip base64 data — too large for localStorage
+            dataUri: '',
           })),
         };
       }),
     }));
     localStorage.setItem(STORAGE_KEY_CHAT_SESSIONS, JSON.stringify(toSave));
   } catch (err) {
-    // Round 71: Log the error so we know if localStorage is full
     console.warn('[persistChatSessions] Failed to save sessions:', err);
   }
 }
