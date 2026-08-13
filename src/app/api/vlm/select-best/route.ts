@@ -59,12 +59,17 @@ export async function POST(req: NextRequest) {
 3. 构图是否平衡、视觉上是否易于理解
 
 请以JSON格式回复（不要其他内容）：
-{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张>", "scores": [<截图1分数>, <截图2分数>, ...]}
+{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>"}
 
 每张截图的分数为1-10的整数，10分最佳。评分标准：
 - 结构特征清晰可见程度 (0-4分)
 - 关键信息未被遮挡 (0-3分)
-- 构图平衡和视觉清晰度 (0-3分)`;
+- 构图平衡和视觉清晰度 (0-3分)
+
+confidence表示你对最佳选择的确信程度：
+- high: 最佳截图明显优于其他（分数差距 ≥3）
+- medium: 最佳截图较好但差距不大（分数差距 1-2）
+- low: 截图质量相近，难以区分（分数差距 0）`;
 
     const userPrompt = prompt || defaultPrompt;
 
@@ -98,10 +103,11 @@ export async function POST(req: NextRequest) {
 
     const vlmResponse = response.choices?.[0]?.message?.content || '';
 
-    // Parse the VLM response to extract bestIndex + scores
+    // Parse the VLM response to extract bestIndex + scores + confidence
     let bestIndex = 0;
     let commentary = vlmResponse;
     let scores: number[] = [];
+    let confidence: 'high' | 'medium' | 'low' = 'medium';
 
     // Try to extract JSON from the response
     const jsonMatch = vlmResponse.match(/\{[\s\S]*?"bestIndex"[\s\S]*?\}/);
@@ -121,6 +127,13 @@ export async function POST(req: NextRequest) {
             .filter((s: number) => !isNaN(s) && s >= 1 && s <= 10)
             .slice(0, screenshots.length);
         }
+        // Round 65: Extract confidence level
+        if (typeof parsed.confidence === 'string') {
+          const c = parsed.confidence.toLowerCase();
+          if (c === 'high' || c === 'medium' || c === 'low') {
+            confidence = c;
+          }
+        }
       } catch {
         // JSON parse failed — use the raw response as commentary
       }
@@ -139,6 +152,7 @@ export async function POST(req: NextRequest) {
       bestIndex,
       commentary,
       scores,
+      confidence,
       recipe,
       vlmResponse,
     });

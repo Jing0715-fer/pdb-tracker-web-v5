@@ -20,7 +20,7 @@ import {
   Pin, Bookmark, History, Volume2, VolumeX, Languages, CornerDownRight,
   ExternalLink, Tag, StickyNote, GitCompare, Bell, Share2, Folder,
   GitBranch, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download, Star,
-  Maximize2, ZoomIn, ZoomOut,
+  Maximize2, ZoomIn, ZoomOut, Filter,
 } from "lucide-react";
 import { useAppStore, type ChatMessage } from "@/lib/molcraft/store";
 import type { LlmCommand } from "@/lib/molcraft/command-schema";
@@ -1059,7 +1059,17 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
+  const [showAll, setShowAll] = useState(false); // Round 65: score filter
+  const [compareMode, setCompareMode] = useState(false); // Round 65: comparison view
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Round 65: Score-based filtering — hide screenshots with score < 3
+  // unless showAll is true. Best images are always shown.
+  const visibleImages = useMemo(() => {
+    if (showAll) return images;
+    return images.filter(img => img.best || (img.score == null) || img.score >= 3);
+  }, [images, showAll]);
+  const hiddenCount = images.length - visibleImages.length;
 
   // Round 63: Keyboard navigation — left/right arrows to navigate,
   // but only when the carousel container is focused or hovered.
@@ -1069,17 +1079,15 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
       setActiveIdx(i => Math.max(0, i - 1));
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
-      setActiveIdx(i => Math.min(images.length - 1, i + 1));
+      setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
     }
-  }, [images.length]);
+  }, [visibleImages.length]);
 
   // Round 63: Download the current screenshot as a PNG file.
   const handleDownload = useCallback(() => {
-    // We read currentImg from the closure — it's computed below, but
-    // useCallback needs to be called unconditionally (before any early return).
-    const bestIdx = images.findIndex(img => img.best);
-    const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, images.length - 1);
-    const img = images[currentIdx];
+    const bestIdx = visibleImages.findIndex(img => img.best);
+    const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
+    const img = visibleImages[currentIdx];
     if (!img) return;
     const a = document.createElement("a");
     a.href = img.dataUri;
@@ -1089,27 +1097,27 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
     document.body.removeChild(a);
     setDownloaded(true);
     setTimeout(() => setDownloaded(false), 1500);
-  }, [images, activeIdx]);
+  }, [visibleImages, activeIdx]);
 
   // Round 62: Auto-select the best image when VLM selection completes.
   // Instead of using useEffect + setState (which triggers lint warning),
   // we compute the effective index directly during render.
-  const bestIdx = images.findIndex(img => img.best);
+  const bestIdx = visibleImages.findIndex(img => img.best);
   // If there's a best image and the user hasn't manually navigated away,
   // show the best image. Otherwise show the activeIdx.
-  const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, images.length - 1);
-  const currentImg = images[currentIdx];
+  const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
+  const currentImg = visibleImages[currentIdx];
   if (!currentImg) return null;
 
   const goToPrev = () => setActiveIdx(i => Math.max(0, i - 1));
-  const goToNext = () => setActiveIdx(i => Math.min(images.length - 1, i + 1));
+  const goToNext = () => setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
 
   return (
     <div
       ref={containerRef}
       className="mt-3 rounded-lg border border-claude-border-light/40 dark:border-[#3d3832]/40 overflow-hidden bg-claude-bg dark:bg-[#1a1917] focus:outline-none"
       tabIndex={0}
-      onKeyDown={images.length > 1 ? handleKeyDown : undefined}
+      onKeyDown={visibleImages.length > 1 ? handleKeyDown : undefined}
     >
       {/* Main image area */}
       <div className="relative group">
@@ -1117,7 +1125,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
         <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-black/70 backdrop-blur-sm text-white text-[10px] font-medium">
           {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
           <span>{currentImg.label}</span>
-          <span className="text-white/50 ml-1">{currentIdx + 1}/{images.length}</span>
+          <span className="text-white/50 ml-1">{currentIdx + 1}/{visibleImages.length}</span>
         </div>
 
         {/* Score badge (top-left, below label) — Round 64 */}
@@ -1128,6 +1136,11 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
             'bg-red-500/80 text-white'
           }`}>
             <span>★ {currentImg.score}/10</span>
+            {currentImg.confidence && (
+              <span className="ml-1 opacity-80">
+                {currentImg.confidence === 'high' ? '●' : currentImg.confidence === 'medium' ? '◐' : '○'}
+              </span>
+            )}
           </div>
         )}
 
@@ -1150,7 +1163,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
         )}
 
         {/* Navigation arrows (only if >1 image) */}
-        {images.length > 1 && (
+        {visibleImages.length > 1 && (
           <>
             <button
               type="button"
@@ -1164,7 +1177,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
             <button
               type="button"
               onClick={goToNext}
-              disabled={currentIdx === images.length - 1}
+              disabled={currentIdx === visibleImages.length - 1}
               className="absolute right-2 top-1/2 -translate-y-1/2 z-10 h-7 w-7 rounded-full bg-black/60 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/80 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               title="Next (→)"
             >
@@ -1191,9 +1204,9 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
       </div>
 
       {/* Thumbnail strip (only if >1 image) */}
-      {images.length > 1 && (
+      {visibleImages.length > 1 && (
         <div className="flex gap-1 p-1.5 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-x-auto thin-scroll">
-          {images.map((img, idx) => (
+          {visibleImages.map((img, idx) => (
             <button
               key={idx}
               type="button"
@@ -1221,35 +1234,50 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
         </div>
       )}
 
-      {/* Action bar — Round 64: batch download + expand */}
+      {/* Action bar — Round 64/65: batch download + filter + expand */}
       <div className="flex items-center justify-between px-2 py-1 bg-claude-surface/40 dark:bg-[#242220]/40 border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
-        <button
-          type="button"
-          onClick={() => {
-            // Round 64: Batch download all screenshots
-            images.forEach((img, i) => {
-              setTimeout(() => {
-                const a = document.createElement("a");
-                a.href = img.dataUri;
-                a.download = `${img.recipe}-${img.angle}-${Date.now()}-${i}.png`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-              }, i * 200); // 200ms delay between downloads to avoid browser blocking
-            });
-          }}
-          className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
-          title="下载所有截图"
-        >
-          <Download className="h-2.5 w-2.5" />
-          下载全部 ({images.length})
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              // Round 64: Batch download all screenshots
+              images.forEach((img, i) => {
+                setTimeout(() => {
+                  const a = document.createElement("a");
+                  a.href = img.dataUri;
+                  a.download = `${img.recipe}-${img.angle}-${Date.now()}-${i}.png`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }, i * 200); // 200ms delay between downloads to avoid browser blocking
+              });
+            }}
+            className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+            title="下载所有截图"
+          >
+            <Download className="h-2.5 w-2.5" />
+            下载全部 ({images.length})
+          </button>
+          {/* Round 65: Score filter toggle */}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAll(s => !s)}
+              className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
+              title={showAll ? "隐藏低分截图" : `显示全部 (${hiddenCount} 张低分隐藏)`}
+            >
+              <Filter className="h-2.5 w-2.5" />
+              {showAll ? `隐藏低分` : `+${hiddenCount} 低分`}
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => {
             setZoom(1);
             setPanX(0);
             setPanY(0);
+            setCompareMode(false);
             setLightboxOpen(true);
           }}
           className="flex items-center gap-1 text-[9px] text-claude-text-muted hover:text-claude-accent transition-colors"
@@ -1261,7 +1289,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
       </div>
 
       {/* Keyboard hint (only if >1 image) — Round 63 */}
-      {images.length > 1 && (
+      {visibleImages.length > 1 && (
         <div className="px-2 py-1 text-[8px] text-claude-text-muted/50 text-center border-t border-claude-border-light/20 dark:border-[#3d3832]/20">
           ← → 键切换 · 点击图片全屏查看 · 点击下载按钮保存
         </div>
@@ -1274,14 +1302,14 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           onClick={() => setLightboxOpen(false)}
           onKeyDown={(e) => {
             if (e.key === "Escape") setLightboxOpen(false);
-            if (e.key === "ArrowLeft" && images.length > 1) {
+            if (e.key === "ArrowLeft" && visibleImages.length > 1) {
               e.stopPropagation();
               setActiveIdx(i => Math.max(0, i - 1));
               setZoom(1); setPanX(0); setPanY(0);
             }
-            if (e.key === "ArrowRight" && images.length > 1) {
+            if (e.key === "ArrowRight" && visibleImages.length > 1) {
               e.stopPropagation();
-              setActiveIdx(i => Math.min(images.length - 1, i + 1));
+              setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
               setZoom(1); setPanX(0); setPanY(0);
             }
           }}
@@ -1293,7 +1321,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/60 backdrop-blur-sm text-white text-xs">
               {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
               <span className="font-medium">{currentImg.label}</span>
-              {images.length > 1 && <span className="text-white/50 ml-1">{currentIdx + 1}/{images.length}</span>}
+              {visibleImages.length > 1 && <span className="text-white/50 ml-1">{currentIdx + 1}/{visibleImages.length}</span>}
               {currentImg.score != null && (
                 <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${
                   currentImg.score >= 8 ? 'bg-emerald-500/30 text-emerald-300' :
@@ -1331,6 +1359,20 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               >
                 <RotateCcw className="h-4 w-4" />
               </button>
+              {/* Round 65: Comparison view toggle */}
+              {visibleImages.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setCompareMode(c => !c)}
+                  className={`h-8 px-2 rounded-full flex items-center gap-1 text-xs font-medium transition-colors ml-1 ${
+                    compareMode ? 'bg-claude-accent/30 text-claude-accent' : 'bg-white/10 hover:bg-white/20 text-white'
+                  }`}
+                  title="对比视图"
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                  对比
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleDownload}
@@ -1351,7 +1393,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           </div>
 
           {/* Navigation arrows */}
-          {images.length > 1 && (
+          {visibleImages.length > 1 && (
             <>
               <button
                 type="button"
@@ -1364,8 +1406,8 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               </button>
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); setActiveIdx(i => Math.min(images.length - 1, i + 1)); setZoom(1); setPanX(0); setPanY(0); }}
-                disabled={currentIdx === images.length - 1}
+                onClick={(e) => { e.stopPropagation(); setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1)); setZoom(1); setPanX(0); setPanY(0); }}
+                disabled={currentIdx === visibleImages.length - 1}
                 className="absolute right-4 top-1/2 -translate-y-1/2 z-10 h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                 title="下一张 (→)"
               >
@@ -1374,7 +1416,43 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
             </>
           )}
 
-          {/* The zoomable image */}
+          {/* Round 65: Comparison view — two images side-by-side */}
+          {compareMode && visibleImages.length > 1 ? (
+            (() => {
+              const nextIdx = (currentIdx + 1) % visibleImages.length;
+              const nextImg = visibleImages[nextIdx];
+              return (
+                <div className="flex gap-2 max-w-[95vw] max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                  {/* Left image */}
+                  <div className="flex-1 flex flex-col items-center">
+                    <div className="text-white/70 text-xs mb-1 flex items-center gap-1">
+                      {currentImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+                      {currentImg.label}
+                      {currentImg.score != null && <span className="opacity-60">★{currentImg.score}</span>}
+                    </div>
+                    <img
+                      src={currentImg.dataUri}
+                      alt={currentImg.label}
+                      className="max-w-full max-h-[72vh] object-contain rounded-lg border border-white/10"
+                    />
+                  </div>
+                  {/* Right image */}
+                  <div className="flex-1 flex flex-col items-center">
+                    <div className="text-white/70 text-xs mb-1 flex items-center gap-1">
+                      {nextImg.best && <Star className="h-3 w-3 text-claude-accent" />}
+                      {nextImg.label}
+                      {nextImg.score != null && <span className="opacity-60">★{nextImg.score}</span>}
+                    </div>
+                    <img
+                      src={nextImg.dataUri}
+                      alt={nextImg.label}
+                      className="max-w-full max-h-[72vh] object-contain rounded-lg border border-white/10"
+                    />
+                  </div>
+                </div>
+              );
+            })()
+          ) : (
           <img
             src={currentImg.dataUri}
             alt={currentImg.label}
@@ -1407,6 +1485,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
               transition: 'transform 0.1s ease-out',
             }}
           />
+          )}
 
           {/* VLM commentary in lightbox */}
           {currentImg.vlmComment && (

@@ -12167,3 +12167,84 @@ Improvement Suggestions for Next Round:
    detailed comparison
 4. **VLM confidence** — have the VLM also report a confidence level for its
    best-index selection
+
+---
+Task ID: round-65-score-filter-confidence-comparison
+Agent: main
+Task: Continue development based on Round 64 improvement suggestions. Add score-based filtering, VLM confidence, comparison view. QA + commit and push.
+
+Development:
+
+### 1. Score-Based Filtering (src/components/structure-analysis/message-bubble.tsx)
+Added automatic hiding of low-quality screenshots:
+- `visibleImages` computed with `useMemo` — filters out images with `score < 3`
+  unless `showAll` is true. Best images are always shown regardless of score.
+- `hiddenCount` tracks how many images are hidden
+- Filter toggle button in the action bar: shows "+N 低分" when images are hidden,
+  "隐藏低分" when all are shown. Only appears when hiddenCount > 0.
+- All carousel navigation, keyboard handlers, and lightbox now use `visibleImages`
+  instead of `images` (except batch download which downloads ALL images)
+- Added `Filter` icon import from lucide-react
+
+### 2. VLM Confidence Level (src/app/api/vlm/select-best/route.ts + store.ts + chat-tab.tsx)
+Enhanced the VLM API to also report confidence in its best-index selection:
+
+**VLM Prompt**: Added confidence criteria:
+- high: best screenshot clearly better (score gap ≥3)
+- medium: best better but gap small (1-2)
+- low: scores similar, hard to distinguish (gap 0)
+
+**API Response**: Now returns `confidence: "high" | "medium" | "low"`
+
+**AnalysisImage.confidence**: New field on the interface
+
+**Chat Tab**: Updated VLM background selection to store confidence on all images
+
+**UI Display**: Confidence indicator next to score badge:
+- ● (filled circle) = high confidence
+- ◐ (half circle) = medium confidence
+- ○ (empty circle) = low confidence
+
+### 3. Comparison View (src/components/structure-analysis/message-bubble.tsx)
+Added side-by-side comparison mode in the lightbox:
+- "对比" toggle button in the lightbox toolbar (GitCompare icon)
+- When enabled, shows current image + next image side-by-side
+- Each image shows its label, best star, and score
+- ← → navigation still works to cycle through pairs
+- Compare mode resets when opening the lightbox
+- Active state highlighted with accent color
+
+### Verification
+
+#### VLM API Test
+```
+POST /api/vlm/select-best (2 blank test screenshots, binding_pocket)
+→ bestIndex: 0
+→ scores: [1, 1]
+→ confidence: low  ← correctly identifies equal scores
+→ commentary: "两张截图均为空白图像，无法显示任何蛋白质结构..."
+```
+
+#### Browser E2E
+- Page loads: HTTP 200, no console errors ✅
+- No React warnings or errors ✅
+- Server compiles successfully ✅
+
+#### Lint
+- All 4 modified files: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Score-based filtering: auto-hide score < 3, toggle to show all
+- ✅ VLM confidence: high/medium/low with visual indicator
+- ✅ Comparison view: side-by-side in lightbox with toggle
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Annotation overlay** — draw residue labels on the screenshot before VLM
+   analysis so the VLM can reference specific residues by name
+2. **Score-based sorting** — sort thumbnails by score (best first) instead of
+   by capture order
+3. **Image carousel transition animations** — add smooth slide transitions
+   between images
+4. **VLM analysis export** — export the VLM commentary + scores as a JSON/CSV
+   report for documentation
