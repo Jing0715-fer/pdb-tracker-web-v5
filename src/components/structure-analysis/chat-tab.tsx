@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen, Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -415,6 +415,7 @@ export function ChatTab() {
   const [providers, setProviders] = useState<LlmProviderInfo[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false); // Round 83: settings popover
 
   const refreshProviders = useCallback(async () => {
     setProvidersLoading(true);
@@ -2512,55 +2513,79 @@ export function ChatTab() {
               >
                 {soundEnabled ? <Volume2 className="h-3 w-3" /> : <VolumeX className="h-3 w-3" />}
               </Button>
-              {/* Round 80: Label count selector for screenshot annotation */}
-              <select
-                value={maxLabels}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  setMaxLabels(v);
-                  try { localStorage.setItem("pdb-tracker:max-labels", String(v)); } catch { /* ignore */ }
-                }}
-                className="h-7 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
-                title="Number of residue labels on screenshots"
-              >
-                <option value={0}>No labels</option>
-                <option value={3}>3 labels</option>
-                <option value={5}>5 labels</option>
-                <option value={8}>8 labels</option>
-                <option value={12}>12 labels</option>
-                <option value={20}>20 labels</option>
-              </select>
-              {/* Round 81: Screenshot resolution selector */}
-              <select
-                value={screenshotSize}
-                onChange={(e) => {
-                  setScreenshotSize(e.target.value);
-                  try { localStorage.setItem("pdb-tracker:screenshot-size", e.target.value); } catch { /* ignore */ }
-                }}
-                className="h-7 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
-                title="Screenshot resolution"
-              >
-                <option value="800x600">800x600</option>
-                <option value="1200x800">1200x800</option>
-                <option value="1600x1000">1600x1000</option>
-                <option value="1920x1080">1920x1080</option>
-              </select>
-              {/* Round 82: Label font size selector */}
-              <select
-                value={labelFontSize}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  setLabelFontSize(v);
-                  try { localStorage.setItem("pdb-tracker:label-font-size", String(v)); } catch { /* ignore */ }
-                }}
-                className="h-7 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
-                title="Label font size on screenshots"
-              >
-                <option value={0.5}>Small</option>
-                <option value={1.0}>Medium</option>
-                <option value={1.5}>Large</option>
-                <option value={2.0}>X-Large</option>
-              </select>
+              {/* Round 83: Consolidated settings popover */}
+              <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`h-7 w-7 p-0 ${settingsOpen ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
+                    title="Screenshot settings"
+                  >
+                    <Settings className="h-3 w-3" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent side="bottom" align="end" className="w-56 p-2">
+                  <div className="space-y-2">
+                    <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted">Screenshot Settings</div>
+                    {/* Label count */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-claude-text-secondary">Labels</span>
+                      <select
+                        value={maxLabels}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          setMaxLabels(v);
+                          try { localStorage.setItem("pdb-tracker:max-labels", String(v)); } catch { /* ignore */ }
+                        }}
+                        className="h-6 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                      >
+                        <option value={0}>None</option>
+                        <option value={3}>3</option>
+                        <option value={5}>5</option>
+                        <option value={8}>8</option>
+                        <option value={12}>12</option>
+                        <option value={20}>20</option>
+                      </select>
+                    </div>
+                    {/* Resolution */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-claude-text-secondary">Resolution</span>
+                      <select
+                        value={screenshotSize}
+                        onChange={(e) => {
+                          setScreenshotSize(e.target.value);
+                          try { localStorage.setItem("pdb-tracker:screenshot-size", e.target.value); } catch { /* ignore */ }
+                        }}
+                        className="h-6 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                      >
+                        <option value="800x600">800x600</option>
+                        <option value="1200x800">1200x800</option>
+                        <option value="1600x1000">1600x1000</option>
+                        <option value="1920x1080">1920x1080</option>
+                      </select>
+                    </div>
+                    {/* Font size */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-claude-text-secondary">Font size</span>
+                      <select
+                        value={labelFontSize}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          setLabelFontSize(v);
+                          try { localStorage.setItem("pdb-tracker:label-font-size", String(v)); } catch { /* ignore */ }
+                        }}
+                        className="h-6 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                      >
+                        <option value={0.5}>Small</option>
+                        <option value={1.0}>Medium</option>
+                        <option value={1.5}>Large</option>
+                        <option value={2.0}>X-Large</option>
+                      </select>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
               <Button
                 variant="ghost"
                 size="sm"
