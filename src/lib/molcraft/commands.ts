@@ -68,6 +68,22 @@ async function runRecipe(
   return await res.json();
 }
 
+/**
+ * Round 87: Wait for the next render frame. Molstar's setProps() schedules
+ * a re-render via requestAnimationFrame; if we screenshot before the next
+ * frame, we capture the OLD background (or worse, an empty/transparent
+ * frame) and the screenshot is all black.
+ */
+function nextFrame(): Promise<number> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "undefined") {
+      requestAnimationFrame((t) => resolve(t));
+    } else {
+      setTimeout(() => resolve(Date.now()), 16);
+    }
+  });
+}
+
 export async function executeCommand(
   viewer: MolstarViewer,
   cmd: LlmCommand
@@ -638,8 +654,13 @@ export async function executeCommand(
           try {
             // Apply camera angle
             await applyCameraAngle(plugin, angle);
-            // Round 78: Reduced from 150ms to 80ms — camera setState is fast
+            // Round 87: Wait for camera + 2 animation frames so the render
+            // pipeline settles before we grab the screenshot. The previous
+            // 80ms setTimeout was unreliable — on busy machines the frame
+            // hasn't been drawn yet, producing a black/empty screenshot.
             await new Promise((r) => setTimeout(r, 80));
+            await nextFrame();
+            await nextFrame();
             // Capture
             const dataUri =
               await plugin.helpers?.viewportScreenshot?.getImageDataUri({

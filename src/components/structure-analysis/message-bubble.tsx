@@ -220,8 +220,22 @@ export function MessageBubble({
   const [isCollapsed, setIsCollapsed] = useState(true);
   // Round 19: Diff view state for edited messages
   const [showDiff, setShowDiff] = useState(false);
+  // Round 87: When collapsed, find the last newline before COLLAPSE_THRESHOLD
+  // so tables/headings don't get cut mid-row. Falls back to the hard slice
+  // if there's no newline in range.
   const displayedContent = isLongMessage && isCollapsed
-    ? (message.content || "").slice(0, COLLAPSE_THRESHOLD) + "..."
+    ? (() => {
+        const full = message.content || "";
+        if (full.length <= COLLAPSE_THRESHOLD) return full;
+        const slice = full.slice(0, COLLAPSE_THRESHOLD);
+        const lastNl = slice.lastIndexOf("\n");
+        // Only cut at the newline if it's reasonably close to threshold
+        // (within 60% of threshold) — otherwise we end up showing too little.
+        if (lastNl > COLLAPSE_THRESHOLD * 0.6) {
+          return slice.slice(0, lastNl) + "\n\n*[...truncated — click Show more]*";
+        }
+        return slice + "\n\n*[...truncated — click Show more]*";
+      })()
     : message.content || "";
 
   // Round 3: Copy message content to clipboard
