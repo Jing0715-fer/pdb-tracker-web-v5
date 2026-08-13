@@ -577,6 +577,9 @@ export function ChatTab() {
             { role: "user", content: `Translate the following text to English. Output ONLY the translation, no explanation:\n\n${content}` },
           ],
           provider: chatProvider,
+          // Round 62: tag translate with a separate session so it doesn't
+          // pollute the main chat session, but repeats stay consistent.
+          sessionId: activeSessionId ? `translate-${activeSessionId}` : undefined,
         }),
       });
       if (!res.ok) throw new Error("Translation failed");
@@ -630,6 +633,8 @@ export function ChatTab() {
             { role: "user", content: `Summarize the following chat conversation in bullet points (max 5 key points). Output ONLY the summary:\n\n${conversationText}` },
           ],
           provider: chatProvider,
+          // Round 62: tag summarize with a separate session
+          sessionId: activeSessionId ? `summarize-${activeSessionId}` : undefined,
         }),
       });
       if (!res.ok) throw new Error("Summarization failed");
@@ -1400,6 +1405,11 @@ export function ChatTab() {
                     analysisResults: allAnalysisResults.slice(-5),
                   },
                   provider: chatProvider,
+                  // Round 62: Pass the active session id so the LLM CLI
+                  // (hermes/codex/codebuddy) reuses its captured session
+                  // across turns. Falls back to server-side hash when
+                  // activeSessionId is null (no saved session yet).
+                  sessionId: activeSessionId ?? undefined,
                 }),
                 signal: controller.signal,
               });

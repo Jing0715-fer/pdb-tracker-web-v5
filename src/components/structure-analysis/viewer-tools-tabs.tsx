@@ -1735,10 +1735,17 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
   const chatProvider = useAppStore((s) => s.chatProvider);
   const toast = useAppStore((s) => s.toast);
 
+  // Round 62: Stable sessionId for this pdbId view so the LLM CLI reuses
+  // its captured session across turns in this modal chat. Reset when
+  // pdbId changes (we want a fresh session per structure).
+  const sessionIdRef = useRef<string>(`modal-${pdbId}-${Date.now()}`);
+
   // Reset chat messages when pdbId changes (switching structures)
   useEffect(() => {
     setMessages([]);
     setInput("");
+    // Round 62: refresh the session id on pdbId change.
+    sessionIdRef.current = `modal-${pdbId}-${Date.now()}`;
     // Abort any in-flight request when switching structures
     if (abortRef.current) {
       abortRef.current.abort();
@@ -1782,6 +1789,9 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
           context: { loadedStructures: [{ id: pdbId, label: pdbId }] },
           provider: chatProvider,
+          // Round 62: pass stable session id so the LLM CLI reuses its
+          // session across turns.
+          sessionId: sessionIdRef.current,
         }),
         signal: controller.signal,
       });
