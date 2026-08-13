@@ -580,8 +580,9 @@ export async function executeCommand(
         // Round 62: Apply recipe-specific visualization before capturing
         const vizParams = cmd.vizParams as Record<string, unknown> | undefined;
         await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
-        // Allow visualization to render
-        await new Promise((r) => setTimeout(r, 300));
+        // Round 78: Reduced from 300ms to 150ms — visualization renders fast
+        // for camera focus operations; 150ms is enough for Molstar to settle
+        await new Promise((r) => setTimeout(r, 150));
 
         // Round 74: Add residue labels to the 3D view before capturing
         if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
@@ -596,8 +597,6 @@ export async function executeCommand(
                   // Round 75: Use larger font size for better screenshot readability
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     customText: lbl.text ?? "",
-                    // Round 75: Larger text size for screenshot readability
-                    // Default is ~0.5; we use 1.0 for clearer labels in captures
                     textSize: 1.0,
                   } as any);
                 }
@@ -609,9 +608,24 @@ export async function executeCommand(
               );
             }
           }
-          // Allow labels to render
-          await new Promise((r) => setTimeout(r, 100));
+          // Round 78: Reduced from 100ms to 50ms — labels render synchronously
+          await new Promise((r) => setTimeout(r, 50));
         }
+
+        // Round 78: Set dark background for consistent screenshot contrast
+        try {
+          const canvas3d = plugin.canvas3d as
+            | { setProps?: (fn: (p: unknown) => void) => void }
+            | undefined;
+          if (canvas3d?.setProps) {
+            canvas3d.setProps((p: unknown) => {
+              const props = p as { renderer?: { backgroundColor?: unknown } };
+              props.renderer = props.renderer ?? {};
+              // Dark navy background (#1a1a2e) for better label/screenshot contrast
+              props.renderer.backgroundColor = 0x1a1a2e;
+            });
+          }
+        } catch { /* best-effort */ }
 
         const results: Array<{
           dataUri: string;
@@ -623,8 +637,8 @@ export async function executeCommand(
           try {
             // Apply camera angle
             await applyCameraAngle(plugin, angle);
-            // Allow the view to settle after camera move
-            await new Promise((r) => setTimeout(r, 150));
+            // Round 78: Reduced from 150ms to 80ms — camera setState is fast
+            await new Promise((r) => setTimeout(r, 80));
             // Capture
             const dataUri =
               await plugin.helpers?.viewportScreenshot?.getImageDataUri({
@@ -661,6 +675,21 @@ export async function executeCommand(
             console.warn("[capture_multi_angle] label cleanup failed:", err);
           }
         }
+
+        // Round 78: Restore original background color after capture
+        try {
+          const canvas3d = plugin.canvas3d as
+            | { setProps?: (fn: (p: unknown) => void) => void }
+            | undefined;
+          if (canvas3d?.setProps) {
+            canvas3d.setProps((p: unknown) => {
+              const props = p as { renderer?: { backgroundColor?: unknown } };
+              props.renderer = props.renderer ?? {};
+              // Restore to transparent/default (0 = black, which is Molstar default)
+              props.renderer.backgroundColor = 0;
+            });
+          }
+        } catch { /* best-effort */ }
 
         return {
           ok: true,

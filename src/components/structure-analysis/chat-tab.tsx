@@ -726,7 +726,7 @@ export function ChatTab() {
     } catch { /* ignore */ }
   }, [soundEnabled]);
 
-  const activeProviderInfo = providers.find((p) => p.provider === chatProvider);
+  const activeProviderInfo = (providers || []).find((p) => p.provider === chatProvider);
   const providerLabel = chatProvider === "" || chatProvider === "auto"
     ? "Auto"
     : activeProviderInfo?.label || chatProvider;
