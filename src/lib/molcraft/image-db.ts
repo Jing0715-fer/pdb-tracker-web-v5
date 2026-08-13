@@ -72,6 +72,8 @@ export async function storeImage(
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
+    // Round 74: Auto-clean old images if we exceed 100 stored images
+    autoCleanOldImages(100);
   } catch { /* ignore */ }
 }
 
@@ -164,4 +166,63 @@ export async function clearAllImages(): Promise<void> {
       tx.onerror = () => resolve();
     });
   } catch { /* ignore */ }
+}
+
+/**
+ * Round 74: Get the total number of stored images and estimated size.
+ * Useful for quota management and debugging.
+ */
+export async function getImageStats(): Promise<{ count: number; estimatedSizeKB: number }> {
+  const db = await openDB();
+  if (!db) return { count: 0, estimatedSizeKB: 0 };
+  try {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const all = await new Promise<StoredImage[]>((resolve) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    });
+    const estimatedSizeKB = all.reduce((sum, img) =>
+      sum + (img.dataUri ? Math.ceil(img.dataUri.length / 1024) : 0), 0
+    );
+    return { count: all.length, estimatedSizeKB };
+  } catch {
+    return { count: 0, estimatedSizeKB: 0 };
+  }
+}
+
+/**
+ * Round 74: Auto-clean old images when the count exceeds a threshold.
+ * Keeps only the most recent `maxImages` images (by storedAt timestamp).
+ * Called automatically after storing new images.
+ *
+ * @param maxImages Maximum number of images to keep (default: 100)
+ */
+export async function autoCleanOldImages(maxImages: number = 100): Promise<number> {
+  const db = await openDB();
+  if (!db) return 0;
+  try {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const all = await new Promise<StoredImage[]>((resolve) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    });
+    if (all.length <= maxImages) return 0;
+    // Sort by storedAt ascending (oldest first)
+    all.sort((a, b) => a.storedAt - b.storedAt);
+    const toDelete = all.slice(0, all.length - maxImages);
+    for (const img of toDelete) {
+      store.delete(img.key);
+    }
+    await new Promise<void>((resolve) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+    return toDelete.length;
+  } catch {
+    return 0;
+  }
 }

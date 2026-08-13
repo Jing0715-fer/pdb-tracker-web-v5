@@ -92,6 +92,14 @@ export type LlmCommand =
       /** Round 62: Optional visualization parameters passed to
        *  applyRecipeVisualization (e.g. { ligandCompId: "HEM" } for binding_pocket). */
       vizParams?: Record<string, unknown>;
+      /** Round 74: Residue labels to draw on the 3D view before capturing.
+       *  Each label is placed at the specified residue position. */
+      labels?: Array<{
+        text: string;
+        chain?: string;
+        resno?: number;
+        compId?: string;
+      }>;
     }
   | {
       type: "select";

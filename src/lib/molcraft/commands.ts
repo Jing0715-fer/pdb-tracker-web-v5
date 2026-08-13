@@ -583,6 +583,32 @@ export async function executeCommand(
         // Allow visualization to render
         await new Promise((r) => setTimeout(r, 300));
 
+        // Round 74: Add residue labels to the 3D view before capturing
+        if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
+          for (const lbl of cmd.labels) {
+            try {
+              if (lbl.chain !== undefined && lbl.resno !== undefined) {
+                const loci = await lociFromResidue(viewer, {
+                  chain: lbl.chain,
+                  resno: lbl.resno,
+                });
+                if (loci) {
+                  await plugin.managers.structure.measurement.addLabel(loci, {
+                    customText: lbl.text ?? "",
+                  });
+                }
+              }
+            } catch (err) {
+              console.warn(
+                `[capture_multi_angle] label "${lbl.text}" failed:`,
+                err
+              );
+            }
+          }
+          // Allow labels to render
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
         const results: Array<{
           dataUri: string;
           angle: string;

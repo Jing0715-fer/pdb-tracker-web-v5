@@ -1603,6 +1603,8 @@ export function ChatTab() {
                           // Extract viz params from the analysis result
                           const analysisData = (result as { analysisResult?: unknown }).analysisResult as Record<string, unknown> | undefined;
                           const vizParams: Record<string, unknown> = {};
+                          // Round 74: Extract residue labels for screenshot annotation
+                          const residueLabels: Array<{ text: string; chain?: string; resno?: number }> = [];
                           if (analysisData) {
                             // Extract ligand compId for pocket-related recipes
                             const bp = analysisData.bindingPocket as Record<string, unknown> | undefined;
@@ -1612,6 +1614,51 @@ export function ChatTab() {
                             const ai = analysisData.allInteractions as Record<string, unknown> | undefined;
                             if (ai?.chain1) vizParams.chain1 = ai.chain1;
                             if (ai?.chain2) vizParams.chain2 = ai.chain2;
+
+                            // Round 74: Extract top residues for labeling
+                            const residues = analysisData.residues as Array<Record<string, unknown>> | undefined;
+                            if (Array.isArray(residues)) {
+                              // Label top 5 residues (closest to ligand)
+                              for (const r of residues.slice(0, 5)) {
+                                const chain = r.chain as string | undefined;
+                                const resno = r.resno as number | undefined;
+                                const resname = r.resname as string | undefined;
+                                if (chain && resno && resname) {
+                                  residueLabels.push({
+                                    text: `${resname}${resno}`,
+                                    chain,
+                                    resno,
+                                  });
+                                }
+                              }
+                            }
+                            // Extract H-bond residues for labeling
+                            const hbonds = analysisData.hbonds as Array<Record<string, unknown>> | undefined;
+                            if (Array.isArray(hbonds)) {
+                              const seen = new Set<string>();
+                              for (const h of hbonds.slice(0, 10)) {
+                                const dChain = h.donor_chain as string | undefined;
+                                const dResno = h.donor_resno as number | undefined;
+                                const dResname = h.donor_resname as string | undefined;
+                                const aChain = h.acceptor_chain as string | undefined;
+                                const aResno = h.acceptor_resno as number | undefined;
+                                const aResname = h.acceptor_resname as string | undefined;
+                                if (dChain && dResno && dResname) {
+                                  const key = `${dChain}:${dResno}`;
+                                  if (!seen.has(key)) {
+                                    seen.add(key);
+                                    residueLabels.push({ text: `${dResname}${dResno}`, chain: dChain, resno: dResno });
+                                  }
+                                }
+                                if (aChain && aResno && aResname) {
+                                  const key = `${aChain}:${aResno}`;
+                                  if (!seen.has(key)) {
+                                    seen.add(key);
+                                    residueLabels.push({ text: `${aResname}${aResno}`, chain: aChain, resno: aResno });
+                                  }
+                                }
+                              }
+                            }
                           }
 
                           const captureResult = await executeCommand(viewer, {
@@ -1622,6 +1669,8 @@ export function ChatTab() {
                             width: 1200,
                             height: 800,
                             vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
+                            // Round 74: Pass residue labels for visual annotation
+                            labels: residueLabels.length > 0 ? residueLabels.slice(0, 8) : undefined,
                           });
                           if (captureResult.ok && captureResult.data) {
                             const data = captureResult.data as {
