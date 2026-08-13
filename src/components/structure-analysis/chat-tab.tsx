@@ -1599,6 +1599,11 @@ export function ChatTab() {
                     if (cmd.type === "analyze_run" && result.ok) {
                       const recipeId = (cmd as { recipe?: string }).recipe;
                       if (recipeId && shouldCaptureScreenshot(recipeId)) {
+                        // Round 79: Show capture progress indicator
+                        updateMessage(pendingId, {
+                          agentStep: "executing",
+                          content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*`,
+                        });
                         try {
                           // Extract viz params from the analysis result
                           // Round 77: Fix — analysisResult is { kind: "recipe", recipe, data }
@@ -1685,6 +1690,11 @@ export function ChatTab() {
                               screenshots: Array<{ dataUri: string; angle: string; label: string }>;
                               recipe: string;
                             };
+
+                            // Round 79: Update message to show capture success
+                            updateMessage(pendingId, {
+                              content: `${reply || ""}\n\n*Captured ${data.screenshots.length} screenshots for ${getRecipeLabel(recipeId)}. VLM analysis running...*`,
+                            });
 
                             // Round 62: Store images IMMEDIATELY (without VLM
                             // selection) so the user sees them right away.

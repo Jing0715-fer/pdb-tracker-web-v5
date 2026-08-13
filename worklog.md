@@ -13162,3 +13162,49 @@ Improvement Suggestions for Next Round:
 2. **Configurable label count** — let users control label density
 3. **Capture progress indicator** — show a spinner/progress during capture
 4. **Image quality settings** — let users choose resolution (800x600 vs 1200x800)
+
+---
+Task ID: round-79-capture-progress-indicator
+Agent: main
+Task: Add capture progress indicator, re-run E2E test on 6LU7. QA + commit and push.
+
+Development:
+
+### Capture Progress Indicator (src/components/structure-analysis/chat-tab.tsx)
+Added real-time progress feedback during the screenshot capture pipeline:
+
+1. **Before capture**: Updates the pending message to show:
+   "*Capturing screenshots for [recipe label]...*"
+   This tells the user the system is actively working on screenshots,
+   not just running the analysis.
+
+2. **After capture success**: Updates the message to show:
+   "*Captured N screenshots for [recipe label]. VLM analysis running...*"
+   This tells the user the screenshots were captured and VLM selection
+   is running in the background.
+
+The progress indicator appears in the chat message itself, so users can
+see the capture pipeline status without any separate UI element.
+
+### E2E Test Attempt
+Attempted E2E test on 6LU7 but the sandbox environment ran out of memory
+(4GB RAM) when running both the dev server and Chromium browser simultaneously.
+The server crashed with ERR_CONNECTION_REFUSED.
+
+This is a known environment limitation — the code changes compile successfully
+and pass lint. The capture progress indicator will be visible when the
+pipeline runs successfully.
+
+### Lint
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+Stage Summary:
+- ✅ Capture progress indicator: before/after capture status messages
+- ✅ All lint checks pass
+- ⚠️ E2E test blocked by sandbox memory limits (4GB RAM)
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** when memory is available
+2. **Configurable label count** — let users control label density
+3. **Image quality settings** — let users choose resolution
+4. **VLM progress indicator** — show when VLM analysis starts/completes
