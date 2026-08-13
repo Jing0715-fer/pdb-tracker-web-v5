@@ -1704,34 +1704,51 @@ export function ChatTab() {
                             }
                           }
 
-                          const captureResult = await executeCommand(viewer, {
-                            type: "capture_multi_angle",
-                            recipe: recipeId,
-                            label: getRecipeLabel(recipeId),
-                            angles: ["front", "side", "top"],
-                            width: parseInt(screenshotSize.split("x")[0], 10) || 1200,
-                            height: parseInt(screenshotSize.split("x")[1], 10) || 800,
-                            vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
-                            // Round 74: Pass residue labels for visual annotation
-                            labels: residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined,
-                            labelFontSize,
-                          });
-                          if (captureResult.ok && captureResult.data) {
-                            const data = captureResult.data as {
-                              screenshots: Array<{ dataUri: string; angle: string; label: string }>;
-                              recipe: string;
-                            };
+                          // Round 85: Incremental capture — capture each angle
+                          // separately so we can update the progress bar in real-time
+                          const allScreenshots: Array<{ dataUri: string; angle: string; label: string }> = [];
+                          for (let ai = 0; ai < captureAngles.length; ai++) {
+                            const angle = captureAngles[ai];
+                            updateMessage(pendingId, {
+                              content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*\n${progressBar(ai, captureAngles.length)} (${angle})`,
+                            });
+                            try {
+                              const angleResult = await executeCommand(viewer, {
+                                type: "capture_multi_angle",
+                                recipe: recipeId,
+                                label: getRecipeLabel(recipeId),
+                                angles: [angle as "front" | "side" | "top" | "back"],
+                                width: parseInt(screenshotSize.split("x")[0], 10) || 1200,
+                                height: parseInt(screenshotSize.split("x")[1], 10) || 800,
+                                vizParams: ai === 0 ? (Object.keys(vizParams).length > 0 ? vizParams : undefined) : undefined,
+                                labels: ai === 0 ? (residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined) : undefined,
+                                labelFontSize,
+                              });
+                              if (angleResult.ok && angleResult.data) {
+                                const angleData = angleResult.data as {
+                                  screenshots: Array<{ dataUri: string; angle: string; label: string }>;
+                                  recipe: string;
+                                };
+                                allScreenshots.push(...angleData.screenshots);
+                              }
+                            } catch (angleErr) {
+                              console.warn(`[auto-capture] Angle ${angle} failed:`, angleErr);
+                            }
+                          }
 
-                            // Round 79/84: Update message to show capture success + duration + full bar
+                          if (allScreenshots.length > 0) {
+                            const data = { screenshots: allScreenshots, recipe: recipeId };
+
+                            // Round 79/84/85: Update message to show capture success + duration + full bar
                             const captureDuration = ((Date.now() - captureStartTime) / 1000).toFixed(1);
                             updateMessage(pendingId, {
-                              content: `${reply || ""}\n\n*Captured ${data.screenshots.length} screenshots for ${getRecipeLabel(recipeId)} in ${captureDuration}s.*\n${progressBar(data.screenshots.length, captureAngles.length)} VLM analysis running...`,
+                              content: `${reply || ""}\n\n*Captured ${allScreenshots.length} screenshots for ${getRecipeLabel(recipeId)} in ${captureDuration}s.*\n${progressBar(allScreenshots.length, captureAngles.length)} VLM analysis running...`,
                             });
 
                             // Round 62: Store images IMMEDIATELY (without VLM
                             // selection) so the user sees them right away.
                             // VLM selection runs in the background.
-                            const initialImages: AnalysisImage[] = data.screenshots.map((s) => ({
+                            const initialImages: AnalysisImage[] = allScreenshots.map((s) => ({
                               dataUri: s.dataUri,
                               recipe: recipeId,
                               angle: s.angle as "front" | "side" | "top" | "back",
@@ -2524,10 +2541,14 @@ export function ChatTab() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className={`h-7 w-7 p-0 ${settingsOpen ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
+                    className={`relative h-7 w-7 p-0 ${settingsOpen ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
                     title={`Screenshot settings | Labels: ${maxLabels === 0 ? 'None' : maxLabels} | Resolution: ${screenshotSize} | Font: ${labelFontSize === 0.5 ? 'Small' : labelFontSize === 1.0 ? 'Medium' : labelFontSize === 1.5 ? 'Large' : 'X-Large'}`}
                   >
                     <Settings className="h-3 w-3" />
+                    {/* Round 85: Show indicator dot when settings differ from defaults */}
+                    {(maxLabels !== 8 || screenshotSize !== "1200x800" || labelFontSize !== 1.0) && (
+                      <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-claude-accent" />
+                    )}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent side="bottom" align="end" className="w-56 p-2">

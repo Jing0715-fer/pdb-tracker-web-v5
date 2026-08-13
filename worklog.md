@@ -13459,3 +13459,62 @@ Improvement Suggestions for Next Round:
 3. **Auto-resolution** — detect screen size and suggest optimal resolution
 4. **Settings persistence indicator** — show a small dot when settings
    differ from defaults
+
+---
+Task ID: round-85-incremental-progress-settings-indicator
+Agent: main
+Task: Add incremental progress bar (per-angle capture) and settings persistence indicator. QA + commit and push.
+
+Development:
+
+### 1. Incremental Progress Bar (src/components/structure-analysis/chat-tab.tsx)
+Split the capture into per-angle calls for true incremental progress:
+
+**Before**: Single `capture_multi_angle` call with all 3 angles → progress
+bar jumped from 0/3 to 3/3 instantly.
+
+**After**: Loop through angles one by one:
+1. Before each angle: update message with progress bar showing current angle
+   ```
+   *Capturing screenshots for [recipe]...*
+   [===-------] 1/3 (side)
+   ```
+2. Capture that single angle via `executeCommand` with `angles: [angle]`
+3. On success: append screenshots to `allScreenshots` array
+4. After all angles: show final success message with full bar
+
+Key details:
+- `vizParams` and `labels` only passed on the FIRST angle (ai === 0) to
+  avoid re-applying visualization/labels on subsequent angles
+- Each angle capture is independent — if one fails, others still succeed
+- Progress bar updates in real-time between each angle capture
+- Final message shows total capture count and duration
+
+### 2. Settings Persistence Indicator (src/components/structure-analysis/chat-tab.tsx)
+Added a small accent-colored dot on the settings gear icon when any setting
+differs from defaults:
+- Dot appears when: `maxLabels !== 8 || screenshotSize !== "1200x800" || labelFontSize !== 1.0`
+- Dot is positioned at top-right of the gear icon (absolute positioning)
+- Uses `bg-claude-accent` color for visibility
+- Disappears when settings are reset to defaults
+- Button has `relative` class for proper dot positioning
+
+This gives users a quick visual cue that non-default settings are active,
+without needing to open the popover to check.
+
+### Lint
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Incremental progress: per-angle capture with real-time bar updates
+- ✅ Settings indicator: accent dot when non-default settings active
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** — verify incremental progress with real analysis
+2. **Capture error recovery** — if one angle fails, show which angle failed
+3. **Auto-resolution** — detect screen size and suggest optimal resolution
+4. **Settings reset button** — add a "Reset to defaults" button in the popover
