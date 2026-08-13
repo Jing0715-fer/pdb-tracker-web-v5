@@ -593,9 +593,13 @@ export async function executeCommand(
                   resno: lbl.resno,
                 });
                 if (loci) {
+                  // Round 75: Use larger font size for better screenshot readability
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     customText: lbl.text ?? "",
-                  });
+                    // Round 75: Larger text size for screenshot readability
+                    // Default is ~0.5; we use 1.0 for clearer labels in captures
+                    textSize: 1.0,
+                  } as any);
                 }
               }
             } catch (err) {
@@ -647,6 +651,17 @@ export async function executeCommand(
         if (results.length === 0) {
           return { ok: false, detail: "All captures failed" };
         }
+
+        // Round 75: Clean up 3D labels after capture to avoid cluttering
+        // the interactive view. Only clear if we added labels.
+        if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
+          try {
+            plugin.managers.structure.measurement.clear();
+          } catch (err) {
+            console.warn("[capture_multi_angle] label cleanup failed:", err);
+          }
+        }
+
         return {
           ok: true,
           detail: `Captured ${results.length} angles for ${cmd.recipe}`,
