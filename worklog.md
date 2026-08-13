@@ -13399,3 +13399,63 @@ Improvement Suggestions for Next Round:
 2. **Capture progress bar** — visual progress bar during multi-angle capture
 3. **Auto-resolution** — detect screen size and suggest optimal resolution
 4. **Settings tooltip** — show current settings summary on hover
+
+---
+Task ID: round-84-progress-bar-settings-tooltip
+Agent: main
+Task: Add capture progress bar and settings tooltip. QA + commit and push.
+
+Development:
+
+### 1. Capture Progress Bar (src/components/structure-analysis/chat-tab.tsx)
+Added a visual text-based progress bar to the capture progress messages:
+
+**Before capture**:
+```
+*Capturing screenshots for [recipe]...*
+[----------] 0/3
+```
+
+**After capture success**:
+```
+*Captured 3 screenshots for [recipe] in 1.2s.*
+[==========] 3/3 VLM analysis running...
+```
+
+The progress bar uses ASCII characters (`=` for filled, `-` for empty)
+with 10 segments, providing a clear visual indication of capture progress.
+The bar shows current/total count (e.g. "0/3" → "3/3").
+
+Note: Since `capture_multi_angle` captures all angles in a single
+`executeCommand` call, the progress bar jumps from 0/3 to 3/3. A truly
+incremental bar would require splitting the capture into per-angle calls,
+but the visual bar still provides a clear "before vs after" state.
+
+### 2. Settings Tooltip (src/components/structure-analysis/chat-tab.tsx)
+The settings gear icon now shows a dynamic tooltip with current settings:
+```
+Screenshot settings | Labels: 8 | Resolution: 1200x800 | Font: Medium
+```
+
+This lets users see their current screenshot configuration at a glance
+without opening the popover. The tooltip updates automatically when
+settings change (maxLabels, screenshotSize, labelFontSize).
+
+### Lint
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Capture progress bar: ASCII bar [==========] 3/3 in capture messages
+- ✅ Settings tooltip: dynamic summary on gear icon hover
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Re-run E2E test** — verify full pipeline with progress bar
+2. **Incremental progress** — split capture into per-angle calls for true
+   incremental progress bar updates
+3. **Auto-resolution** — detect screen size and suggest optimal resolution
+4. **Settings persistence indicator** — show a small dot when settings
+   differ from defaults

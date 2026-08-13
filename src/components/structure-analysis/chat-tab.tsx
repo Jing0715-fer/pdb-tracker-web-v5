@@ -1623,11 +1623,16 @@ export function ChatTab() {
                     if (cmd.type === "analyze_run" && result.ok) {
                       const recipeId = (cmd as { recipe?: string }).recipe;
                       if (recipeId && shouldCaptureScreenshot(recipeId)) {
-                        // Round 79: Show capture progress indicator
+                        // Round 79/84: Show capture progress with visual bar
                         const captureStartTime = Date.now();
+                        const captureAngles = ["front", "side", "top"];
+                        const progressBar = (current: number, total: number) => {
+                          const filled = Math.round((current / total) * 10);
+                          return `[${"=".repeat(filled)}${"-".repeat(10 - filled)}] ${current}/${total}`;
+                        };
                         updateMessage(pendingId, {
                           agentStep: "executing",
-                          content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*`,
+                          content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*\n${progressBar(0, captureAngles.length)}`,
                         });
                         try {
                           // Extract viz params from the analysis result
@@ -1717,10 +1722,10 @@ export function ChatTab() {
                               recipe: string;
                             };
 
-                            // Round 79: Update message to show capture success + duration
+                            // Round 79/84: Update message to show capture success + duration + full bar
                             const captureDuration = ((Date.now() - captureStartTime) / 1000).toFixed(1);
                             updateMessage(pendingId, {
-                              content: `${reply || ""}\n\n*Captured ${data.screenshots.length} screenshots for ${getRecipeLabel(recipeId)} in ${captureDuration}s. VLM analysis running...*`,
+                              content: `${reply || ""}\n\n*Captured ${data.screenshots.length} screenshots for ${getRecipeLabel(recipeId)} in ${captureDuration}s.*\n${progressBar(data.screenshots.length, captureAngles.length)} VLM analysis running...`,
                             });
 
                             // Round 62: Store images IMMEDIATELY (without VLM
@@ -2520,7 +2525,7 @@ export function ChatTab() {
                     variant="ghost"
                     size="sm"
                     className={`h-7 w-7 p-0 ${settingsOpen ? "text-claude-accent bg-claude-accent-light/30" : "text-claude-text-muted hover:text-claude-accent"}`}
-                    title="Screenshot settings"
+                    title={`Screenshot settings | Labels: ${maxLabels === 0 ? 'None' : maxLabels} | Resolution: ${screenshotSize} | Font: ${labelFontSize === 0.5 ? 'Small' : labelFontSize === 1.0 ? 'Medium' : labelFontSize === 1.5 ? 'Large' : 'X-Large'}`}
                   >
                     <Settings className="h-3 w-3" />
                   </Button>
