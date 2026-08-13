@@ -49,17 +49,22 @@ export async function POST(req: NextRequest) {
 
     // Build the VLM prompt based on the recipe type
     const recipeContext = getRecipeContext(recipe);
+    // Round 73: Extract key residues from analysis summary for VLM reference
+    const residueInfo = extractResidueInfo(analysisSummary || '');
+    const residueText = residueInfo ? `\n\n关键残基信息（请在评语中引用这些残基名称）：\n${residueInfo}` : '';
+
     const defaultPrompt = `你是一位结构生物学专家。请查看以下${screenshots.length}张蛋白质3D结构截图，它们分别从不同角度（${screenshots.map(s => s.angle).join('、')}）拍摄。
 
-分析背景：${analysisSummary || recipeContext}
+分析背景：${analysisSummary || recipeContext}${residueText}
 
 请选择最能清晰展示"${recipeContext}"的那张截图。考虑以下因素：
 1. 关键结构特征是否清晰可见
 2. 配体/残基/互作是否没有被遮挡
 3. 构图是否平衡、视觉上是否易于理解
+4. 关键残基（如催化残基、口袋残基）是否在视野中可见
 
 请以JSON格式回复（不要其他内容）：
-{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>"}
+{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张，引用具体残基名称>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>"}
 
 每张截图的分数为1-10的整数，10分最佳。评分标准：
 - 结构特征清晰可见程度 (0-4分)
@@ -200,4 +205,89 @@ function getRecipeContext(recipe: string): string {
     summary: '结构摘要 — 链/残基/原子计数和配体列表',
   };
   return contexts[recipe] || `结构分析结果 (${recipe})`;
+}
+
+/**
+ * Round 73: Extract key residue information from the analysis summary text.
+ * The analysis summary is a JSON string containing recipe results. This function
+ * parses it and extracts residue names/numbers that the VLM can reference.
+ *
+ * Extracts:
+ * - Pocket residues (from binding_pocket results)
+ * - Catalytic residues (CYS/HIS dyads)
+ * - Top interaction residues (from hbonds/salt_bridges)
+ * - Ligand name
+ *
+ * Returns a formatted string or null if no residues found.
+ */
+function extractResidueInfo(summary: string): string | null {
+  try {
+    // The summary is a JSON string — try to parse it
+    let data: any;
+    try {
+      data = JSON.parse(summary);
+    } catch {
+      // Not JSON — try to extract residue patterns from plain text
+      const residuePattern = /([A-Z]{3})(\d+)\(([A-Z])\)/g;
+      const matches = [...summary.matchAll(residuePattern)];
+      if (matches.length > 0) {
+        const residues = matches.slice(0, 10).map(m => `${m[1]}${m[2]}(${m[3]})`);
+        return `检测到的残基: ${residues.join(', ')}`;
+      }
+      return null;
+    }
+
+    const lines: string[] = [];
+
+    // Extract from binding_pocket
+    if (data.bindingPocket || data.binding_pocket) {
+      const bp = data.bindingPocket || data.binding_pocket;
+      if (bp.ligand) lines.push(`配体: ${bp.ligand}`);
+      if (bp.topResidues && Array.isArray(bp.topResidues)) {
+        lines.push(`口袋残基: ${bp.topResidues.slice(0, 8).join(', ')}`);
+      }
+      if (bp.catalyticResidues && Array.isArray(bp.catalyticResidues) && bp.catalyticResidues.length > 0) {
+        lines.push(`催化残基: ${bp.catalyticResidues.join(', ')}`);
+      }
+    }
+
+    // Extract from residues array (binding_pocket format)
+    if (data.residues && Array.isArray(data.residues)) {
+      const topRes = data.residues.slice(0, 8).map((r: any) =>
+        `${r.resname || '?'}${r.resno || '?'}(${r.chain || '?'})`
+      );
+      if (topRes.length > 0) lines.push(`口袋残基: ${topRes.join(', ')}`);
+    }
+
+    // Extract from hbonds
+    if (data.hbonds && Array.isArray(data.hbonds)) {
+      const hbondRes = data.hbonds.slice(0, 5).map((h: any) =>
+        `${h.donor_resname || '?'}${h.donor_resno || '?'} → ${h.acceptor_resname || '?'}${h.acceptor_resno || '?'}`
+      );
+      if (hbondRes.length > 0) lines.push(`氢键残基对: ${hbondRes.join(', ')}`);
+    }
+
+    // Extract from salt_bridges
+    if (data.salt_bridges && Array.isArray(data.salt_bridges)) {
+      const sbRes = data.salt_bridges.slice(0, 5).map((s: any) =>
+        `${s.pos_resname || '?'}${s.pos_resno || '?'}(+) ↔ ${s.neg_resname || '?'}${s.neg_resno || '?'}(−)`
+      );
+      if (sbRes.length > 0) lines.push(`盐桥残基对: ${sbRes.join(', ')}`);
+    }
+
+    // Extract from all_interactions
+    if (data.interactions && Array.isArray(data.interactions)) {
+      const aiRes = data.interactions.slice(0, 5).map((i: any) =>
+        `${i.resname1 || '?'}${i.resno1 || '?'} ↔ ${i.resname2 || '?'}${i.resno2 || '?'}`
+      );
+      if (aiRes.length > 0) lines.push(`互作残基对: ${aiRes.join(', ')}`);
+    }
+
+    // Extract ligand name
+    if (data.ligand) lines.push(`配体: ${data.ligand}`);
+
+    return lines.length > 0 ? lines.join('\n') : null;
+  } catch {
+    return null;
+  }
 }

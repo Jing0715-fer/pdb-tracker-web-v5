@@ -12770,3 +12770,67 @@ Improvement Suggestions for Next Round:
 3. **Recipe output schema validation** — validate field names match formatter
 4. **VLM prompt update** — include residue label information in the VLM prompt
    so it can reference specific residues by name
+
+---
+Task ID: round-73-image-cleanup-vlm-residue-labels
+Agent: main
+Task: Add image cleanup on session delete, update VLM prompt with residue labels. QA + commit and push.
+
+Development:
+
+### 1. Image Cleanup on Session Delete (src/lib/molcraft/store.ts)
+Updated `deleteChatSession` to clean up IndexedDB images before removing the session:
+- Finds the session being deleted
+- For each message in that session, calls `deleteImagesForMessage(msg.id)` to
+  remove all associated images from IndexedDB
+- This prevents orphaned image data from accumulating in IndexedDB when
+  sessions are deleted
+
+### 2. VLM Prompt with Residue Labels (src/app/api/vlm/select-best/route.ts)
+Added `extractResidueInfo()` function that parses the analysis summary and
+extracts key residue information for the VLM to reference:
+
+**Extracts from JSON analysis data:**
+- binding_pocket: ligand name, pocket residues (top 8), catalytic residues
+- hbonds: top 5 donor→acceptor residue pairs
+- salt_bridges: top 5 pos↔neg residue pairs
+- all_interactions: top 5 interaction pairs
+- Fallback: regex pattern matching for `XXX(N)` residue format in plain text
+
+**VLM prompt updates:**
+- Added "关键残基信息（请在评语中引用这些残基名称）" section with extracted residues
+- Added evaluation criterion: "关键残基（如催化残基、口袋残基）是否在视野中可见"
+- Updated reason field instruction: "引用具体残基名称"
+- The VLM now produces commentary like:
+  "截图1（正面视角）能更清晰地展示配体PJE与关键催化残基CYS145(A)和HIS41(A)
+   的空间位置关系及结合口袋的整体布局"
+
+### Verification
+
+#### VLM API Test with residue info
+```
+POST /api/vlm/select-best (binding_pocket, PJE + CYS145 + HIS41)
+→ bestIndex: 0
+→ scores: [6, 4]
+→ confidence: medium
+→ commentary: "截图1（正面视角）能更清晰地展示配体PJE与关键催化残基
+   CYS145(A)和HIS41(A)的空间位置关系及结合口袋的整体布局..."
+```
+The VLM now references specific residues (CYS145, HIS41) by name!
+
+#### Lint
+- store.ts: 0 errors ✅
+- vlm/select-best/route.ts: 0 errors ✅
+
+Stage Summary:
+- ✅ Image cleanup: deleteChatSession removes IndexedDB images
+- ✅ VLM residue labels: prompt includes extracted residue info, VLM references by name
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **Chat screenshot display verification** — run a real analysis on 6LU7 to
+   verify the auto-capture pipeline works end-to-end
+2. **Image quota management** — track IndexedDB usage and auto-clean old images
+3. **Residue label overlay on screenshots** — draw text labels on the 3D view
+   before capturing so the VLM can see them visually
+4. **Batch session export** — export all sessions (with images) as a ZIP file

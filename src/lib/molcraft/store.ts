@@ -856,6 +856,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ activeSessionId: id, chatMessages: messages });
   },
   deleteChatSession: (id) => {
+    // Round 73: Clean up IndexedDB images for the deleted session's messages
+    const sessionToDelete = get().chatSessions.find((s) => s.id === id);
+    if (sessionToDelete) {
+      for (const msg of sessionToDelete.messages) {
+        if (msg.analysisImages && msg.analysisImages.length > 0) {
+          deleteImagesForMessage(msg.id);
+        }
+      }
+    }
     const sessions = get().chatSessions.filter((s) => s.id !== id);
     persistChatSessions(sessions);
     // If we deleted the active session, switch to the first remaining or create new
