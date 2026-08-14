@@ -170,8 +170,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Round 102: For tool calling, the z.ai SDK is the only provider that
+    // natively supports OpenAI-style function calling. When the user picked
+    // a CLI provider (hermes/codex/codebuddy), we fall back to z.ai SDK for
+    // the LLM call but include a `note` so the UI can show the user that
+    // their selected provider wasn't used for the agent.
+    const requestedProvider = provider || 'auto';
+    const isCliProvider = requestedProvider.startsWith('cli:');
     const ZAI = (await import('z-ai-web-dev-sdk')).default;
     const zai = await ZAI.create();
+    // If the user explicitly selected a CLI provider, prepend a note to the
+    // system prompt so the LLM knows we're using a different backend.
+    const providerNote = isCliProvider
+      ? `\n\n> Note: The user selected ${requestedProvider} for chat, but this\n> agent-mode request uses the z.ai SDK (the only provider that natively\n> supports OpenAI-style tool/function calling). Tool execution still runs\n> locally in the browser via Molstar.\n`
+      : '';
+    const systemPromptWithNote = AGENT_SYSTEM_PROMPT + providerNote;
 
     const MAX_RETRIES = 2;
     const BASE_DELAY = 5_000;
@@ -182,7 +195,7 @@ export async function POST(request: NextRequest) {
         const resp = await zai.chat.completions.create({
           model: 'glm-4.6',
           messages: [
-            { role: 'system', content: AGENT_SYSTEM_PROMPT },
+            { role: 'system', content: systemPromptWithNote },
             ...llmMessages,
           ] as any,
           tools: AGENT_TOOLS as any,
@@ -212,7 +225,10 @@ export async function POST(request: NextRequest) {
           done,
           content,
           toolCalls: done ? undefined : toolCalls,
-          provider: provider || 'zai',
+          // Round 102: Report the actual provider used (z.ai SDK), even when
+          // the user selected a CLI provider. The note above explains why.
+          provider: 'zai',
+          requestedProvider,
           model: 'glm-4.6',
           round: Math.floor(llmMessages.length / 2),
           finishReason: choice.finish_reason,

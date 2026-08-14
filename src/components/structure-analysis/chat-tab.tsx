@@ -1627,6 +1627,9 @@ export function ChatTab() {
           const result = await agentLoop.run(trimmed, history, {
             viewer,
             sessionId,
+            // Round 102: Pass the user's selected chat provider so the agent
+            // can use it (or fall back to z.ai for tool calling).
+            provider: chatProvider,
             onProgress,
           });
           if (!result.ok && result.error) {

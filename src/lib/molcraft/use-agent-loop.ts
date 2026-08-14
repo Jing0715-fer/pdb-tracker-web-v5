@@ -70,6 +70,10 @@ export interface AgentMessage {
 export interface UseAgentLoopOptions {
   viewer: MolstarViewer | null;
   sessionId?: string;
+  /** Round 102: Selected LLM provider (e.g. 'cli:hermes', 'cli:codex', 'zai').
+   *  If omitted, defaults to z.ai SDK (the only provider that natively supports
+   *  OpenAI-style function calling for tool-calling). */
+  provider?: string;
   onProgress?: (event: AgentProgressEvent) => void;
   /** Called when a tool requires approval — the UI should show a permission card */
   onPermissionRequest?: (request: {
@@ -302,6 +306,11 @@ export function useAgentLoop() {
       const MAX_ROUNDS = 10;
       const allToolResults: AgentToolResult[] = [];
       const sessionId = options.sessionId || `agent-${Date.now()}`;
+      // Round 102: Pass the user's selected provider. Default to z.ai SDK
+      // when none is specified, because that's the only provider that
+      // natively supports OpenAI-style function calling. If the user picked
+      // hermes/codex, the route will fall back to z.ai internally.
+      const providerFromOptions = options.provider || 'zai';
       // R98.6: Track the last pdb_analyze result so we can auto-inject
       // interactions/labels into subsequent capture_multi_angle calls
       let lastAnalysisData: Record<string, unknown> | undefined = undefined;
@@ -342,6 +351,9 @@ export function useAgentLoop() {
                   messages,
                   toolResults: round > 0 ? allToolResults.slice(-4) : undefined,
                   sessionId,
+                  // Round 102: Pass the selected chat provider so the route
+                  // can route to the correct LLM (e.g. cli:hermes, cli:codex).
+                  provider: providerFromOptions,
                 }),
                 signal: controller.signal,
               });
