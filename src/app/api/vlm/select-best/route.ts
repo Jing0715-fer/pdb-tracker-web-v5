@@ -224,6 +224,42 @@ recaptureHints对象提供重新截图的建议（当quality为degraded或unacce
       }
     }
 
+    // R101.5: Validate VLM fields — if quality is missing, infer from scores
+    if (!quality || quality === 'acceptable') {
+      // If we have scores, infer quality from the best score
+      if (scores.length > 0) {
+        const bestScore = Math.max(...scores);
+        const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+        if (bestScore < 3 || avgScore < 3) {
+          quality = 'unacceptable';
+        } else if (bestScore < 5 || avgScore < 5) {
+          quality = 'degraded';
+        } else {
+          quality = 'acceptable';
+        }
+      }
+    }
+    // R101.5: If issues is empty but quality is not acceptable, add a generic issue
+    if (quality !== 'acceptable' && issues.length === 0) {
+      issues = screenshots.map(() =>
+        quality === 'unacceptable'
+          ? '截图质量不佳，可能存在显示问题'
+          : '截图质量一般，部分元素可能不清晰'
+      );
+    }
+    // R101.5: If issues is empty and quality is acceptable, fill with '无问题'
+    if (quality === 'acceptable' && issues.length === 0) {
+      issues = screenshots.map(() => '无问题');
+    }
+    // R101.5: If recaptureHints is empty, provide defaults
+    if (Object.keys(recaptureHints).length === 0) {
+      recaptureHints = {
+        angles: ['front', 'side', 'top'],
+        focus: 'ligand',
+        zoom: 'in',
+      };
+    }
+
     return NextResponse.json({
       bestIndex,
       commentary,

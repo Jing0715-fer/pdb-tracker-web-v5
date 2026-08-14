@@ -105,6 +105,15 @@ If the VLM reports quality issues (degraded/unacceptable), you will see feedback
 - Different angles (try the VLM-suggested angles, or use ["back", "side"])
 - Any focus/zoom hints from the VLM
 
+# Screenshot quality in final answer
+
+When writing your final answer, if VLM reported screenshot quality issues (degraded/unacceptable) and the recapture limit was reached, you MUST:
+1. Acknowledge the screenshot quality issue to the user
+2. Explain what was expected (e.g. "侧链应以ball-and-stick方式显示，氢键应以虚线显示")
+3. Suggest the user manually rotate the view and request a new screenshot
+
+Example: "注意：截图质量评估为'一般'，部分侧链可能未完全显示。如需更清晰的截图，请手动调整视角后重新请求。"
+
 # Important
 
 - Do NOT ask the user to confirm every action - just call the tools. The UI handles approval for destructive operations (clear_chat, export_snapshot).

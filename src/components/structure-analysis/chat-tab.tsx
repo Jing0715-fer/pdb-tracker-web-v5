@@ -282,7 +282,8 @@ export function ChatTab() {
   const logCommand = useAppStore((s) => s.logCommand);
   // Agent mode: when ON, uses the tool-calling agent loop (/api/llm/agent/round)
   // instead of the legacy ReAct-in-prompt loop (/api/llm/chat/stream)
-  const [agentMode, setAgentMode] = useState(false);
+  // R101.7: Agent mode is now the default (feature-complete with 36 tools, VLM feedback, recapture)
+  const [agentMode, setAgentMode] = useState(true);
   const [agentProgress, setAgentProgress] = useState<string | null>(null);
   const agentLoop = useAgentLoop();
 

@@ -128,18 +128,35 @@ export function normalizeInteractions(analysisData: Record<string, unknown> | un
 export function extractResidueLabels(
   analysisData: Record<string, unknown> | undefined,
   maxLabels: number = 12,
-): Array<{ text: string; chain?: string; resno?: number }> {
+): Array<{ text: string; chain?: string; resno?: number; fullResidue?: string }> {
   if (!analysisData) return [];
   const THREE_TO_ONE: Record<string, string> = {
     ALA: "A", ARG: "R", ASN: "N", ASP: "D", CYS: "C", GLN: "Q", GLU: "E",
     GLY: "G", HIS: "H", ILE: "I", LEU: "L", LYS: "K", MET: "M", PHE: "F",
     PRO: "P", SER: "S", THR: "T", TRP: "W", TYR: "Y", VAL: "V",
   };
+  const ONE_TO_THREE: Record<string, string> = {
+    A: "ALA", R: "ARG", N: "ASN", D: "ASP", C: "CYS", Q: "GLN", E: "GLU",
+    G: "GLY", H: "HIS", I: "ILE", L: "LEU", K: "LYS", M: "MET", F: "PHE",
+    P: "PRO", S: "SER", T: "THR", W: "TRP", Y: "TYR", V: "VAL",
+  };
   const formatLabel = (resname: string, resno: number) => {
     const one = THREE_TO_ONE[resname] || "?";
     return `${one}${resno}`;
   };
-  const labels: Array<{ text: string; chain?: string; resno?: number }> = [];
+  // R101.6: Build full residue name for tooltip (e.g. "CYS145 (Cysteine)")
+  const RESNAME_FULL: Record<string, string> = {
+    ALA: "Alanine", ARG: "Arginine", ASN: "Asparagine", ASP: "Aspartate",
+    CYS: "Cysteine", GLN: "Glutamine", GLU: "Glutamate", GLY: "Glycine",
+    HIS: "Histidine", ILE: "Isoleucine", LEU: "Leucine", LYS: "Lysine",
+    MET: "Methionine", PHE: "Phenylalanine", PRO: "Proline", SER: "Serine",
+    THR: "Threonine", TRP: "Tryptophan", TYR: "Tyrosine", VAL: "Valine",
+  };
+  const formatFull = (resname: string, resno: number, chain?: string) => {
+    const full = RESNAME_FULL[resname] || resname;
+    return chain ? `${resname}${resno} (${full}, Chain ${chain})` : `${resname}${resno} (${full})`;
+  };
+  const labels: Array<{ text: string; chain?: string; resno?: number; fullResidue?: string }> = [];
   const seen = new Set<string>();
 
   // From binding_pocket residues
@@ -153,7 +170,12 @@ export function extractResidueLabels(
         const key = `${chain}:${resno}`;
         if (!seen.has(key)) {
           seen.add(key);
-          labels.push({ text: formatLabel(resname, resno), chain, resno });
+          labels.push({
+            text: formatLabel(resname, resno),
+            chain,
+            resno,
+            fullResidue: formatFull(resname, resno, chain),
+          });
         }
       }
     }
@@ -166,12 +188,22 @@ export function extractResidueLabels(
     const key1 = `${i.chain1}:${i.resno1}`;
     if (!seen.has(key1) && i.resname1) {
       seen.add(key1);
-      labels.push({ text: formatLabel(i.resname1, i.resno1), chain: i.chain1, resno: i.resno1 });
+      labels.push({
+        text: formatLabel(i.resname1, i.resno1),
+        chain: i.chain1,
+        resno: i.resno1,
+        fullResidue: formatFull(i.resname1, i.resno1, i.chain1),
+      });
     }
     const key2 = `${i.chain2}:${i.resno2}`;
     if (!seen.has(key2) && i.resname2) {
       seen.add(key2);
-      labels.push({ text: formatLabel(i.resname2, i.resno2), chain: i.chain2, resno: i.resno2 });
+      labels.push({
+        text: formatLabel(i.resname2, i.resno2),
+        chain: i.chain2,
+        resno: i.resno2,
+        fullResidue: formatFull(i.resname2, i.resno2, i.chain2),
+      });
     }
   }
 
