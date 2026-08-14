@@ -27,6 +27,7 @@ import type { MolstarViewer } from './types';
 import { permissionStore, type PermissionDecision } from './permission';
 import { sessionManager } from './session-manager';
 import { backgroundTaskManager } from './background-tasks';
+import { getToolDefinition } from './tool-definitions';
 
 export interface AgentToolCall {
   id: string;
@@ -88,44 +89,100 @@ export interface AgentLoopResult {
   error?: string;
 }
 
-/** Map agent tool calls to LlmCommand objects expected by executeCommand */
+'/** Map agent tool calls to LlmCommand objects expected by executeCommand.
+ * Round 97: Expanded to support all 36 tools. */
 function toolCallToCommand(name: string, args: Record<string, unknown>): Record<string, unknown> | null {
   switch (name) {
+    // Structure loading
     case 'pdb_load':
       return { type: 'load_pdb', id: args.id };
+    case 'load_alphafold':
+      return { type: 'load_alphafold', uniprotId: args.uniprotId };
+    case 'load_emdb':
+      return { type: 'load_emdb', id: args.emdbId, detail: args.detail ?? 3 };
+    case 'load_structure_url':
+      return { type: 'load_structure_url', url: args.url, format: args.format ?? 'mmcif', isBinary: args.isBinary ?? false };
+    // Analysis
     case 'pdb_analyze': {
-      const params: Record<string, unknown> = {
-        chain1: args.chain1,
-        chain2: args.chain2,
-      };
+      const params: Record<string, unknown> = { chain1: args.chain1, chain2: args.chain2 };
       if (args.ligandCompId) params.ligandCompId = args.ligandCompId;
       if (args.radius) params.radius = args.radius;
-      return {
-        type: 'analyze_run',
-        pdbId: args.pdbId || '',
-        recipe: args.recipe,
-        params,
-      };
+      return { type: 'analyze_run', pdbId: args.pdbId || '', recipe: args.recipe, params };
     }
+    case 'fetch_metadata':
+      return { type: 'analyze_metadata', id: args.id, includeInterfaces: args.includeInterfaces ?? true };
+    case 'fetch_interface':
+      return { type: 'analyze_interface', id: args.id, assembly: args.assembly ?? 1 };
+    case 'show_interactions': {
+      const cmd: Record<string, unknown> = { type: 'show_interactions', radius: args.radius ?? 8 };
+      if (args.target_compId) cmd.target = args.target_compId;
+      else if (args.target_chain && args.target_resno) cmd.target = { chain: args.target_chain, resno: args.target_resno };
+      else cmd.target = 'ligand';
+      return cmd;
+    }
+    case 'align_structures':
+      return { type: 'align_structures', ref: args.ref, mobile: args.mobile, method: args.method ?? 'superpose' };
+    case 'show_electrostatic_surface':
+      return { type: 'show_electrostatic_surface', chain: args.chain, ionicStrength: args.ionicStrength };
+    case 'show_druggable_pocket':
+      return { type: 'show_druggable_pocket', ligandCompId: args.ligandCompId, radius: args.radius ?? 8 };
+    case 'run_virtual_screening':
+      return { type: 'run_virtual_screening', ligandCompId: args.ligandCompId, fragmentSet: args.fragmentSet ?? 'druglike' };
+    case 'detect_pockets':
+      return { type: 'detect_pockets', minDepth: args.minDepth ?? 100 };
+    // Visualization
     case 'set_representation':
       return { type: 'set_representation', preset: args.preset, structures: 'all' };
     case 'set_color_theme':
       return { type: 'set_color_theme', theme: args.theme, structures: 'all' };
+    case 'set_uniform_color':
+      return { type: 'set_uniform_color', color: args.color, structures: 'all' };
     case 'focus_ligand':
       return { type: 'focus_ligand', compId: args.compId };
     case 'focus_residue':
       return { type: 'focus_residue', chain: args.chain, resno: args.resno };
-    case 'capture_multi_angle':
-      return {
-        type: 'capture_multi_angle',
-        angles: args.angles || ['front', 'side', 'top'],
-      };
+    case 'focus_chain':
+      return { type: 'focus_chain', chain: args.chain };
+    case 'reset_camera':
+      return { type: 'reset_camera' };
+    case 'set_background':
+      return { type: 'set_background', color: args.color };
+    case 'toggle_spin':
+      return { type: 'toggle_spin', speed: args.speed ?? 0.1 };
+    case 'toggle_rock':
+      return { type: 'toggle_rock' };
+    case 'toggle_component_visibility':
+      return { type: 'toggle_component_visibility', component: args.component, action: args.action ?? 'toggle' };
+    case 'select': {
+      const cmd: Record<string, unknown> = { type: 'select', action: args.action ?? 'set' };
+      if (args.target_compId) cmd.target = args.target_compId;
+      else if (args.target_chain && args.target_resno) cmd.target = { chain: args.target_chain, resno: args.target_resno };
+      else cmd.target = 'all';
+      return cmd;
+    }
+    case 'clear_selection':
+      return { type: 'clear_selection' };
+    case 'clear_interactions':
+      return { type: 'clear_interactions' };
+    case 'label_residue':
+      return { type: 'label_residue', chain: args.chain, resno: args.resno, text: args.text };
+    // Measurement
     case 'measure_distance':
-      return {
-        type: 'measure_distance',
-        a: { chain: args.a_chain, resno: args.a_resno, atom: args.a_atom || 'CA' },
-        b: { chain: args.b_chain, resno: args.b_resno, atom: args.b_atom || 'CA' },
-      };
+      return { type: 'measure_distance', a: { chain: args.a_chain, resno: args.a_resno, atom: args.a_atom || 'CA' }, b: { chain: args.b_chain, resno: args.b_resno, atom: args.b_atom || 'CA' } };
+    case 'measure_angle':
+      return { type: 'measure_angle', a: { chain: args.a_chain, resno: args.a_resno, atom: args.a_atom || 'CA' }, b: { chain: args.b_chain, resno: args.b_resno, atom: args.b_atom || 'CA' }, c: { chain: args.c_chain, resno: args.c_resno, atom: args.c_atom || 'CA' } };
+    case 'measure_dihedral':
+      return { type: 'measure_dihedral', a: { chain: args.a_chain, resno: args.a_resno, atom: args.a_atom || 'CA' }, b: { chain: args.b_chain, resno: args.b_resno, atom: args.b_atom || 'CA' }, c: { chain: args.c_chain, resno: args.c_resno, atom: args.c_atom || 'CA' }, d: { chain: args.d_chain, resno: args.d_resno, atom: args.d_atom || 'CA' } };
+    case 'clear_measurements':
+      return { type: 'clear_measurements' };
+    // Screenshot
+    case 'capture_multi_angle':
+      return { type: 'capture_multi_angle', recipe: args.recipe, angles: args.angles || ['front', 'side', 'top'] };
+    case 'capture_snapshot':
+      return { type: 'capture_snapshot', label: args.label };
+    case 'export_snapshot':
+      return { type: 'export_snapshot' };
+    // Session
     case 'clear_chat':
       return { type: 'clear_chat' };
     default:
@@ -133,35 +190,55 @@ function toolCallToCommand(name: string, args: Record<string, unknown>): Record<
   }
 }
 
-/** Generate a human-readable summary for the permission UI */
+/** Generate a human-readable summary for the permission UI.
+ * Round 97: Expanded for all tools. */
 function summarizeToolCall(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
-    case 'pdb_load':
-      return `加载 PDB 结构: ${args.id || '未知'}`;
-    case 'pdb_analyze':
-      return `运行分析: ${args.recipe || '未知'} (链 ${args.chain1}/${args.chain2})`;
-    case 'set_representation':
-      return `设置表示方式: ${args.preset || '默认'}`;
-    case 'set_color_theme':
-      return `设置颜色主题: ${args.theme || '默认'}`;
-    case 'focus_ligand':
-      return `聚焦配体: ${args.compId || '全部'}`;
-    case 'focus_residue':
-      return `聚焦残基: ${args.chain}${args.resno}`;
-    case 'capture_multi_angle':
-      return `多角度截图`;
-    case 'measure_distance':
-      return `测量距离: ${args.a_chain}${args.a_resno} ↔ ${args.b_chain}${args.b_resno}`;
-    case 'clear_chat':
-      return `清空聊天记录`;
-    default:
-      return `执行: ${toolName}`;
+    case 'pdb_load': return `加载 PDB 结构: ${args.id || '未知'}`;
+    case 'load_alphafold': return `加载 AlphaFold 结构: ${args.uniprotId || '未知'}`;
+    case 'load_emdb': return `加载 EMDB 体积图: ${args.emdbId || '未知'}`;
+    case 'load_structure_url': return `从 URL 加载结构`;
+    case 'pdb_analyze': return `运行分析: ${args.recipe || '未知'} (链 ${args.chain1}/${args.chain2})`;
+    case 'fetch_metadata': return `获取 PDB 元数据: ${args.id || '未知'}`;
+    case 'fetch_interface': return `获取界面数据: ${args.id || '未知'}`;
+    case 'show_interactions': return `显示互作环境`;
+    case 'align_structures': return `对齐结构`;
+    case 'show_electrostatic_surface': return `显示静电势表面`;
+    case 'show_druggable_pocket': return `显示可成药口袋: ${args.ligandCompId || ''}`;
+    case 'run_virtual_screening': return `运行虚拟筛选`;
+    case 'detect_pockets': return `检测口袋`;
+    case 'set_representation': return `设置表示方式: ${args.preset || '默认'}`;
+    case 'set_color_theme': return `设置颜色主题: ${args.theme || '默认'}`;
+    case 'set_uniform_color': return `设置统一颜色: ${args.color || ''}`;
+    case 'focus_ligand': return `聚焦配体: ${args.compId || '全部'}`;
+    case 'focus_residue': return `聚焦残基: ${args.chain}${args.resno}`;
+    case 'focus_chain': return `聚焦链: ${args.chain}`;
+    case 'reset_camera': return `重置相机`;
+    case 'set_background': return `设置背景色: ${args.color || ''}`;
+    case 'toggle_spin': return `切换旋转动画`;
+    case 'toggle_rock': return `切换摇摆动画`;
+    case 'toggle_component_visibility': return `切换组件可见性: ${args.component || ''}`;
+    case 'select': return `选择残基`;
+    case 'clear_selection': return `清除选择`;
+    case 'clear_interactions': return `清除互作显示`;
+    case 'label_residue': return `标记残基: ${args.chain}${args.resno}`;
+    case 'measure_distance': return `测量距离: ${args.a_chain}${args.a_resno} ↔ ${args.b_chain}${args.b_resno}`;
+    case 'measure_angle': return `测量角度`;
+    case 'measure_dihedral': return `测量二面角`;
+    case 'clear_measurements': return `清除所有测量`;
+    case 'capture_multi_angle': return `多角度截图`;
+    case 'capture_snapshot': return `截取当前视图`;
+    case 'export_snapshot': return `导出 PNG 截图`;
+    case 'clear_chat': return `清空聊天记录`;
+    default: return `执行: ${toolName}`;
   }
 }
 
-/** Check if a tool requires user approval before execution */
+/** Check if a tool requires user approval before execution.
+ * Round 97: Now consults the shared tool definitions instead of hardcoding. */
 function requiresApproval(toolName: string): boolean {
-  return toolName === 'clear_chat';
+  const def = getToolDefinition(toolName);
+  return def?.requiresApproval === true;
 }
 
 export function useAgentLoop() {
