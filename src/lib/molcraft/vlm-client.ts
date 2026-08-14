@@ -235,15 +235,64 @@ export interface ScreenshotData {
   label: string;
 }
 
+// R108.4: VLM result cache — avoids re-analyzing identical screenshots.
+// Key: hash of screenshot data URIs + recipe + analysisSummary
+// Value: VlmResult
+// TTL: 5 minutes (300000ms) — old entries are evicted on access
+const vlmCache = new Map<string, { result: VlmResult; timestamp: number }>();
+const VLM_CACHE_TTL = 300_000; // 5 minutes
+
+/** Generate a cache key from screenshots + recipe + summary */
+function getVlmCacheKey(screenshots: ScreenshotData[], recipe: string, analysisSummary: string): string {
+  // Use the first 100 chars of each data URI + length as a fingerprint
+  // (full data URIs are too long for a Map key)
+  const fingerprint = screenshots
+    .map((s) => `${s.dataUri.length}:${s.dataUri.slice(0, 100)}`)
+    .join("|");
+  return `${recipe}:${analysisSummary.slice(0, 200)}:${fingerprint}`;
+}
+
+/** Check cache for a valid (non-expired) entry */
+function getCachedVlm(key: string): VlmResult | null {
+  const entry = vlmCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > VLM_CACHE_TTL) {
+    vlmCache.delete(key); // expired
+    return null;
+  }
+  return entry.result;
+}
+
+/** Store a VLM result in cache */
+function setCachedVlm(key: string, result: VlmResult): void {
+  // Evict expired entries when cache grows large
+  if (vlmCache.size > 50) {
+    const now = Date.now();
+    for (const [k, v] of vlmCache.entries()) {
+      if (now - v.timestamp > VLM_CACHE_TTL) vlmCache.delete(k);
+    }
+  }
+  vlmCache.set(key, { result, timestamp: Date.now() });
+}
+
 /**
  * Call /api/vlm/select-best to analyze screenshots.
  * Returns null on failure (caller can retry).
+ * R108.4: Results are cached for 5 minutes to avoid re-analysis.
  */
 export async function selectBestScreenshot(
   screenshots: ScreenshotData[],
   recipe: string,
   analysisSummary: string,
 ): Promise<VlmResult | null> {
+  // R108.4: Check cache first
+  const cacheKey = getVlmCacheKey(screenshots, recipe, analysisSummary);
+  const cached = getCachedVlm(cacheKey);
+  if (cached) {
+    console.log("[vlm-client] Cache hit — skipping VLM call");
+    return cached;
+  }
+
   try {
     const vlmResponse = await fetch("/api/vlm/select-best", {
       method: "POST",
@@ -255,12 +304,20 @@ export async function selectBestScreenshot(
       }),
     });
     if (vlmResponse.ok) {
-      return (await vlmResponse.json()) as VlmResult;
+      const result = (await vlmResponse.json()) as VlmResult;
+      // R108.4: Cache the result
+      setCachedVlm(cacheKey, result);
+      return result;
     }
     return null;
   } catch {
     return null;
   }
+}
+
+/** R108.4: Clear the VLM cache (for testing or when structure changes) */
+export function clearVlmCache(): void {
+  vlmCache.clear();
 }
 
 /**

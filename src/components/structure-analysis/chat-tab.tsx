@@ -752,6 +752,19 @@ export function ChatTab() {
       return isNaN(v) ? 1.0 : Math.max(0.3, Math.min(3.0, v));
     } catch { return 1.0; }
   });
+  // R108.6: Agent settings — persisted to localStorage
+  const [autoCapture, setAutoCapture] = useState(() => {
+    try { return localStorage.getItem("pdb-tracker:auto-capture") !== "off"; } catch { return true; }
+  });
+  const [vlmEnabled, setVlmEnabled] = useState(() => {
+    try { return localStorage.getItem("pdb-tracker:vlm-enabled") !== "off"; } catch { return true; }
+  });
+  const [maxRecaptures, setMaxRecaptures] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem("pdb-tracker:max-recaptures") || "2", 10);
+      return isNaN(v) ? 2 : Math.max(0, Math.min(5, v));
+    } catch { return 2; }
+  });
 
   // Round 10: Sound notifications — play a beep when the agent finishes or errors
   const [soundEnabled, setSoundEnabled] = useState(() => {
@@ -1486,6 +1499,10 @@ export function ChatTab() {
                       c.status = tr.ok ? "done" : "error";
                       c.result = tr.result;
                       c.error = tr.error;
+                      // R108.7: Add durationMs for performance display
+                      if (tr.durationMs != null) {
+                        c.durationMs = tr.durationMs;
+                      }
                       break;
                     }
                   }
@@ -2980,6 +2997,54 @@ export function ChatTab() {
                         <option value={1.5}>Large</option>
                         <option value={2.0}>X-Large</option>
                       </select>
+                    </div>
+                    {/* R108.6: Agent Settings */}
+                    <div className="border-t border-claude-border/30 pt-1.5">
+                      <div className="text-[9px] font-semibold uppercase tracking-wide text-claude-text-muted mb-1">Agent Settings</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-claude-text-secondary">Auto-capture</span>
+                        <button
+                          onClick={() => {
+                            const v = !autoCapture;
+                            setAutoCapture(v);
+                            try { localStorage.setItem("pdb-tracker:auto-capture", v ? "on" : "off"); } catch { /* ignore */ }
+                          }}
+                          className={`relative h-4 w-7 rounded-full transition-colors ${autoCapture ? "bg-claude-accent" : "bg-claude-border"}`}
+                        >
+                          <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${autoCapture ? "left-3.5" : "left-0.5"}`} />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-1">
+                        <span className="text-[10px] text-claude-text-secondary">VLM analysis</span>
+                        <button
+                          onClick={() => {
+                            const v = !vlmEnabled;
+                            setVlmEnabled(v);
+                            try { localStorage.setItem("pdb-tracker:vlm-enabled", v ? "on" : "off"); } catch { /* ignore */ }
+                          }}
+                          className={`relative h-4 w-7 rounded-full transition-colors ${vlmEnabled ? "bg-claude-accent" : "bg-claude-border"}`}
+                        >
+                          <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${vlmEnabled ? "left-3.5" : "left-0.5"}`} />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 mt-1">
+                        <span className="text-[10px] text-claude-text-secondary">Max recaptures</span>
+                        <select
+                          value={maxRecaptures}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            setMaxRecaptures(v);
+                            try { localStorage.setItem("pdb-tracker:max-recaptures", String(v)); } catch { /* ignore */ }
+                          }}
+                          className="h-6 px-1 text-[9px] rounded border border-claude-border-light/60 dark:border-[#3d3832]/60 bg-claude-surface dark:bg-[#242220] text-claude-text-secondary dark:text-[#9b9590] cursor-pointer"
+                        >
+                          <option value={0}>Off</option>
+                          <option value={1}>1</option>
+                          <option value={2}>2</option>
+                          <option value={3}>3</option>
+                          <option value={5}>5</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
                 </PopoverContent>

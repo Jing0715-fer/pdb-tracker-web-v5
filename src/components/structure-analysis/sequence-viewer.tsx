@@ -197,17 +197,46 @@ export function SequenceViewer() {
               <SequenceRow sequence={currentSeq.sequence} chain={currentSeq.chain} onResidueClick={handleResidueClick} onResidueHover={setHoveredIdx} hoveredIdx={hoveredIdx} selectedIdx={selectedIdx} />
             </div>
           </div>
-          {hoveredIdx != null && currentSeq.sequence[hoveredIdx] && (
-            <div className="mt-1.5 flex items-center gap-2 border-t border-claude-border pt-1.5 text-[9px]">
-              <span className="font-mono font-bold text-claude-accent">
+          {/* R108.8: Selected residue info panel (persistent) */}
+          {selectedIdx != null && currentSeq.sequence[selectedIdx] && (() => {
+            const resCode = currentSeq.sequence[selectedIdx];
+            const resName = RESIDUE_NAMES[resCode] ?? resCode;
+            const resno = currentSeq.residueNumbers && selectedIdx < currentSeq.residueNumbers.length
+              ? currentSeq.residueNumbers[selectedIdx]
+              : selectedIdx + 1;
+            const insCode = currentSeq.insertionCodes && selectedIdx < currentSeq.insertionCodes.length
+              ? currentSeq.insertionCodes[selectedIdx]
+              : "";
+            return (
+              <div className="mt-1.5 border-t border-claude-accent/30 pt-1.5 rounded bg-claude-accent/5 px-2 py-1.5">
+                <div className="flex items-center gap-2 text-[10px]">
+                  <span className="flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold text-white"
+                    style={{ backgroundColor: RESIDUE_COLORS[resCode] ?? "#6b7280" }}>
+                    {resCode}
+                  </span>
+                  <span className="font-bold text-claude-accent">{resName}</span>
+                  <span className="font-mono text-claude-text">
+                    {resno}{insCode || ""}
+                  </span>
+                  <span className="text-claude-text-muted">·</span>
+                  <span className="text-claude-text-secondary">Chain {currentSeq.chain}</span>
+                  <span className="ml-auto text-claude-text-muted text-[9px]">
+                    Sequence pos {selectedIdx + 1}
+                  </span>
+                </div>
+                <div className="mt-1 text-[9px] text-claude-text-muted">
+                  Clicked residue — focused in 3D viewer
+                </div>
+              </div>
+            );
+          })()}
+          {hoveredIdx != null && hoveredIdx !== selectedIdx && currentSeq.sequence[hoveredIdx] && (
+            <div className="mt-1 flex items-center gap-2 text-[9px] text-claude-text-muted">
+              <span className="font-mono font-bold">
                 {RESIDUE_NAMES[currentSeq.sequence[hoveredIdx]] ?? currentSeq.sequence[hoveredIdx]}
               </span>
-              <span className="text-claude-text-secondary">
-                Position {hoveredIdx + 1}
-              </span>
-              <span className="ml-auto text-claude-text-muted">
-                Chain {currentSeq.chain} · Click to focus
-              </span>
+              <span>Position {hoveredIdx + 1}</span>
+              <span className="ml-auto">Click to focus</span>
             </div>
           )}
         </div>
