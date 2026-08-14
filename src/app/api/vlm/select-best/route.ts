@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 4. 关键残基（如催化残基、口袋残基）是否在视野中可见
 
 请以JSON格式回复（不要其他内容）：
-{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张，引用具体残基名称>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>", "comments": ["<截图1的15-30字中文评语>", "<截图2的评语>", ...]}
+{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张，引用具体残基名称>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>", "comments": ["<截图1的15-30字中文评语>", "<截图2的评语>", ...], "quality": "<acceptable|degraded|unacceptable>", "issues": ["<截图1的问题>", "<截图2的问题>"], "recaptureHints": {"angles": ["<建议角度>"], "focus": "<interface|ligand|residue|chain>", "zoom": "<in|out>"}}
 
 每张截图的分数为1-10的整数，10分最佳。评分标准：
 - 结构特征清晰可见程度 (0-4分)
@@ -76,7 +76,30 @@ confidence表示你对最佳选择的确信程度：
 - medium: 最佳截图较好但差距不大（分数差距 1-2）
 - low: 截图质量相近，难以区分（分数差距 0）
 
-comments数组必须为每张截图提供一条15-30字的中文评语，描述该截图所展示的具体结构特征（引用残基名称/链/配体），不要泛泛而谈。`;
+comments数组必须为每张截图提供一条15-30字的中文评语，描述该截图所展示的具体结构特征（引用残基名称/链/配体），不要泛泛而谈。
+
+quality字段表示截图整体质量：
+- "acceptable": 截图清晰展示了分析目标（侧链可见、氢键连线可见、结构未被遮挡）
+- "degraded": 截图部分可用但存在问题（如侧链未显示、连线缺失、角度不佳）
+- "unacceptable": 截图无法用于分析（黑屏、结构不可见、完全遮挡）
+
+issues数组列出每张截图存在的具体问题（用中文），例如：
+- "侧链未显示（ball-and-stick缺失）"
+- "氢键连线（虚线）未显示"
+- "关键残基被遮挡"
+- "结构太远/太近"
+- "黑屏或空白"
+
+recaptureHints对象提供重新截图的建议（当quality为degraded或unacceptable时）：
+- angles: 建议尝试的角度（如["side","top"]）
+- focus: 建议聚焦目标（"interface"/"ligand"/"residue"/"chain"）
+- zoom: 建议缩放方向（"in"/"out"）
+
+特别注意：对于互作分析（hbonds/salt_bridges/all_interactions/ligand_interactions），必须验证：
+1. 侧链是否以ball-and-stick方式显示（彩色的小球和棍子）
+2. 氢键/互作连线是否以虚线显示
+3. 关键残基是否有标签标注
+如果这些元素缺失，quality应设为degraded或unacceptable，并在issues中说明。`;
 
     const userPrompt = prompt || defaultPrompt;
 
@@ -116,9 +139,12 @@ comments数组必须为每张截图提供一条15-30字的中文评语，描述�
     let scores: number[] = [];
     let confidence: 'high' | 'medium' | 'low' = 'medium';
     let comments: string[] = [];
+    let quality: 'acceptable' | 'degraded' | 'unacceptable' = 'acceptable';
+    let issues: string[] = [];
+    let recaptureHints: { angles?: string[]; focus?: string; zoom?: 'in' | 'out' } = {};
 
     // Try to extract JSON from the response
-    const jsonMatch = vlmResponse.match(/\{[\s\S]*?"bestIndex"[\s\S]*?\}/);
+    const jsonMatch = vlmResponse.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -149,6 +175,35 @@ comments数组必须为每张截图提供一条15-30字的中文评语，描述�
             .filter((c: string) => c.length > 0)
             .slice(0, screenshots.length);
         }
+        // Round 98: Extract quality assessment
+        if (typeof parsed.quality === 'string') {
+          const q = parsed.quality.toLowerCase();
+          if (q === 'acceptable' || q === 'degraded' || q === 'unacceptable') {
+            quality = q;
+          }
+        }
+        // Round 98: Extract per-image issues
+        if (Array.isArray(parsed.issues)) {
+          issues = parsed.issues
+            .map((i: unknown) => typeof i === 'string' ? i : String(i ?? ''))
+            .filter((i: string) => i.length > 0)
+            .slice(0, screenshots.length);
+        }
+        // Round 98: Extract recapture hints
+        if (parsed.recaptureHints && typeof parsed.recaptureHints === 'object') {
+          const rh = parsed.recaptureHints as Record<string, unknown>;
+          if (Array.isArray(rh.angles)) {
+            recaptureHints.angles = (rh.angles as unknown[])
+              .map((a) => String(a ?? ''))
+              .filter((a: string) => ['front', 'side', 'top', 'back'].includes(a));
+          }
+          if (typeof rh.focus === 'string') {
+            recaptureHints.focus = rh.focus as string;
+          }
+          if (typeof rh.zoom === 'string') {
+            recaptureHints.zoom = rh.zoom as 'in' | 'out';
+          }
+        }
       } catch {
         // JSON parse failed — use the raw response as commentary
       }
@@ -169,6 +224,9 @@ comments数组必须为每张截图提供一条15-30字的中文评语，描述�
       scores,
       confidence,
       comments,
+      quality,
+      issues,
+      recaptureHints,
       recipe,
       vlmResponse,
     });
