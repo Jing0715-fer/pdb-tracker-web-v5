@@ -14394,3 +14394,68 @@ Task: Continue developing feat/tool-calling-agent based on Round 99 worklog reco
 6. **Screenshot annotation improvements**: The residue labels use one-letter codes (C145). Consider adding the full residue name as a tooltip or secondary label for clarity.
 
 7. **Agent mode default**: Consider making agent mode the default (agentMode=true) since it's now feature-complete with 36 tools, VLM feedback, and recapture support.
+
+---
+Task ID: round-101-vlm-validation-quality-ack-default-agent-tooltips
+Agent: main
+Task: Continue developing feat/tool-calling-agent based on Round 100 worklog recommendations. Implement VLM field validation, quality acknowledgment in final answer, agent mode default, residue tooltips. Run QA and E2E tests. Commit and push.
+
+### R101.3: VLM Quality Acknowledgment in Agent Final Answer
+- Updated agent system prompt: when VLM quality is degraded/unacceptable and recapture limit is reached, agent MUST acknowledge screenshot quality issues in the final answer
+- VERIFIED: LLM says "截图质量评估为'一般'，侧链可能未完全显示。如需更清晰的氢键可视化效果，建议您手动调整视角后重新请求截图"
+
+### R101.5: VLM Field Validation + Fallback
+- VLM route validates quality/issues/recaptureHints after parsing
+- If quality missing, infers from scores (best<3=unacceptable, <5=degraded, else acceptable)
+- If issues empty but quality not acceptable, adds generic issue per screenshot
+- If issues empty and quality acceptable, fills with '无问题'
+- If recaptureHints empty, provides defaults
+
+### R101.6: Screenshot Annotation Improvements
+- extractResidueLabels now includes 'fullResidue' field (e.g. 'CYS145 (Cysteine, Chain A)')
+- Added RESNAME_FULL mapping (20 amino acids → English full names)
+
+### R101.7: Agent Mode is Now the Default
+- Changed agentMode useState(false) → useState(true)
+- VERIFIED via browser: VLM confirms "Agent mode is currently selected and active"
+
+### E2E Test Results
+
+#### Full agent loop (4 rounds):
+1. Round 1: "Load 1CBS and analyze hbonds" → pdb_load ✓
+2. Round 4: After VLM quality=acceptable → final answer ✓
+
+#### VLM quality assessment:
+- Blank screenshots → quality='unacceptable', issues=['黑屏/空白...'], recaptureHints ✓
+
+#### VLM recapture feedback loop:
+- Round 5: VLM quality=unacceptable → LLM calls recapture_screenshot with focus='interface' ✓
+
+#### Quality acknowledgment in final answer:
+- When quality='degraded' after recapture → LLM acknowledges screenshot issues ✓
+
+#### Browser test:
+- Agent mode is now default (orange highlight, lightning icon)
+- VLM confirms: "Agent mode is currently selected and active"
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- feat/tool-calling-agent: cb5f818 (Round 101 complete, pushed to remote)
+
+### Next Round Recommendations (Round 102)
+
+1. **Real PDB browser E2E test with loaded structure**: The API tests confirm the tool call sequence, but a full browser test with actual PDB loading + Molstar rendering + screenshot capture + VLM analysis still needs verification with a real structure loaded in the viewer.
+
+2. **Parallel VLM analysis**: When multiple recipes are analyzed (e.g. hbonds + salt_bridges + binding_pocket), the VLM calls are sequential. Consider parallelizing them.
+
+3. **VLM model upgrade**: The current VLM (glm-5v-turbo) sometimes omits quality/issues fields. The R101.5 fallback handles this, but a more capable model would be more reliable.
+
+4. **Recapture effectiveness verification**: When recapture_screenshot is called, verify that side chains and H-bond lines are actually rendered in the new screenshots (needs real-browser test with loaded structure).
+
+5. **Full residue name display in UI**: The fullResidue field is now available in labels, but the message-bubble.tsx carousel doesn't yet display it as a tooltip. Wire it up.
+
+6. **Performance optimization**: The VLM call adds ~10-30s per capture. Consider caching VLM results for identical screenshots, or skipping VLM for single-screenshot captures.
+
+7. **User settings panel**: Allow users to configure VLM sensitivity (e.g. always accept, strict mode), max recaptures, and preferred angles.
