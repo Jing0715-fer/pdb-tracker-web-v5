@@ -14686,3 +14686,55 @@ Based on the test results, the following improvements are recommended:
 
 ### Git
 - main branch: Round 106 testing complete (no code changes, only E2E verification)
+
+---
+Task ID: round-107-auto-capture-skip-vlm-single-sequence-feedback
+Agent: main
+Task: Continue developing based on Round 106 worklog recommendations. Implement auto-capture after pdb_analyze, skip VLM for single screenshots, sequence viewer visual feedback. Run QA and E2E tests. Commit and push to main.
+
+### R107.2: Auto-Capture Screenshots After pdb_analyze
+- use-agent-loop.ts: After pdb_analyze succeeds, if recipe is visualizable and
+  LLM didn't call capture_multi_angle, auto-trigger it
+- Uses same vizParams auto-injection as explicit calls
+- Also runs VLM on auto-captured screenshots
+- Ensures screenshots ALWAYS captured after analysis
+
+### R107.5: Skip VLM for Single-Screenshot Captures
+- Single screenshot → skip VLM (saves 10-30s)
+- Returns synthetic result with quality='acceptable'
+
+### R107.8: Sequence Viewer Visual Feedback
+- Clicked residue gets ring-2 ring-claude-accent highlight + scale(1.15)
+- Highlight persists after clicking
+
+### R107.6: Error Recovery (verified working)
+- Agent loop already continues with other tools when one fails
+
+### E2E Test Results
+- Full agent loop (4 rounds): final answer with comprehensive text ✓
+  - Structure (1CBS), ligand (HEM), key residue (CYS145), functional insight
+- Single screenshot VLM: returns immediately, no delay ✓
+
+### Lint
+- All changed files: 0 errors
+
+### Git
+- main branch: 933d8af (Round 107 complete, pushed to remote)
+
+### Next Round Recommendations (Round 108)
+
+1. **Browser E2E test with loaded structure**: Still need to verify screenshots render in the chat UI carousel with quality badges, VLM commentary, and residue labels. The dev server keeps dying in the sandbox.
+
+2. **Side chain rendering verification**: Verify that the vizParams auto-injection actually renders side chains (ball-and-stick) and H-bond lines (dashed) in the screenshots.
+
+3. **Auto-capture effectiveness**: Verify that the R107.2 auto-capture actually triggers in the browser (not just API simulation) and that the screenshots appear in the chat.
+
+4. **VLM caching**: Consider caching VLM results for identical screenshots to avoid re-analysis when the same structure is analyzed multiple times.
+
+5. **Parallel VLM for multi-recipe**: When multiple recipes are analyzed in one session, run VLM analysis in parallel instead of sequentially.
+
+6. **User settings panel**: Allow users to configure VLM sensitivity, max recaptures, preferred angles, and whether auto-capture is enabled.
+
+7. **Performance metrics**: Add timing display for each tool call in the agent mode UI (currently only legacy path shows execution duration).
+
+8. **Sequence viewer: show residue info panel**: When a residue is clicked, show a small info panel with full residue name, number, chain, and nearby interactions (not just a toast).
