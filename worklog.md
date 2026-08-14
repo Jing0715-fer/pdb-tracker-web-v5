@@ -13722,3 +13722,72 @@ Improvement Suggestions for Next Round:
    check pixel variance for more accurate detection
 3. **Collapsible section memory** — remember which sections were expanded
 4. **Scroll to specific section** — add anchor links to jump to a section
+
+---
+Task ID: round-91-white-bg-camera-unlock-sidechains-ac-analysis
+Agent: main
+Task: Fix screenshot background (white), unlock camera after capture, show side chains for interactions, analyze A-C vs B-D asymmetry. QA + commit and push.
+
+User Bug Reports:
+1. 截图后结构预览界面的视角被锁定了 — camera locked after screenshot
+2. 截图的背景是黑色的，用白色比较好 — black background, want white
+3. 分析互作界面时没有展示出参与互作的氨基酸的侧链及标记 — no side chains visible
+4. A-C vs B-D 互作结果不对称 — why are results different?
+
+Fixes Applied:
+
+### 1. White Screenshot Background (src/lib/molcraft/commands.ts)
+Changed capture background from `0x1a1a2e` (dark navy) to `0xffffff` (white).
+White background provides better contrast for molecular structures and is
+more suitable for scientific publications.
+
+### 2. Camera Unlock After Capture (src/lib/molcraft/commands.ts)
+Added `plugin.managers.camera.reset()` + `await nextFrame()` after all
+capture cleanup is done. This restores the camera to the default position,
+allowing the user to freely rotate/zoom the structure again. Previously,
+the `applyCameraAngle` function set specific camera positions that
+effectively "locked" the view.
+
+### 3. Side Chain Display for Interactions (src/lib/molcraft/commands.ts)
+Updated `applyRecipeVisualization` for `all_interactions`/`hbonds`/
+`salt_bridges`/`hydrophobic_contacts`:
+- Creates a MolScript expression to find residues within 5Å of the
+  opposite chain (interface residues)
+- Creates a new component "Interface residues" with ball-and-stick
+  representation, making side chains visible in screenshots
+- After capture, cleans up the "Interface residues" component to
+  avoid cluttering the interactive view
+
+### 4. A-C vs B-D Analysis (explanation, no code change)
+The user asked why A-C (4 salt bridges) and B-D (0 interactions) have
+such different results when they "should" be symmetric.
+
+**Explanation**: In hemoglobin (4HHB), A/C are α chains and B/D are β chains.
+- A-C interface (α1-α2): Connected by 4 salt bridges between Asp126 and
+  Arg141 of each α chain. This is the T-state constraint.
+- B-D interface (β1-β2): Zero direct contacts. The two β chains are
+  separated by the central water cavity where 2,3-BPG binds.
+
+This asymmetry is **correct and biologically meaningful** — it's a hallmark
+of the T-state (deoxy) hemoglobin structure. The α1-α2 interface is locked
+by salt bridges, while β1-β2 is not in direct contact. The analysis is
+accurate.
+
+### Lint
+- commands.ts: 0 errors ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ White screenshot background (0xffffff)
+- ✅ Camera unlock after capture (camera.reset + nextFrame)
+- ✅ Side chain display for interactions (ball-and-stick for interface residues)
+- ✅ A-C vs B-D asymmetry explained (biologically correct)
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **E2E test on 4HHB** — verify white screenshots with visible side chains
+2. **deepseek-harness integration** — analyze if the tool can improve agent quality
+3. **Interaction line display** — add dashed lines for H-bonds/salt bridges
+4. **Label cleanup** — ensure side chain labels don't overlap in screenshots

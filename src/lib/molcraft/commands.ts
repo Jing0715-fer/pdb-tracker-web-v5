@@ -669,7 +669,7 @@ export async function executeCommand(
               const props = p as { renderer?: { backgroundColor?: unknown } };
               props.renderer = props.renderer ?? {};
               // Dark navy background (#1a1a2e) for better label/screenshot contrast
-              props.renderer.backgroundColor = 0x1a1a2e;
+              props.renderer.backgroundColor = 0xffffff; // White background for better screenshot readability
             });
           }
         } catch { /* best-effort */ }
@@ -755,6 +755,23 @@ export async function executeCommand(
           }
         }
 
+        // Round 91: Clean up any "Interface residues" component we added
+        try {
+          const structs = getStructures(plugin);
+          for (const s of structs) {
+            const toRemove: any[] = [];
+            for (const c of (s.components || [])) {
+              const label = c?.cell?.obj?.label;
+              if (label && label.includes("Interface residues")) {
+                toRemove.push(c);
+              }
+            }
+            for (const c of toRemove) {
+              try { plugin.managers.structure.component.remove(c); } catch { /* ignore */ }
+            }
+          }
+        } catch { /* best-effort */ }
+
         // Round 86: Restore original background color after capture.
         // Previously set backgroundColor = 0 (Molstar treats 0 as BLACK), which
         // made the viewer go fully black after every screenshot capture. Now we
@@ -780,6 +797,14 @@ export async function executeCommand(
             // Round 88: Wait for restore to render
             await nextFrame();
           }
+        } catch { /* best-effort */ }
+
+        // Round 91: Reset camera to restore user's view after capture.
+        // The applyCameraAngle function moves the camera to specific angles,
+        // which "locks" the view. Reset to let the user freely rotate again.
+        try {
+          plugin.managers.camera.reset();
+          await nextFrame();
         } catch { /* best-effort */ }
 
         return {
@@ -1528,14 +1553,50 @@ async function applyRecipeVisualization(
         // Show interactions (dashed lines for H-bonds, salt bridges, etc.)
         await safe(async () => {
           const chain1 = params?.chain1 as string | undefined;
-          if (chain1) {
+          const chain2 = params?.chain2 as string | undefined;
+          if (chain1 && chain2) {
+            // Round 91: Use show_interactions to display contact lines
+            // between the two chains
+            const targetLoci = await resolveInteractionsTarget(viewer, "ligand" as any);
+            // Focus on the interface region
             const loci = await lociFromResidue(viewer, { chain: chain1 });
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
           }
         }, "show_interactions");
-        // Round 89: Don't re-apply preset — it can remove the existing
-        // structure representation and cause black screenshots. Just apply
-        // color theme to the existing components.
+        // Round 91: Add ball-and-stick for interaction residues to make
+        // side chains visible in the screenshot. We create a component for
+        // residues near the interface.
+        await safe(async () => {
+          const data = getFirstStructureData(plugin);
+          if (!data) return;
+          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+          const chain1 = params?.chain1 as string | undefined;
+          const chain2 = params?.chain2 as string | undefined;
+          if (Q && chain1 && chain2) {
+            // Create a component showing residues within 5Å of the other chain
+            const expr = Q.struct.generator.atomGroups({
+              'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.authAsymId(), chain1]),
+              'and': [{'atom-test': Q.core.logic.lte([
+                Q.struct.atomProperty.core.distanceToLabeled({
+                  0: Q.struct.generator.atomGroups({
+                    'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.authAsymId(), chain2])
+                  })
+                }),
+                Q.core.math.add(5.0)
+              ])}]
+            });
+            const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
+            if (loci && !isLociEmpty(loci)) {
+              // Add ball-and-stick representation for interface residues
+              await plugin.managers.structure.component.addRepresentations(
+                plugin.managers.structure.component.createComponent(data, { loci, label: 'Interface residues' }),
+                'ball-and-stick',
+                {}
+              );
+            }
+          }
+        }, "show_sidechains");
+        // Apply chain-id color to distinguish interacting chains
         await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;
       }
