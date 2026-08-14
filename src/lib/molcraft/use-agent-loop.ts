@@ -29,6 +29,7 @@ import { sessionManager } from './session-manager';
 import { backgroundTaskManager } from './background-tasks';
 import { getToolDefinition } from './tool-definitions';
 import { normalizeInteractions, extractResidueLabels, selectBestWithRetry, needsRecapture, buildRecaptureInstruction } from './vlm-client';
+import { normalizeRecipeName, getVisualizableRecipes } from './recipe-aliases';
 
 export interface AgentToolCall {
   id: string;
@@ -563,6 +564,59 @@ export function useAgentLoop() {
               if (call.name === 'pdb_analyze' && execResult.ok) {
                 const ar = (execResult as any).analysisResult;
                 lastAnalysisData = (ar?.data as Record<string, unknown> | undefined) || (ar as Record<string, unknown> | undefined);
+
+                // R107.2: Auto-capture screenshots after pdb_analyze if the
+                // recipe is visualizable and the LLM didn't explicitly call
+                // capture_multi_angle in this round's tool calls.
+                const recipeName = (call.arguments.recipe as string) || '';
+                const visualizable = getVisualizableRecipes().has(normalizeRecipeName(recipeName));
+                const hasCaptureCall = toolCalls.some((tc: AgentToolCall) =>
+                  tc.name === 'capture_multi_angle' || tc.name === 'recapture_screenshot'
+                );
+                if (visualizable && !hasCaptureCall) {
+                  // Inject a synthetic capture_multi_angle tool call
+                  const autoCaptureCall: AgentToolCall = {
+                    id: `auto-capture-${Date.now()}`,
+                    name: 'capture_multi_angle',
+                    arguments: { recipe: recipeName },
+                  };
+                  // Add to messages as an assistant tool_call
+                  options.onProgress?.({ type: 'tool_start', toolCall: autoCaptureCall });
+                  // Execute it (will auto-inject vizParams from lastAnalysisData)
+                  const autoCmd = toolCallToCommand('capture_multi_angle', autoCaptureCall.arguments);
+                  if (autoCmd) {
+                    try {
+                      const autoResult = await executeCommand(options.viewer, autoCmd as any);
+                      const autoToolResult: AgentToolResult = {
+                        callId: autoCaptureCall.id,
+                        name: 'capture_multi_angle',
+                        ok: autoResult.ok,
+                        result: autoResult.ok
+                          ? { detail: autoResult.detail, data: (autoResult as any).data, autoCaptured: true }
+                          : undefined,
+                        error: autoResult.ok ? undefined : autoResult.detail,
+                        durationMs: 0,
+                      };
+                      allToolResults.push(autoToolResult);
+                      options.onProgress?.({ type: 'tool_result', toolResult: autoToolResult });
+
+                      // Run VLM on auto-captured screenshots
+                      if (autoResult.ok) {
+                        const autoScreenshots = (autoResult as any).data?.screenshots || [];
+                        if (autoScreenshots.length > 0) {
+                          try {
+                            const vlmData = await selectBestWithRetry(autoScreenshots, recipeName, JSON.stringify(lastAnalysisData || {}).slice(0, 2000));
+                            if (vlmData) {
+                              (autoToolResult as any).vlmResult = vlmData;
+                            }
+                          } catch { /* VLM failure is non-fatal */ }
+                        }
+                      }
+                    } catch (autoErr) {
+                      console.warn('[agent] Auto-capture failed:', autoErr);
+                    }
+                  }
+                }
               }
 
               // R99.2: For capture_multi_angle/recapture_screenshot, call VLM
@@ -570,7 +624,18 @@ export function useAgentLoop() {
               // decide whether to call recapture_screenshot
               if ((call.name === 'capture_multi_angle' || call.name === 'recapture_screenshot') && execResult.ok) {
                 const screenshots = (execResult as any).data?.screenshots || [];
-                if (screenshots.length > 0) {
+                // R107.5: Skip VLM for single-screenshot captures (no selection needed,
+                // saves 10-30s). Just mark it as best.
+                if (screenshots.length === 1) {
+                  (result as any).vlmResult = {
+                    bestIndex: 0,
+                    quality: 'acceptable',
+                    issues: ['单张截图，自动选择'],
+                    scores: [7],
+                    confidence: 'low',
+                    comments: ['单张截图自动选择，未进行VLM分析'],
+                  };
+                } else if (screenshots.length > 1) {
                   const recipe = (call.arguments.recipe as string) || 'unknown';
                   const analysisSummary = JSON.stringify(lastAnalysisData || {}).slice(0, 2000);
                   try {

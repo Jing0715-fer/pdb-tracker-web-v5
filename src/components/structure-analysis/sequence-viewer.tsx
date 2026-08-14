@@ -55,6 +55,7 @@ export function SequenceViewer() {
   const [sequences, setSequences] = useState<SequenceInfo[]>([]);
   const [selectedChain, setSelectedChain] = useState<string>("");
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null); // R107.8: clicked residue highlight
   const [loading, setLoading] = useState(false);
 
   // Extract sequences when the active structure changes
@@ -84,6 +85,7 @@ export function SequenceViewer() {
   );
 
   const handleResidueClick = async (idx: number) => {
+    setSelectedIdx(idx); // R107.8: Highlight clicked residue
     if (!viewer || !currentSeq) return;
     const resCode = currentSeq.sequence[idx];
     // R103.5: Use actual PDB residue number (auth_seq_id) if available
@@ -192,7 +194,7 @@ export function SequenceViewer() {
         <div className="rounded-md border border-claude-border bg-claude-bg p-2">
           <div className="max-h-64 overflow-y-auto overflow-x-auto sa-scroll">
             <div className="font-mono text-[11px] leading-relaxed min-w-max">
-              <SequenceRow sequence={currentSeq.sequence} chain={currentSeq.chain} onResidueClick={handleResidueClick} onResidueHover={setHoveredIdx} hoveredIdx={hoveredIdx} />
+              <SequenceRow sequence={currentSeq.sequence} chain={currentSeq.chain} onResidueClick={handleResidueClick} onResidueHover={setHoveredIdx} hoveredIdx={hoveredIdx} selectedIdx={selectedIdx} />
             </div>
           </div>
           {hoveredIdx != null && currentSeq.sequence[hoveredIdx] && (
@@ -221,12 +223,14 @@ function SequenceRow({
   onResidueClick,
   onResidueHover,
   hoveredIdx,
+  selectedIdx,
 }: {
   sequence: string;
   chain: string;
   onResidueClick: (idx: number) => void;
   onResidueHover: (idx: number | null) => void;
   hoveredIdx: number | null;
+  selectedIdx?: number | null;
 }) {
   const blockSize = 10;
   const blocks: React.ReactNode[] = [];
@@ -244,6 +248,7 @@ function SequenceRow({
           {block.split("").map((res, j) => {
             const idx = i + j;
             const isHovered = hoveredIdx === idx;
+            const isSelected = selectedIdx === idx; // R107.8: clicked residue
             return (
               <button
                 key={j}
@@ -252,10 +257,11 @@ function SequenceRow({
                 onMouseLeave={() => onResidueHover(null)}
                 className={`flex h-5 w-5 items-center justify-center rounded text-[9px] font-bold transition-all ${
                   isHovered ? "scale-125 text-white shadow-md" : "text-white/90"
-                }`}
+                } ${isSelected ? "ring-2 ring-claude-accent ring-offset-1" : ""}`}
                 style={{
                   backgroundColor: RESIDUE_COLORS[res] ?? "#6b7280",
-                  opacity: isHovered ? 1 : 0.85,
+                  opacity: isHovered ? 1 : isSelected ? 1 : 0.85,
+                  transform: isSelected ? "scale(1.15)" : undefined,
                 }}
                 title={`${RESIDUE_NAMES[res] ?? res} ${idx + 1} (chain ${chain})`}
               >
