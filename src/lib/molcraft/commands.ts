@@ -1359,6 +1359,14 @@ async function lociFromResidue(
           ref.compId,
         ])
       );
+    // R104.4: Support insertion codes (e.g. 145A, 145B)
+    if (ref.insCode)
+      residueTests.push(
+        Q.core.rel.eq([
+          Q.struct.atomProperty.macromolecular.label_ins_code(),
+          ref.insCode,
+        ])
+      );
     const residueTest =
       residueTests.length === 0
         ? undefined

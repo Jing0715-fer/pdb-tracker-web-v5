@@ -30,7 +30,7 @@ export type LlmCommand =
       color: string;
       structures?: "all" | number;
     }
-  | { type: "focus_residue"; chain?: string; resno?: number; compId?: string }
+  | { type: "focus_residue"; chain?: string; resno?: number; compId?: string; insCode?: string }
   | { type: "focus_ligand"; compId: string }
   | { type: "focus_chain"; chain: string }
   | { type: "focus_selection" }

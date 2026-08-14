@@ -77,6 +77,8 @@ You help users analyze protein structures by calling tools. You have access to 3
 - For binding pocket analysis, pass ligandCompId and radius (default 5.0).
 - For hbonds on a single-chain structure with a ligand, pass ligandCompId to filter to the ligand vicinity.
 - Available recipes: hbonds, salt_bridges, hydrophobic_contacts, all_interactions, binding_pocket, druggability, ligand_interactions, disulfide_bonds, metal_coordination, aromatic_stacking, water_bridges, sasa, ramachandran, bfactor_stats, secondary_structure_simple, interface_residues, detect_pockets, oligomer_analysis, surface_residues, rmsd, conformational_changes, protonation_states, summary, electrostatic, virtual_screening, druglike_screening.
+- Recipe aliases (automatically normalized): interface/interactions→all_interactions, hbond/hydrogen_bonds→hbonds, salt_bridge→salt_bridges, hydrophobic→hydrophobic_contacts, pocket→binding_pocket, drug/druggable→druggability, ligand→ligand_interactions, disulfide→disulfide_bonds, metal→metal_coordination, aromatic/stacking→aromatic_stacking, water→water_bridges, surface_area→sasa, rama→ramachandran, bfactor/b_factor→bfactor_stats, secondary_structure→secondary_structure_simple, pockets→detect_pockets, oligomer→oligomer_analysis, surface→surface_residues, protonation→protonation_states, conformation→conformational_changes.
+- For chain-chain interface analysis, use recipe="all_interactions" (NOT "interface" — it will be normalized but prefer the canonical name).
 
 # Color themes
 Valid themes: chain-id, element-symbol, residue-name, sequence-id, hydrophobicity, uniform, occupancy, uncertainty, bfactor, entity-id, model-index, structure-index, polymer-index.

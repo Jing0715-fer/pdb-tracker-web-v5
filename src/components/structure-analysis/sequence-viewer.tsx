@@ -86,18 +86,23 @@ export function SequenceViewer() {
   const handleResidueClick = async (idx: number) => {
     if (!viewer || !currentSeq) return;
     const resCode = currentSeq.sequence[idx];
-    // R103.5: Use actual PDB residue number (auth_seq_id) if available,
-    // instead of assuming 1-based indexing (idx+1 which is often wrong)
+    // R103.5: Use actual PDB residue number (auth_seq_id) if available
     const resno = currentSeq.residueNumbers && idx < currentSeq.residueNumbers.length
       ? currentSeq.residueNumbers[idx]
       : idx + 1;
+    // R104.4: Pass insertion code if present
+    const insCode = currentSeq.insertionCodes && idx < currentSeq.insertionCodes.length
+      ? currentSeq.insertionCodes[idx]
+      : undefined;
     try {
       await executeCommand(viewer, {
         type: "focus_residue",
         chain: currentSeq.chain,
         resno,
+        insCode: insCode || undefined,
       });
-      toast(`Focused ${RESIDUE_NAMES[resCode] ?? resCode}${resno} (chain ${currentSeq.chain})`, "info");
+      const label = insCode ? `${resno}${insCode}` : `${resno}`;
+      toast(`Focused ${RESIDUE_NAMES[resCode] ?? resCode}${label} (chain ${currentSeq.chain})`, "info");
     } catch {
       toast("Focus failed", "error");
     }

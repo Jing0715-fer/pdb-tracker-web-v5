@@ -1215,6 +1215,8 @@ export interface SequenceInfo {
   /** R103.5: PDB residue numbers (auth_seq_id) for each position in the sequence.
    *  If empty, residue numbers are assumed to be 1-based (idx+1). */
   residueNumbers?: number[];
+  /** R104.4: Insertion codes (e.g. "A", "B") for each position. Empty string = no insertion code. */
+  insertionCodes?: string[];
 }
 
 // 3-letter to 1-letter amino acid code mapping.
@@ -1275,10 +1277,11 @@ export function extractSequences(pdb: string): SequenceInfo[] {
     }
   }
 
-  // R103.5: Also extract residue numbers from ATOM records for accurate focus
+  // R103.5: Also extract residue numbers + insertion codes from ATOM records
   const residueNumberMap = new Map<string, number[]>();
+  const insertionCodeMap = new Map<string, string[]>();
   {
-    const chainResNums = new Map<string, { resSeq: number }[]>();
+    const chainResNums = new Map<string, { resSeq: number; insCode: string }[]>();
     const seen = new Set<string>();
     for (const line of lines) {
       if (line.substring(0, 6).trim() !== "ATOM") continue;
@@ -1287,15 +1290,18 @@ export function extractSequences(pdb: string): SequenceInfo[] {
       const chain = line.substring(21, 22).trim() || "A";
       const resSeq = parseInt(line.substring(22, 26), 10);
       if (Number.isNaN(resSeq)) continue;
-      const key = `${chain}:${resSeq}`;
+      // R104.4: Extract insertion code (column 27, 0-indexed 26)
+      const insCode = line.length > 26 ? (line.substring(26, 27).trim() || "") : "";
+      const key = `${chain}:${resSeq}:${insCode}`;
       if (seen.has(key)) continue;
       seen.add(key);
       if (!chainResNums.has(chain)) chainResNums.set(chain, []);
-      chainResNums.get(chain)!.push({ resSeq });
+      chainResNums.get(chain)!.push({ resSeq, insCode });
     }
     for (const [chain, residues] of chainResNums) {
-      residues.sort((a, b) => a.resSeq - b.resSeq);
+      residues.sort((a, b) => a.resSeq - b.resSeq || a.insCode.localeCompare(b.insCode));
       residueNumberMap.set(chain, residues.map((r) => r.resSeq));
+      insertionCodeMap.set(chain, residues.map((r) => r.insCode));
     }
   }
 
@@ -1304,6 +1310,7 @@ export function extractSequences(pdb: string): SequenceInfo[] {
     sequence: seq.join(""),
     length: seq.length,
     residueNumbers: residueNumberMap.get(chain) || [],
+    insertionCodes: insertionCodeMap.get(chain) || [],
   }));
 }
 

@@ -528,11 +528,18 @@ export function useAgentLoop() {
 
             const startTime = Date.now();
             try {
-              // Execute via the existing Molstar command executor
-              const execResult: CommandResult = await executeCommand(
-                options.viewer,
-                cmd as any,
-              );
+              // R104.2: Retry mechanism for pdb_analyze (up to 2 attempts)
+              let execResult: CommandResult;
+              const MAX_TOOL_RETRIES = call.name === 'pdb_analyze' ? 2 : 1;
+              let lastToolError: string | null = null;
+              for (let toolAttempt = 0; toolAttempt < MAX_TOOL_RETRIES; toolAttempt++) {
+                execResult = await executeCommand(options.viewer, cmd as any);
+                if (execResult.ok || toolAttempt >= MAX_TOOL_RETRIES - 1) break;
+                lastToolError = execResult.detail || 'Failed';
+                // Wait with exponential backoff (0.5s, 1s)
+                await new Promise(r => setTimeout(r, 500 * Math.pow(2, toolAttempt)));
+              }
+              // execResult is guaranteed to be set here (loop runs at least once)
 
               const durationMs = Date.now() - startTime;
               const result: AgentToolResult = {

@@ -1956,7 +1956,7 @@ export function ChatTab() {
                       (allCommands[cmdIndex] as Record<string, unknown>).status = "retrying";
                       (allCommands[cmdIndex] as Record<string, unknown>).retryAttempt = attempt + 1;
                       updateMessage(pendingId, { commands: [...allCommands] });
-                      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt))); // R104.7: 0.5s, 1s exponential backoff
                     }
                   } catch (execErr: any) {
                     lastError = execErr?.message || String(execErr);
@@ -1964,7 +1964,7 @@ export function ChatTab() {
                       (allCommands[cmdIndex] as Record<string, unknown>).status = "retrying";
                       (allCommands[cmdIndex] as Record<string, unknown>).retryAttempt = attempt + 1;
                       updateMessage(pendingId, { commands: [...allCommands] });
-                      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                      await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt))); // R104.7: 0.5s, 1s exponential backoff
                     } else {
                       result = { ok: false, detail: lastError };
                     }
