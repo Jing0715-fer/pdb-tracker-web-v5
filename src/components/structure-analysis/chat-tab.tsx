@@ -1671,6 +1671,11 @@ export function ChatTab() {
                             // Also check direct chain1/chain2 on analysisData
                             if (!vizParams.chain1 && analysisData.chain1) vizParams.chain1 = analysisData.chain1;
                             if (!vizParams.chain2 && analysisData.chain2) vizParams.chain2 = analysisData.chain2;
+                            // Round 92: Pass interactions array for dashed line drawing
+                            const interactions = analysisData.interactions as Array<Record<string, unknown>> | undefined;
+                            if (Array.isArray(interactions) && interactions.length > 0) {
+                              vizParams.interactions = interactions;
+                            }
 
                             // Round 74: Extract top residues for labeling
                             const residues = analysisData.residues as Array<Record<string, unknown>> | undefined;

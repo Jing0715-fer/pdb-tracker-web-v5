@@ -1596,6 +1596,30 @@ async function applyRecipeVisualization(
             }
           }
         }, "show_sidechains");
+        // Round 92: Draw interaction lines (dashed) between contact atom pairs
+        // using measurement.addDistance. This creates visible dashed lines
+        // for H-bonds, salt bridges, and hydrophobic contacts.
+        await safe(async () => {
+          const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
+          if (!Array.isArray(interactions) || interactions.length === 0) return;
+          // Draw lines for the top 15 interactions (to avoid cluttering)
+          for (const c of interactions.slice(0, 15)) {
+            try {
+              const r1 = await lociFromResidue(viewer, {
+                chain: c.chain1 as string,
+                resno: c.resno1 as number,
+              }, c.atom1 as string | undefined);
+              const r2 = await lociFromResidue(viewer, {
+                chain: c.chain2 as string,
+                resno: c.resno2 as number,
+              }, c.atom2 as string | undefined);
+              if (r1 && r2) {
+                // addDistance creates a dashed line between two loci
+                await plugin.managers.structure.measurement.addDistance(r1, r2);
+              }
+            } catch { /* skip individual failures */ }
+          }
+        }, "draw_interaction_lines");
         // Apply chain-id color to distinguish interacting chains
         await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;

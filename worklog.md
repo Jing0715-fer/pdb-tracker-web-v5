@@ -13791,3 +13791,86 @@ Improvement Suggestions for Next Round:
 2. **deepseek-harness integration** — analyze if the tool can improve agent quality
 3. **Interaction line display** — add dashed lines for H-bonds/salt bridges
 4. **Label cleanup** — ensure side chain labels don't overlap in screenshots
+
+---
+Task ID: round-92-interaction-lines-deepseek-harness
+Agent: main
+Task: Add interaction dashed lines for screenshots, research deepseek-harness integration. QA + commit and push.
+
+Development:
+
+### 1. Interaction Dashed Lines (src/lib/molcraft/commands.ts + chat-tab.tsx)
+
+**commands.ts** — `applyRecipeVisualization` for `all_interactions`/`hbonds`/`salt_bridges`/`hydrophobic_contacts`:
+- New step: `draw_interaction_lines` — reads `params.interactions` array
+- For each interaction (top 15): resolves both atom positions via `lociFromResidue`
+  with atom name, then calls `plugin.managers.structure.measurement.addDistance(r1, r2)`
+- This creates visible dashed lines between contacting atoms, showing:
+  - H-bonds (donor-acceptor)
+  - Salt bridges (positive-negative)
+  - Hydrophobic contacts (C-C)
+- Lines are cleaned up after capture via `measurement.clear()` (already in place)
+
+**chat-tab.tsx** — passes `interactions` array from analysis result to `vizParams`:
+```typescript
+const interactions = analysisData.interactions as Array<Record<string, unknown>> | undefined;
+if (Array.isArray(interactions) && interactions.length > 0) {
+  vizParams.interactions = interactions;
+}
+```
+
+### 2. deepseek-harness Integration Analysis
+
+**What it is**: DeepSeek Harness (`dsh`) is an open-source agent harness (MIT, developer preview) that turns an LLM into a full agentic coding assistant. Built on Cordis (plugin-based TypeScript framework). Not a model — it's the runtime/orchestration layer.
+
+**Key API surfaces**:
+- CLI Web UI: `npx @deepseek-ai/dsh web` (HTTP :3080)
+- CLI Headless: `dsh --profile headless "<task>"` (one-shot)
+- TypeScript SDK: `@deepseek-ai/dsh-sdk-client` (spawns subprocess, JSON-RPC)
+- Python SDK: `deepseek-harness`
+
+**Integration feasibility**: EASY → MEDIUM
+
+**Phase 1 (EASY, days)**: Add `dsh` as a CLI adapter in `CLI_ADAPTERS`:
+```typescript
+{ id: 'dsh', bin: 'dsh', callArgs: (q) => ['--profile', 'headless', q] }
+```
+Limitation: chat-only, doesn't drive Molstar viewer.
+
+**Phase 2 (MEDIUM, weeks, high-value)**: SDK + domain tool plugin:
+- Register `pdb_load`, `pdb_analyze`, `pdb_measure`, `pdb_visualize` as dsh tools
+- Wrap existing `executeCommand` engine as tool bodies
+- Bridge dsh notifications → existing SSE run-stream protocol
+- Resolves structured-command impedance (real tool-calling vs JSON parsing)
+
+**Value-add for PDB tracker**:
+1. Real tool-calling agent loop (replaces ReAct-in-prompt)
+2. Approval/permission gating for destructive operations
+3. Sandboxed execution
+4. Durable, forkable, replayable sessions
+5. Background jobs (maps to run-center modules)
+6. Native DeepSeek model provider
+7. Subagent delegation per module
+8. Built-in web_search/web_fetch for PubMed/RCSB
+9. Plan/todo subsystems for multi-step analyses
+10. Plugin ecosystem
+
+**Recommendation**: Start with Phase 1 (CLI adapter) for quick validation, then Phase 2 (SDK + tools) for full integration. Defer Phase 3 (UI migration) until stable release.
+
+### Lint
+- commands.ts: 0 errors ✅
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Interaction dashed lines: addDistance for top 15 contacts
+- ✅ deepseek-harness analysis: Phase 1 (CLI) + Phase 2 (SDK) plan documented
+- ✅ All lint checks pass
+
+Improvement Suggestions for Next Round:
+1. **E2E test on 4HHB** — verify dashed interaction lines visible in screenshots
+2. **Phase 1 dsh CLI adapter** — add the adapter entry if user wants to proceed
+3. **Interaction line coloring** — color H-bonds/salt bridges/hydrophobic differently
+4. **Line label** — add distance label on each interaction line
