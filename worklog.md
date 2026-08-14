@@ -14033,7 +14033,7 @@ Task ID: round-95-structure-list-analysis-display-sidechains-vlm-comments
 Agent: main
 Task: Fix structure list not loading, analysis results not showing, side chains not visible, VLM comments only on best, focus on chain pair interface, one-letter residue labels.
 
-Bug Fixes (on feat/tool-calling-agent, also applicable to main):
+Bug Fixes (applied to both main and feat/tool-calling-agent):
 
 ### 1. Structure list not loading after chat PDB load (chat-tab.tsx)
 - **Root cause**: `executeCommand(viewer, {type: "load_pdb"})` loaded the structure in Molstar but never called `addStructure()` to update the Zustand store → structure list UI never updated
@@ -14076,9 +14076,3 @@ Stage Summary:
 - ✅ Interface focus: camera on chain1 atoms (includes interface)
 - ✅ All angles get vizParams: no more ai===0 restriction
 - ✅ All lint checks pass
-
-Next Steps:
-1. Wire agent loop into /api/llm/chat/stream
-2. Add permission request UI
-3. Add background task monitoring UI
-4. Integrate session manager with ChatSession store
