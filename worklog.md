@@ -14324,3 +14324,73 @@ Based on verification, the following improvements are recommended:
 6. **Tool execution progress indicators**: Add spinner/progress bars on tool call cards in the chat UI so users can see which tools are running.
 
 7. **VLM prompt tuning**: The VLM sometimes omits quality/issues/recaptureHints fields when screenshots are acceptable. Consider making these fields always required in the JSON schema.
+
+---
+Task ID: round-100-recapture-limit-quality-badge-vlm-progress
+Agent: main
+Task: Continue developing feat/tool-calling-agent based on Round 99 worklog recommendations. Implement VLM recapture limit, quality badge UI, VLM analyzing progress indicator. Run QA and E2E tests with real tasks. Commit and push.
+
+### R100.2: VLM Recapture Limit (prevent infinite loops)
+- use-agent-loop.ts: Added recaptureCount map tracking per-recipe recapture attempts
+- MAX_RECAPTURES = 2 — after 2 failed recaptures, returns error telling LLM to proceed
+- Prevents infinite recapture loops when VLM keeps reporting 'unacceptable'
+
+### R100.3: VLM Quality Badge + Issues Display in UI
+- store.ts: Added 'quality' and 'issues' fields to AnalysisImage interface
+- vlm-client.ts: applyVlmResultToImages now sets quality + issues from VLM result
+- message-bubble.tsx: Added quality badge overlay on screenshots:
+  - Green '✓ 良好' for acceptable
+  - Amber '⚠ 一般' for degraded
+  - Red '✗ 不合格' for unacceptable
+  - Issues shown as tooltip + expandable text under VLM commentary
+
+### R100.4: VLM Analyzing Progress Indicator
+- use-agent-loop.ts: Emits 'vlm_analyzing' progress event before calling selectBestWithRetry
+- chat-tab.tsx: Shows 'VLM 正在分析截图... (可能需要 10-30 秘)' progress message
+
+### E2E Test Results
+
+#### Full 4-round agent loop (API curl):
+1. Round 1: 'Load 6LU7 and analyze binding pocket of N3' → pdb_load ✓
+2. Round 2: After pdb_load → pdb_analyze(binding_pocket, A, A, N3, 5.0) ✓
+3. Round 3: After pdb_analyze → capture_multi_angle(recipe, chain1, chain2, ligandCompId) ✓
+4. Round 4: After capture with VLM quality=acceptable → final answer mentioning
+   CYS145 and HIS41 as key binding residues ✓
+
+#### VLM recapture feedback loop:
+5. Round 5: VLM quality=unacceptable → LLM calls recapture_screenshot with
+   focus=interface, angles=[front,side,top] ✓
+6. Round 6: After 1st recapture also fails → LLM calls recapture again ✓
+   (MAX_RECAPTURES=2 will stop further attempts on the 3rd try)
+
+#### VLM API quality assessment:
+- Bad screenshots: quality='unacceptable', issues=['黑屏或空白...'],
+  recaptureHints={angles, focus, zoom} ✓
+
+#### Browser test (agent-browser + VLM):
+- Agent mode toggle works (经典 ↔ Agent)
+- VLM confirms: 'Agent mode is definitely ON' (orange highlight, lightning icon)
+- Toast '已切换到工具调用 Agent 模式' appears
+- Structured tool call log visible in chat panel
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- feat/tool-calling-agent: c1f2b98 (Round 100 complete, pushed to remote)
+
+### Next Round Recommendations (Round 101)
+
+1. **Real PDB browser E2E test**: The API tests confirm the tool call sequence, but a full browser test with actual PDB loading + Molstar rendering + screenshot capture + VLM analysis still needs verification. The dev server keeps dying in the sandbox after ~60s, making long browser tests difficult. Consider using a persistent server wrapper.
+
+2. **Recapture effectiveness verification**: When recapture_screenshot is called, verify that the side chains and H-bond lines are actually rendered in the new screenshots. The vizParams auto-injection (normalizeInteractions + extractResidueLabels) should handle this, but needs real-browser verification with a loaded structure.
+
+3. **VLM feedback in agent final answer**: When VLM quality is 'degraded' or 'unacceptable' and the recapture limit is reached, the agent's final answer should acknowledge the screenshot quality issues to the user.
+
+4. **Parallel VLM analysis**: When multiple recipes are analyzed (e.g. hbonds + salt_bridges + binding_pocket), the VLM calls are sequential. Consider parallelizing them for faster total execution.
+
+5. **VLM model upgrade**: The current VLM (glm-5v-turbo via createVision) sometimes omits quality/issues fields. Consider using a more capable model or adding a validation+retry layer for missing fields.
+
+6. **Screenshot annotation improvements**: The residue labels use one-letter codes (C145). Consider adding the full residue name as a tooltip or secondary label for clarity.
+
+7. **Agent mode default**: Consider making agent mode the default (agentMode=true) since it's now feature-complete with 36 tools, VLM feedback, and recapture support.
