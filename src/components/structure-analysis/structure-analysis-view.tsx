@@ -621,9 +621,12 @@ function ViewerOverlay({
 
       {/* Top-right: unified measurement toolbar (shared component — same as
           the modal PdbViewerLite). Always shows all 4 mode buttons in a single
-          row (no 2×2 wrap) and inlines the 0/N picking progress. */}
+          row (no 2×2 wrap) and inlines the 0/N picking progress.
+          R103.4: Use plain absolute positioning (no sa-viewer-overlay) because
+          MeasureToolbar already has its own border/bg/shadow — the wrapper
+          caused a double-border visual overlap. */}
       <div
-        className="sa-viewer-overlay"
+        className="absolute z-10"
         style={{ top: 12, right: 12 }}
       >
         <MeasureToolbar pdbId={activeStructure?.id} />

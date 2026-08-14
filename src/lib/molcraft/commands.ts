@@ -51,6 +51,60 @@ async function fetchCliList() {
   return await res.json();
 }
 
+/**
+ * R103.1: Normalize recipe names to handle common LLM aliases.
+ * The LLM sometimes returns "interface" instead of "interface_residues",
+ * or "hbond" instead of "hbonds", etc. This maps those aliases to the
+ * canonical recipe IDs registered in cli-registry.ts.
+ */
+function normalizeRecipeName(recipe: string): string {
+  const aliases: Record<string, string> = {
+    "interface": "all_interactions",
+    "interactions": "all_interactions",
+    "all_interactions": "all_interactions",
+    "hbond": "hbonds",
+    "h_bonds": "hbonds",
+    "h-bonds": "hbonds",
+    "hydrogen_bonds": "hbonds",
+    "salt_bridge": "salt_bridges",
+    "salt-bridges": "salt_bridges",
+    "saltbridge": "salt_bridges",
+    "hydrophobic": "hydrophobic_contacts",
+    "hydrophobics": "hydrophobic_contacts",
+    "binding_pocket": "binding_pocket",
+    "pocket": "binding_pocket",
+    "drug": "druggability",
+    "druggable": "druggability",
+    "ligand": "ligand_interactions",
+    "ligand_contacts": "ligand_interactions",
+    "disulfide": "disulfide_bonds",
+    "metal": "metal_coordination",
+    "aromatic": "aromatic_stacking",
+    "stacking": "aromatic_stacking",
+    "water": "water_bridges",
+    "water_bridged": "water_bridges",
+    "sas": "sasa",
+    "surface_area": "sasa",
+    "rama": "ramachandran",
+    "bfactor": "bfactor_stats",
+    "b_factor": "bfactor_stats",
+    "b-factor": "bfactor_stats",
+    "secondary_structure": "secondary_structure_simple",
+    "secstruct": "secondary_structure_simple",
+    "interface_residues": "interface_residues",
+    "interface_residue": "interface_residues",
+    "pockets": "detect_pockets",
+    "oligomer": "oligomer_analysis",
+    "surface": "surface_residues",
+    "validation": "structure_validation",
+    "protonation": "protonation_states",
+    "conformation": "conformational_changes",
+    "conformational": "conformational_changes",
+  };
+  const normalized = recipe.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return aliases[normalized] || recipe;
+}
+
 async function runRecipe(
   recipe: string,
   pdbId?: string,
@@ -148,11 +202,16 @@ export async function executeCommand(
         };
       }
       case "analyze_run": {
-        const data = await runRecipe(cmd.recipe, cmd.pdbId, cmd.params);
+        // R103.1: Normalize recipe name (e.g. "interface" → "all_interactions")
+        const normalizedRecipe = normalizeRecipeName(cmd.recipe);
+        if (normalizedRecipe !== cmd.recipe) {
+          console.warn(`[analyze_run] Normalized recipe "${cmd.recipe}" → "${normalizedRecipe}"`);
+        }
+        const data = await runRecipe(normalizedRecipe, cmd.pdbId, cmd.params);
         return {
           ok: true,
-          detail: `Recipe ${cmd.recipe} ok: ${data.data ? "with data" : "see stdout"}`,
-          analysisResult: { kind: "recipe", recipe: cmd.recipe, data },
+          detail: `Recipe ${normalizedRecipe} ok: ${data.data ? "with data" : "see stdout"}`,
+          analysisResult: { kind: "recipe", recipe: normalizedRecipe, data },
         };
       }
 

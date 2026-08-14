@@ -1212,6 +1212,9 @@ export interface SequenceInfo {
   chain: string;
   sequence: string; // one-letter amino acid codes
   length: number;
+  /** R103.5: PDB residue numbers (auth_seq_id) for each position in the sequence.
+   *  If empty, residue numbers are assumed to be 1-based (idx+1). */
+  residueNumbers?: number[];
 }
 
 // 3-letter to 1-letter amino acid code mapping.
@@ -1272,10 +1275,35 @@ export function extractSequences(pdb: string): SequenceInfo[] {
     }
   }
 
+  // R103.5: Also extract residue numbers from ATOM records for accurate focus
+  const residueNumberMap = new Map<string, number[]>();
+  {
+    const chainResNums = new Map<string, { resSeq: number }[]>();
+    const seen = new Set<string>();
+    for (const line of lines) {
+      if (line.substring(0, 6).trim() !== "ATOM") continue;
+      const atomName = line.substring(12, 16).trim();
+      if (atomName !== "CA") continue;
+      const chain = line.substring(21, 22).trim() || "A";
+      const resSeq = parseInt(line.substring(22, 26), 10);
+      if (Number.isNaN(resSeq)) continue;
+      const key = `${chain}:${resSeq}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!chainResNums.has(chain)) chainResNums.set(chain, []);
+      chainResNums.get(chain)!.push({ resSeq });
+    }
+    for (const [chain, residues] of chainResNums) {
+      residues.sort((a, b) => a.resSeq - b.resSeq);
+      residueNumberMap.set(chain, residues.map((r) => r.resSeq));
+    }
+  }
+
   return [...seqMap.entries()].map(([chain, seq]) => ({
     chain,
     sequence: seq.join(""),
     length: seq.length,
+    residueNumbers: residueNumberMap.get(chain) || [],
   }));
 }
 

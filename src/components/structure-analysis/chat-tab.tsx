@@ -217,6 +217,47 @@ function saveFavoriteTemplates(titles: string[]): void {
  * Only recipes that produce 3D-visualizable results get screenshots — pure
  * data recipes (sequence alignment, Ramachandran plot, etc.) are skipped.
  */
+/** R103.1: Normalize recipe names for UI checks (mirrors commands.ts normalizeRecipeName) */
+function normalizeRecipeNameForUI(recipe: string): string {
+  const aliases: Record<string, string> = {
+    "interface": "all_interactions",
+    "interactions": "all_interactions",
+    "hbond": "hbonds",
+    "h_bonds": "hbonds",
+    "h-bonds": "hbonds",
+    "hydrogen_bonds": "hbonds",
+    "salt_bridge": "salt_bridges",
+    "salt-bridges": "salt_bridges",
+    "hydrophobic": "hydrophobic_contacts",
+    "pocket": "binding_pocket",
+    "drug": "druggability",
+    "druggable": "druggability",
+    "ligand": "ligand_interactions",
+    "ligand_contacts": "ligand_interactions",
+    "disulfide": "disulfide_bonds",
+    "metal": "metal_coordination",
+    "aromatic": "aromatic_stacking",
+    "stacking": "aromatic_stacking",
+    "water": "water_bridges",
+    "surface_area": "sasa",
+    "rama": "ramachandran",
+    "bfactor": "bfactor_stats",
+    "b_factor": "bfactor_stats",
+    "b-factor": "bfactor_stats",
+    "secondary_structure": "secondary_structure_simple",
+    "secstruct": "secondary_structure_simple",
+    "pockets": "detect_pockets",
+    "oligomer": "oligomer_analysis",
+    "surface": "surface_residues",
+    "validation": "structure_validation",
+    "protonation": "protonation_states",
+    "conformation": "conformational_changes",
+    "conformational": "conformational_changes",
+  };
+  const normalized = recipe.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return aliases[normalized] || recipe;
+}
+
 function shouldCaptureScreenshot(recipeId: string): boolean {
   const visualizable = new Set([
     "binding_pocket", "druggability", "all_interactions", "hbonds",
@@ -1903,14 +1944,42 @@ export function ChatTab() {
 
                 const cmdStartTime = Date.now(); // Round 3: per-command timing
                 try {
-                  const result = await executeCommand(viewer, cmd);
-                  (allCommands[cmdIndex] as Record<string, unknown>).status = result.ok ? "done" : "error";
-                  (allCommands[cmdIndex] as Record<string, unknown>).durationMs = Date.now() - cmdStartTime;
-                  if (!result.ok) {
-                    (allCommands[cmdIndex] as Record<string, unknown>).error = result.detail || "Failed";
+                let result: any = null;
+                let lastError: string | null = null;
+                const MAX_RETRIES = (cmd.type === "analyze_run") ? 2 : 1; // R103.2: retry analyze_run up to 2 times
+                for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                  try {
+                    result = await executeCommand(viewer, cmd);
+                    if (result.ok) break;
+                    lastError = result.detail || "Failed";
+                    if (cmd.type === "analyze_run" && attempt < MAX_RETRIES - 1) {
+                      (allCommands[cmdIndex] as Record<string, unknown>).status = "retrying";
+                      (allCommands[cmdIndex] as Record<string, unknown>).retryAttempt = attempt + 1;
+                      updateMessage(pendingId, { commands: [...allCommands] });
+                      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                    }
+                  } catch (execErr: any) {
+                    lastError = execErr?.message || String(execErr);
+                    if (cmd.type === "analyze_run" && attempt < MAX_RETRIES - 1) {
+                      (allCommands[cmdIndex] as Record<string, unknown>).status = "retrying";
+                      (allCommands[cmdIndex] as Record<string, unknown>).retryAttempt = attempt + 1;
+                      updateMessage(pendingId, { commands: [...allCommands] });
+                      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                    } else {
+                      result = { ok: false, detail: lastError };
+                    }
                   }
-                  logCommand({ type: cmd.type, ok: result.ok, detail: result.detail });
-                  if (cmd.type === "analyze_run" || cmd.type === "analyze_metadata" || cmd.type === "analyze_interface") {
+                }
+                if (!result) {
+                  result = { ok: false, detail: lastError || "Execution failed" };
+                }
+                (allCommands[cmdIndex] as Record<string, unknown>).status = result.ok ? "done" : "error";
+                (allCommands[cmdIndex] as Record<string, unknown>).durationMs = Date.now() - cmdStartTime;
+                if (!result.ok) {
+                  (allCommands[cmdIndex] as Record<string, unknown>).error = result.detail || "Failed";
+                }
+                logCommand({ type: cmd.type, ok: result.ok, detail: result.detail });
+                if (cmd.type === "analyze_run" || cmd.type === "analyze_metadata" || cmd.type === "analyze_interface") {
                     allAnalysisResults.push({
                       type: cmd.type,
                       ok: result.ok,
@@ -1929,7 +1998,10 @@ export function ChatTab() {
                     // best flag + commentary when it completes.
                     if (cmd.type === "analyze_run" && result.ok) {
                       const recipeId = (cmd as { recipe?: string }).recipe;
-                      if (recipeId && shouldCaptureScreenshot(recipeId)) {
+                      // R103.1: Normalize recipeId for screenshot check (e.g. "interface" → "all_interactions")
+                      const normalizedRecipeId = recipeId ? normalizeRecipeNameForUI(recipeId) : "";
+                      const captureRecipeId = normalizedRecipeId || recipeId || "unknown";
+                      if (normalizedRecipeId && shouldCaptureScreenshot(normalizedRecipeId)) {
                         // Round 79/84: Show capture progress with visual bar
                         const captureStartTime = Date.now();
                         const captureAngles = ["front", "side", "top"];
@@ -1939,7 +2011,7 @@ export function ChatTab() {
                         };
                         updateMessage(pendingId, {
                           agentStep: "executing",
-                          content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*\n${progressBar(0, captureAngles.length)}`,
+                          content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(captureRecipeId)}...*\n${progressBar(0, captureAngles.length)}`,
                         });
                         try {
                           // Extract viz params from the analysis result
@@ -2024,13 +2096,13 @@ export function ChatTab() {
                           for (let ai = 0; ai < captureAngles.length; ai++) {
                             const angle = captureAngles[ai];
                             updateMessage(pendingId, {
-                              content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(recipeId)}...*\n${progressBar(ai, captureAngles.length)} (${angle})`,
+                              content: `${reply || ""}\n\n*Capturing screenshots for ${getRecipeLabel(captureRecipeId)}...*\n${progressBar(ai, captureAngles.length)} (${angle})`,
                             });
                             try {
                               const angleResult = await executeCommand(viewer, {
                                 type: "capture_multi_angle",
-                                recipe: recipeId,
-                                label: getRecipeLabel(recipeId),
+                                recipe: captureRecipeId,
+                                label: getRecipeLabel(captureRecipeId),
                                 angles: [angle as "front" | "side" | "top" | "back"],
                                 width: parseInt(screenshotSize.split("x")[0], 10) || 1200,
                                 height: parseInt(screenshotSize.split("x")[1], 10) || 800,
@@ -2051,12 +2123,12 @@ export function ChatTab() {
                           }
 
                           if (allScreenshots.length > 0) {
-                            const data = { screenshots: allScreenshots, recipe: recipeId };
+                            const data = { screenshots: allScreenshots, recipe: captureRecipeId };
 
                             // Round 79/84/85: Update message to show capture success + duration + full bar
                             const captureDuration = ((Date.now() - captureStartTime) / 1000).toFixed(1);
                             updateMessage(pendingId, {
-                              content: `${reply || ""}\n\n*Captured ${allScreenshots.length} screenshots for ${getRecipeLabel(recipeId)} in ${captureDuration}s.*\n${progressBar(allScreenshots.length, captureAngles.length)} VLM analysis running...`,
+                              content: `${reply || ""}\n\n*Captured ${allScreenshots.length} screenshots for ${getRecipeLabel(captureRecipeId)} in ${captureDuration}s.*\n${progressBar(allScreenshots.length, captureAngles.length)} VLM analysis running...`,
                             });
 
                             // Round 62: Store images IMMEDIATELY (without VLM
@@ -2064,7 +2136,7 @@ export function ChatTab() {
                             // VLM selection runs in the background.
                             const initialImages: AnalysisImage[] = allScreenshots.map((s) => ({
                               dataUri: s.dataUri,
-                              recipe: recipeId,
+                              recipe: captureRecipeId,
                               angle: s.angle as "front" | "side" | "top" | "back",
                               label: s.label,
                               // No best flag yet — VLM will set it
@@ -2090,7 +2162,7 @@ export function ChatTab() {
                                       headers: { "Content-Type": "application/json" },
                                       body: JSON.stringify({
                                         screenshots: data.screenshots,
-                                        recipe: recipeId,
+                                        recipe: captureRecipeId,
                                         analysisSummary: JSON.stringify(
                                           (result as { analysisResult?: unknown }).analysisResult
                                         ).slice(0, 2000),
@@ -2119,8 +2191,8 @@ export function ChatTab() {
                                     const msg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
                                     const currentImages = msg?.analysisImages || [];
                                     // Find the images for this recipe
-                                    const recipeImages = currentImages.filter(img => img.recipe === recipeId);
-                                    const otherImages = currentImages.filter(img => img.recipe !== recipeId);
+                                    const recipeImages = currentImages.filter(img => img.recipe === captureRecipeId);
+                                    const otherImages = currentImages.filter(img => img.recipe !== captureRecipeId);
                                     const updatedRecipeImages = recipeImages.map((img, i) => ({
                                       ...img,
                                       best: i === vlmData!.bestIndex,

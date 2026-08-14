@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { getRecipe, probeAllClis } from "@/lib/molcraft/cli-registry";
+import { normalizeRecipeName } from "@/lib/molcraft/commands";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,10 +99,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const recipe = getRecipe(body.recipe);
+    // R103.1: Normalize recipe name (e.g. "interface" → "all_interactions")
+    const normalizedRecipe = normalizeRecipeName(body.recipe);
+    if (normalizedRecipe !== body.recipe) {
+      console.warn(`[analyze/run] Normalized recipe "${body.recipe}" → "${normalizedRecipe}"`);
+    }
+    const recipe = getRecipe(normalizedRecipe);
     if (!recipe) {
       return NextResponse.json(
-        { error: `Unknown recipe: ${body.recipe}` },
+        { error: `Unknown recipe: ${body.recipe}. Tried normalized: ${normalizedRecipe}. Available recipes: hbonds, salt_bridges, hydrophobic_contacts, all_interactions, binding_pocket, interface_residues, sasa, etc.` },
         { status: 400 }
       );
     }
