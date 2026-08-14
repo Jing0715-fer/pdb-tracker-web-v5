@@ -11,7 +11,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllToolSchemas } from '@/lib/molcraft/tool-definitions';
-
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
@@ -144,8 +143,16 @@ interface AgentRequestBody {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as AgentRequestBody;
-    const { messages, toolResults, provider } = body;
+    let body: AgentRequestBody;
+    try {
+      body = (await request.json()) as AgentRequestBody;
+    } catch (parseErr: any) {
+      return NextResponse.json(
+        { error: `Invalid JSON body: ${parseErr?.message || 'parse failed'}` },
+        { status: 400 },
+      );
+    }
+    const { messages, toolResults, provider, sessionId } = body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
@@ -170,19 +177,38 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Round 102: For tool calling, the z.ai SDK is the only provider that
-    // natively supports OpenAI-style function calling. When the user picked
-    // a CLI provider (hermes/codex/codebuddy), we fall back to z.ai SDK for
-    // the LLM call but include a `note` so the UI can show the user that
-    // their selected provider wasn't used for the agent.
+    // Round 102: Use z.ai SDK for tool calling (the only provider that
+    // natively supports OpenAI-style function calling). When the user
+    // selected a CLI provider (hermes/codex/codebuddy), we still use z.ai
+    // SDK internally and surface a clear `note` so the UI can explain why.
+    // Future: implement prompt-based tool calling for CLI providers too.
     const requestedProvider = provider || 'auto';
     const isCliProvider = requestedProvider.startsWith('cli:');
     const ZAI = (await import('z-ai-web-dev-sdk')).default;
-    const zai = await ZAI.create();
+    let zai: any;
+    try {
+      zai = await ZAI.create();
+    } catch (configErr: any) {
+      // Common cause: .z-ai-config missing or has placeholder apiKey.
+      // Give a clear actionable error.
+      const msg = String(configErr?.message || configErr || '');
+      const isConfigError = msg.includes('Configuration file') || msg.includes('.z-ai-config');
+      const isAuthError = msg.includes('401') || msg.includes('令牌') || msg.includes('verify');
+      let userMsg = msg;
+      if (isConfigError) {
+        userMsg = `z.ai SDK 找不到 .z-ai-config 配置文件。\n\n解决方法:\n1. 在项目根目录创建 .z-ai-config 文件(JSON 格式): {\n   "baseUrl": "https://open.bigmodel.cn/api/paas/v4",\n   "apiKey": "<你的 zhipuai API key>"\n}\n2. 或者在用户主目录 ~/.z-ai-config 写同样内容\n3. 在 https://open.bigmodel.cn/usercenter/apikeys 申请 API key\n\n原始错误: ${msg}`;
+      } else if (isAuthError) {
+        userMsg = `z.ai SDK 鉴权失败 (401 令牌已过期或验证不正确)。\n\n解决方法:\n1. 在 .z-ai-config 中替换 apiKey 为有效的 zhipuai API key\n2. 在 https://open.bigmodel.cn/usercenter/apikeys 重新生成\n\n原始错误: ${msg}`;
+      }
+      return NextResponse.json(
+        { error: userMsg, retryable: false, configError: isConfigError, authError: isAuthError },
+        { status: isAuthError ? 401 : isConfigError ? 503 : 500 },
+      );
+    }
     // If the user explicitly selected a CLI provider, prepend a note to the
-    // system prompt so the LLM knows we're using a different backend.
+    // system prompt so the LLM knows why a different backend is being used.
     const providerNote = isCliProvider
-      ? `\n\n> Note: The user selected ${requestedProvider} for chat, but this\n> agent-mode request uses the z.ai SDK (the only provider that natively\n> supports OpenAI-style tool/function calling). Tool execution still runs\n> locally in the browser via Molstar.\n`
+      ? `\n\n> Note: The user selected ${requestedProvider} for chat, but this\n> agent-mode request uses the z.ai SDK (the only provider with native\n> OpenAI-style tool/function calling). Tool execution still runs locally\n> in the browser via Molstar.\n`
       : '';
     const systemPromptWithNote = AGENT_SYSTEM_PROMPT + providerNote;
 
@@ -225,8 +251,6 @@ export async function POST(request: NextRequest) {
           done,
           content,
           toolCalls: done ? undefined : toolCalls,
-          // Round 102: Report the actual provider used (z.ai SDK), even when
-          // the user selected a CLI provider. The note above explains why.
           provider: 'zai',
           requestedProvider,
           model: 'glm-4.6',
@@ -237,16 +261,18 @@ export async function POST(request: NextRequest) {
         lastError = err?.message || String(err);
         const is429 = lastError.includes('429') || lastError.includes('Too many');
         const isTimeout = lastError.includes('timeout') || lastError.includes('deadline');
+        const isAuthErr = lastError.includes('401') || lastError.includes('令牌');
         if ((is429 || isTimeout) && attempt < MAX_RETRIES - 1) {
           await new Promise((r) => setTimeout(r, BASE_DELAY * Math.pow(2, attempt)));
           continue;
         }
         return NextResponse.json(
           {
-            error: lastError,
+            error: isAuthErr ? `z.ai SDK 鉴权失败 (401)。请在 .z-ai-config 中设置有效的 zhipuai API key。\n\n原始错误: ${lastError}` : lastError,
             retryable: is429 || isTimeout,
+            authError: isAuthErr,
           },
-          { status: is429 ? 429 : 500 },
+          { status: isAuthErr ? 401 : is429 ? 429 : 500 },
         );
       }
     }
@@ -285,3 +311,10 @@ function safeParseArgs(argsStr: string): Record<string, unknown> {
     return result;
   }
 }
+
+
+/**
+ * Round 102: Parse `` blocks out of an LLM response and return the
+ * remaining text + a list of {name, arguments} pairs. Used by the
+ * prompt-based tool calling path that works with any provider.
+ */
