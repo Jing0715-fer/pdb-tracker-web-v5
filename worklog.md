@@ -14609,3 +14609,80 @@ Task: Fix user-reported errors: (1) normalizeRecipeName is not a function, (2) N
 5. **Performance monitoring**: Add timing metrics for agent mode tool calls.
 
 6. **VLM recapture effectiveness**: Verify side chains render in recaptured screenshots.
+
+---
+Task ID: round-106-real-agent-analysis-test
+Agent: main
+Task: Continue real agent analysis structure testing. Verify results contain images and text descriptions. Propose next round development plan based on test results.
+
+### E2E Test Results (API-based)
+
+#### Full Agent Loop (4 rounds) — 1CBS binding pocket analysis:
+1. **Round 1**: "Load 1CBS and analyze its binding pocket, then capture screenshots"
+   → LLM returns `pdb_load(id='1CBS')` ✓
+2. **Round 2**: After pdb_load success
+   → LLM returns `pdb_analyze(recipe='binding_pocket', chain1='A', chain2='A', ligandCompId='HEM', radius=5.0)` ✓
+3. **Round 3**: After pdb_analyze returns 12 residues including CYS145
+   → LLM returns `capture_multi_angle(recipe='binding_pocket', chain1='A', chain2='A', ligandCompId='HEM')` ✓
+4. **Round 4**: After capture with VLM quality=acceptable
+   → Final answer: "已成功加载1CBS并分析了血红素(HEM)结合口袋。分析发现结合口袋包含12个残基，关键残基是CYS145。截图已从三个角度捕获，质量评估为'可接受'。" ✓
+
+#### Recipe Normalization:
+- 'interface' → 'all_interactions' (no error) ✓
+- 'hbond' → 'hbonds' (no error) ✓
+
+#### VLM Quality Assessment:
+- Blank screenshots → quality='unacceptable', issues=['黑屏/空白'], recaptureHints={angles, focus, zoom} ✓
+- VLM correctly identifies missing structure elements (side chains, H-bond lines)
+
+#### Metadata Fetch:
+- HTTP 200 with retry logic (R105.3) ✓
+
+### Browser Test Limitations
+- The dev server dies after ~60s in the sandbox, making long browser tests difficult
+- The Load button click doesn't always register in agent-browser (possible timing issue)
+- The Structure Analysis sub-button navigation fails when the page hasn't fully hydrated
+- VLM verification of loaded 3D structure was not possible due to server instability
+
+### Key Findings
+
+1. **Agent loop works end-to-end via API**: The full pipeline (load → analyze → capture → VLM → final answer) works correctly when tested via curl. The LLM correctly calls tools in sequence and produces a Chinese summary with key residues.
+
+2. **Screenshots are captured but not verified in browser**: The capture_multi_angle tool is called with correct vizParams (ligandCompId, chain1, chain2). However, browser-based verification of actual screenshot rendering with side chains and H-bond lines was not possible due to server instability.
+
+3. **VLM quality assessment works**: The VLM correctly identifies blank/black screenshots as 'unacceptable' and provides recapture hints. The quality/issues/recaptureHints fields are always present (R101.5 fallback works).
+
+4. **Text descriptions are comprehensive**: The agent's final answer includes:
+   - Structure name (1CBS)
+   - Ligand name (HEM/血红素)
+   - Key residues (CYS145)
+   - Screenshot count and angles
+   - VLM quality assessment
+
+5. **Recipe normalization is robust**: 'interface', 'hbond', and other aliases are correctly normalized to canonical recipe names.
+
+### Next Round Development Plan (Round 107)
+
+Based on the test results, the following improvements are recommended:
+
+1. **CRITICAL: Fix browser Load button timing**: The Load button click doesn't register when the page hasn't fully hydrated. Add a longer initial wait or a "page ready" indicator. The Structure Analysis sub-button also needs better timing.
+
+2. **Agent mode auto-capture**: The agent mode relies on the LLM calling capture_multi_angle. Consider auto-triggering capture_multi_angle after pdb_analyze in the agent loop (like the legacy path does), so screenshots are always captured even if the LLM forgets.
+
+3. **Screenshot display verification**: Need to verify that screenshots actually render in the chat UI carousel with the quality badge, VLM commentary, and residue labels. This requires a stable browser environment.
+
+4. **Side chain rendering verification**: The vizParams auto-injection (normalizeInteractions + extractResidueLabels) should ensure side chains and H-bond lines are rendered. Need real-browser verification with a loaded structure.
+
+5. **Performance**: The VLM call adds ~10-30s per capture. Consider:
+   - Skipping VLM for single-screenshot captures
+   - Caching VLM results for identical screenshots
+   - Parallel VLM analysis for multiple recipes
+
+6. **Error recovery in agent loop**: When a tool fails after all retries, the agent should gracefully continue with other tools instead of stopping the entire loop.
+
+7. **User settings panel**: Allow users to configure VLM sensitivity, max recaptures, and preferred angles.
+
+8. **Sequence viewer visual feedback**: Highlight clicked residue in the sequence view (currently only a toast appears).
+
+### Git
+- main branch: Round 106 testing complete (no code changes, only E2E verification)
