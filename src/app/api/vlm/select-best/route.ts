@@ -99,7 +99,13 @@ recaptureHints对象提供重新截图的建议（当quality为degraded或unacce
 1. 侧链是否以ball-and-stick方式显示（彩色的小球和棍子）
 2. 氢键/互作连线是否以虚线显示
 3. 关键残基是否有标签标注
-如果这些元素缺失，quality应设为degraded或unacceptable，并在issues中说明。`;
+如果这些元素缺失，quality应设为degraded或unacceptable，并在issues中说明。
+
+重要：quality、issues和recaptureHints字段是必需的，不能省略：
+- quality: 必须为"acceptable"、"degraded"或"unacceptable"之一
+- issues: 即使quality为acceptable，也要为每张截图提供一个issue条目（可写"无问题"）
+- recaptureHints: 即使quality为acceptable，也要提供（可写默认值{"angles":["front","side","top"],"focus":"ligand","zoom":"in"}）
+- 如果截图质量完美，quality设为acceptable，issues每项写"无问题"，recaptureHints写默认值`;
 
     const userPrompt = prompt || defaultPrompt;
 

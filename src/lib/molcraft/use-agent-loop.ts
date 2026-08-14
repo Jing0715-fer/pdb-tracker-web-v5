@@ -28,6 +28,7 @@ import { permissionStore, type PermissionDecision } from './permission';
 import { sessionManager } from './session-manager';
 import { backgroundTaskManager } from './background-tasks';
 import { getToolDefinition } from './tool-definitions';
+import { normalizeInteractions, extractResidueLabels, selectBestWithRetry, needsRecapture, buildRecaptureInstruction } from './vlm-client';
 
 export interface AgentToolCall {
   id: string;
@@ -176,8 +177,38 @@ function toolCallToCommand(name: string, args: Record<string, unknown>): Record<
     case 'clear_measurements':
       return { type: 'clear_measurements' };
     // Screenshot
-    case 'capture_multi_angle':
-      return { type: 'capture_multi_angle', recipe: args.recipe, angles: args.angles || ['front', 'side', 'top'] };
+    case 'capture_multi_angle': {
+      const vizParams: Record<string, unknown> = {};
+      if (args.ligandCompId) vizParams.ligandCompId = args.ligandCompId;
+      if (args.chain1) vizParams.chain1 = args.chain1;
+      if (args.chain2) vizParams.chain2 = args.chain2;
+      if (args.interactions) vizParams.interactions = args.interactions;
+      const cmd: Record<string, unknown> = {
+        type: 'capture_multi_angle',
+        recipe: args.recipe,
+        angles: args.angles || ['front', 'side', 'top'],
+      };
+      if (Object.keys(vizParams).length > 0) cmd.vizParams = vizParams;
+      if (args.labels) cmd.labels = args.labels;
+      if (args.labelFontSize) cmd.labelFontSize = args.labelFontSize;
+      return cmd;
+    }
+    case 'recapture_screenshot': {
+      const vizParams2: Record<string, unknown> = {};
+      if (args.ligandCompId) vizParams2.ligandCompId = args.ligandCompId;
+      if (args.chain1) vizParams2.chain1 = args.chain1;
+      if (args.chain2) vizParams2.chain2 = args.chain2;
+      if (args.interactions) vizParams2.interactions = args.interactions;
+      const cmd2: Record<string, unknown> = {
+        type: 'capture_multi_angle',
+        recipe: args.recipe,
+        angles: args.angles || ['front', 'side', 'top'],
+      };
+      if (Object.keys(vizParams2).length > 0) cmd2.vizParams = vizParams2;
+      if (args.labels) cmd2.labels = args.labels;
+      if (args.labelFontSize) cmd2.labelFontSize = args.labelFontSize;
+      return cmd2;
+    }
     case 'capture_snapshot':
       return { type: 'capture_snapshot', label: args.label };
     case 'export_snapshot':
@@ -271,6 +302,9 @@ export function useAgentLoop() {
       const MAX_ROUNDS = 10;
       const allToolResults: AgentToolResult[] = [];
       const sessionId = options.sessionId || `agent-${Date.now()}`;
+      // R98.6: Track the last pdb_analyze result so we can auto-inject
+      // interactions/labels into subsequent capture_multi_angle calls
+      let lastAnalysisData: Record<string, unknown> | undefined = undefined;
 
       // Build the initial message array (include history + new user message)
       const messages: AgentMessage[] = [
@@ -419,6 +453,31 @@ export function useAgentLoop() {
               }
             }
 
+            // R98.6: For capture_multi_angle/recapture_screenshot, auto-inject
+            // interactions + labels from the last pdb_analyze result if the
+            // LLM didn't pass them explicitly
+            if ((call.name === 'capture_multi_angle' || call.name === 'recapture_screenshot') && lastAnalysisData) {
+              if (!call.arguments.interactions) {
+                const interactions = normalizeInteractions(lastAnalysisData);
+                if (interactions.length > 0) call.arguments.interactions = interactions;
+              }
+              if (!call.arguments.labels) {
+                const labels = extractResidueLabels(lastAnalysisData, 12);
+                if (labels.length > 0) call.arguments.labels = labels;
+              }
+              if (!call.arguments.ligandCompId) {
+                const ligand = (lastAnalysisData.ligand as string | undefined) ||
+                  ((lastAnalysisData.bindingPocket as Record<string, unknown> | undefined)?.ligand as string | undefined);
+                if (ligand) call.arguments.ligandCompId = ligand;
+              }
+              if (!call.arguments.chain1 && (lastAnalysisData.allInteractions as Record<string, unknown> | undefined)?.chain1) {
+                call.arguments.chain1 = (lastAnalysisData.allInteractions as Record<string, unknown>).chain1;
+              }
+              if (!call.arguments.chain2 && (lastAnalysisData.allInteractions as Record<string, unknown> | undefined)?.chain2) {
+                call.arguments.chain2 = (lastAnalysisData.allInteractions as Record<string, unknown>).chain2;
+              }
+            }
+
             // Convert the tool call to an LlmCommand and execute
             const cmd = toolCallToCommand(call.name, call.arguments);
             if (!cmd) {
@@ -450,12 +509,61 @@ export function useAgentLoop() {
                   ? {
                       detail: execResult.detail,
                       analysisResult: execResult.analysisResult,
+                      data: (execResult as any).data,
                     }
                   : undefined,
                 error: execResult.ok ? undefined : execResult.detail,
                 durationMs,
               };
               allToolResults.push(result);
+
+              // R98.6: Store analysis data from pdb_analyze for later use
+              // by capture_multi_angle (auto-inject interactions/labels)
+              if (call.name === 'pdb_analyze' && execResult.ok) {
+                const ar = (execResult as any).analysisResult;
+                lastAnalysisData = (ar?.data as Record<string, unknown> | undefined) || (ar as Record<string, unknown> | undefined);
+              }
+
+              // R99.2: For capture_multi_angle/recapture_screenshot, call VLM
+              // and append quality feedback to the tool result so the LLM can
+              // decide whether to call recapture_screenshot
+              if ((call.name === 'capture_multi_angle' || call.name === 'recapture_screenshot') && execResult.ok) {
+                const screenshots = (execResult as any).data?.screenshots || [];
+                if (screenshots.length > 0) {
+                  const recipe = (call.arguments.recipe as string) || 'unknown';
+                  const analysisSummary = JSON.stringify(lastAnalysisData || {}).slice(0, 2000);
+                  try {
+                    const vlmData = await selectBestWithRetry(screenshots, recipe, analysisSummary);
+                    if (vlmData) {
+                      // Attach VLM result to the tool result
+                      (result as any).vlmResult = vlmData;
+                      // If quality is unacceptable, append feedback to the result detail
+                      if (needsRecapture(vlmData)) {
+                        const instruction = buildRecaptureInstruction(vlmData, recipe);
+                        (result as any).error = instruction;
+                        (result as any).ok = true; // capture succeeded, but VLM flagged issues
+                        // Override the result content sent to LLM
+                        (result as any).result = {
+                          detail: `Captured ${screenshots.length} screenshots. VLM quality: ${vlmData.quality}. ${instruction}`,
+                          vlmFeedback: instruction,
+                          quality: vlmData.quality,
+                          issues: vlmData.issues,
+                          recaptureHints: vlmData.recaptureHints,
+                        };
+                      } else {
+                        (result as any).result = {
+                          detail: `Captured ${screenshots.length} screenshots. VLM quality: ${vlmData.quality}. Best: angle ${screenshots[vlmData.bestIndex]?.angle || 'unknown'}.`,
+                          vlmQuality: vlmData.quality,
+                          bestIndex: vlmData.bestIndex,
+                          scores: vlmData.scores,
+                        };
+                      }
+                    }
+                  } catch (vlmErr) {
+                    console.warn('[agent] VLM analysis failed:', vlmErr);
+                  }
+                }
+              }
 
               options.onProgress?.({ type: 'tool_result', toolResult: result });
 

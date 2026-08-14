@@ -22,6 +22,7 @@ import {
   SELECT, CLEAR_SELECTION, CLEAR_INTERACTIONS, LABEL_RESIDUE,
   MEASURE_DISTANCE, MEASURE_ANGLE, MEASURE_DIHEDRAL, CLEAR_MEASUREMENTS,
   CAPTURE_MULTI_ANGLE, CAPTURE_SNAPSHOT, EXPORT_SNAPSHOT,
+  RECAPTURE_SCREENSHOT,
   CLEAR_CHAT,
   ALL_TOOL_DEFINITIONS,
 } from "./tool-definitions";
@@ -260,13 +261,22 @@ export function registerDomainTools(executeCommandFn: ExecuteCommandFn): void {
   );
 
   // ---- Screenshot / capture ----
-  toolRegistry.register(CAPTURE_MULTI_ANGLE, async (args, ctx) =>
-    executeCommandFn(ctx.viewer, {
+  toolRegistry.register(CAPTURE_MULTI_ANGLE, async (args, ctx) => {
+    const vizParams: Record<string, unknown> = {};
+    if (args.ligandCompId) vizParams.ligandCompId = args.ligandCompId;
+    if (args.chain1) vizParams.chain1 = args.chain1;
+    if (args.chain2) vizParams.chain2 = args.chain2;
+    if (args.interactions) vizParams.interactions = args.interactions;
+    const cmd: Record<string, unknown> = {
       type: "capture_multi_angle",
       recipe: args.recipe as string,
       angles: (args.angles as Array<"front" | "side" | "top" | "back">) ?? ["front", "side", "top"],
-    }),
-  );
+    };
+    if (Object.keys(vizParams).length > 0) cmd.vizParams = vizParams;
+    if (args.labels) cmd.labels = args.labels;
+    if (args.labelFontSize) cmd.labelFontSize = args.labelFontSize;
+    return executeCommandFn(ctx.viewer, cmd);
+  });
   toolRegistry.register(CAPTURE_SNAPSHOT, async (args, ctx) =>
     executeCommandFn(ctx.viewer, {
       type: "capture_snapshot",
@@ -276,6 +286,23 @@ export function registerDomainTools(executeCommandFn: ExecuteCommandFn): void {
   toolRegistry.register(EXPORT_SNAPSHOT, async (_args, ctx) =>
     executeCommandFn(ctx.viewer, { type: "export_snapshot" }),
   );
+  toolRegistry.register(RECAPTURE_SCREENSHOT, async (args, ctx) => {
+    // R98.10: recapture_screenshot maps to capture_multi_angle with adjusted params
+    const vizParams: Record<string, unknown> = {};
+    if (args.ligandCompId) vizParams.ligandCompId = args.ligandCompId;
+    if (args.chain1) vizParams.chain1 = args.chain1;
+    if (args.chain2) vizParams.chain2 = args.chain2;
+    if (args.interactions) vizParams.interactions = args.interactions;
+    const cmd: Record<string, unknown> = {
+      type: "capture_multi_angle",
+      recipe: args.recipe as string,
+      angles: (args.angles as Array<"front" | "side" | "top" | "back">) ?? ["front", "side", "top"],
+    };
+    if (Object.keys(vizParams).length > 0) cmd.vizParams = vizParams;
+    if (args.labels) cmd.labels = args.labels;
+    if (args.labelFontSize) cmd.labelFontSize = args.labelFontSize;
+    return executeCommandFn(ctx.viewer, cmd);
+  });
 
   // ---- Session ----
   toolRegistry.register(CLEAR_CHAT, async (_args, _ctx) => {

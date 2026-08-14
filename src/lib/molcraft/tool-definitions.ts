@@ -367,15 +367,30 @@ export const CLEAR_MEASUREMENTS: ToolDefinition = {
 // ---- Screenshot / capture ----
 export const CAPTURE_MULTI_ANGLE: ToolDefinition = {
   name: "capture_multi_angle",
-  description: "Capture screenshots from multiple angles (front, side, top, back). Returns image data URIs for VLM analysis.",
+  description: "Capture screenshots from multiple angles (front, side, top, back). Returns image data URIs for VLM analysis. Pass interactions array from pdb_analyze to show side chains (ball-and-stick) and hydrogen bond lines (dashed). Pass labels for residue annotation.",
   category: "visualization",
   parameters: {
-    recipe: { type: "string", description: "Recipe name for screenshot labeling and visualization (e.g. binding_pocket, hbonds)", required: true },
+    recipe: { type: "string", description: "Recipe name for screenshot labeling and visualization (e.g. binding_pocket, hbonds, all_interactions)", required: true },
     angles: {
       type: "array",
       description: "Camera angles to capture (default: front, side, top)",
       items: { type: "string", enum: [...CAMERA_ANGLES] },
     },
+    ligandCompId: { type: "string", description: "Ligand compId to focus camera on (e.g. N3, HEM). From pdb_analyze result." },
+    chain1: { type: "string", description: "Chain 1 ID for interface focus (e.g. A). From pdb_analyze result." },
+    chain2: { type: "string", description: "Chain 2 ID for interface focus (e.g. B). From pdb_analyze result." },
+    interactions: {
+      type: "array",
+      description: "Interaction records from pdb_analyze result. Each item: {chain1, resno1, atom1, chain2, resno2, atom2}. Used to draw ball-and-stick side chains (up to 10 residues) and dashed hydrogen bond lines (up to 15).",
+      items: { type: "object" },
+    },
+    labels: {
+      type: "array",
+      description: "Residue labels to display on the screenshot. Each item: {text, chain, resno}. text is the label (e.g. C145 for Cys145).",
+      items: { type: "object" },
+    },
+    labelFontSize: { type: "number", description: "Font size for residue labels (default 24)" },
+    maxLabels: { type: "number", description: "Maximum number of labels to show (default 12)" },
   },
 };
 
@@ -394,6 +409,27 @@ export const EXPORT_SNAPSHOT: ToolDefinition = {
   category: "session",
   parameters: {},
   requiresApproval: true,
+};
+
+export const RECAPTURE_SCREENSHOT: ToolDefinition = {
+  name: "recapture_screenshot",
+  description: "Re-capture screenshots with adjusted parameters when VLM reports quality issues. Use this when the previous capture_multi_angle result was rejected by VLM (e.g. side chains not visible, H-bond lines missing, structure occluded). Adjust angles/focus based on VLM feedback.",
+  category: "visualization",
+  parameters: {
+    recipe: { type: "string", description: "Original recipe name", required: true },
+    angles: {
+      type: "array",
+      description: "New camera angles to try (e.g. different from previous attempt)",
+      items: { type: "string", enum: [...CAMERA_ANGLES] },
+    },
+    focus: { type: "string", description: "What to focus on", enum: ["interface", "ligand", "residue", "chain", "reset"] },
+    issues: { type: "array", description: "VLM-reported issues to address", items: { type: "string" } },
+    interactions: { type: "array", description: "Interaction records (same as capture_multi_angle)", items: { type: "object" } },
+    labels: { type: "array", description: "Residue labels", items: { type: "object" } },
+    ligandCompId: { type: "string" },
+    chain1: { type: "string" },
+    chain2: { type: "string" },
+  },
 };
 
 // ---- Advanced analysis (with visualization side-effects) ----
@@ -492,6 +528,7 @@ export const ALL_TOOL_DEFINITIONS: ToolDefinition[] = [
   CAPTURE_MULTI_ANGLE,
   CAPTURE_SNAPSHOT,
   EXPORT_SNAPSHOT,
+  RECAPTURE_SCREENSHOT,
   // Session
   CLEAR_CHAT,
 ];

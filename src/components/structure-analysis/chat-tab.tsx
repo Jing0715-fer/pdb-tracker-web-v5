@@ -52,6 +52,7 @@ import { PermissionRequestCard } from "./permission-request-card";
 import { BackgroundTasksPanel } from "./background-tasks-panel";
 import { useAgentLoop, type AgentProgressEvent } from "@/lib/molcraft/use-agent-loop";
 import { registerDomainTools, unregisterDomainTools } from "@/lib/molcraft/domain-tools";
+import { selectBestWithRetry, applyVlmResultToImages, needsRecapture, buildRecaptureInstruction, type VlmResult } from "@/lib/molcraft/vlm-client";
 import { sessionManager } from "@/lib/molcraft/session-manager";
 import { Wrench, Zap } from "lucide-react";
 
@@ -1484,12 +1485,108 @@ export function ChatTab() {
                   return { commands: updated } as any;
                 });
                 // If load_pdb succeeded, add the structure to the store
+                // R98.4: Read pdbId from the command arguments stored on the message
                 if (tr.ok && tr.name === "pdb_load") {
                   try {
-                    const args = (tr as any).arguments || {};
-                    const pdbId = (args.id || "").toUpperCase();
-                    if (pdbId) addStructure({ id: pdbId, label: pdbId, format: "pdb" });
+                    updateMessage(pendingId, (prev) => {
+                      const cmds = ((prev as any).commands as unknown[]) || [];
+                      let pdbId = "";
+                      for (let i = cmds.length - 1; i >= 0; i--) {
+                        const c = cmds[i] as any;
+                        if (c?.type === "agent_tool_call" && c.name === "pdb_load" && c.arguments?.id) {
+                          pdbId = String(c.arguments.id).toUpperCase();
+                          break;
+                        }
+                      }
+                      if (pdbId) {
+                        addStructure({ id: pdbId, label: pdbId, format: "pdb" });
+                      }
+                      return {};
+                    });
                   } catch { /* best-effort */ }
+                }
+                // R98.3: If capture_multi_angle or recapture_screenshot succeeded,
+                // extract screenshots and run VLM analysis
+                if (tr.ok && (tr.name === "capture_multi_angle" || tr.name === "recapture_screenshot")) {
+                  try {
+                    const resultData = (tr.result as any)?.data;
+                    const screenshots = resultData?.screenshots || [];
+                    if (screenshots.length > 0) {
+                      // Find the recipe from the command arguments
+                      let recipeName = "unknown";
+                      updateMessage(pendingId, (prev) => {
+                        const cmds = ((prev as any).commands as unknown[]) || [];
+                        for (let i = cmds.length - 1; i >= 0; i--) {
+                          const c = cmds[i] as any;
+                          if (c?.type === "agent_tool_call" && (c.name === "capture_multi_angle" || c.name === "recapture_screenshot") && c.arguments?.recipe) {
+                            recipeName = String(c.arguments.recipe);
+                            break;
+                          }
+                        }
+                        return {};
+                      });
+                      // Store images immediately (without VLM) so user sees them right away
+                      const initialImages: AnalysisImage[] = screenshots.map((s: any) => ({
+                        dataUri: s.dataUri,
+                        recipe: recipeName,
+                        angle: s.angle as "front" | "side" | "top" | "back",
+                        label: s.label,
+                      }));
+                      const existingMsg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
+                      const existingImages = existingMsg?.analysisImages || [];
+                      // For recapture: replace images for this recipe
+                      let newImages: AnalysisImage[];
+                      if (tr.name === "recapture_screenshot") {
+                        const otherImages = existingImages.filter(img => img.recipe !== recipeName);
+                        newImages = [...otherImages, ...initialImages];
+                      } else {
+                        newImages = [...existingImages, ...initialImages];
+                      }
+                      updateMessage(pendingId, {
+                        analysisImages: newImages,
+                      } as Partial<ChatMessage>);
+                      // R99.2: The agent loop (use-agent-loop.ts) now calls VLM and attaches
+                      // the result as tr.result.vlmResult. We just need to apply it to the images.
+                      // If vlmResult is missing (older path), fall back to calling VLM here.
+                      const vlmResult = (tr.result as any)?.vlmResult;
+                      if (vlmResult) {
+                        // VLM was already called by the agent loop — apply the result
+                        try {
+                          const msg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
+                          const currentImages = msg?.analysisImages || [];
+                          const updatedImages = applyVlmResultToImages(currentImages, recipeName, vlmResult);
+                          updateMessage(pendingId, {
+                            analysisImages: updatedImages,
+                          } as Partial<ChatMessage>);
+                          if (needsRecapture(vlmResult)) {
+                            setAgentProgress(`VLM评估: ${vlmResult.quality} — Agent将重新截图`);
+                          }
+                        } catch (updateErr) {
+                          console.warn("[agent] VLM image update failed:", updateErr);
+                        }
+                      } else if (screenshots.length > 0) {
+                        // Fallback: call VLM here (for legacy/compatibility)
+                        (async () => {
+                          const analysisSummary = JSON.stringify((tr.result as any)?.analysisResult || {}).slice(0, 2000);
+                          const vlmData = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                          if (vlmData) {
+                            try {
+                              const msg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
+                              const currentImages = msg?.analysisImages || [];
+                              const updatedImages = applyVlmResultToImages(currentImages, recipeName, vlmData);
+                              updateMessage(pendingId, {
+                                analysisImages: updatedImages,
+                              } as Partial<ChatMessage>);
+                            } catch (updateErr) {
+                              console.warn("[agent] VLM update failed:", updateErr);
+                            }
+                          }
+                        })();
+                      }
+                    }
+                  } catch (extractErr) {
+                    console.warn("[agent] Screenshot extraction failed:", extractErr);
+                  }
                 }
               }
               break;
