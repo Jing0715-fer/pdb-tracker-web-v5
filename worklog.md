@@ -14076,3 +14076,89 @@ Stage Summary:
 - ✅ Interface focus: camera on chain1 atoms (includes interface)
 - ✅ All angles get vizParams: no more ai===0 restriction
 - ✅ All lint checks pass
+
+---
+Task ID: round-96-agent-loop-integration
+Agent: main
+Task: Wire agent loop into /api/llm/chat/stream route, add permission request UI, add background task monitoring UI, integrate session manager with ChatSession store. Also apply Round 95 bug fixes to main.
+
+### Summary
+
+**Round 95 bug fixes applied to main** (commit 55beaea):
+- Structure list: addStructure() called after load_pdb
+- Side chains: ball-and-stick from interactions data, one-letter residue labels
+- VLM per-image comments: API returns comments[] array, each screenshot shows commentary
+- Interface focus: camera focuses on chain1 atoms
+- vizParams on all angles
+
+**Round 96 agent loop integration on feat/tool-calling-agent** (commit 932b8b9):
+
+#### 1. New API Route: /api/llm/agent/round
+- Native function-calling via z.ai SDK with `tools` parameter
+- 9 tool definitions: pdb_load, pdb_analyze, set_representation, set_color_theme, focus_ligand, focus_residue, capture_multi_angle, measure_distance, clear_chat
+- Returns { done, content, toolCalls } — client orchestrates the loop
+- Retry logic for 429/timeout errors
+- Safe argument parsing (handles malformed JSON from LLM)
+
+#### 2. Client-side Agent Loop Hook: useAgentLoop
+- Orchestrates: LLM call → execute tools via executeCommand → feed results back → repeat
+- Max 10 rounds, abort signal support
+- Permission checking via permissionStore (clear_chat requires approval)
+- Session manager event logging (user_message, assistant_message, tool_call, tool_result, permission_request, permission_response)
+- Background task tracking for analysis operations
+- Progress events: llm_start, llm_response, tool_start, tool_result, permission_request, done, error
+
+#### 3. Permission Request UI
+- PermissionRequestCard component: inline amber card with Approve/Deny/Always-Approve buttons
+- Listens to `tool-permission-request` window events from permissionStore
+- Shows tool name, summary, expandable arguments
+- Renders at top of message list when a tool requires approval
+- InlinePermissionPrompt variant for use inside message bubbles
+
+#### 4. Background Tasks Panel
+- BackgroundTasksPanel popover in chat header
+- Active/completed/failed count badges on trigger button
+- Task rows with status icons, progress bars, duration, expandable event log
+- Cancel button for running tasks, cleanup button for finished tasks
+- Listens to `background-task-update` window events
+- Fixed backgroundTaskManager bug: execute function now properly stored and called (was a no-op placeholder)
+
+#### 5. Session Manager Integration
+- Store: addChatMessage appends events to sessionManager
+- New store actions: appendSessionEvent, forkCurrentSession, getSessionToolCallSummary, clearSessionEvents
+- updateChatMessage now accepts function patches (for incremental command updates)
+- sessionEvents state exposed for UI consumption
+- clearChat clears session events
+
+#### 6. ChatTab Integration
+- Agent mode toggle button (Wrench/Zap icon) in header
+- When ON: uses /api/llm/agent/round (tool-calling) instead of /api/llm/chat/stream (JSON parsing)
+- Progress indicator (sticky pill at top of messages)
+- Tool calls displayed as command cards in the message
+- BackgroundTasksPanel + PermissionRequestCard rendered in chat UI
+- Toast notifications on mode switch
+
+#### 7. New UI Components
+- card.tsx (shadcn/ui Card component — was missing from the UI library)
+- permission-request-card.tsx (PermissionRequestCard + InlinePermissionPrompt)
+- background-tasks-panel.tsx (BackgroundTasksPanel with TaskRow)
+
+### Verification (agent-browser + VLM)
+- ✅ Page loads HTTP 200
+- ✅ Chat panel renders with "Molcraft AI Agent" heading
+- ✅ Agent mode toggle visible in header ("经典" / "Agent")
+- ✅ Background tasks panel button visible ("后台任务")
+- ✅ Clicking toggle switches mode + shows toast "已切换到工具调用 Agent 模式"
+- ✅ VLM confirms all UI elements visible
+- ✅ No runtime errors in dev.log
+- ✅ Lint: 0 errors in changed files
+
+### Git
+- main: 55beaea (Round 95 bug fixes)
+- feat/tool-calling-agent: 932b8b9 (Round 96 agent loop integration)
+
+### Next Steps
+1. Test the full agent loop flow (load PDB → analyze → report) in agent mode
+2. Add visual indicators for tool execution progress (spinner on tool cards)
+3. Add session fork/replay UI (using sessionManager.fork)
+4. Integrate domain-tools.ts registration on app init
