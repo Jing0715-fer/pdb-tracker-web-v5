@@ -14738,3 +14738,53 @@ Task: Continue developing based on Round 106 worklog recommendations. Implement 
 7. **Performance metrics**: Add timing display for each tool call in the agent mode UI (currently only legacy path shows execution duration).
 
 8. **Sequence viewer: show residue info panel**: When a residue is clicked, show a small info panel with full residue name, number, chain, and nearby interactions (not just a toast).
+
+---
+Task ID: round-108-vlm-caching-agent-settings-sequence-info-timing
+Agent: main
+Task: Continue developing based on Round 107 worklog recommendations. Implement VLM caching, agent settings panel, sequence info panel, timing display. Run QA and E2E tests. Commit and push to main.
+
+### R108.4: VLM Caching
+- vlm-client.ts: In-memory cache with 5-minute TTL
+- Cache key: screenshot fingerprint + recipe + summary
+- Cache hit → skip VLM call (saves 10-30s)
+- clearVlmCache() for manual clearing
+
+### R108.6: Agent Settings Panel
+- Auto-capture toggle, VLM analysis toggle, Max recaptures dropdown
+- All persisted to localStorage
+
+### R108.7: Timing Display
+- Agent tool_result handler sets durationMs on commands
+- Enables Timer icon + duration in message-bubble.tsx
+
+### R108.8: Sequence Viewer Residue Info Panel
+- Persistent info panel on click: badge, name, resno+insCode, chain, position
+
+### E2E Test Results
+- Full agent loop (4 rounds): comprehensive markdown final answer ✓
+- VLM caching: second call faster (cached) ✓
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- main branch: 3e3847e (Round 108 complete, pushed to remote)
+
+### Next Round Recommendations (Round 109)
+
+1. **Browser E2E test with loaded structure**: Still need to verify screenshots render in the chat UI carousel with quality badges, VLM commentary, and residue labels.
+
+2. **Side chain rendering verification**: Verify vizParams auto-injection renders side chains (ball-and-stick) and H-bond lines (dashed) in screenshots.
+
+3. **Wire agent settings to agent loop**: The autoCapture, vlmEnabled, and maxRecaptures settings are stored but not yet read by use-agent-loop.ts. Need to pass them as options.
+
+4. **VLM cache invalidation**: When a new structure is loaded, the VLM cache should be cleared (old screenshots are irrelevant).
+
+5. **Parallel VLM for multi-recipe**: Run VLM analysis in parallel for multiple recipes.
+
+6. **Performance metrics display**: The timing is now available on commands — verify it renders in the agent mode UI.
+
+7. **Sequence viewer: nearby interactions**: When a residue is clicked, show nearby interactions from the last analysis (if available).
+
+8. **Error recovery improvements**: When a tool fails, show a retry button in the agent mode UI (currently only legacy path has retry).
