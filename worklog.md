@@ -13874,3 +13874,102 @@ Improvement Suggestions for Next Round:
 2. **Phase 1 dsh CLI adapter** — add the adapter entry if user wants to proceed
 3. **Interaction line coloring** — color H-bonds/salt bridges/hydrophobic differently
 4. **Line label** — add distance label on each interaction line
+
+---
+Task ID: round-93-tool-calling-agent-branch
+Agent: main
+Task: Create feat/tool-calling-agent branch with core infrastructure for real tool-calling agent loop, permission system, session manager, background tasks.
+
+Branch: `feat/tool-calling-agent` (created on remote)
+
+New Files Created:
+
+### 1. src/lib/molcraft/tool-registry.ts
+Core tool registry infrastructure:
+- `ToolDefinition` interface: name, description, category, parameters (JSON schema), requiresApproval, timeoutMs
+- `ToolCall` / `ToolResult` interfaces: structured tool call/result
+- `ToolExecutor` type: async function that receives args + context
+- `ToolExecutionContext`: viewer, pdbId, sessionId, abort signal
+- `ToolRegistry` class: register/unregister/get/list/listByCategory
+- `toFunctionDefinitions()`: converts to LLM function-calling schema format
+- `validate()`: checks arguments against parameter definitions
+- Categories: structure, analysis, visualization, measurement, session, system
+
+### 2. src/lib/molcraft/permission.ts
+Approval/permission control system:
+- `PermissionDecision`: approve | deny | approve_always
+- `PermissionRequest` / `PermissionResponse` interfaces
+- `PermissionStore` class:
+  - `isApproved()`: checks if tool has "always" approval
+  - `requestApproval()`: creates request, returns Promise, dispatches window event for UI
+  - `respond()`: called by UI when user makes a decision
+  - `getPending()`: lists pending requests for UI display
+  - `approveAlways()` / `revokeAlways()`: manage session-level approvals
+  - `clear()`: reset for new session
+- `summarizeTool()`: generates human-readable summary of what a tool will do
+- Integrates with window CustomEvent for browser-side UI communication
+
+### 3. src/lib/molcraft/agent-loop.ts
+Real tool-calling agent loop (replaces ReAct-in-prompt):
+- `AgentMessage`: role (user/assistant/tool), content, toolCalls, toolCallId
+- `AgentLoopOptions`: maxRounds, llmCall function, context, onProgress callback, autoApprove
+- `AgentProgressEvent`: typed events for UI streaming (llm_start, llm_response, tool_start, permission_request, tool_result, tool_error, done, error)
+- `executeAgentLoop()`: main function that:
+  1. Sends conversation + tool definitions to LLM
+  2. Receives text or tool calls
+  3. Validates tool arguments
+  4. Checks permissions (pauses for user approval if needed)
+  5. Executes tools with timeout
+  6. Truncates large results (>4KB) to prevent context overflow
+  7. Feeds results back to LLM
+  8. Loops until LLM produces final text or maxRounds reached
+- `AgentLoopResult`: final content, tool results, rounds, error
+
+### 4. src/lib/molcraft/session-manager.ts
+Persistent, forkable, replayable sessions:
+- `SessionEvent`: append-only log entry (user_message, assistant_message, tool_call, tool_result, permission_request, permission_response, session_fork)
+- `ForkOptions`: fromEventIndex, title
+- `ReplayResult`: tool results + events from replay
+- `SessionManager` class:
+  - `append()`: add event to session log
+  - `getEvents()`: retrieve full event log
+  - `fork()`: create new session from a point in the conversation
+  - `exportSession()` / `importSession()`: serialize/deserialize for external storage
+  - `replay()`: re-execute tool calls with same or different executor
+  - `getToolCallSummary()`: audit trail of all tool calls
+  - `clear()` / `clearAll()`: cleanup
+
+### 5. src/lib/molcraft/background-tasks.ts
+Background task manager (maps run-center modules):
+- `TaskStatus`: pending, running, completed, failed, cancelled
+- `TaskModule`: literature, eval, weekly, analysis, custom
+- `BackgroundTask`: id, module, title, status, progress (0-100), result, error, events log
+- `BackgroundTaskManager` class:
+  - `enqueue()`: add task to queue with priority
+  - `get()` / `list()` / `listByModule()`: query tasks
+  - `cancel()`: cancel running/pending task
+  - `cleanup()`: remove completed/failed tasks
+  - `processQueue()`: runs tasks with maxConcurrent limit
+  - `notify()`: dispatches window CustomEvent for UI updates
+  - SSE event log for replay
+
+### Lint
+- All 5 new files: 0 errors ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Tool registry: typed tool definitions + validation + function-calling schema
+- ✅ Permission system: approval/deny/always with window event UI integration
+- ✅ Agent loop: real tool-calling loop with progress events + timeout + truncation
+- ✅ Session manager: fork, replay, export/import, audit trail
+- ✅ Background tasks: queue, priority, cancel, progress, SSE event log
+- ✅ All lint checks pass
+
+Next Steps (for this branch):
+1. Register domain tools (pdb_load, pdb_analyze, set_representation, etc.)
+2. Wire the agent loop into /api/llm/chat/stream route
+3. Add UI for permission requests (approve/deny buttons in chat)
+4. Add UI for background task monitoring
+5. Integrate session manager with existing ChatSession store
