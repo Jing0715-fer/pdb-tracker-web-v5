@@ -13973,3 +13973,57 @@ Next Steps (for this branch):
 3. Add UI for permission requests (approve/deny buttons in chat)
 4. Add UI for background task monitoring
 5. Integrate session manager with existing ChatSession store
+
+---
+Task ID: round-94-carousel-unlock-sidechains-domain-tools
+Agent: main
+Task: Fix carousel lock, side chain display, register domain tools on feat/tool-calling-agent branch.
+
+### Bug Fixes (committed to main):
+
+**1. Carousel unlock** (`message-bubble.tsx`)
+- Problem: VLM best image selection locked the carousel — user couldn't switch to other screenshots
+- Root cause: `currentIdx = bestIdx >= 0 ? bestIdx : activeIdx` always used bestIdx when a best image existed
+- Fix: Added `userNavigated` state flag. Auto-navigates to best only ONCE (when VLM completes). After user clicks any navigation (arrows, thumbnails, keyboard), the best-image lock is released and `activeIdx` takes over.
+- Applied to: goToPrev, goToNext, thumbnail onClick, keyboard handleKeyDown, handleDownload
+
+**2. Side chain display** (`commands.ts`)
+- Problem: Complex MolScript `distanceToLabeled` query wasn't working in prebuilt bundle
+- Fix: Replaced with direct approach — extract unique (chain, resno) pairs from the `interactions` data, create a ball-and-stick component for each residue using `auth_asym_id` + `label_seq_id` matching. Up to 10 residues shown.
+- This is simpler and more reliable than the MolScript distance query
+
+### Domain Tools (committed to feat/tool-calling-agent):
+
+**src/lib/molcraft/domain-tools.ts** — Registered 9 domain tools:
+
+| Tool | Category | Parameters | Approval |
+|------|----------|------------|----------|
+| pdb_load | structure | id (PDB ID) | No |
+| pdb_analyze | analysis | recipe, chain1, chain2, ligandCompId, radius | No |
+| set_representation | visualization | preset (cartoon/surface/ball-and-stick/putty) | No |
+| set_color_theme | visualization | theme (chain-id/element-symbol/hydrophobicity/etc.) | No |
+| focus_ligand | visualization | compId | No |
+| focus_residue | visualization | chain, resno | No |
+| capture_multi_angle | visualization | recipe, angles[] | No |
+| measure_distance | measurement | a_chain, a_resno, a_atom, b_chain, b_resno, b_atom | No |
+| clear_chat | session | (none) | Yes |
+
+Each tool wraps the existing `executeCommand` function from `commands.ts`, so the tool-calling agent loop reuses all the existing Molstar logic without reimplementation.
+
+`registerDomainTools(executeCommandFn)` registers all tools.
+`unregisterDomainTools()` cleans up for testing.
+
+### Lint
+- message-bubble.tsx: 0 errors ✅
+- commands.ts: 0 errors ✅
+- domain-tools.ts: 0 errors ✅
+
+### Git
+- main: `03f233f` fix: Round 94 — carousel unlock + side chain display
+- feat/tool-calling-agent: domain-tools.ts added (pending commit)
+
+Next Steps on feat/tool-calling-agent:
+1. Wire agent loop into /api/llm/chat/stream route
+2. Add permission request UI in chat
+3. Add background task monitoring UI
+4. Integrate session manager with ChatSession store
