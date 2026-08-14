@@ -14512,3 +14512,54 @@ Task: Fix 4 user-reported issues: (1) 'Unknown recipe: interface' error with no 
 6. **Screenshot auto-capture in agent mode**: The agent mode (use-agent-loop.ts) doesn't auto-capture screenshots after pdb_analyze like the legacy path does. The LLM must explicitly call capture_multi_angle. Consider adding auto-capture.
 
 7. **Performance**: The retry mechanism adds up to 3s delay per failed analyze_run. Consider shorter retry delays or exponential backoff.
+
+---
+Task ID: round-104-agent-retry-recipe-alias-docs-insertion-codes-autocapture-retry-opt
+Agent: main
+Task: Continue developing based on Round 103 worklog recommendations. Implement agent retry, recipe alias docs, insertion codes, auto-capture, retry optimization. Run QA and E2E tests. Commit and push to main.
+
+### R104.2: Retry Mechanism for Agent Mode
+- use-agent-loop.ts: MAX_TOOL_RETRIES=2 for pdb_analyze, exponential backoff (0.5s, 1s)
+
+### R104.3: Recipe Alias Documentation
+- Added 30+ alias mappings to agent system prompt
+- LLM now knows interface→all_interactions, hbond→hbonds, etc.
+
+### R104.4: Insertion Code Support
+- SequenceInfo: added insertionCodes field
+- extractSequences: extracts insertion codes from ATOM records (column 27)
+- lociFromResidue: supports insCode via label_ins_code MolScript property
+- focus_residue command: accepts insCode parameter
+- sequence-viewer: passes insertion code when focusing
+
+### R104.7: Retry Delay Optimization
+- Legacy path: 0.5s exponential backoff (was 1s linear)
+- Agent loop: 0.5s exponential backoff (already optimized)
+
+### E2E Test Results
+- Recipe normalization: 'interface' → 'all_interactions' ✓
+- Agent round: returns pdb_load for 'Load 4HHB and analyze interface' ✓
+- VLM quality: blank screenshots → quality='unacceptable', issues, recaptureHints ✓
+- Full agent loop (4 rounds): final answer summarizes 17 interactions ✓
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- main branch: aceff21 (Round 104 complete, pushed to remote)
+
+### Next Round Recommendations (Round 105)
+
+1. **Browser E2E test with loaded structure**: Load 4HHB in the browser, run all_interactions on A-B, verify screenshots appear with side chains and H-bond lines. The dev server keeps dying after ~60s in the sandbox, making long browser tests difficult.
+
+2. **VLM recapture effectiveness**: When recapture_screenshot is called in agent mode, verify that the side chains and H-bond lines are actually rendered in the new screenshots (needs real-browser test).
+
+3. **Sequence viewer visual feedback**: When clicking a residue, show a visual highlight on the clicked residue in the sequence (currently only a toast appears).
+
+4. **Agent mode auto-capture**: The agent mode relies on the LLM calling capture_multi_angle explicitly. Consider auto-triggering capture_multi_angle after pdb_analyze in the agent loop (like the legacy path does).
+
+5. **Performance monitoring**: Add timing metrics for each tool call (currently only the legacy path shows execution duration).
+
+6. **Error recovery**: When a tool fails after all retries, the agent should gracefully continue with other tools instead of stopping the entire loop.
+
+7. **User settings panel**: Allow users to configure VLM sensitivity, max recaptures, and preferred angles.
