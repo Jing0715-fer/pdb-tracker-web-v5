@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { getRecipe, probeAllClis } from "@/lib/molcraft/cli-registry";
-import { normalizeRecipeName } from "@/lib/molcraft/commands";
+import { normalizeRecipeName } from "@/lib/molcraft/recipe-aliases";
 
 const execFileAsync = promisify(execFile);
 

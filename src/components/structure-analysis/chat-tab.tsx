@@ -52,6 +52,7 @@ import { PermissionRequestCard } from "./permission-request-card";
 import { BackgroundTasksPanel } from "./background-tasks-panel";
 import { useAgentLoop, type AgentProgressEvent } from "@/lib/molcraft/use-agent-loop";
 import { registerDomainTools, unregisterDomainTools } from "@/lib/molcraft/domain-tools";
+import { normalizeRecipeName } from "@/lib/molcraft/recipe-aliases";
 import { selectBestWithRetry, applyVlmResultToImages, needsRecapture, buildRecaptureInstruction, type VlmResult } from "@/lib/molcraft/vlm-client";
 import { sessionManager } from "@/lib/molcraft/session-manager";
 import { Wrench, Zap } from "lucide-react";
@@ -217,47 +218,6 @@ function saveFavoriteTemplates(titles: string[]): void {
  * Only recipes that produce 3D-visualizable results get screenshots — pure
  * data recipes (sequence alignment, Ramachandran plot, etc.) are skipped.
  */
-/** R103.1: Normalize recipe names for UI checks (mirrors commands.ts normalizeRecipeName) */
-function normalizeRecipeNameForUI(recipe: string): string {
-  const aliases: Record<string, string> = {
-    "interface": "all_interactions",
-    "interactions": "all_interactions",
-    "hbond": "hbonds",
-    "h_bonds": "hbonds",
-    "h-bonds": "hbonds",
-    "hydrogen_bonds": "hbonds",
-    "salt_bridge": "salt_bridges",
-    "salt-bridges": "salt_bridges",
-    "hydrophobic": "hydrophobic_contacts",
-    "pocket": "binding_pocket",
-    "drug": "druggability",
-    "druggable": "druggability",
-    "ligand": "ligand_interactions",
-    "ligand_contacts": "ligand_interactions",
-    "disulfide": "disulfide_bonds",
-    "metal": "metal_coordination",
-    "aromatic": "aromatic_stacking",
-    "stacking": "aromatic_stacking",
-    "water": "water_bridges",
-    "surface_area": "sasa",
-    "rama": "ramachandran",
-    "bfactor": "bfactor_stats",
-    "b_factor": "bfactor_stats",
-    "b-factor": "bfactor_stats",
-    "secondary_structure": "secondary_structure_simple",
-    "secstruct": "secondary_structure_simple",
-    "pockets": "detect_pockets",
-    "oligomer": "oligomer_analysis",
-    "surface": "surface_residues",
-    "validation": "structure_validation",
-    "protonation": "protonation_states",
-    "conformation": "conformational_changes",
-    "conformational": "conformational_changes",
-  };
-  const normalized = recipe.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return aliases[normalized] || recipe;
-}
-
 function shouldCaptureScreenshot(recipeId: string): boolean {
   const visualizable = new Set([
     "binding_pocket", "druggability", "all_interactions", "hbonds",
@@ -1999,7 +1959,7 @@ export function ChatTab() {
                     if (cmd.type === "analyze_run" && result.ok) {
                       const recipeId = (cmd as { recipe?: string }).recipe;
                       // R103.1: Normalize recipeId for screenshot check (e.g. "interface" → "all_interactions")
-                      const normalizedRecipeId = recipeId ? normalizeRecipeNameForUI(recipeId) : "";
+                      const normalizedRecipeId = recipeId ? normalizeRecipeName(recipeId) : "";
                       const captureRecipeId = normalizedRecipeId || recipeId || "unknown";
                       if (normalizedRecipeId && shouldCaptureScreenshot(normalizedRecipeId)) {
                         // Round 79/84: Show capture progress with visual bar

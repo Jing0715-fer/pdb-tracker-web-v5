@@ -11,6 +11,7 @@
 import type { LlmCommand, ResidueRef } from "./command-schema";
 import type { MolstarPlugin, MolstarViewer } from "./types";
 import { useAppStore, type ElectrostaticViz, type DruggabilityViz, type ScreeningViz, type PocketDetectionViz } from "./store";
+import { normalizeRecipeName } from "./recipe-aliases";
 
 export interface CommandResult {
   ok: boolean;
@@ -25,9 +26,31 @@ export interface CommandResult {
 // Backend analysis API helpers (called from the browser)
 // ============================================================
 
+// R105.3: Generic fetch with retry for transient network errors (502, timeout)
+async function fetchWithRetry(url: string, options?: RequestInit, maxRetries = 2): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || res.status < 500) return res; // Don't retry 4xx errors
+      lastError = new Error(`HTTP ${res.status}`);
+      // 5xx error — wait and retry
+      if (attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError || new Error("Fetch failed after retries");
+}
+
 async function fetchMetadata(id: string, includeInterfaces: boolean) {
   const url = `/api/analyze/metadata?id=${encodeURIComponent(id)}&interfaces=${includeInterfaces ? 1 : 0}&format=markdown`;
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `HTTP ${res.status}`);
@@ -37,7 +60,7 @@ async function fetchMetadata(id: string, includeInterfaces: boolean) {
 
 async function fetchInterface(id: string, assembly: number) {
   const url = `/api/analyze/interface?id=${encodeURIComponent(id)}&assembly=${assembly}`;
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `HTTP ${res.status}`);
@@ -49,60 +72,6 @@ async function fetchCliList() {
   const res = await fetch("/api/cli/list");
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
-}
-
-/**
- * R103.1: Normalize recipe names to handle common LLM aliases.
- * The LLM sometimes returns "interface" instead of "interface_residues",
- * or "hbond" instead of "hbonds", etc. This maps those aliases to the
- * canonical recipe IDs registered in cli-registry.ts.
- */
-function normalizeRecipeName(recipe: string): string {
-  const aliases: Record<string, string> = {
-    "interface": "all_interactions",
-    "interactions": "all_interactions",
-    "all_interactions": "all_interactions",
-    "hbond": "hbonds",
-    "h_bonds": "hbonds",
-    "h-bonds": "hbonds",
-    "hydrogen_bonds": "hbonds",
-    "salt_bridge": "salt_bridges",
-    "salt-bridges": "salt_bridges",
-    "saltbridge": "salt_bridges",
-    "hydrophobic": "hydrophobic_contacts",
-    "hydrophobics": "hydrophobic_contacts",
-    "binding_pocket": "binding_pocket",
-    "pocket": "binding_pocket",
-    "drug": "druggability",
-    "druggable": "druggability",
-    "ligand": "ligand_interactions",
-    "ligand_contacts": "ligand_interactions",
-    "disulfide": "disulfide_bonds",
-    "metal": "metal_coordination",
-    "aromatic": "aromatic_stacking",
-    "stacking": "aromatic_stacking",
-    "water": "water_bridges",
-    "water_bridged": "water_bridges",
-    "sas": "sasa",
-    "surface_area": "sasa",
-    "rama": "ramachandran",
-    "bfactor": "bfactor_stats",
-    "b_factor": "bfactor_stats",
-    "b-factor": "bfactor_stats",
-    "secondary_structure": "secondary_structure_simple",
-    "secstruct": "secondary_structure_simple",
-    "interface_residues": "interface_residues",
-    "interface_residue": "interface_residues",
-    "pockets": "detect_pockets",
-    "oligomer": "oligomer_analysis",
-    "surface": "surface_residues",
-    "validation": "structure_validation",
-    "protonation": "protonation_states",
-    "conformation": "conformational_changes",
-    "conformational": "conformational_changes",
-  };
-  const normalized = recipe.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return aliases[normalized] || recipe;
 }
 
 async function runRecipe(
@@ -320,14 +289,30 @@ export async function executeCommand(
           structures,
           cmd.preset
         );
+        // R105.2: Wait for components to be created after applyPreset.
+        // applyPreset is async but components may not be immediately available
+        // for color theme updates. Wait a short delay + animation frame.
+        await new Promise(r => setTimeout(r, 300));
+        if (typeof requestAnimationFrame !== "undefined") {
+          await new Promise(r => requestAnimationFrame(() => r(null)));
+        }
         return { ok: true, detail: `Applied preset: ${cmd.preset}` };
       }
 
       case "set_color_theme": {
         const structures = getStructures(plugin, cmd.structures);
-        const components = collectComponents(plugin, structures);
+        let components = collectComponents(plugin, structures);
+        // R105.2: If no components yet, wait and retry (they may still be
+        // loading after a recent set_representation)
+        if (components.length === 0) {
+          for (let i = 0; i < 3; i++) {
+            await new Promise(r => setTimeout(r, 300));
+            components = collectComponents(plugin, structures);
+            if (components.length > 0) break;
+          }
+        }
         if (components.length === 0)
-          return { ok: false, detail: "No components to color" };
+          return { ok: false, detail: "No components to color (structure may still be loading). Try again in a moment." };
         // Normalize common LLM-friendly aliases to Molstar's actual color theme names.
         // Without this, "chain" (commonly emitted by the LLM) is invalid and breaks
         // the representation, causing the structure to visually disappear.
