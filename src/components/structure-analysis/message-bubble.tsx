@@ -1123,14 +1123,19 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
   }, [images, showAll, sortByScore]);
   const hiddenCount = images.length - (showAll ? 0 : images.filter(img => img.best || (img.score == null) || img.score >= 3).length);
 
+  // Round 94: Track whether user has manually navigated (to unlock from best image)
+  const [userNavigated, setUserNavigated] = useState(false);
+
   // Round 63: Keyboard navigation — left/right arrows to navigate,
   // but only when the carousel container is focused or hovered.
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "ArrowLeft") {
       e.preventDefault();
+      setUserNavigated(true);
       setActiveIdx(i => Math.max(0, i - 1));
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
+      setUserNavigated(true);
       setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
     }
   }, [visibleImages.length]);
@@ -1138,7 +1143,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
   // Round 63: Download the current screenshot as a PNG file.
   const handleDownload = useCallback(() => {
     const bestIdx = visibleImages.findIndex(img => img.best);
-    const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
+    const currentIdx = (bestIdx >= 0 && !userNavigated) ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
     const img = visibleImages[currentIdx];
     if (!img) return;
     const a = document.createElement("a");
@@ -1151,18 +1156,18 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
     setTimeout(() => setDownloaded(false), 1500);
   }, [visibleImages, activeIdx]);
 
-  // Round 62: Auto-select the best image when VLM selection completes.
-  // Instead of using useEffect + setState (which triggers lint warning),
-  // we compute the effective index directly during render.
+  // Round 62/94: Auto-select the best image when VLM selection completes.
+  // But ONLY auto-navigate once — after that, the user can freely navigate.
   const bestIdx = visibleImages.findIndex(img => img.best);
-  // If there's a best image and the user hasn't manually navigated away,
-  // show the best image. Otherwise show the activeIdx.
-  const currentIdx = bestIdx >= 0 ? bestIdx : Math.min(activeIdx, visibleImages.length - 1);
+  // Auto-navigate to best only if user hasn't navigated manually
+  const currentIdx = (bestIdx >= 0 && !userNavigated)
+    ? bestIdx
+    : Math.min(activeIdx, visibleImages.length - 1);
   const currentImg = visibleImages[currentIdx];
   if (!currentImg) return null;
 
-  const goToPrev = () => setActiveIdx(i => Math.max(0, i - 1));
-  const goToNext = () => setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1));
+  const goToPrev = () => { setUserNavigated(true); setActiveIdx(i => Math.max(0, i - 1)); };
+  const goToNext = () => { setUserNavigated(true); setActiveIdx(i => Math.min(visibleImages.length - 1, i + 1)); };
 
   return (
     <div
@@ -1278,7 +1283,7 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
                 exit={{ opacity: 0, scale: 0.8 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
                 type="button"
-                onClick={() => setActiveIdx(idx)}
+                onClick={() => { setUserNavigated(true); setActiveIdx(idx); }}
                 className={`relative shrink-0 h-12 w-16 rounded overflow-hidden border-2 transition-colors ${
                   idx === currentIdx
                     ? "border-claude-accent opacity-100"

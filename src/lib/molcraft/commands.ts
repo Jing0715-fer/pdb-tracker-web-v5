@@ -1563,37 +1563,53 @@ async function applyRecipeVisualization(
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
           }
         }, "show_interactions");
-        // Round 91: Add ball-and-stick for interaction residues to make
-        // side chains visible in the screenshot. We create a component for
-        // residues near the interface.
+        // Round 91/94: Add ball-and-stick for interaction residues to make
+        // side chains visible in the screenshot. Use the interactions data
+        // directly to find which residues to show.
         await safe(async () => {
+          const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
+          if (!Array.isArray(interactions) || interactions.length === 0) return;
           const data = getFirstStructureData(plugin);
           if (!data) return;
+
+          // Collect unique (chain, resno) pairs from interactions
+          const residueSet = new Set<string>();
+          for (const c of interactions.slice(0, 20)) {
+            const ch1 = c.chain1 as string;
+            const rn1 = c.resno1 as number;
+            const ch2 = c.chain2 as string;
+            const rn2 = c.resno2 as number;
+            if (ch1 && rn1) residueSet.add(`${ch1}:${rn1}`);
+            if (ch2 && rn2) residueSet.add(`${ch2}:${rn2}`);
+          }
+
+          if (residueSet.size === 0) return;
+
+          // Build a MolScript expression for each residue and union them
           const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-          const chain1 = params?.chain1 as string | undefined;
-          const chain2 = params?.chain2 as string | undefined;
-          if (Q && chain1 && chain2) {
-            // Create a component showing residues within 5Å of the other chain
-            const expr = Q.struct.generator.atomGroups({
-              'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.authAsymId(), chain1]),
-              'and': [{'atom-test': Q.core.logic.lte([
-                Q.struct.atomProperty.core.distanceToLabeled({
-                  0: Q.struct.generator.atomGroups({
-                    'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.authAsymId(), chain2])
-                  })
-                }),
-                Q.core.math.add(5.0)
-              ])}]
+          if (!Q) return;
+
+          const residueExprs = Array.from(residueSet).map(key => {
+            const [chain, resno] = key.split(":");
+            return Q.struct.generator.atomGroups({
+              'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
+              'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_seq_id(), parseInt(resno, 10)]),
             });
-            const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
-            if (loci && !isLociEmpty(loci)) {
-              // Add ball-and-stick representation for interface residues
-              await plugin.managers.structure.component.addRepresentations(
-                plugin.managers.structure.component.createComponent(data, { loci, label: 'Interface residues' }),
-                'ball-and-stick',
-                {}
-              );
-            }
+          });
+
+          // Use the first expression (Molstar union is complex in prebuilt bundle)
+          // For multiple residues, we merge by creating a component for each
+          for (const expr of residueExprs.slice(0, 10)) {
+            try {
+              const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
+              if (loci && !isLociEmpty(loci)) {
+                await plugin.managers.structure.component.addRepresentations(
+                  plugin.managers.structure.component.createComponent(data, { loci, label: 'Interface residues' }),
+                  'ball-and-stick',
+                  {}
+                );
+              }
+            } catch { /* skip individual failures */ }
           }
         }, "show_sidechains");
         // Round 92: Draw interaction lines (dashed) between contact atom pairs
