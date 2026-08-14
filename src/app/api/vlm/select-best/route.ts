@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 4. 关键残基（如催化残基、口袋残基）是否在视野中可见
 
 请以JSON格式回复（不要其他内容）：
-{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张，引用具体残基名称>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>"}
+{"bestIndex": <0-based索引>, "reason": "<简短中文说明为什么选择这张，引用具体残基名称>", "scores": [<截图1分数>, <截图2分数>, ...], "confidence": "<high|medium|low>", "comments": ["<截图1的15-30字中文评语>", "<截图2的评语>", ...]}
 
 每张截图的分数为1-10的整数，10分最佳。评分标准：
 - 结构特征清晰可见程度 (0-4分)
@@ -74,7 +74,9 @@ export async function POST(req: NextRequest) {
 confidence表示你对最佳选择的确信程度：
 - high: 最佳截图明显优于其他（分数差距 ≥3）
 - medium: 最佳截图较好但差距不大（分数差距 1-2）
-- low: 截图质量相近，难以区分（分数差距 0）`;
+- low: 截图质量相近，难以区分（分数差距 0）
+
+comments数组必须为每张截图提供一条15-30字的中文评语，描述该截图所展示的具体结构特征（引用残基名称/链/配体），不要泛泛而谈。`;
 
     const userPrompt = prompt || defaultPrompt;
 
@@ -108,11 +110,12 @@ confidence表示你对最佳选择的确信程度：
 
     const vlmResponse = response.choices?.[0]?.message?.content || '';
 
-    // Parse the VLM response to extract bestIndex + scores + confidence
+    // Parse the VLM response to extract bestIndex + scores + confidence + comments
     let bestIndex = 0;
     let commentary = vlmResponse;
     let scores: number[] = [];
     let confidence: 'high' | 'medium' | 'low' = 'medium';
+    let comments: string[] = [];
 
     // Try to extract JSON from the response
     const jsonMatch = vlmResponse.match(/\{[\s\S]*?"bestIndex"[\s\S]*?\}/);
@@ -139,6 +142,13 @@ confidence表示你对最佳选择的确信程度：
             confidence = c;
           }
         }
+        // Round 95: Extract per-image comments array
+        if (Array.isArray(parsed.comments)) {
+          comments = parsed.comments
+            .map((c: unknown) => typeof c === 'string' ? c : String(c ?? ''))
+            .filter((c: string) => c.length > 0)
+            .slice(0, screenshots.length);
+        }
       } catch {
         // JSON parse failed — use the raw response as commentary
       }
@@ -158,6 +168,7 @@ confidence表示你对最佳选择的确信程度：
       commentary,
       scores,
       confidence,
+      comments,
       recipe,
       vlmResponse,
     });

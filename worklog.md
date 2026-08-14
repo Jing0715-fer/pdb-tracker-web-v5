@@ -14027,3 +14027,52 @@ Next Steps on feat/tool-calling-agent:
 2. Add permission request UI in chat
 3. Add background task monitoring UI
 4. Integrate session manager with ChatSession store
+
+---
+Task ID: round-95-structure-list-analysis-display-sidechains-vlm-comments
+Agent: main
+Task: Fix structure list not loading, analysis results not showing, side chains not visible, VLM comments only on best, focus on chain pair interface, one-letter residue labels.
+
+Bug Fixes (applied to both main and feat/tool-calling-agent):
+
+### 1. Structure list not loading after chat PDB load (chat-tab.tsx)
+- **Root cause**: `executeCommand(viewer, {type: "load_pdb"})` loaded the structure in Molstar but never called `addStructure()` to update the Zustand store → structure list UI never updated
+- **Fix**: After successful `load_pdb`, call `addStructure({ id: pdbId, label: pdbId, format: "pdb" })` to add to the store
+- Applied in both branches (last command and non-last command)
+
+### 2. Side chain display not working (chat-tab.tsx + commands.ts)
+- **Root cause**: Complex MolScript `distanceToLabeled` query failed silently in prebuilt bundle
+- **Fix**: Replaced with direct approach — extract (chain, resno) pairs from interactions data, create ball-and-stick component for each residue using `auth_asym_id` + `label_seq_id`
+- **One-letter labels**: Added THREE_TO_ONE mapping (ALA→A, ARG→R, etc.) and `formatLabel()` function. Labels now show "C145" (Cys145) instead of "CYS145"
+
+### 3. VLM comments only on best image (chat-tab.tsx + vlm/select-best/route.ts)
+- **Root cause**: VLM API only returned one `commentary` string, stored only on `bestIndex` image
+- **Fix**:
+  - VLM prompt: added `comments` array to JSON schema — per-image Chinese commentary (15-30 chars each)
+  - API response: returns `comments: string[]` alongside `commentary`
+  - chat-tab: stores `vlmData.comments[i]` on each image, falls back to `commentary` for best if comments missing
+  - Now ALL screenshots show VLM commentary, not just the best one
+
+### 4. Screenshot focus on chain pair interface (commands.ts)
+- **Root cause**: Camera focused on `chain1` only, not the interface between chain1 and chain2
+- **Fix**: For cross-chain analysis (chain1 ≠ chain2), focus on all atoms of chain1 (which includes interface residues near chain2) with minRadius 25. For same-chain, focus on the chain with minRadius 20.
+
+### 5. vizParams applied to all angles (chat-tab.tsx)
+- **Root cause**: vizParams and labels only passed on `ai === 0` (first angle), so subsequent angles didn't get visualization/labels
+- **Fix**: Removed the `ai === 0` condition — all angles now get the same vizParams and labels
+
+### Lint
+- commands.ts: 0 errors ✅
+- chat-tab.tsx: 0 errors, 1 pre-existing warning ✅
+- vlm/select-best/route.ts: 0 errors ✅
+
+### Server
+- Page loads: HTTP 200 ✅
+
+Stage Summary:
+- ✅ Structure list: addStructure called after load_pdb
+- ✅ Side chains: ball-and-stick from interactions data, one-letter labels
+- ✅ VLM comments: per-image comments array, all images show commentary
+- ✅ Interface focus: camera on chain1 atoms (includes interface)
+- ✅ All angles get vizParams: no more ai===0 restriction
+- ✅ All lint checks pass
