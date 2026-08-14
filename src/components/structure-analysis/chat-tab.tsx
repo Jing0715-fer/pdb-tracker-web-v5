@@ -53,6 +53,7 @@ import { BackgroundTasksPanel } from "./background-tasks-panel";
 import { useAgentLoop, type AgentProgressEvent } from "@/lib/molcraft/use-agent-loop";
 import { registerDomainTools, unregisterDomainTools } from "@/lib/molcraft/domain-tools";
 import { normalizeRecipeName } from "@/lib/molcraft/recipe-aliases";
+import { clearVlmCache } from "@/lib/molcraft/vlm-client";
 import { selectBestWithRetry, applyVlmResultToImages, needsRecapture, buildRecaptureInstruction, type VlmResult } from "@/lib/molcraft/vlm-client";
 import { sessionManager } from "@/lib/molcraft/session-manager";
 import { Wrench, Zap } from "lucide-react";
@@ -268,6 +269,28 @@ function getRecipeLabel(recipeId: string): string {
 }
 
 
+/** R109.8: Convert agent tool name + arguments to a command for retry */
+function toolCallToCommandForRetry(name: string, args: Record<string, unknown>): Record<string, unknown> | null {
+  // Reuse the same mapping logic from use-agent-loop.ts
+  switch (name) {
+    case 'pdb_load': return { type: 'load_pdb', id: args.id };
+    case 'pdb_analyze': {
+      const params: Record<string, unknown> = { chain1: args.chain1, chain2: args.chain2 };
+      if (args.ligandCompId) params.ligandCompId = args.ligandCompId;
+      if (args.radius) params.radius = args.radius;
+      return { type: 'analyze_run', pdbId: '', recipe: args.recipe, params };
+    }
+    case 'set_representation': return { type: 'set_representation', preset: args.preset, structures: 'all' };
+    case 'set_color_theme': return { type: 'set_color_theme', theme: args.theme, structures: 'all' };
+    case 'focus_ligand': return { type: 'focus_ligand', compId: args.compId };
+    case 'focus_residue': return { type: 'focus_residue', chain: args.chain, resno: args.resno };
+    case 'capture_multi_angle': return { type: 'capture_multi_angle', recipe: args.recipe, angles: args.angles || ['front', 'side', 'top'] };
+    case 'measure_distance': return { type: 'measure_distance', a: { chain: args.a_chain, resno: args.a_resno, atom: args.a_atom || 'CA' }, b: { chain: args.b_chain, resno: args.b_resno, atom: args.b_atom || 'CA' } };
+    case 'reset_camera': return { type: 'reset_camera' };
+    default: return null;
+  }
+}
+
 export function ChatTab() {
   const [input, setInput] = useState("");
   const messages = useAppStore((s) => s.chatMessages);
@@ -426,6 +449,34 @@ export function ChatTab() {
     window.addEventListener(REEXEC_EVENT, handler);
     return () => window.removeEventListener(REEXEC_EVENT, handler);
   }, [viewer, toast, logCommand]);
+
+  // R109.8: Listen for agent tool retry events from MessageBubble
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { name: string; arguments: Record<string, unknown> };
+      if (!detail || !viewer) return;
+      // Re-execute the failed agent tool call
+      try {
+        const { executeCommand } = await import("@/lib/molcraft/commands");
+        const cmd = toolCallToCommandForRetry(detail.name, detail.arguments);
+        if (!cmd) {
+          toast(`Cannot retry: unknown tool ${detail.name}`, "error");
+          return;
+        }
+        const result = await executeCommand(viewer, cmd as any);
+        toast(
+          result.ok
+            ? `Retry succeeded: ${detail.name}`
+            : `Retry failed: ${result.detail || "unknown error"}`,
+          result.ok ? "success" : "error"
+        );
+      } catch (err) {
+        toast(`Retry error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    };
+    window.addEventListener("chat-retry-agent-tool", handler);
+    return () => window.removeEventListener("chat-retry-agent-tool", handler);
+  }, [viewer, toast]);
 
   // Abort any in-flight SSE stream on unmount
   useEffect(() => {
@@ -1524,6 +1575,9 @@ export function ChatTab() {
                       }
                       if (pdbId) {
                         addStructure({ id: pdbId, label: pdbId, format: "pdb" });
+                        // R109.4: Clear VLM cache when a new structure is loaded
+                        // (old screenshots are irrelevant for the new structure)
+                        clearVlmCache();
                       }
                       return {};
                     });
@@ -1649,6 +1703,10 @@ export function ChatTab() {
             // can use it (or fall back to z.ai for tool calling).
             provider: chatProvider,
             onProgress,
+            // R109.3: Pass agent settings from user settings panel
+            autoCapture,
+            vlmEnabled,
+            maxRecaptures,
           });
           if (!result.ok && result.error) {
             updateMessage(pendingId, {

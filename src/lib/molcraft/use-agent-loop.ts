@@ -85,6 +85,10 @@ export interface UseAgentLoopOptions {
   }) => void;
   /** Signal to abort the loop */
   signal?: AbortSignal;
+  /** R109.3: Agent settings (from user settings panel) */
+  autoCapture?: boolean; // default true — auto-capture after pdb_analyze
+  vlmEnabled?: boolean;  // default true — run VLM on captured screenshots
+  maxRecaptures?: number; // default 2 — max recapture attempts
 }
 
 export interface AgentLoopResult {
@@ -317,7 +321,7 @@ export function useAgentLoop() {
       let lastAnalysisData: Record<string, unknown> | undefined = undefined;
       // R100.2: Track recapture count per recipe to prevent infinite loops
       const recaptureCount = new Map<string, number>();
-      const MAX_RECAPTURES = 2;
+      const MAX_RECAPTURES = options.maxRecaptures ?? 2; // R109.3: from settings
 
       // Build the initial message array (include history + new user message)
       const messages: AgentMessage[] = [
@@ -568,12 +572,13 @@ export function useAgentLoop() {
                 // R107.2: Auto-capture screenshots after pdb_analyze if the
                 // recipe is visualizable and the LLM didn't explicitly call
                 // capture_multi_angle in this round's tool calls.
+                // R109.3: Respect autoCapture setting from user settings
                 const recipeName = (call.arguments.recipe as string) || '';
                 const visualizable = getVisualizableRecipes().has(normalizeRecipeName(recipeName));
                 const hasCaptureCall = toolCalls.some((tc: AgentToolCall) =>
                   tc.name === 'capture_multi_angle' || tc.name === 'recapture_screenshot'
                 );
-                if (visualizable && !hasCaptureCall) {
+                if (visualizable && !hasCaptureCall && (options.autoCapture ?? true)) {
                   // Inject a synthetic capture_multi_angle tool call
                   const autoCaptureCall: AgentToolCall = {
                     id: `auto-capture-${Date.now()}`,
@@ -600,8 +605,8 @@ export function useAgentLoop() {
                       allToolResults.push(autoToolResult);
                       options.onProgress?.({ type: 'tool_result', toolResult: autoToolResult });
 
-                      // Run VLM on auto-captured screenshots
-                      if (autoResult.ok) {
+                      // Run VLM on auto-captured screenshots (R109.3: respect vlmEnabled)
+                      if (autoResult.ok && (options.vlmEnabled ?? true)) {
                         const autoScreenshots = (autoResult as any).data?.screenshots || [];
                         if (autoScreenshots.length > 0) {
                           try {

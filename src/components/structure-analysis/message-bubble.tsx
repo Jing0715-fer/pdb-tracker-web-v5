@@ -628,7 +628,17 @@ export function MessageBubble({
                           {/* Round 28: Prominent retry button for FAILED commands (always visible, not just hover) */}
                           {hasError && !sending && (
                             <button
-                              onClick={() => dispatchReexec(c as unknown as LlmCommand)}
+                              onClick={() => {
+                                // R109.8: For agent_tool_call, dispatch a retry event
+                                // with the tool name + arguments
+                                if (c.type === "agent_tool_call") {
+                                  window.dispatchEvent(new CustomEvent("chat-retry-agent-tool", {
+                                    detail: { name: c.name, arguments: c.arguments },
+                                  }));
+                                } else {
+                                  dispatchReexec(c as unknown as LlmCommand);
+                                }
+                              }}
                               className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[7px] font-medium text-destructive hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
                               title="Retry this command"
                             >
