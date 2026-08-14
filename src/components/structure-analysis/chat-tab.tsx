@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen, Settings,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen, Settings, GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,6 +51,7 @@ import { MessageBubble, analyzeSentiment,
 import { PermissionRequestCard } from "./permission-request-card";
 import { BackgroundTasksPanel } from "./background-tasks-panel";
 import { useAgentLoop, type AgentProgressEvent } from "@/lib/molcraft/use-agent-loop";
+import { registerDomainTools, unregisterDomainTools } from "@/lib/molcraft/domain-tools";
 import { sessionManager } from "@/lib/molcraft/session-manager";
 import { Wrench, Zap } from "lucide-react";
 
@@ -283,6 +284,16 @@ export function ChatTab() {
   const [agentMode, setAgentMode] = useState(false);
   const [agentProgress, setAgentProgress] = useState<string | null>(null);
   const agentLoop = useAgentLoop();
+
+  // Round 97: Register all domain tools on mount so the toolRegistry is
+  // populated for the agent loop. The executor wraps executeCommand.
+  useEffect(() => {
+    registerDomainTools(async (viewer, cmd) => {
+      // @ts-expect-error - executeCommand accepts a specific LlmCommand type
+      return executeCommand(viewer, cmd);
+    });
+    return () => unregisterDomainTools();
+  }, []);
   // Round 33: Chat session management
   const chatSessions = useAppStore((s) => s.chatSessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -293,6 +304,7 @@ export function ChatTab() {
   const toggleChatSessionPin = useAppStore((s) => s.toggleChatSessionPin);
   const setChatSessionTags = useAppStore((s) => s.setChatSessionTags);
   const saveCurrentSession = useAppStore((s) => s.saveCurrentSession);
+  const forkCurrentSession = useAppStore((s) => s.forkCurrentSession);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
 
@@ -2904,6 +2916,20 @@ export function ChatTab() {
             >
               <Plus className="h-2.5 w-2.5" />
               New
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1.5 text-[8px] gap-0.5 text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 disabled:opacity-30"
+              disabled={!activeSessionId || messages.length === 0}
+              title="Fork current session (creates a copy of the conversation for branching exploration)"
+              onClick={() => {
+                const newId = forkCurrentSession();
+                toast(`已分叉当前会话 (${newId.slice(0, 12)}…)`, "success");
+              }}
+            >
+              <GitBranch className="h-2.5 w-2.5" />
+              Fork
             </Button>
           </div>
           {/* Round 46: Session search filter */}
