@@ -89,7 +89,7 @@ export interface AgentLoopResult {
   error?: string;
 }
 
-'/** Map agent tool calls to LlmCommand objects expected by executeCommand.
+/** Map agent tool calls to LlmCommand objects expected by executeCommand.
  * Round 97: Expanded to support all 36 tools. */
 function toolCallToCommand(name: string, args: Record<string, unknown>): Record<string, unknown> | null {
   switch (name) {
