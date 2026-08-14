@@ -265,6 +265,7 @@ export function ChatTab() {
   const messages = useAppStore((s) => s.chatMessages);
   const addMessage = useAppStore((s) => s.addChatMessage);
   const updateMessage = useAppStore((s) => s.updateChatMessage);
+  const addStructure = useAppStore((s) => s.addStructure);
   const clearChat = useAppStore((s) => s.clearChat);
   const chatProvider = useAppStore((s) => s.chatProvider);
   const setChatProvider = useAppStore((s) => s.setChatProvider);
@@ -1657,6 +1658,8 @@ export function ChatTab() {
                           const vizParams: Record<string, unknown> = {};
                           // Round 74: Extract residue labels for screenshot annotation
                           const residueLabels: Array<{ text: string; chain?: string; resno?: number }> = [];
+                          const THREE_TO_ONE: Record<string, string> = { ALA:"A",ARG:"R",ASN:"N",ASP:"D",CYS:"C",GLN:"Q",GLU:"E",GLY:"G",HIS:"H",ILE:"I",LEU:"L",LYS:"K",MET:"M",PHE:"F",PRO:"P",SER:"S",THR:"T",TRP:"W",TYR:"Y",VAL:"V" };
+                          const formatLabel = (resname: string, resno: number) => { const one = THREE_TO_ONE[resname] || "?"; return `${one}${resno}`; };
                           if (analysisData) {
                             // Extract ligand compId for pocket-related recipes
                             // Round 77: binding_pocket recipe outputs 'ligand' directly,
@@ -1687,7 +1690,7 @@ export function ChatTab() {
                                 const resname = r.resname as string | undefined;
                                 if (chain && resno && resname) {
                                   residueLabels.push({
-                                    text: `${resname}${resno}`,
+                                    text: formatLabel(resname, resno),
                                     chain,
                                     resno,
                                   });
@@ -1709,14 +1712,14 @@ export function ChatTab() {
                                   const key = `${dChain}:${dResno}`;
                                   if (!seen.has(key)) {
                                     seen.add(key);
-                                    residueLabels.push({ text: `${dResname}${dResno}`, chain: dChain, resno: dResno });
+                                    residueLabels.push({ text: formatLabel(dResname, dResno), chain: dChain, resno: dResno });
                                   }
                                 }
                                 if (aChain && aResno && aResname) {
                                   const key = `${aChain}:${aResno}`;
                                   if (!seen.has(key)) {
                                     seen.add(key);
-                                    residueLabels.push({ text: `${aResname}${aResno}`, chain: aChain, resno: aResno });
+                                    residueLabels.push({ text: formatLabel(aResname, aResno), chain: aChain, resno: aResno });
                                   }
                                 }
                               }
@@ -1739,8 +1742,8 @@ export function ChatTab() {
                                 angles: [angle as "front" | "side" | "top" | "back"],
                                 width: parseInt(screenshotSize.split("x")[0], 10) || 1200,
                                 height: parseInt(screenshotSize.split("x")[1], 10) || 800,
-                                vizParams: ai === 0 ? (Object.keys(vizParams).length > 0 ? vizParams : undefined) : undefined,
-                                labels: ai === 0 ? (residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined) : undefined,
+                                vizParams: Object.keys(vizParams).length > 0 ? vizParams : undefined,
+                                labels: residueLabels.length > 0 ? residueLabels.slice(0, maxLabels) : undefined,
                                 labelFontSize,
                               });
                               if (angleResult.ok && angleResult.data) {
@@ -1788,7 +1791,7 @@ export function ChatTab() {
                             if (data.screenshots.length > 1) {
                               // Don't await — fire and forget
                               (async () => {
-                                const fetchVlm = async (): Promise<{ bestIndex: number; commentary: string; scores?: number[]; confidence?: "high" | "medium" | "low" } | null> => {
+                                const fetchVlm = async (): Promise<{ bestIndex: number; commentary: string; scores?: number[]; confidence?: "high" | "medium" | "low"; comments?: string[] } | null> => {
                                   try {
                                     const vlmResponse = await fetch("/api/vlm/select-best", {
                                       method: "POST",
@@ -1802,7 +1805,7 @@ export function ChatTab() {
                                       }),
                                     });
                                     if (vlmResponse.ok) {
-                                      return await vlmResponse.json() as { bestIndex: number; commentary: string; scores?: number[]; confidence?: "high" | "medium" | "low" };
+                                      return await vlmResponse.json() as { bestIndex: number; commentary: string; scores?: number[]; confidence?: "high" | "medium" | "low"; comments?: string[] };
                                     }
                                     return null;
                                   } catch {
@@ -1829,7 +1832,7 @@ export function ChatTab() {
                                     const updatedRecipeImages = recipeImages.map((img, i) => ({
                                       ...img,
                                       best: i === vlmData!.bestIndex,
-                                      vlmComment: i === vlmData!.bestIndex ? vlmData!.commentary : undefined,
+                                      vlmComment: vlmData!.comments && i < vlmData!.comments.length ? vlmData!.comments[i] : (i === vlmData!.bestIndex ? vlmData!.commentary : undefined),
                                       // Round 64: Store VLM quality score (1-10)
                                       score: vlmData!.scores && i < vlmData!.scores.length ? vlmData!.scores[i] : undefined,
                                       // Round 65: Store VLM confidence level
@@ -1858,8 +1861,12 @@ export function ChatTab() {
                   }
                   // Round 26: After load_pdb, wait 2s for structure to fully load
                   // before executing subsequent commands (analyze_run, focus_ligand, etc.)
-                  if (cmd.type === "load_pdb" && result.ok && ci < commands.length - 1) {
-                    await new Promise(r => setTimeout(r, 2000));
+                  if (cmd.type === "load_pdb" && result.ok) {
+                    try {
+                      const pdbId = (cmd as { id?: string }).id?.toUpperCase() || "";
+                      addStructure({ id: pdbId, label: pdbId, format: "pdb" });
+                    } catch { /* best-effort */ }
+                    if (ci < commands.length - 1) await new Promise(r => setTimeout(r, 2000));
                   }
                 } catch (err) {
                   (allCommands[cmdIndex] as Record<string, unknown>).status = "error";
