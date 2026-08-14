@@ -14248,3 +14248,79 @@ Task: Continue developing feat/tool-calling-agent branch — test full agent loo
 2. Add visual indicators for tool execution progress (spinner on tool cards)
 3. Add session replay UI (using sessionManager.replay)
 4. Consider exposing the tool list in a "Tools" panel for user reference
+
+---
+Task ID: round-98-vlm-screenshot-pipeline-recapture-feedback
+Agent: main
+Task: Continue developing feat/tool-calling-agent — improve VLM understanding, guide agent to recapture when screenshots don't meet requirements, independent screenshots per analysis, interaction screenshots must show side chains and hydrogen bond lines, verify and propose next round improvements.
+
+### Audit Findings (from subagent)
+Critical gaps identified in the agent loop screenshot pipeline:
+- G1: Agent loop capture_multi_angle doesn't pass vizParams (no ligand focus, no side chains, no H-bond lines)
+- G2: Agent loop drops screenshots — they're in execResult.data.screenshots but only analysisResult is forwarded
+- G3: Agent loop never invokes VLM
+- G4: Agent loop never populates analysisImages[] — screenshots invisible to user
+- G6: Side chains + H-bond lines only work for all_interactions recipe (schema mismatch for hbonds/salt_bridges)
+- G7: label_seq_id vs auth_seq_id inconsistency in side-chain MolScript
+- G8: VLM cannot reject bad screenshots or trigger recapture
+- G9: VLM prompt doesn't verify side chains / H-bond lines visible
+
+### Changes Made (Round 98)
+
+#### 1. Agent Loop Screenshot Pipeline (R98.1-R98.5)
+- Extended capture_multi_angle tool schema to accept vizParams: interactions, labels, ligandCompId, chain1/chain2, labelFontSize, maxLabels
+- Updated toolCallToCommand + domain-tools.ts executors to forward vizParams
+- Forward data.screenshots in agent tool result (was dropped)
+- chat-tab.tsx tool_result handler: extract screenshots, store as analysisImages, run VLM in background
+- Fixed addStructure in agent mode (reads pdbId from command arguments)
+- Updated agent system prompt: ALWAYS call capture_multi_angle after pdb_analyze
+
+#### 2. Interaction Schema Normalization (R98.6)
+- New normalizeInteractions() in vlm-client.ts: converts all recipe schemas (all_interactions, hbonds donor/acceptor, salt_bridges pos/neg, hydrophobic_contacts) to unified {chain1, resno1, atom1, chain2, resno2, atom2}
+- New extractResidueLabels(): one-letter labels from any recipe
+- Agent loop auto-injects interactions + labels from last pdb_analyze into capture_multi_angle
+
+#### 3. Side Chain Identifier Fix (R98.7)
+- Fixed label_seq_id → auth_seq_id in side-chain MolScript expression (commands.ts:1596)
+
+#### 4. VLM Quality Feedback Loop (R98.9, R98.10)
+- Extended VLM prompt to verify: side chains visible (ball-and-stick), H-bond lines visible (dashed), key residues labeled
+- VLM response now includes: quality (acceptable/degraded/unacceptable), issues[], recaptureHints
+- New recapture_screenshot tool for VLM feedback loop
+- Fixed JSON regex: greedy /\{[\s\S]*\}/ instead of non-greedy (was truncating nested objects)
+
+#### 5. Shared VLM Client (R98.14)
+- New src/lib/molcraft/vlm-client.ts with: selectBestScreenshot, selectBestWithRetry, applyVlmResultToImages, needsRecapture, buildRecaptureInstruction, normalizeInteractions, extractResidueLabels
+
+### Verification
+
+#### API Tests (curl)
+- ✅ Agent round 1: "Load 1CBS and analyze" → returns pdb_load tool call
+- ✅ Agent round 2: After pdb_load result → returns pdb_analyze tool call
+- ✅ Agent round 3: After pdb_analyze result → returns capture_multi_angle tool call (system prompt working!)
+- ✅ VLM with bad screenshots: quality='unacceptable', issues=['黑屏/纯色背景...', '关键元素缺失...'], recaptureHints={angles, focus, zoom}
+- ✅ VLM with good screenshots: quality='acceptable', scores=[8,6], comments with per-image analysis
+
+#### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- feat/tool-calling-agent: c6aa4b6 (Round 98 complete)
+
+### Next Round Recommendations (Round 99)
+
+Based on verification, the following improvements are recommended:
+
+1. **End-to-end browser test**: The API tests confirm the tool call sequence works, but a full browser test (load PDB → analyze → capture → VLM → display images) is needed to verify the UI renders screenshots correctly in agent mode.
+
+2. **VLM recapture feedback to LLM**: Currently when VLM quality='unacceptable', the recapture instruction is logged but not fed back to the LLM. The agent loop should append the VLM feedback to the tool_result message so the LLM sees it and calls recapture_screenshot.
+
+3. **Real black-screen detection (R98.11)**: Replace the size-based checkIfBlackScreen heuristic with actual canvas pixel decoding.
+
+4. **Selective measurement cleanup (R98.13)**: Replace measurement.clear() with targeted cleanup that only removes labels/lines added by this capture (not user-added measurements).
+
+5. **Agent loop dispatch through toolRegistry (R98.12)**: Eliminate the duplicate toolCallToCommand dispatch — make the agent loop call toolRegistry.execute() instead.
+
+6. **Tool execution progress indicators**: Add spinner/progress bars on tool call cards in the chat UI so users can see which tools are running.
+
+7. **VLM prompt tuning**: The VLM sometimes omits quality/issues/recaptureHints fields when screenshots are acceptable. Consider making these fields always required in the JSON schema.
