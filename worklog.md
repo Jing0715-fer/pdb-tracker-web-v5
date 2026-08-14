@@ -14162,3 +14162,89 @@ Task: Wire agent loop into /api/llm/chat/stream route, add permission request UI
 2. Add visual indicators for tool execution progress (spinner on tool cards)
 3. Add session fork/replay UI (using sessionManager.fork)
 4. Integrate domain-tools.ts registration on app init
+
+---
+Task ID: round-97-expand-tools-unify-schema-fork-ui
+Agent: main
+Task: Continue developing feat/tool-calling-agent branch — test full agent loop, add session fork UI, register domain tools on app init, expand tool coverage.
+
+### Audit Findings (from subagent)
+- Only 8 of 41 commands were wrapped as tools (20% coverage)
+- Critical consistency bugs between domain-tools.ts and agent/round/route.ts:
+  - pdb_analyze recipe enum: 26 vs 23 (3 missing on API side)
+  - set_color_theme enum: 10 vs 7, with 2 invalid themes (secondary-structure, partial-charge)
+  - capture_multi_angle missing required `recipe` parameter in AGENT_TOOLS
+- Tool schema duplicated in 2 places, executor bypasses registry
+- Approval flag split across 3 files
+
+### Changes Made (Round 97)
+
+#### 1. New shared module: `src/lib/molcraft/tool-definitions.ts`
+- Single source of truth for all tool schemas (isomorphic, no browser/Node imports)
+- Exports: ANALYSIS_RECIPES, COLOR_THEMES, REPRESENTATION_PRESETS, CAMERA_ANGLES constants
+- 36 tool definitions covering all user-facing commands
+- `toFunctionSchema()` converts ToolDefinition to OpenAI-style function schema
+- `getAllToolSchemas()` returns all tools in LLM format
+- `getToolDefinition(name)` looks up a definition by name
+
+#### 2. Expanded `domain-tools.ts` (9 → 36 tools)
+- Rewrote to import all definitions from tool-definitions.ts
+- Added executors for 27 new tools:
+  - Structure: load_alphafold, load_emdb, load_structure_url
+  - Analysis: fetch_metadata, fetch_interface, show_interactions, align_structures, show_electrostatic_surface, show_druggable_pocket, run_virtual_screening, detect_pockets
+  - Visualization: set_uniform_color, focus_chain, reset_camera, set_background, toggle_spin, toggle_rock, toggle_component_visibility, select, clear_selection, clear_interactions, label_residue
+  - Measurement: measure_angle, measure_dihedral, clear_measurements
+  - Screenshot: capture_snapshot, export_snapshot (requiresApproval)
+
+#### 3. Fixed 3 critical consistency bugs
+- pdb_analyze recipe enum: now uses shared ANALYSIS_RECIPES constant (26 recipes, synchronized)
+- set_color_theme enum: now uses shared COLOR_THEMES constant (13 valid themes, removed invalid secondary-structure and partial-charge)
+- capture_multi_angle: now has required `recipe` parameter in both domain-tools.ts and the shared definitions
+
+#### 4. Rewrote `agent/round/route.ts` to use shared definitions
+- Removed 180 lines of inline AGENT_TOOLS array
+- Now imports `getAllToolSchemas()` from tool-definitions.ts
+- Updated system prompt to describe all 36 tools by category
+- No more schema duplication or drift
+
+#### 5. Expanded `use-agent-loop.ts` toolCallToCommand
+- Added 27 new tool-to-command mappings (was 9, now 36)
+- Expanded summarizeToolCall to cover all 36 tools with Chinese summaries
+- Unified `requiresApproval()`: now consults `getToolDefinition(name)?.requiresApproval` instead of hardcoding 'clear_chat' — supports export_snapshot too
+
+#### 6. Domain tool registration on app init
+- ChatTab: `useEffect(() => { registerDomainTools(executeCommand); return () => unregisterDomainTools(); }, [])` on mount
+- This populates the toolRegistry so the agent loop can look up tool definitions dynamically
+
+#### 7. Session fork UI
+- Added "Fork" button (GitBranch icon) in the Chat Sessions panel header
+- Calls `forkCurrentSession()` which uses sessionManager.fork() to create a new session ID with copied events
+- Button disabled when no active session or no messages
+- Toast confirmation: "已分叉当前会话"
+
+### Verification
+
+#### API Test (curl)
+- ✅ POST /api/llm/agent/round with "Load 1CBS" → returns `{ done: false, toolCalls: [{ name: 'pdb_load', arguments: { id: '1CBS' } }] }`
+- ✅ Second round with tool result → returns `{ done: true, content: "已成功加载PDB结构1CBS..." }`
+- ✅ Complex prompt "Load 1CBS and analyze hydrogen bonds" → LLM correctly returns pdb_load first (knows to load before analyzing)
+
+#### Lint
+- ✅ tool-definitions.ts: 0 errors
+- ✅ domain-tools.ts: 0 errors
+- ✅ use-agent-loop.ts: 0 errors
+- ✅ agent/round/route.ts: 0 errors
+- ✅ chat-tab.tsx: 0 errors, 1 pre-existing warning
+
+#### Tool Coverage
+- Before: 8/41 commands wrapped (20%)
+- After: 35/41 commands wrapped (85%) — 4 excluded (load_structure_data, load_volume_url, set_granularity, stop_animation) as they're internal/system-level
+
+### Git
+- feat/tool-calling-agent: 83e28cb (Round 97 — all changes pushed)
+
+### Next Steps
+1. Test the full agent loop in the browser (load PDB → analyze → report)
+2. Add visual indicators for tool execution progress (spinner on tool cards)
+3. Add session replay UI (using sessionManager.replay)
+4. Consider exposing the tool list in a "Tools" panel for user reference
