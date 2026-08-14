@@ -14788,3 +14788,50 @@ Task: Continue developing based on Round 107 worklog recommendations. Implement 
 7. **Sequence viewer: nearby interactions**: When a residue is clicked, show nearby interactions from the last analysis (if available).
 
 8. **Error recovery improvements**: When a tool fails, show a retry button in the agent mode UI (currently only legacy path has retry).
+
+---
+Task ID: round-109-wire-settings-vlm-cache-invalidation-agent-retry
+Agent: main
+Task: Continue developing based on Round 108 worklog recommendations. Wire agent settings to agent loop, VLM cache invalidation, agent retry button. Run QA and E2E tests. Commit and push to main.
+
+### R109.3: Wire Agent Settings to Agent Loop
+- use-agent-loop.ts: autoCapture, vlmEnabled, maxRecaptures in UseAgentLoopOptions
+- MAX_RECAPTURES reads from settings (default 2)
+- Auto-capture and VLM respect settings
+- chat-tab.tsx: Passes settings to agentLoop.run
+
+### R109.4: VLM Cache Invalidation
+- clearVlmCache() called when pdb_load succeeds in agent mode
+
+### R109.8: Retry Button for Failed Agent Tool Calls
+- message-bubble.tsx: Retry button handles agent_tool_call type
+- chat-tab.tsx: Event listener for 'chat-retry-agent-tool'
+- toolCallToCommandForRetry() converts tool name+args to command
+
+### E2E Test Results
+- Full agent loop (4 rounds): comprehensive final answer ✓
+  - Structure, ligand, residues, functional insight, screenshot quality
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- main branch: 68bcbe7 (Round 109 complete, pushed to remote)
+
+### Next Round Recommendations (Round 110)
+
+1. **Browser E2E test with loaded structure**: Still need to verify screenshots render in the chat UI carousel with quality badges, VLM commentary, and residue labels.
+
+2. **Side chain rendering verification**: Verify vizParams auto-injection renders side chains (ball-and-stick) and H-bond lines (dashed) in screenshots.
+
+3. **Agent retry effectiveness**: Verify the retry button actually re-executes the tool and updates the command status in the chat UI.
+
+4. **Settings panel UX**: Add visual feedback when settings are changed (e.g. toast notification "Auto-capture disabled").
+
+5. **VLM cache visualization**: Show cache hit/miss in the UI (e.g. "VLM cache hit" badge on screenshots).
+
+6. **Parallel VLM for multi-recipe**: Run VLM analysis in parallel for multiple recipes.
+
+7. **Sequence viewer nearby interactions**: When a residue is clicked, show nearby interactions from the last analysis.
+
+8. **Performance dashboard**: Add a performance summary (total time, tool count, VLM calls, cache hits) at the end of agent runs.
