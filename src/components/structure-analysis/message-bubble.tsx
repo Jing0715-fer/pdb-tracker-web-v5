@@ -1211,11 +1211,29 @@ function AnalysisImageCarousel({ images }: { images: import("@/lib/molcraft/stor
           {downloaded ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Download className="h-3.5 w-3.5" />}
         </button>
 
+        {/* R100.3: VLM quality badge (top-right) */}
+        {currentImg.quality && (
+          <div className={`absolute top-2 right-2 z-10 px-2 py-0.5 rounded-full text-[9px] font-medium backdrop-blur-sm ${
+            currentImg.quality === 'acceptable'
+              ? 'bg-green-500/80 text-white'
+              : currentImg.quality === 'degraded'
+              ? 'bg-amber-500/80 text-white'
+              : 'bg-red-500/80 text-white'
+          }`} title={currentImg.issues?.join('; ') || currentImg.quality}>
+            {currentImg.quality === 'acceptable' ? '✓ 良好' : currentImg.quality === 'degraded' ? '⚠ 一般' : '✗ 不合格'}
+          </div>
+        )}
         {/* VLM commentary overlay (bottom) */}
         {currentImg.vlmComment && (
           <div className="absolute bottom-2 left-2 right-2 z-10 px-3 py-1.5 rounded-md bg-black/70 backdrop-blur-sm text-white/95 text-[10px] leading-relaxed">
             <span className="text-claude-accent font-medium">VLM: </span>
             {currentImg.vlmComment}
+            {/* R100.3: Show issues if present */}
+            {currentImg.issues && currentImg.issues.length > 0 && currentImg.quality !== 'acceptable' && (
+              <div className="mt-0.5 text-amber-300 text-[9px]">
+                问题: {currentImg.issues.join('; ')}
+              </div>
+            )}
           </div>
         )}
 

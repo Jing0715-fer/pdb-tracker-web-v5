@@ -42,6 +42,7 @@ export interface TaskEnqueueOptions {
 
 class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTask>();
+  private executors = new Map<string, (task: BackgroundTask, onProgress: (progress: number, message: string) => void) => Promise<unknown>>();
   private queue: string[] = [];
   private running = new Set<string>();
   private maxConcurrent = 1; // Run one task at a time to avoid overloading
@@ -59,6 +60,7 @@ class BackgroundTaskManager {
       events: [],
     };
     this.tasks.set(id, task);
+    this.executors.set(id, options.execute);
     this.queue.push(id);
     this.processQueue();
     return id;
@@ -81,7 +83,9 @@ class BackgroundTaskManager {
     this.notify(taskId, "started", `Task started: ${task.title}`);
 
     try {
-      const result = await options_execute(task, (progress, message) => {
+      const executor = this.executors.get(taskId);
+      if (!executor) throw new Error("No executor for task " + taskId);
+      const result = await executor(task, (progress, message) => {
         task.progress = progress;
         this.notify(taskId, "progress", message, progress);
       });
@@ -97,6 +101,7 @@ class BackgroundTaskManager {
       this.notify(taskId, "failed", `Task failed: ${task.error}`);
     } finally {
       this.running.delete(taskId);
+      this.executors.delete(taskId);
       this.processQueue(); // Process next task
     }
   }
@@ -151,18 +156,6 @@ class BackgroundTaskManager {
       }));
     }
   }
-}
-
-/** Helper to execute a task's function */
-async function options_execute(
-  task: BackgroundTask,
-  onProgress: (progress: number, message: string) => void,
-): Promise<unknown> {
-  // This is a placeholder — the actual execute function is stored
-  // in the task and called by the enqueue caller
-  // In practice, the execute function is passed to enqueue() and
-  // stored in a closure
-  return task.result;
 }
 
 export const backgroundTaskManager = new BackgroundTaskManager();

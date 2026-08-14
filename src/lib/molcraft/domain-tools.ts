@@ -1,143 +1,36 @@
 /**
- * Domain Tools — Registration of PDB structure analysis tools.
+ * Domain Tools — Registration of all PDB structure analysis tools.
  *
- * This module registers all the tools that the agent can call:
- * - pdb_load: Load a PDB structure
- * - pdb_analyze: Run an analysis recipe
- * - set_representation: Change the 3D representation
- * - set_color_theme: Change the color theme
- * - focus_ligand: Focus camera on a ligand
- * - focus_residue: Focus camera on a specific residue
- * - capture_multi_angle: Capture screenshots from multiple angles
- * - measure_distance: Measure distance between two atoms
- * - clear_chat: Clear the chat (requires approval)
+ * This module registers all tools (schema + executor) with the toolRegistry.
+ * The tool SCHEMAS live in `tool-definitions.ts` (shared with the server-side
+ * agent round route) so there's a single source of truth.
  *
- * Each tool wraps the existing executeCommand function from commands.ts,
+ * Each executor wraps the existing `executeCommand` function from commands.ts,
  * so the tool-calling agent loop reuses all the existing Molstar logic.
+ *
+ * Total tools: 36 (up from 9 in Round 94)
  */
 
-import { toolRegistry, type ToolDefinition, type ToolExecutor, type ToolExecutionContext } from "./tool-registry";
+import { toolRegistry, type ToolExecutor } from "./tool-registry";
+import {
+  PDB_LOAD, LOAD_ALPHAFOLD, LOAD_EMDB, LOAD_STRUCTURE_URL,
+  PDB_ANALYZE, FETCH_METADATA, FETCH_INTERFACE, SHOW_INTERACTIONS, ALIGN_STRUCTURES,
+  SHOW_ELECTROSTATIC_SURFACE, SHOW_DRUGGABLE_POCKET, RUN_VIRTUAL_SCREENING, DETECT_POCKETS,
+  SET_REPRESENTATION, SET_COLOR_THEME, SET_UNIFORM_COLOR,
+  FOCUS_LIGAND, FOCUS_RESIDUE, FOCUS_CHAIN, RESET_CAMERA, SET_BACKGROUND,
+  TOGGLE_SPIN, TOGGLE_ROCK, TOGGLE_COMPONENT_VISIBILITY,
+  SELECT, CLEAR_SELECTION, CLEAR_INTERACTIONS, LABEL_RESIDUE,
+  MEASURE_DISTANCE, MEASURE_ANGLE, MEASURE_DIHEDRAL, CLEAR_MEASUREMENTS,
+  CAPTURE_MULTI_ANGLE, CAPTURE_SNAPSHOT, EXPORT_SNAPSHOT,
+  RECAPTURE_SCREENSHOT,
+  CLEAR_CHAT,
+  ALL_TOOL_DEFINITIONS,
+} from "./tool-definitions";
 
-// Tool definitions (schema only — executors are registered separately)
-
-const PDB_LOAD: ToolDefinition = {
-  name: "pdb_load",
-  description: "Load a PDB structure by ID (e.g. 4HHB, 6LU7, 1CBS). Downloads from RCSB.",
-  category: "structure",
-  parameters: {
-    id: { type: "string", description: "4-character PDB ID (e.g. 4HHB)", required: true },
-  },
-};
-
-const PDB_ANALYZE: ToolDefinition = {
-  name: "pdb_analyze",
-  description: "Run a structure analysis recipe (hbonds, salt_bridges, binding_pocket, all_interactions, etc.)",
-  category: "analysis",
-  parameters: {
-    recipe: {
-      type: "string",
-      description: "Analysis recipe name",
-      required: true,
-      enum: [
-        "hbonds", "salt_bridges", "hydrophobic_contacts", "all_interactions",
-        "binding_pocket", "druggability", "virtual_screening", "ligand_interactions",
-        "disulfide_bonds", "metal_coordination", "aromatic_stacking", "water_bridges",
-        "sasa", "electrostatic", "ramachandran", "bfactor_stats",
-        "secondary_structure_simple", "interface_residues", "detect_pockets",
-        "oligomer_analysis", "surface_residues", "structure_validation",
-        "rmsd", "conformational_changes", "protonation_states", "summary",
-      ],
-    },
-    chain1: { type: "string", description: "Chain 1 ID (e.g. A)", required: true },
-    chain2: { type: "string", description: "Chain 2 ID (e.g. B, or same as chain1 for intra-chain)", required: true },
-    ligandCompId: { type: "string", description: "Ligand compId for pocket analysis (e.g. PJE, N3, HEM)" },
-    radius: { type: "number", description: "Pocket radius in Angstroms (default 5.0)" },
-  },
-  timeoutMs: 120_000, // Analysis can take a while
-};
-
-const SET_REPRESENTATION: ToolDefinition = {
-  name: "set_representation",
-  description: "Set the 3D representation preset (cartoon, surface, ball-and-stick, putty)",
-  category: "visualization",
-  parameters: {
-    preset: {
-      type: "string",
-      description: "Representation preset name",
-      required: true,
-      enum: ["cartoon", "surface", "ball-and-stick", "putty"],
-    },
-  },
-};
-
-const SET_COLOR_THEME: ToolDefinition = {
-  name: "set_color_theme",
-  description: "Set the color theme (chain-id, element-symbol, hydrophobicity, bfactor, etc.)",
-  category: "visualization",
-  parameters: {
-    theme: {
-      type: "string",
-      description: "Color theme name",
-      required: true,
-      enum: ["chain-id", "element-symbol", "hydrophobicity", "residue-name", "sequence-id", "uniform", "secondary-structure", "bfactor", "uncertainty", "partial-charge"],
-    },
-  },
-};
-
-const FOCUS_LIGAND: ToolDefinition = {
-  name: "focus_ligand",
-  description: "Focus the camera on a specific ligand by its compId (e.g. HEM, N3, PJE)",
-  category: "visualization",
-  parameters: {
-    compId: { type: "string", description: "Ligand 3-letter compId (e.g. HEM, N3, PJE)", required: true },
-  },
-};
-
-const FOCUS_RESIDUE: ToolDefinition = {
-  name: "focus_residue",
-  description: "Focus the camera on a specific residue",
-  category: "visualization",
-  parameters: {
-    chain: { type: "string", description: "Chain ID (e.g. A)", required: true },
-    resno: { type: "number", description: "Residue number (e.g. 145)", required: true },
-  },
-};
-
-const CAPTURE_MULTI_ANGLE: ToolDefinition = {
-  name: "capture_multi_angle",
-  description: "Capture screenshots from multiple angles (front, side, top) for VLM analysis",
-  category: "visualization",
-  parameters: {
-    recipe: { type: "string", description: "Recipe name for screenshot labeling", required: true },
-    angles: {
-      type: "array",
-      description: "Camera angles to capture",
-      items: { type: "string", enum: ["front", "side", "top", "back"] },
-    },
-  },
-};
-
-const MEASURE_DISTANCE: ToolDefinition = {
-  name: "measure_distance",
-  description: "Measure the distance between two residues/atoms",
-  category: "measurement",
-  parameters: {
-    a_chain: { type: "string", description: "Chain of atom A", required: true },
-    a_resno: { type: "number", description: "Residue number of atom A", required: true },
-    a_atom: { type: "string", description: "Atom name of atom A (e.g. CA, SG)" },
-    b_chain: { type: "string", description: "Chain of atom B", required: true },
-    b_resno: { type: "number", description: "Residue number of atom B", required: true },
-    b_atom: { type: "string", description: "Atom name of atom B (e.g. CA, SG)" },
-  },
-};
-
-const CLEAR_CHAT: ToolDefinition = {
-  name: "clear_chat",
-  description: "Clear all chat messages (destructive — requires user approval)",
-  category: "session",
-  parameters: {},
-  requiresApproval: true,
-};
+type ExecuteCommandFn = (
+  viewer: unknown,
+  cmd: unknown,
+) => Promise<{ ok: boolean; detail?: string; data?: unknown; analysisResult?: unknown }>;
 
 /**
  * Register all domain tools with their executors.
@@ -145,15 +38,33 @@ const CLEAR_CHAT: ToolDefinition = {
  *
  * @param executeCommandFn - The executeCommand function from commands.ts
  */
-export function registerDomainTools(
-  executeCommandFn: (viewer: unknown, cmd: unknown) => Promise<{ ok: boolean; detail?: string; data?: unknown }>,
-): void {
-  // pdb_load
-  toolRegistry.register(PDB_LOAD, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, { type: "load_pdb", id: args.id as string });
-  });
+export function registerDomainTools(executeCommandFn: ExecuteCommandFn): void {
+  const exec: ToolExecutor = async (args, ctx) => executeCommandFn(ctx.viewer, buildCommand(args));
 
-  // pdb_analyze
+  // ---- Structure loading ----
+  toolRegistry.register(PDB_LOAD, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "load_pdb", id: args.id as string }),
+  );
+  toolRegistry.register(LOAD_ALPHAFOLD, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "load_alphafold", uniprotId: args.uniprotId as string }),
+  );
+  toolRegistry.register(LOAD_EMDB, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "load_emdb",
+      id: args.emdbId as string,
+      detail: (args.detail as number) ?? 3,
+    }),
+  );
+  toolRegistry.register(LOAD_STRUCTURE_URL, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "load_structure_url",
+      url: args.url as string,
+      format: (args.format as "pdb" | "mmcif") ?? "mmcif",
+      isBinary: (args.isBinary as boolean) ?? false,
+    }),
+  );
+
+  // ---- Analysis ----
   toolRegistry.register(PDB_ANALYZE, async (args, ctx) => {
     const params: Record<string, unknown> = {};
     if (args.chain1) params.chain1 = args.chain1;
@@ -167,72 +78,258 @@ export function registerDomainTools(
       params,
     });
   });
-
-  // set_representation
-  toolRegistry.register(SET_REPRESENTATION, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, { type: "set_representation", preset: args.preset as string });
+  toolRegistry.register(FETCH_METADATA, async (_args, _ctx) =>
+    // fetchMetadata is called inside executeCommand for analyze_metadata
+    executeCommandFn(_ctx.viewer, {
+      type: "analyze_metadata",
+      id: _args.id as string,
+      includeInterfaces: (args_includeInterfaces(_args)) ?? true,
+    }),
+  );
+  toolRegistry.register(FETCH_INTERFACE, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "analyze_interface",
+      id: args.id as string,
+      assembly: (args.assembly as number) ?? 1,
+    }),
+  );
+  toolRegistry.register(SHOW_INTERACTIONS, async (args, ctx) => {
+    const cmd: Record<string, unknown> = { type: "show_interactions", radius: (args.radius as number) ?? 8 };
+    if (args.target_compId) {
+      cmd.target = args.target_compId;
+    } else if (args.target_chain && args.target_resno) {
+      cmd.target = { chain: args.target_chain, resno: args.target_resno };
+    } else {
+      cmd.target = "ligand";
+    }
+    return executeCommandFn(ctx.viewer, cmd);
   });
+  toolRegistry.register(ALIGN_STRUCTURES, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "align_structures",
+      ref: args.ref as number,
+      mobile: args.mobile as number,
+      method: (args.method as "superpose" | "tm-align") ?? "superpose",
+    }),
+  );
+  toolRegistry.register(SHOW_ELECTROSTATIC_SURFACE, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "show_electrostatic_surface",
+      chain: args.chain as string | undefined,
+      ionicStrength: args.ionicStrength as number | undefined,
+    }),
+  );
+  toolRegistry.register(SHOW_DRUGGABLE_POCKET, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "show_druggable_pocket",
+      ligandCompId: args.ligandCompId as string,
+      radius: (args.radius as number) ?? 8,
+    }),
+  );
+  toolRegistry.register(RUN_VIRTUAL_SCREENING, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "run_virtual_screening",
+      ligandCompId: args.ligandCompId as string,
+      fragmentSet: (args.fragmentSet as string) ?? "druglike",
+    }),
+  );
+  toolRegistry.register(DETECT_POCKETS, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "detect_pockets",
+      minDepth: (args.minDepth as number) ?? 100,
+    }),
+  );
 
-  // set_color_theme
-  toolRegistry.register(SET_COLOR_THEME, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, { type: "set_color_theme", theme: args.theme as string });
-  });
-
-  // focus_ligand
-  toolRegistry.register(FOCUS_LIGAND, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, { type: "focus_ligand", compId: args.compId as string });
-  });
-
-  // focus_residue
-  toolRegistry.register(FOCUS_RESIDUE, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, {
+  // ---- Visualization ----
+  toolRegistry.register(SET_REPRESENTATION, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "set_representation",
+      preset: args.preset as string,
+      structures: "all",
+    }),
+  );
+  toolRegistry.register(SET_COLOR_THEME, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "set_color_theme",
+      theme: args.theme as string,
+      structures: "all",
+    }),
+  );
+  toolRegistry.register(SET_UNIFORM_COLOR, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "set_uniform_color",
+      color: args.color as string,
+      structures: "all",
+    }),
+  );
+  toolRegistry.register(FOCUS_LIGAND, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "focus_ligand", compId: args.compId as string }),
+  );
+  toolRegistry.register(FOCUS_RESIDUE, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
       type: "focus_residue",
       chain: args.chain as string,
       resno: args.resno as number,
-    });
+    }),
+  );
+  toolRegistry.register(FOCUS_CHAIN, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "focus_chain", chain: args.chain as string }),
+  );
+  toolRegistry.register(RESET_CAMERA, async (_args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "reset_camera" }),
+  );
+  toolRegistry.register(SET_BACKGROUND, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "set_background", color: args.color as string }),
+  );
+  toolRegistry.register(TOGGLE_SPIN, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "toggle_spin", speed: (args.speed as number) ?? 0.1 }),
+  );
+  toolRegistry.register(TOGGLE_ROCK, async (_args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "toggle_rock" }),
+  );
+  toolRegistry.register(TOGGLE_COMPONENT_VISIBILITY, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "toggle_component_visibility",
+      component: args.component as string,
+      action: (args.action as "show" | "hide" | "toggle") ?? "toggle",
+    }),
+  );
+  toolRegistry.register(SELECT, async (args, ctx) => {
+    const cmd: Record<string, unknown> = {
+      type: "select",
+      action: (args.action as "set" | "add" | "remove") ?? "set",
+    };
+    if (args.target_compId) {
+      cmd.target = args.target_compId;
+    } else if (args.target_chain && args.target_resno) {
+      cmd.target = { chain: args.target_chain, resno: args.target_resno };
+    } else {
+      cmd.target = "all";
+    }
+    return executeCommandFn(ctx.viewer, cmd);
   });
+  toolRegistry.register(CLEAR_SELECTION, async (_args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "clear_selection" }),
+  );
+  toolRegistry.register(CLEAR_INTERACTIONS, async (_args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "clear_interactions" }),
+  );
+  toolRegistry.register(LABEL_RESIDUE, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "label_residue",
+      chain: args.chain as string,
+      resno: args.resno as number,
+      text: args.text as string | undefined,
+    }),
+  );
 
-  // capture_multi_angle
-  toolRegistry.register(CAPTURE_MULTI_ANGLE, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, {
-      type: "capture_multi_angle",
-      recipe: args.recipe as string,
-      angles: (args.angles as Array<"front" | "side" | "top" | "back">) || ["front", "side", "top"],
-    });
-  });
-
-  // measure_distance
-  toolRegistry.register(MEASURE_DISTANCE, async (args, ctx) => {
-    return executeCommandFn(ctx.viewer, {
+  // ---- Measurement ----
+  toolRegistry.register(MEASURE_DISTANCE, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
       type: "measure_distance",
       a: {
         chain: args.a_chain as string,
         resno: args.a_resno as number,
-        atom: args.a_atom as string | undefined,
+        atom: (args.a_atom as string) ?? "CA",
       },
       b: {
         chain: args.b_chain as string,
         resno: args.b_resno as number,
-        atom: args.b_atom as string | undefined,
+        atom: (args.b_atom as string) ?? "CA",
       },
-    });
+    }),
+  );
+  toolRegistry.register(MEASURE_ANGLE, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "measure_angle",
+      a: { chain: args.a_chain as string, resno: args.a_resno as number, atom: (args.a_atom as string) ?? "CA" },
+      b: { chain: args.b_chain as string, resno: args.b_resno as number, atom: (args.b_atom as string) ?? "CA" },
+      c: { chain: args.c_chain as string, resno: args.c_resno as number, atom: (args.c_atom as string) ?? "CA" },
+    }),
+  );
+  toolRegistry.register(MEASURE_DIHEDRAL, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "measure_dihedral",
+      a: { chain: args.a_chain as string, resno: args.a_resno as number, atom: (args.a_atom as string) ?? "CA" },
+      b: { chain: args.b_chain as string, resno: args.b_resno as number, atom: (args.b_atom as string) ?? "CA" },
+      c: { chain: args.c_chain as string, resno: args.c_resno as number, atom: (args.c_atom as string) ?? "CA" },
+      d: { chain: args.d_chain as string, resno: args.d_resno as number, atom: (args.d_atom as string) ?? "CA" },
+    }),
+  );
+  toolRegistry.register(CLEAR_MEASUREMENTS, async (_args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "clear_measurements" }),
+  );
+
+  // ---- Screenshot / capture ----
+  toolRegistry.register(CAPTURE_MULTI_ANGLE, async (args, ctx) => {
+    const vizParams: Record<string, unknown> = {};
+    if (args.ligandCompId) vizParams.ligandCompId = args.ligandCompId;
+    if (args.chain1) vizParams.chain1 = args.chain1;
+    if (args.chain2) vizParams.chain2 = args.chain2;
+    if (args.interactions) vizParams.interactions = args.interactions;
+    const cmd: Record<string, unknown> = {
+      type: "capture_multi_angle",
+      recipe: args.recipe as string,
+      angles: (args.angles as Array<"front" | "side" | "top" | "back">) ?? ["front", "side", "top"],
+    };
+    if (Object.keys(vizParams).length > 0) cmd.vizParams = vizParams;
+    if (args.labels) cmd.labels = args.labels;
+    if (args.labelFontSize) cmd.labelFontSize = args.labelFontSize;
+    return executeCommandFn(ctx.viewer, cmd);
+  });
+  toolRegistry.register(CAPTURE_SNAPSHOT, async (args, ctx) =>
+    executeCommandFn(ctx.viewer, {
+      type: "capture_snapshot",
+      label: args.label as string | undefined,
+    }),
+  );
+  toolRegistry.register(EXPORT_SNAPSHOT, async (_args, ctx) =>
+    executeCommandFn(ctx.viewer, { type: "export_snapshot" }),
+  );
+  toolRegistry.register(RECAPTURE_SCREENSHOT, async (args, ctx) => {
+    // R98.10: recapture_screenshot maps to capture_multi_angle with adjusted params
+    const vizParams: Record<string, unknown> = {};
+    if (args.ligandCompId) vizParams.ligandCompId = args.ligandCompId;
+    if (args.chain1) vizParams.chain1 = args.chain1;
+    if (args.chain2) vizParams.chain2 = args.chain2;
+    if (args.interactions) vizParams.interactions = args.interactions;
+    const cmd: Record<string, unknown> = {
+      type: "capture_multi_angle",
+      recipe: args.recipe as string,
+      angles: (args.angles as Array<"front" | "side" | "top" | "back">) ?? ["front", "side", "top"],
+    };
+    if (Object.keys(vizParams).length > 0) cmd.vizParams = vizParams;
+    if (args.labels) cmd.labels = args.labels;
+    if (args.labelFontSize) cmd.labelFontSize = args.labelFontSize;
+    return executeCommandFn(ctx.viewer, cmd);
   });
 
-  // clear_chat (requires approval)
+  // ---- Session ----
   toolRegistry.register(CLEAR_CHAT, async (_args, _ctx) => {
     // This will be handled by the chat store — return a signal
     return { cleared: true };
   });
 }
 
+/** Helper to safely extract includeInterfaces from args */
+function args_includeInterfaces(args: Record<string, unknown>): boolean | undefined {
+  const v = args.includeInterfaces;
+  return typeof v === "boolean" ? v : undefined;
+}
+
+/** Placeholder — not used (executors are registered individually above) */
+function buildCommand(_args: Record<string, unknown>): unknown {
+  return { type: "noop" };
+}
+
 /** Unregister all domain tools (for cleanup/testing) */
 export function unregisterDomainTools(): void {
-  const names = [
-    "pdb_load", "pdb_analyze", "set_representation", "set_color_theme",
-    "focus_ligand", "focus_residue", "capture_multi_angle",
-    "measure_distance", "clear_chat",
-  ];
-  for (const name of names) {
-    toolRegistry.unregister(name);
+  for (const def of ALL_TOOL_DEFINITIONS) {
+    toolRegistry.unregister(def.name);
   }
+}
+
+/** List all registered tool names (for debugging/UI display) */
+export function listAllToolNames(): string[] {
+  return ALL_TOOL_DEFINITIONS.map((d) => d.name);
 }

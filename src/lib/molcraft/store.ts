@@ -16,6 +16,7 @@
 import { create } from "zustand";
 import type { MolstarViewer, MolstarPlugin } from "./types";
 import { storeImage, getImagesForMessage, deleteImagesForMessage } from "./image-db";
+import { sessionManager, type SessionEvent } from "./session-manager";
 
 // ---- localStorage persistence helpers ----
 const STORAGE_KEY_REPORTS = "pdb-tracker:molcraft-reports";
@@ -242,8 +243,18 @@ interface AppState {
   // CLI agent detection).
   chatMessages: ChatMessage[];
   addChatMessage: (m: ChatMessage) => void;
-  updateChatMessage: (id: string, patch: Partial<ChatMessage>) => void;
+  updateChatMessage: (id: string, patch: Partial<ChatMessage> | ((prev: ChatMessage) => Partial<ChatMessage>)) => void;
   clearChat: () => void;
+  /** Session manager integration: events for the current session (fork/replay audit trail) */
+  sessionEvents: SessionEvent[];
+  /** Append an event to the session manager + refresh the store's sessionEvents */
+  appendSessionEvent: (event: Omit<SessionEvent, "id" | "sessionId" | "timestamp">) => void;
+  /** Fork the current session from a given event index */
+  forkCurrentSession: (fromEventIndex?: number, title?: string) => string;
+  /** Get a summary of all tool calls in the current session (audit trail) */
+  getSessionToolCallSummary: () => Array<{ name: string; timestamp: number; ok: boolean }>;
+  /** Clear all session events for the current session */
+  clearSessionEvents: () => void;
   // Selected LLM provider (persisted to localStorage, shared with run center).
   // Empty string = auto (use the run center's chosen provider).
   chatProvider: string;
@@ -343,6 +354,12 @@ export interface AnalysisImage {
    *  "high" = best clearly better (score gap ≥3), "medium" = gap 1-2,
    *  "low" = scores similar. Same for all images in a recipe. */
   confidence?: "high" | "medium" | "low";
+  /** R100.3: VLM quality assessment for this screenshot.
+   *  "acceptable" = clear and useful, "degraded" = usable but flawed,
+   *  "unacceptable" = cannot be used for analysis. */
+  quality?: "acceptable" | "degraded" | "unacceptable";
+  /** R100.3: VLM-reported issues for this screenshot (e.g. "侧链未显示"). */
+  issues?: string[];
 }
 
 /** Round 33: A chat session — a named conversation with its own message history. */
@@ -779,18 +796,53 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newMessages = [...get().chatMessages, m];
     persistChatMessages(newMessages);
     set({ chatMessages: newMessages });
+    // Session manager integration: log user/assistant messages
+    const sid = get().activeSessionId || `chat-${Date.now()}`;
+    sessionManager.append(sid, {
+      type: m.role === "user" ? "user_message" : "assistant_message",
+      data: { content: m.content, messageId: m.id },
+    });
+    set({ sessionEvents: sessionManager.getEvents(sid) });
   },
   updateChatMessage: (id, patch) =>
     set((state) => {
-      const newMessages = state.chatMessages.map((m) =>
-        m.id === id ? { ...m, ...patch } : m
-      );
+      const newMessages = state.chatMessages.map((m) => {
+        if (m.id !== id) return m;
+        const patchObj = typeof patch === "function" ? patch(m) : patch;
+        return { ...m, ...patchObj };
+      });
       persistChatMessages(newMessages);
       return { chatMessages: newMessages };
     }),
   clearChat: () => {
     persistChatMessages([]);
     set({ chatMessages: [] });
+    // Clear session events for the current session
+    const sid = get().activeSessionId || "chat-default";
+    sessionManager.clear(sid);
+    set({ sessionEvents: [] });
+  },
+  // Session manager integration
+  sessionEvents: [],
+  appendSessionEvent: (event) => {
+    const sid = get().activeSessionId || `chat-${Date.now()}`;
+    sessionManager.append(sid, event);
+    set({ sessionEvents: sessionManager.getEvents(sid) });
+  },
+  forkCurrentSession: (fromEventIndex, title) => {
+    const sid = get().activeSessionId || "chat-default";
+    const result = sessionManager.fork(sid, { fromEventIndex, title });
+    set({ sessionEvents: sessionManager.getEvents(result.newSessionId) });
+    return result.newSessionId;
+  },
+  getSessionToolCallSummary: () => {
+    const sid = get().activeSessionId || "chat-default";
+    return sessionManager.getToolCallSummary(sid);
+  },
+  clearSessionEvents: () => {
+    const sid = get().activeSessionId || "chat-default";
+    sessionManager.clear(sid);
+    set({ sessionEvents: [] });
   },
   chatProvider: loadChatProvider(),
   setChatProvider: (providerId) => {

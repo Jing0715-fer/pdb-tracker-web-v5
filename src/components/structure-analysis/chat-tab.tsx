@@ -23,7 +23,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
-  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen, Settings,
+  Send, Loader2, Trash2, Sparkles, User, Bot, ChevronDown, RefreshCw, Check, X, Square, Download, Copy, Search, BarChart3, Pencil, ThumbsUp, ThumbsDown, Pin, Bookmark, History, Volume2, VolumeX, Bold, Code, List, Upload, LayoutGrid, FileText, Mic, Star, Plus, Eye, EyeOff, Tag, Bell, MessageSquare, FolderOpen, Settings, GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -48,6 +48,13 @@ import { MessageBubble, analyzeSentiment,
   PIN_EVENT, BOOKMARK_EVENT, FOLDER_EVENT, BRANCH_EVENT,
   TAG_EVENT, PIN_NOTE_EVENT,
 } from "./message-bubble";
+import { PermissionRequestCard } from "./permission-request-card";
+import { BackgroundTasksPanel } from "./background-tasks-panel";
+import { useAgentLoop, type AgentProgressEvent } from "@/lib/molcraft/use-agent-loop";
+import { registerDomainTools, unregisterDomainTools } from "@/lib/molcraft/domain-tools";
+import { selectBestWithRetry, applyVlmResultToImages, needsRecapture, buildRecaptureInstruction, type VlmResult } from "@/lib/molcraft/vlm-client";
+import { sessionManager } from "@/lib/molcraft/session-manager";
+import { Wrench, Zap } from "lucide-react";
 
 interface LlmProviderInfo {
   provider: string;
@@ -273,6 +280,22 @@ export function ChatTab() {
   const structures = useAppStore((s) => s.structures);
   const toast = useAppStore((s) => s.toast);
   const logCommand = useAppStore((s) => s.logCommand);
+  // Agent mode: when ON, uses the tool-calling agent loop (/api/llm/agent/round)
+  // instead of the legacy ReAct-in-prompt loop (/api/llm/chat/stream)
+  // R101.7: Agent mode is now the default (feature-complete with 36 tools, VLM feedback, recapture)
+  const [agentMode, setAgentMode] = useState(true);
+  const [agentProgress, setAgentProgress] = useState<string | null>(null);
+  const agentLoop = useAgentLoop();
+
+  // Round 97: Register all domain tools on mount so the toolRegistry is
+  // populated for the agent loop. The executor wraps executeCommand.
+  useEffect(() => {
+    registerDomainTools(async (viewer, cmd) => {
+      // @ts-expect-error - executeCommand accepts a specific LlmCommand type
+      return executeCommand(viewer, cmd);
+    });
+    return () => unregisterDomainTools();
+  }, []);
   // Round 33: Chat session management
   const chatSessions = useAppStore((s) => s.chatSessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -283,6 +306,7 @@ export function ChatTab() {
   const toggleChatSessionPin = useAppStore((s) => s.toggleChatSessionPin);
   const setChatSessionTags = useAppStore((s) => s.setChatSessionTags);
   const saveCurrentSession = useAppStore((s) => s.saveCurrentSession);
+  const forkCurrentSession = useAppStore((s) => s.forkCurrentSession);
   const [sessionOpen, setSessionOpen] = useState(false);
   const [sessionSearch, setSessionSearch] = useState("");
 
@@ -1363,6 +1387,271 @@ export function ChatTab() {
         if (!viewer) toast("Load a structure first to use the agent", "error");
         return;
       }
+
+      // Agent mode: use the tool-calling agent loop
+      if (agentMode) {
+        sendingRef.current = true;
+        stopRequestedRef.current = false;
+        const userMsg: ChatMessage = {
+          id: `u-${Date.now()}`,
+          role: "user",
+          content: trimmed,
+          ts: Date.now(),
+        };
+        const pendingId = `a-${Date.now()}`;
+        const pendingMsg: ChatMessage = {
+          id: pendingId,
+          role: "assistant",
+          content: "",
+          ts: Date.now(),
+          pending: true,
+          agentStep: "thinking",
+          retryPrompt: trimmed,
+        };
+        addMessage(userMsg);
+        addMessage(pendingMsg);
+        setInput("");
+
+        const history: Array<{ role: "user" | "assistant"; content: string }> = [
+          ...messages.map((m) => ({ role: m.role, content: m.content })),
+          { role: "user" as const, content: trimmed },
+        ];
+
+        const sessionId = activeSessionId
+          ? `agent-${activeSessionId}`
+          : `agent-${Date.now()}`;
+
+        const onProgress = (event: AgentProgressEvent) => {
+          switch (event.type) {
+            case "llm_start":
+              setAgentProgress(`第 ${((event.round ?? 0) + 1)} 轮 · 调用 LLM…`);
+              updateMessage(pendingId, {
+                content: `第 ${((event.round ?? 0) + 1)} 轮 · 调用 LLM…`,
+                pending: true,
+                agentStep: "calling-llm",
+              });
+              break;
+            case "llm_response":
+              if (event.content) {
+                setAgentProgress("LLM 返回工具调用，执行中…");
+                updateMessage(pendingId, {
+                  content: event.content,
+                  pending: true,
+                  agentStep: "executing",
+                });
+              }
+              break;
+            case "tool_start": {
+              const tc = event.toolCall;
+              const desc = tc
+                ? `执行工具: ${tc.name}(${Object.entries(tc.arguments).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ")})`
+                : "执行工具…";
+              setAgentProgress(desc);
+              updateMessage(pendingId, {
+                content: `🔧 ${desc}`,
+                pending: true,
+                agentStep: "executing",
+              });
+              // Also add the tool call to the message's commands list for display
+              if (tc) {
+                updateMessage(pendingId, (prev) => {
+                  const prevCommands = (prev as any).commands as unknown[] || [];
+                  return {
+                    commands: [
+                      ...prevCommands,
+                      { type: "agent_tool_call", name: tc.name, arguments: tc.arguments, status: "pending" },
+                    ],
+                  } as any;
+                });
+              }
+              break;
+            }
+            case "tool_result": {
+              const tr = event.toolResult;
+              if (tr) {
+                // R100.4: Show "VLM analyzing..." for the vlm_analyzing pseudo-event
+                if (tr.name === 'vlm_analyzing') {
+                  setAgentProgress(`VLM 正在分析截图... (可能需要 10-30 秒)`);
+                  break;
+                }
+                setAgentProgress(`工具 ${tr.name} 完成 (${tr.ok ? "成功" : "失败"})`);
+                // Update the last tool_call command's status
+                updateMessage(pendingId, (prev) => {
+                  const cmds = ((prev as any).commands as unknown[]) || [];
+                  const updated = [...cmds];
+                  for (let i = updated.length - 1; i >= 0; i--) {
+                    const c = updated[i] as any;
+                    if (c?.type === "agent_tool_call" && c.status === "pending") {
+                      c.status = tr.ok ? "done" : "error";
+                      c.result = tr.result;
+                      c.error = tr.error;
+                      break;
+                    }
+                  }
+                  return { commands: updated } as any;
+                });
+                // If load_pdb succeeded, add the structure to the store
+                // R98.4: Read pdbId from the command arguments stored on the message
+                if (tr.ok && tr.name === "pdb_load") {
+                  try {
+                    updateMessage(pendingId, (prev) => {
+                      const cmds = ((prev as any).commands as unknown[]) || [];
+                      let pdbId = "";
+                      for (let i = cmds.length - 1; i >= 0; i--) {
+                        const c = cmds[i] as any;
+                        if (c?.type === "agent_tool_call" && c.name === "pdb_load" && c.arguments?.id) {
+                          pdbId = String(c.arguments.id).toUpperCase();
+                          break;
+                        }
+                      }
+                      if (pdbId) {
+                        addStructure({ id: pdbId, label: pdbId, format: "pdb" });
+                      }
+                      return {};
+                    });
+                  } catch { /* best-effort */ }
+                }
+                // R98.3: If capture_multi_angle or recapture_screenshot succeeded,
+                // extract screenshots and run VLM analysis
+                if (tr.ok && (tr.name === "capture_multi_angle" || tr.name === "recapture_screenshot")) {
+                  try {
+                    const resultData = (tr.result as any)?.data;
+                    const screenshots = resultData?.screenshots || [];
+                    if (screenshots.length > 0) {
+                      // Find the recipe from the command arguments
+                      let recipeName = "unknown";
+                      updateMessage(pendingId, (prev) => {
+                        const cmds = ((prev as any).commands as unknown[]) || [];
+                        for (let i = cmds.length - 1; i >= 0; i--) {
+                          const c = cmds[i] as any;
+                          if (c?.type === "agent_tool_call" && (c.name === "capture_multi_angle" || c.name === "recapture_screenshot") && c.arguments?.recipe) {
+                            recipeName = String(c.arguments.recipe);
+                            break;
+                          }
+                        }
+                        return {};
+                      });
+                      // Store images immediately (without VLM) so user sees them right away
+                      const initialImages: AnalysisImage[] = screenshots.map((s: any) => ({
+                        dataUri: s.dataUri,
+                        recipe: recipeName,
+                        angle: s.angle as "front" | "side" | "top" | "back",
+                        label: s.label,
+                      }));
+                      const existingMsg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
+                      const existingImages = existingMsg?.analysisImages || [];
+                      // For recapture: replace images for this recipe
+                      let newImages: AnalysisImage[];
+                      if (tr.name === "recapture_screenshot") {
+                        const otherImages = existingImages.filter(img => img.recipe !== recipeName);
+                        newImages = [...otherImages, ...initialImages];
+                      } else {
+                        newImages = [...existingImages, ...initialImages];
+                      }
+                      updateMessage(pendingId, {
+                        analysisImages: newImages,
+                      } as Partial<ChatMessage>);
+                      // R99.2: The agent loop (use-agent-loop.ts) now calls VLM and attaches
+                      // the result as tr.result.vlmResult. We just need to apply it to the images.
+                      // If vlmResult is missing (older path), fall back to calling VLM here.
+                      const vlmResult = (tr.result as any)?.vlmResult;
+                      if (vlmResult) {
+                        // VLM was already called by the agent loop — apply the result
+                        try {
+                          const msg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
+                          const currentImages = msg?.analysisImages || [];
+                          const updatedImages = applyVlmResultToImages(currentImages, recipeName, vlmResult);
+                          updateMessage(pendingId, {
+                            analysisImages: updatedImages,
+                          } as Partial<ChatMessage>);
+                          if (needsRecapture(vlmResult)) {
+                            setAgentProgress(`VLM评估: ${vlmResult.quality} — Agent将重新截图`);
+                          }
+                        } catch (updateErr) {
+                          console.warn("[agent] VLM image update failed:", updateErr);
+                        }
+                      } else if (screenshots.length > 0) {
+                        // Fallback: call VLM here (for legacy/compatibility)
+                        (async () => {
+                          const analysisSummary = JSON.stringify((tr.result as any)?.analysisResult || {}).slice(0, 2000);
+                          const vlmData = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                          if (vlmData) {
+                            try {
+                              const msg = useAppStore.getState().chatMessages.find(m => m.id === pendingId);
+                              const currentImages = msg?.analysisImages || [];
+                              const updatedImages = applyVlmResultToImages(currentImages, recipeName, vlmData);
+                              updateMessage(pendingId, {
+                                analysisImages: updatedImages,
+                              } as Partial<ChatMessage>);
+                            } catch (updateErr) {
+                              console.warn("[agent] VLM update failed:", updateErr);
+                            }
+                          }
+                        })();
+                      }
+                    }
+                  } catch (extractErr) {
+                    console.warn("[agent] Screenshot extraction failed:", extractErr);
+                  }
+                }
+              }
+              break;
+            }
+            case "permission_request":
+              setAgentProgress(`等待权限确认: ${event.toolName}`);
+              break;
+            case "permission_response":
+              setAgentProgress(`权限: ${event.decision}`);
+              break;
+            case "done":
+              setAgentProgress(null);
+              updateMessage(pendingId, {
+                content: event.finalContent || "完成",
+                pending: false,
+                agentStep: "done",
+              });
+              break;
+            case "error":
+              setAgentProgress(null);
+              updateMessage(pendingId, {
+                content: `错误: ${event.error}`,
+                pending: false,
+                agentStep: "error",
+                isError: true,
+              });
+              break;
+          }
+        };
+
+        try {
+          const result = await agentLoop.run(trimmed, history, {
+            viewer,
+            sessionId,
+            onProgress,
+          });
+          if (!result.ok && result.error) {
+            updateMessage(pendingId, {
+              content: `Agent 错误: ${result.error}`,
+              pending: false,
+              agentStep: "error",
+              isError: true,
+            });
+          }
+        } catch (err: any) {
+          updateMessage(pendingId, {
+            content: `Agent 异常: ${err?.message || String(err)}`,
+            pending: false,
+            agentStep: "error",
+            isError: true,
+          });
+        } finally {
+          sendingRef.current = false;
+          setAgentProgress(null);
+        }
+        return;
+      }
+
+      // Legacy ReAct-in-prompt mode
       sendingRef.current = true;
       stopRequestedRef.current = false;
 
@@ -1951,7 +2240,7 @@ export function ChatTab() {
         stopRequestedRef.current = false;
       }
     },
-    [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast, playSound]
+    [viewer, messages, structures, chatProvider, addMessage, updateMessage, logCommand, toast, playSound, agentMode, agentLoop, activeSessionId, addStructure]
   );
 
   // Round 17: Quick reply listener — sends the reply as a new message (must be after send is defined)
@@ -2426,6 +2715,27 @@ export function ChatTab() {
         )}
 
         <div className="ml-auto flex items-center gap-0.5">
+          {/* Agent mode toggle — switches between legacy ReAct loop and tool-calling agent loop */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-7 gap-1 px-2 text-[10px] font-medium transition-colors ${
+              agentMode
+                ? "text-claude-accent bg-claude-accent-light/40 border border-claude-accent/30"
+                : "text-claude-text-muted hover:text-claude-accent border border-transparent"
+            }`}
+            onClick={() => {
+              const next = !agentMode;
+              setAgentMode(next);
+              toast(next ? "已切换到工具调用 Agent 模式" : "已切换到经典模式", "info");
+            }}
+            title={agentMode ? "Agent 模式 (工具调用) — 点击关闭" : "经典模式 — 点击开启 Agent 模式 (工具调用)"}
+          >
+            {agentMode ? <Zap className="h-3 w-3" /> : <Wrench className="h-3 w-3" />}
+            <span className="hidden sm:inline">{agentMode ? "Agent" : "经典"}</span>
+          </Button>
+          {/* Background tasks panel */}
+          <BackgroundTasksPanel />
           {messages.length > 0 && (
             <>
               <Button
@@ -2709,6 +3019,20 @@ export function ChatTab() {
             >
               <Plus className="h-2.5 w-2.5" />
               New
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1.5 text-[8px] gap-0.5 text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent-light/30 disabled:opacity-30"
+              disabled={!activeSessionId || messages.length === 0}
+              title="Fork current session (creates a copy of the conversation for branching exploration)"
+              onClick={() => {
+                const newId = forkCurrentSession();
+                toast(`已分叉当前会话 (${newId.slice(0, 12)}…)`, "success");
+              }}
+            >
+              <GitBranch className="h-2.5 w-2.5" />
+              Fork
             </Button>
           </div>
           {/* Round 46: Session search filter */}
@@ -3320,6 +3644,15 @@ export function ChatTab() {
         onScroll={handleScroll}
         className="relative flex-1 min-h-0 overflow-y-auto sa-scroll p-2 space-y-2"
       >
+        {/* Permission request cards (shown when a tool requires approval) */}
+        <PermissionRequestCard />
+        {/* Agent progress indicator */}
+        {agentProgress && (
+          <div className="sticky top-0 z-10 mx-auto max-w-md rounded-full bg-claude-accent/10 backdrop-blur-sm border border-claude-accent/20 px-3 py-1 text-[10px] text-claude-accent text-center truncate">
+            <span className="inline-block animate-pulse mr-1">●</span>
+            {agentProgress}
+          </div>
+        )}
         {/* Round 10: Scroll-to-bottom button when auto-scroll is off */}
         {!autoScroll && messages.length > 0 && (
           <button

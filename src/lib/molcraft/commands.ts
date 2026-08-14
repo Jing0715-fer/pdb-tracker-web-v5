@@ -704,9 +704,10 @@ export async function executeCommand(
               // If the structure hasn't rendered yet, the canvas will be
               // uniform color. We decode a small sample of pixels from the
               // base64 data and check variance. Skip if all-black.
-              const isBlackScreen = checkIfBlackScreen(dataUri);
-              if (isBlackScreen) {
-                console.warn(`[capture_multi_angle] angle "${angle}" produced a black/empty screenshot — skipping`);
+              // R99.3: Use accurate async quality check (decodes pixels)
+              const quality = await checkScreenshotQuality(dataUri);
+              if (quality === 'black' || quality === 'white') {
+                console.warn(`[capture_multi_angle] angle "${angle}" produced a ${quality} screenshot — retrying`);
                 // Try one more time with a longer delay
                 await new Promise((r) => setTimeout(r, 200));
                 await nextFrame();
@@ -718,14 +719,33 @@ export async function executeCommand(
                     transparency: false,
                     axes: true,
                   });
-                if (retryDataUri && !checkIfBlackScreen(retryDataUri)) {
+                if (retryDataUri) {
+                  const retryQuality = await checkScreenshotQuality(retryDataUri);
+                  if (retryQuality === 'ok') {
+                    results.push({
+                      dataUri: retryDataUri,
+                      angle,
+                      label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                    });
+                  } else {
+                    // Retry also failed — use the original (with a warning)
+                    console.warn(`[capture_multi_angle] retry for "${angle}" also ${retryQuality}`);
+                    results.push({
+                      dataUri,
+                      angle,
+                      label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                    });
+                  }
+                } else {
+                  // No retry data — use original
                   results.push({
-                    dataUri: retryDataUri,
+                    dataUri,
                     angle,
                     label: `${cmd.label ?? cmd.recipe} - ${angle}`,
                   });
                 }
               } else {
+                // Quality is ok — use the original screenshot
                 results.push({
                   dataUri,
                   angle,
@@ -745,11 +765,36 @@ export async function executeCommand(
           return { ok: false, detail: "All captures failed" };
         }
 
-        // Round 75: Clean up 3D labels after capture to avoid cluttering
-        // the interactive view. Only clear if we added labels.
+        // R99.4: Selective measurement cleanup — only remove measurements
+        // added during this capture, not user-added ones.
+        // We compare the measurement count before and after, then remove
+        // only the delta (the ones we added).
         if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
           try {
-            plugin.managers.structure.measurement.clear();
+            const meas = plugin.managers.structure.measurement as any;
+            // Get current measurements (after capture — includes our additions)
+            const currentMeas = meas?.state?.items;
+            if (currentMeas && beforeMeasCount !== undefined) {
+              const currentCount = Array.isArray(currentMeas)
+                ? currentMeas.length
+                : (typeof currentMeas === 'object' ? Object.keys(currentMeas).length : 0);
+              const added = currentCount - beforeMeasCount;
+              if (added > 0) {
+                // Remove the last N measurements (the ones we added)
+                // Molstar's measurement manager supports removeLast
+                if (typeof meas.removeLast === 'function') {
+                  for (let i = 0; i < added; i++) {
+                    try { meas.removeLast(); } catch { break; }
+                  }
+                } else {
+                  // Fallback: clear all if removeLast not available
+                  meas.clear();
+                }
+              }
+            } else {
+              // Fallback: clear all if state not accessible
+              meas.clear();
+            }
           } catch (err) {
             console.warn("[capture_multi_angle] label cleanup failed:", err);
           }
@@ -1593,7 +1638,7 @@ async function applyRecipeVisualization(
             const [chain, resno] = key.split(":");
             return Q.struct.generator.atomGroups({
               'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
-              'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_seq_id(), parseInt(resno, 10)]),
+              'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), parseInt(resno, 10)]),
             });
           });
 

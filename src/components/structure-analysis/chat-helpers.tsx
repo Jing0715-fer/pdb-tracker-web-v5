@@ -427,6 +427,52 @@ export function describeCommand(cmd: LlmCommand): string {
     case "show_druggable_pocket": return `Show druggable pocket (${cmd.ligandCompId})`;
     case "run_virtual_screening": return `Run virtual screening (${cmd.fragmentSet || "druglike"})`;
     case "detect_pockets": return `Detect pockets`;
+    case "agent_tool_call": {
+      // R99.6: Describe agent tool calls with readable text
+      const c = cmd as any;
+      const name = c.name || c.type || "tool";
+      const args = c.arguments || {};
+      switch (name) {
+        case "pdb_load": return `Agent: Load PDB ${args.id || ""}`;
+        case "load_alphafold": return `Agent: Load AlphaFold ${args.uniprotId || ""}`;
+        case "load_emdb": return `Agent: Load EMDB ${args.emdbId || ""}`;
+        case "load_structure_url": return `Agent: Load from URL`;
+        case "pdb_analyze": return `Agent: Analyze ${args.recipe || ""} (${args.chain1 || ""}/${args.chain2 || ""})`;
+        case "fetch_metadata": return `Agent: Fetch metadata ${args.id || ""}`;
+        case "fetch_interface": return `Agent: Fetch interface ${args.id || ""}`;
+        case "show_interactions": return `Agent: Show interactions`;
+        case "align_structures": return `Agent: Align structures`;
+        case "show_electrostatic_surface": return `Agent: Electrostatic surface`;
+        case "show_druggable_pocket": return `Agent: Druggable pocket (${args.ligandCompId || ""})`;
+        case "run_virtual_screening": return `Agent: Virtual screening`;
+        case "detect_pockets": return `Agent: Detect pockets`;
+        case "set_representation": return `Agent: Representation → ${args.preset || ""}`;
+        case "set_color_theme": return `Agent: Color → ${args.theme || ""}`;
+        case "set_uniform_color": return `Agent: Color → ${args.color || ""}`;
+        case "focus_ligand": return `Agent: Focus ligand ${args.compId || ""}`;
+        case "focus_residue": return `Agent: Focus ${args.chain || ""}${args.resno || ""}`;
+        case "focus_chain": return `Agent: Focus chain ${args.chain || ""}`;
+        case "reset_camera": return `Agent: Reset camera`;
+        case "set_background": return `Agent: Background → ${args.color || ""}`;
+        case "toggle_spin": return `Agent: Toggle spin`;
+        case "toggle_rock": return `Agent: Toggle rock`;
+        case "toggle_component_visibility": return `Agent: Toggle ${args.component || ""}`;
+        case "select": return `Agent: Select`;
+        case "clear_selection": return `Agent: Clear selection`;
+        case "clear_interactions": return `Agent: Clear interactions`;
+        case "label_residue": return `Agent: Label ${args.chain || ""}${args.resno || ""}`;
+        case "measure_distance": return `Agent: Measure distance`;
+        case "measure_angle": return `Agent: Measure angle`;
+        case "measure_dihedral": return `Agent: Measure dihedral`;
+        case "clear_measurements": return `Agent: Clear measurements`;
+        case "capture_multi_angle": return `Agent: Capture screenshots (${args.recipe || ""})`;
+        case "capture_snapshot": return `Agent: Capture snapshot`;
+        case "export_snapshot": return `Agent: Export PNG`;
+        case "recapture_screenshot": return `Agent: Recapture (${args.recipe || ""})`;
+        case "clear_chat": return `Agent: Clear chat`;
+        default: return `Agent: ${name}`;
+      }
+    }
     default: return cmd.type || "unknown";
   }
 }
