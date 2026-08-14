@@ -14563,3 +14563,49 @@ Task: Continue developing based on Round 103 worklog recommendations. Implement 
 6. **Error recovery**: When a tool fails after all retries, the agent should gracefully continue with other tools instead of stopping the entire loop.
 
 7. **User settings panel**: Allow users to configure VLM sensitivity, max recaptures, and preferred angles.
+
+---
+Task ID: round-105-fix-normalizerecipename-export-color-retry-metadata-retry
+Agent: main
+Task: Fix user-reported errors: (1) normalizeRecipeName is not a function, (2) No components to color, (3) HTTP 502 on fetch_metadata. Commit and push to main.
+
+### R105.1: Fix normalizeRecipeName Not Exported (CRITICAL)
+- Problem: normalizeRecipeName was in commands.ts (a 'use client' module) without 'export'
+- The /api/analyze/run route imported it, causing 'normalizeRecipeName is not a function'
+- Fix: Created src/lib/molcraft/recipe-aliases.ts (isomorphic) with normalizeRecipeName
+- Updated commands.ts, /api/analyze/run/route.ts, and chat-tab.tsx to import from recipe-aliases
+- VERIFIED: 'interface' recipe now normalizes correctly
+
+### R105.2: Fix 'No components to color' Error
+- set_representation now waits 300ms + animation frame after applyPreset
+- set_color_theme retries up to 3 times if no components found
+- Prevents error when commands run in sequence
+
+### R105.3: Fix HTTP 502 on fetch_metadata
+- Added fetchWithRetry() with 2 retries + exponential backoff for 5xx errors
+- Applied to fetchMetadata and fetchInterface
+
+### E2E Test Results
+- Recipe normalization: 'interface' → 'all_interactions' (no function error) ✓
+- Metadata fetch: HTTP 200 ✓
+- Full agent loop (6 rounds): final answer with 17 interactions ✓
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- main branch: f884b38 (Round 105 complete, pushed to remote)
+
+### Next Round Recommendations (Round 106)
+
+1. **Browser E2E test with real PDB**: Load 4HHB, run the full analysis pipeline, verify screenshots appear with side chains and H-bond lines.
+
+2. **Agent mode auto-capture**: The agent mode relies on the LLM calling capture_multi_angle. Consider auto-triggering it after pdb_analyze.
+
+3. **Error recovery in agent loop**: When a tool fails after all retries, the agent should gracefully continue with other tools.
+
+4. **Sequence viewer visual feedback**: Highlight clicked residue in the sequence.
+
+5. **Performance monitoring**: Add timing metrics for agent mode tool calls.
+
+6. **VLM recapture effectiveness**: Verify side chains render in recaptured screenshots.
