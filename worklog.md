@@ -14459,3 +14459,56 @@ Task: Continue developing feat/tool-calling-agent based on Round 100 worklog rec
 6. **Performance optimization**: The VLM call adds ~10-30s per capture. Consider caching VLM results for identical screenshots, or skipping VLM for single-screenshot captures.
 
 7. **User settings panel**: Allow users to configure VLM sensitivity (e.g. always accept, strict mode), max recaptures, and preferred angles.
+
+---
+Task ID: round-103-recipe-normalization-retry-ui-overlap-sequence-focus
+Agent: main
+Task: Fix 4 user-reported issues: (1) 'Unknown recipe: interface' error with no retry, (2) screenshots not showing after analysis, (3) UI overlap near measurement button, (4) clicking amino acid in sequence doesn't focus. Commit and push to main.
+
+### R103.1: Recipe Normalization (fixes 'Unknown recipe: interface')
+- Added normalizeRecipeName() in commands.ts with 30+ aliases (interface→all_interactions, hbond→hbonds, etc.)
+- Applied in commands.ts analyze_run case, /api/analyze/run route, and chat-tab.tsx shouldCaptureScreenshot
+- VERIFIED: 'interface' recipe now normalizes to 'all_interactions' instead of failing
+
+### R103.2: Retry Mechanism for Failed analyze_run Commands
+- chat-tab.tsx: MAX_RETRIES=2 for analyze_run, shows 'retrying' status with attempt number
+- Prevents incomplete analysis results when a recipe fails transiently
+
+### R103.3: Screenshots Not Showing Fix
+- shouldCaptureScreenshot was using raw recipeId ('interface') which wasn't in visualizable set
+- Now uses normalizedRecipeId so screenshots auto-capture for 'interface' (→ all_interactions)
+
+### R103.4: UI Overlap Fix (double border on measurement toolbar)
+- MeasureToolbar has its own border/bg/shadow; wrapper sa-viewer-overlay also had border/bg/shadow
+- Caused visible double-border overlap in top-right corner
+- Fix: Replaced sa-viewer-overlay with plain 'absolute z-10' positioning
+
+### R103.5: Sequence Viewer Click-to-Focus Fix
+- Problem: clicking residue used idx+1 as residue number, but PDB residue numbers often don't start at 1
+- Fix: Added residueNumbers field to SequenceInfo (auth_seq_id values from ATOM records)
+- extractSequences now extracts residue numbers; sequence-viewer uses actual PDB residue number
+
+### Verification
+- Recipe normalization: 'interface' → 'all_interactions' (no more Unknown recipe error) ✓
+- Agent round API: returns pdb_load for 'Load 4HHB and analyze interface' ✓
+- Lint: 0 errors in all changed files ✓
+- Server: HTTP 200, no runtime errors ✓
+
+### Git
+- main branch: eca4b9b (Round 103 complete, pushed to remote)
+
+### Next Round Recommendations (Round 104)
+
+1. **Browser E2E test with real PDB**: Load 4HHB, run all_interactions on A-B, verify screenshots appear with side chains and H-bond lines. The dev server keeps dying after ~60s in the sandbox.
+
+2. **Retry mechanism for agent mode**: The retry logic was added to the legacy path (chat-tab.tsx). The agent loop (use-agent-loop.ts) also needs retry logic for failed pdb_analyze calls.
+
+3. **Recipe alias documentation**: Add the full alias list to the agent system prompt so the LLM knows which recipe names are valid.
+
+4. **Sequence viewer insertion codes**: Some PDB entries have insertion codes (e.g. 145A, 145B). The current residueNumbers array only captures the numeric part. Consider adding insertion codes.
+
+5. **UI overlap verification**: The VLM still detected a slight border issue. Need to verify with a loaded structure that the MeasureToolbar renders cleanly.
+
+6. **Screenshot auto-capture in agent mode**: The agent mode (use-agent-loop.ts) doesn't auto-capture screenshots after pdb_analyze like the legacy path does. The LLM must explicitly call capture_multi_angle. Consider adding auto-capture.
+
+7. **Performance**: The retry mechanism adds up to 3s delay per failed analyze_run. Consider shorter retry delays or exponential backoff.
