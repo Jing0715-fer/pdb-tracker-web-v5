@@ -274,6 +274,12 @@ export function applyVlmResultToImages(
             : undefined,
       score: vlm.scores && idx < vlm.scores.length ? vlm.scores[idx] : undefined,
       confidence: vlm.confidence,
+      // R100.3: Set quality + issues from VLM result
+      quality: vlm.quality,
+      issues:
+        vlm.issues && idx < vlm.issues.length
+          ? [vlm.issues[idx]]
+          : undefined,
     };
   });
 }

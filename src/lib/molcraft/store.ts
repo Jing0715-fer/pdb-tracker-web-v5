@@ -354,6 +354,12 @@ export interface AnalysisImage {
    *  "high" = best clearly better (score gap ≥3), "medium" = gap 1-2,
    *  "low" = scores similar. Same for all images in a recipe. */
   confidence?: "high" | "medium" | "low";
+  /** R100.3: VLM quality assessment for this screenshot.
+   *  "acceptable" = clear and useful, "degraded" = usable but flawed,
+   *  "unacceptable" = cannot be used for analysis. */
+  quality?: "acceptable" | "degraded" | "unacceptable";
+  /** R100.3: VLM-reported issues for this screenshot (e.g. "侧链未显示"). */
+  issues?: string[];
 }
 
 /** Round 33: A chat session — a named conversation with its own message history. */

@@ -305,6 +305,9 @@ export function useAgentLoop() {
       // R98.6: Track the last pdb_analyze result so we can auto-inject
       // interactions/labels into subsequent capture_multi_angle calls
       let lastAnalysisData: Record<string, unknown> | undefined = undefined;
+      // R100.2: Track recapture count per recipe to prevent infinite loops
+      const recaptureCount = new Map<string, number>();
+      const MAX_RECAPTURES = 2;
 
       // Build the initial message array (include history + new user message)
       const messages: AgentMessage[] = [
@@ -453,6 +456,25 @@ export function useAgentLoop() {
               }
             }
 
+            // R100.2: Check recapture limit — if exceeded, skip the call and
+            // tell the LLM we've hit the max
+            if (call.name === 'recapture_screenshot') {
+              const recipeKey = (call.arguments.recipe as string) || 'unknown';
+              const count = recaptureCount.get(recipeKey) || 0;
+              if (count >= MAX_RECAPTURES) {
+                const result: AgentToolResult = {
+                  callId: call.id,
+                  name: call.name,
+                  ok: false,
+                  error: `已达到最大重截图次数 (${MAX_RECAPTURES})。请基于现有截图继续分析，或手动调整视角后重试。`,
+                };
+                allToolResults.push(result);
+                options.onProgress?.({ type: 'tool_error', toolCall: call, error: result.error! });
+                continue;
+              }
+              recaptureCount.set(recipeKey, count + 1);
+            }
+
             // R98.6: For capture_multi_angle/recapture_screenshot, auto-inject
             // interactions + labels from the last pdb_analyze result if the
             // LLM didn't pass them explicitly
@@ -533,6 +555,16 @@ export function useAgentLoop() {
                   const recipe = (call.arguments.recipe as string) || 'unknown';
                   const analysisSummary = JSON.stringify(lastAnalysisData || {}).slice(0, 2000);
                   try {
+                    // R100.4: Emit progress event while VLM is analyzing
+                    options.onProgress?.({
+                      type: 'tool_result',
+                      toolResult: {
+                        callId: call.id,
+                        name: 'vlm_analyzing',
+                        ok: true,
+                        result: { detail: `VLM 正在分析 ${screenshots.length} 张截图...`, recipe },
+                      },
+                    });
                     const vlmData = await selectBestWithRetry(screenshots, recipe, analysisSummary);
                     if (vlmData) {
                       // Attach VLM result to the tool result

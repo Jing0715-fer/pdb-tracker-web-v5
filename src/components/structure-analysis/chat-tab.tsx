@@ -1468,6 +1468,11 @@ export function ChatTab() {
             case "tool_result": {
               const tr = event.toolResult;
               if (tr) {
+                // R100.4: Show "VLM analyzing..." for the vlm_analyzing pseudo-event
+                if (tr.name === 'vlm_analyzing') {
+                  setAgentProgress(`VLM 正在分析截图... (可能需要 10-30 秒)`);
+                  break;
+                }
                 setAgentProgress(`工具 ${tr.name} 完成 (${tr.ok ? "成功" : "失败"})`);
                 // Update the last tool_call command's status
                 updateMessage(pendingId, (prev) => {
