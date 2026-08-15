@@ -35,10 +35,26 @@ import { ProvidersPanel } from './ProvidersPanel';
 import { cn } from '@/lib/utils';
 
 const SUGGESTIONS = [
-  { label: '加载 4HHB', text: '请加载 PDB 结构 4HHB 并分析其氢键相互作用' },
-  { label: '加载 6LU7', text: '加载 6LU7 (SARS-CoV-2 主蛋白酶) 并查看与配体的相互作用' },
-  { label: '分析口袋', text: '加载 1CBS 然后运行 binding_pocket 分析' },
-  { label: '截图', text: '加载 4HHB 后从多个角度截图' },
+  {
+    icon: '',
+    title: 'Analyze complex',
+    prompt: 'Load 1CBS and analyze its structure: get metadata, run hydrogen bond and salt bridge analysis on chain A, and summarize the key interactions.',
+  },
+  {
+    icon: '',
+    title: 'Active site analysis',
+    prompt: 'Load 6LU7 (SARS-CoV-2 Mpro) and analyze the ligand binding pocket — run hydrogen bonds and salt bridges between chain A and the ligand, then focus the camera on the ligand.',
+  },
+  {
+    icon: '',
+    title: 'Oligomer analysis',
+    prompt: 'Load 4HHB (hemoglobin) and analyze all chain-chain interactions. Set the representation to cartoon with chain coloring.',
+  },
+  {
+    icon: '',
+    title: 'Visualize',
+    prompt: 'Load 1CBS, set the representation to ball-and-stick, color by element, then focus on residue ARG30.',
+  },
 ];
 
 export function AgentChatPanel() {
@@ -403,25 +419,28 @@ export function AgentChatPanel() {
 
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center gap-4 py-8">
-      <div className="flex items-center gap-2 text-claude-accent">
-        <Sparkles className="h-6 w-6" />
-        <span className="text-sm font-semibold">DeepSeek Harness Agent</span>
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
+      <div className="rounded-full bg-claude-accent-light/40 p-3">
+        <Sparkles className="h-5 w-5 text-claude-accent" />
       </div>
-      <p className="text-xs text-claude-text-muted max-w-xs">
-        一个受 DeepSeek Harness 架构启发的 agent 子系统：append-only 会话事件日志、
-        turn/step agent loop、工具注册表 + 执行管道 + 权限网关、LLM 适配器接口。
-        所有 agent 活动通过工具注册表进行。
-      </p>
-      <div className="flex flex-col gap-1.5 w-full max-w-xs">
+      <div>
+        <p className="text-xs font-medium text-claude-text">Molcraft AI Agent</p>
+        <p className="text-[10px] text-claude-text-muted mt-0.5 leading-relaxed">
+          Ask me to analyze structures, run analyses, or change visualizations.
+        </p>
+      </div>
+      <div className="w-full space-y-1 mt-2">
         {SUGGESTIONS.map((s) => (
           <button
-            key={s.label}
-            onClick={() => onPick(s.text)}
-            className="group flex items-center gap-2 rounded-md border border-claude-border bg-claude-bg-surface px-3 py-2 text-left text-xs hover:border-claude-accent/50 hover:bg-claude-accent/5 transition-colors"
+            key={s.title}
+            onClick={() => onPick(s.prompt)}
+            className="flex w-full items-start gap-2 rounded-md border border-claude-border-light/40 dark:border-claude-border/40 bg-claude-bg/40 dark:bg-claude-bg-elevated/40 px-2 py-1.5 text-left hover:border-claude-accent/40 hover:bg-claude-accent-light/20 transition-colors"
           >
-            <ChevronRight className="h-3 w-3 text-claude-text-muted group-hover:text-claude-accent shrink-0" />
-            <span className="text-claude-text">{s.label}</span>
+            <span className="text-sm shrink-0">{s.icon}</span>
+            <div className="min-w-0">
+              <div className="text-[10px] font-medium text-claude-text">{s.title}</div>
+              <div className="text-[9px] text-claude-text-muted truncate">{s.prompt}</div>
+            </div>
           </button>
         ))}
       </div>

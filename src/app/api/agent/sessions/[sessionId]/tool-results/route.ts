@@ -29,9 +29,17 @@ export async function POST(
 ) {
   const { sessionId } = await params;
   const manager = getAgentManager();
-  const loop = manager.getLoop(sessionId);
+  // If the session isn't in memory, try to resume it from the DB.
+  let loop = manager.getLoop(sessionId);
   if (!loop) {
-    return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    const resumed = await manager.resumeSession(sessionId);
+    if (!resumed) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    loop = manager.getLoop(sessionId);
+    if (!loop) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
   }
 
   let body: { results?: ToolResultInput[] };

@@ -1600,3 +1600,38 @@ Task: Simplify provider UI, add missing providers (MiniMax etc.), replace emoji 
 - typecheck: 0 错误
 - agent-browser: 下拉菜单列出全部 16 个可配置供应商; 选择 DeepSeek 后 Base URL 自动填充 "https://api.deepseek.com/v1"; API Key 输入框显示; 已配置列表显示 ZAI 标签
 - 控制台无错误
+
+---
+
+Task ID: welcome-fix-and-analysis-test
+Agent: main
+Task: Fix DSH welcome message + test analysis flows + fix session-not-found bug
+
+## 完成的修改
+
+1. **欢迎词统一** — DSH 模式的 EmptyState 改为与 legacy chat-tab 完全一致：
+   - 标题："Molcraft AI Agent" + "Ask me to analyze structures, run analyses, or change visualizations."
+   - 4 个建议按钮（Analyze complex / Active site analysis / Oligomer analysis / Visualize），每个带标题 + prompt 预览
+
+2. **修复 Session not found bug** — 当服务器 OOM 重启后，内存中的会话丢失，messages 和 tool-results 路由返回 404。修复：两个路由现在在会话不在内存时自动调用 `manager.resumeSession()` 从数据库恢复。
+
+3. **供应商目录补齐** — 从 deepseek-harness 的 pi-ai builtinProviders 补齐到 17 个供应商（新增 Google、MiniMax、xAI、Mistral、Groq、OpenRouter、Fireworks），移除 emoji 改用文字标签。
+
+4. **ProvidersPanel 简化** — 改为一个下拉菜单选择供应商 → Base URL 自动填充 → API Key 输入 → 测试/保存按钮的简洁流程。
+
+## 验证结果
+
+### curl 完整分析流程测试：
+1. **加载 1CBS**: POST /messages "Load PDB 1CBS" → 200 {done:false, toolCalls:[pdb_load]}
+2. **提交加载结果**: POST /tool-results → 200 {done:true, finalContent:"已成功加载PDB 1CBS - 视黄素结合蛋白。X射线晶体结构，分辨率1.8Å..."}
+3. **请求氢键分析**: POST /messages "分析氢键相互作用 chain A" → 200 {done:false, toolCalls:[pdb_analyze]}
+4. **提交分析结果**: POST /tool-results → 200 {done:false} → 智能体自动调用 capture_multi_angle
+5. **提交截图结果**: POST /tool-results → 200 {done:true, finalContent:"已分析A链的氢键相互作用，发现2个氢键：1. A:32与A:45之间的氢键，距离2.8Å 2. A:56与A:78之间的氢键，距离3.1Å...已从前方、侧面和顶部角度捕获了氢键相互作用的截图。"}
+
+### Session not found 修复验证：
+- 向已持久化但不在内存的会话发送消息 → 自动恢复 → 200 {done:false, toolCalls:[set_representation]}（不再返回 404 "Session not found"）
+
+### agent-browser 验证：
+- 欢迎词正确显示："Molcraft AI Agent" + "Ask me to analyze structures..."
+- 4 个建议按钮可见且可点击
+- 发送 "Load PDB 1CBS" → 智能体调用 pdb_load → Molstar 查看器加载 1CBS → 智能体回复结构信息
