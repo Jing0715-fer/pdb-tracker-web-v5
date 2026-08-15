@@ -85,6 +85,7 @@ export interface AgentSessionState {
   startNewSession: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
   listSessions: () => Promise<SessionListItem[]>;
+  regenerate: () => Promise<void>;
 }
 
 function parseArgs(argsStr: string): Record<string, unknown> {
@@ -490,6 +491,17 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     [driveLoop],
   );
 
+  /** Regenerate the last assistant response (re-drive from last user message). */
+  const regenerate = useCallback(async () => {
+    if (!sessionIdRef.current || drivingRef.current) return;
+    setError(null);
+    try {
+      await driveLoop(`/api/agent/sessions/${sessionIdRef.current}/regenerate`, {});
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [driveLoop]);
+
   const resolveApproval = useCallback(
     async (callId: string, decision: 'allowed-once' | 'rejected' | 'cancelled') => {
       decisionsRef.current.set(callId, decision);
@@ -579,5 +591,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     startNewSession,
     loadSession,
     listSessions,
+    regenerate,
   };
 }

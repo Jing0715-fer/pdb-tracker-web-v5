@@ -15,17 +15,36 @@ import type { ConversationNode } from './use-agent-session';
 
 const CARD_META: Record<
   string,
-  { icon: typeof Box; accent: string; bg: string }
+  { icon: typeof Box; accent: string; bg: string; border: string; label: string }
 > = {
-  pdb: { icon: Box, accent: 'text-emerald-600', bg: 'bg-emerald-500/10' },
-  measure: { icon: Ruler, accent: 'text-sky-600', bg: 'bg-sky-500/10' },
-  screenshot: { icon: Camera, accent: 'text-purple-600', bg: 'bg-purple-500/10' },
-  analysis: { icon: FlaskConical, accent: 'text-amber-600', bg: 'bg-amber-500/10' },
-  generic: { icon: Wrench, accent: 'text-claude-accent', bg: 'bg-claude-accent/10' },
+  pdb: { icon: Box, accent: 'text-emerald-600', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', label: 'STRUCTURE' },
+  measure: { icon: Ruler, accent: 'text-sky-600', bg: 'bg-sky-500/10', border: 'border-sky-500/30', label: 'MEASURE' },
+  screenshot: { icon: Camera, accent: 'text-purple-600', bg: 'bg-purple-500/10', border: 'border-purple-500/30', label: 'CAPTURE' },
+  analysis: { icon: FlaskConical, accent: 'text-amber-600', bg: 'bg-amber-500/10', border: 'border-amber-500/30', label: 'ANALYSIS' },
+  generic: { icon: Wrench, accent: 'text-claude-accent', bg: 'bg-claude-accent/10', border: 'border-claude-border', label: 'TOOL' },
 };
 
+/** Infer the card category from a tool name. */
+function inferCategory(toolName: string): string {
+  const name = toolName.toLowerCase();
+  if (name.startsWith('pdb_load') || name.startsWith('load_') || name.includes('representation') || name.includes('color') || name.includes('camera') || name.includes('focus') || name.includes('background') || name.includes('spin') || name.includes('rock') || name.includes('visibility') || name.includes('select') || name.includes('label') || name.includes('clear')) {
+    return 'pdb';
+  }
+  if (name.includes('measure') || name.includes('distance') || name.includes('angle') || name.includes('dihedral')) {
+    return 'measure';
+  }
+  if (name.includes('capture') || name.includes('screenshot') || name.includes('snapshot') || name.includes('export') || name.includes('recapture')) {
+    return 'screenshot';
+  }
+  if (name.includes('analyze') || name.includes('fetch') || name.includes('interface') || name.includes('interactions') || name.includes('align') || name.includes('pocket') || name.includes('screening') || name.includes('electrostatic') || name.includes('detect')) {
+    return 'analysis';
+  }
+  return 'generic';
+}
+
 export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind: 'tool-call' }> }) {
-  const meta = CARD_META['generic']!;
+  const category = inferCategory(node.name);
+  const meta = CARD_META[category] ?? CARD_META['generic']!;
   const Icon = meta.icon;
   const status = node.status;
   const [copied, setCopied] = useState(false);
@@ -48,16 +67,20 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
       <div className="flex items-start gap-2 max-w-[92%]">
         <div
           className={cn(
-            'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-claude-border',
+            'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border',
             meta.bg,
+            meta.border,
           )}
         >
           <Icon className={cn('h-3.5 w-3.5', meta.accent)} />
         </div>
-        <div className="rounded-2xl rounded-tl-sm border border-claude-border bg-claude-bg-surface overflow-hidden min-w-0 flex-1">
+        <div className={cn('rounded-2xl rounded-tl-sm border bg-claude-bg-surface overflow-hidden min-w-0 flex-1', meta.border)}>
           {/* Header */}
           <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-claude-bg-elevated/50 border-b border-claude-border">
             <div className="flex items-center gap-1.5 min-w-0">
+              <span className={cn('text-[9px] font-bold px-1 py-0.5 rounded', meta.bg, meta.accent)}>
+                {meta.label}
+              </span>
               <code className={cn('text-xs font-semibold truncate', meta.accent)}>
                 {node.name}
               </code>

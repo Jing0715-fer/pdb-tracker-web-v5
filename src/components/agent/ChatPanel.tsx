@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -170,9 +170,26 @@ export function AgentChatPanel() {
           <EmptyState onPick={(t) => void session.sendMessage(t)} />
         ) : (
           <div className="flex flex-col gap-3">
-            {session.nodes.map((node) => (
-              <NodeRenderer key={node.seq} node={node} onResend={(text) => void session.sendMessage(text)} />
-            ))}
+            {(() => {
+              // Find the last assistant-message seq for the regenerate button.
+              let lastAssistantSeq = -1;
+              for (let i = session.nodes.length - 1; i >= 0; i--) {
+                if (session.nodes[i]!.kind === 'assistant-message') {
+                  lastAssistantSeq = session.nodes[i]!.seq;
+                  break;
+                }
+              }
+              return session.nodes.map((node) => (
+                <NodeRenderer
+                  key={node.seq}
+                  node={node}
+                  onResend={(text) => void session.sendMessage(text)}
+                  onRegenerate={() => void session.regenerate()}
+                  isLastAssistant={node.seq === lastAssistantSeq}
+                  driving={session.driving}
+                />
+              ));
+            })()}
             {session.driving && (
               <div className="flex items-center gap-2 text-xs text-claude-text-muted px-1">
                 <Loader2 className="h-3 w-3 animate-spin text-claude-accent" />
@@ -265,12 +282,12 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-function NodeRenderer({ node, onResend }: { node: ConversationNode; onResend?: (text: string) => void }) {
+function NodeRenderer({ node, onResend, onRegenerate, isLastAssistant, driving }: { node: ConversationNode; onResend?: (text: string) => void; onRegenerate?: () => void; isLastAssistant?: boolean; driving?: boolean }) {
   switch (node.kind) {
     case 'user-message':
       return <UserMessageNode key={node.seq} text={node.text} onResend={onResend} />;
     case 'assistant-message':
-      return <AssistantMessageNode key={node.seq} text={node.text} reasoning={node.reasoning} />;
+      return <AssistantMessageNode key={node.seq} text={node.text} reasoning={node.reasoning} onRegenerate={isLastAssistant ? onRegenerate : undefined} driving={driving} />;
     case 'streaming-assistant':
       return (
         <div className="flex justify-start">
@@ -424,8 +441,8 @@ function UserMessageNode({ text, onResend }: { text: string; onResend?: (text: s
   );
 }
 
-/** Assistant message node with hover copy action. */
-function AssistantMessageNode({ text, reasoning }: { text: string; reasoning?: string }) {
+/** Assistant message node with hover copy + regenerate actions. */
+function AssistantMessageNode({ text, reasoning, onRegenerate, driving }: { text: string; reasoning?: string; onRegenerate?: () => void; driving?: boolean }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     try {
@@ -456,14 +473,27 @@ function AssistantMessageNode({ text, reasoning }: { text: string; reasoning?: s
               <div className="mt-1 whitespace-pre-wrap opacity-80">{reasoning}</div>
             </details>
           )}
+          {/* Hover action bar */}
           {text && (
-            <button
-              onClick={handleCopy}
-              className="absolute -bottom-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
-              title="复制消息"
-            >
-              {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-            </button>
+            <div className="absolute -bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {onRegenerate && (
+                <button
+                  onClick={onRegenerate}
+                  disabled={driving}
+                  className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="重新生成"
+                >
+                  <RotateCw className="h-3 w-3" />
+                </button>
+              )}
+              <button
+                onClick={handleCopy}
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+                title="复制消息"
+              >
+                {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+              </button>
+            </div>
           )}
         </div>
       </div>

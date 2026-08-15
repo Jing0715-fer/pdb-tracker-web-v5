@@ -950,3 +950,66 @@ This is the third cron-triggered review round for the PDB Tracker + DeepSeek Har
 3. Export JSON UI button + import session from JSON
 4. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
 5. Per-session settings (model, temperature, system prompt override)
+
+---
+
+Task ID: cron-review-4
+Agent: main
+Task: Cron-triggered QA + new feature (regenerate response) + style polish (color-coded tool categories)
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the fourth cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + persistence + auto titles + token meter + copy actions + session search + export markdown + message edit. This round: QA-tested the UI (no regressions, tool-calling flow works end-to-end), then added the regenerate-response feature and polished tool card styling with color-coded category icons.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working: session persistence, history sidebar with search, streaming UI, auto titles, token meter, copy/edit actions, export markdown, 37 PDB tools, full tool-calling loop
+- New this round: regenerate response action, color-coded tool category icons + labels
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "加载 1CBS" → agent called pdb_load → Molstar viewer loaded 1CBS → agent responded "我将为您加载 PDB ID 1CBS 的结构。" → auto title "1CBS加载" → token meter + tool count + export link all visible. No console errors (only ChunkLoadError from server restarts + pre-existing Molstar `[lociFromResidue]` warning from the viewer).
+2. **Regenerate response** (new feature):
+   - Built `POST /api/agent/sessions/[sessionId]/regenerate` API route — finds the last user/message event, re-injects its text into the inbox, and drives the loop (opens a new turn with a fresh LLM call)
+   - Added `regenerate()` function to the useAgentSession hook
+   - Added a "重新生成" (regenerate) button with RotateCw icon to the LAST assistant message only (hover action bar, alongside the copy button)
+   - Button is disabled while driving
+   - **Verified via curl**: POST /regenerate → 200 with new response "你好！很高兴见到你！有什么我可以帮助你的吗？" (turn 2, fresh LLM call)
+   - **Verified via agent-browser**: clicked "重新生成" button → new response appeared "你好！很高兴为您提供帮助..." below the original
+3. **Color-coded tool categories** (style polish):
+   - Added `inferCategory(toolName)` function that maps tool names to 5 categories: pdb (structure), measure, screenshot, analysis, generic
+   - Each category now has: a distinct icon (Box/Ruler/Camera/FlaskConical/Wrench), accent color (emerald/sky/purple/amber/claude-accent), background tint, border color, and a bold uppercase label badge (STRUCTURE/MEASURE/CAPTURE/ANALYSIS/TOOL)
+   - Previously all tool cards used the generic style; now pdb_load shows "STRUCTURE" in emerald, measure_distance shows "MEASURE" in sky, etc.
+   - **Verified**: pdb_load tool card shows "STRUCTURE" label badge + emerald-colored border/icon
+4. **Hover action bar** (style polish):
+   - The copy + regenerate buttons now appear together in a unified hover action bar (bottom-right of assistant messages)
+   - Smooth opacity transition on group-hover
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl regenerate**: POST /regenerate → 200 {done:true, finalContent:"你好！很高兴见到你！...", turn:2, steps:1}
+- **agent-browser**:
+  - Chat panel header: auto title "4HHB加载", token meter "7.3k", tool count "1 tools", export link, history button
+  - User message: "编辑并重发" (edit) button on hover
+  - Assistant message: "重新生成" (regenerate) + "复制消息" (copy) buttons on hover
+  - Tool card: "STRUCTURE" category label + "pdb_load" code + color-coded emerald border/icon
+  - Regenerate button works: clicked → new response appeared
+- **Console errors**: only ChunkLoadError (server restarts) + pre-existing Molstar `[lociFromResidue]` warning (viewer-side)
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Regenerate appends rather than replaces**: the regenerate feature adds a new turn instead of replacing the old response. A true "replace" would need session fork + truncate capability (dsh has fork/resume). The current approach preserves history (user can see both responses).
+2. **Molstar `[lociFromResidue]` warning**: a pre-existing Molcraft issue when tool arguments don't perfectly match viewer state — not introduced by the agent subsystem. Could be improved by validating args before dispatch.
+3. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts. Restart: `(setsid bash dev-watchdog.sh >> watchdog.log 2>&1 &)`
+4. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot); a streaming adapter would give true token-by-token rendering.
+5. **Per-session settings**: model selector, temperature, system prompt override — not yet implemented (would need API + UI).
+
+### Recommended next priorities
+1. Session fork: "edit message → fork session from that point" (dsh has fork/resume) — enables true regenerate-without-append
+2. Per-session settings (model, temperature, system prompt override)
+3. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
+4. Import session from JSON (complement to export)
+5. Keyboard shortcuts (e.g. Cmd+R to regenerate, Cmd+K to focus input)
