@@ -1,15 +1,17 @@
 /**
  * SessionHistorySidebar — a collapsible sidebar listing all persisted agent
  * sessions. Click a session to resume it; click "New" to start a fresh one.
+ * Includes a search/filter input that filters sessions by title or id.
  *
  * The sidebar fetches the session list on open and refreshes every 15s.
  */
 
 'use client';
 
-import { useEffect, useState } from 'react';
-import { History, Plus, MessageSquare, Trash2, X, Loader2, Clock } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { History, Plus, MessageSquare, Trash2, X, Loader2, Clock, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import type { SessionListItem } from './use-agent-session';
 
@@ -34,6 +36,7 @@ export function SessionHistorySidebar({
 }: Props) {
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
 
   const refresh = async () => {
     setLoading(true);
@@ -55,6 +58,18 @@ export function SessionHistorySidebar({
     const i = setInterval(() => void refresh(), 15_000);
     return () => clearInterval(i);
   }, [open]);
+
+  // Filter sessions by query (title or id). Memoized — recomputed only when
+  // sessions or query change.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.id.toLowerCase().includes(q),
+    );
+  }, [sessions, query]);
 
   if (!open) return null;
 
@@ -85,7 +100,7 @@ export function SessionHistorySidebar({
           </button>
         </div>
 
-        <div className="p-2 border-b border-claude-border">
+        <div className="p-2 border-b border-claude-border space-y-2">
           <Button
             size="sm"
             onClick={onNew}
@@ -94,6 +109,23 @@ export function SessionHistorySidebar({
             <Plus className="h-3.5 w-3.5 mr-1" />
             新会话
           </Button>
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-claude-text-muted pointer-events-none" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索会话…"
+              className="h-7 pl-7 pr-7 text-xs bg-claude-bg-base border-claude-border focus-visible:ring-claude-accent/30"
+            />
+            {query && (
+              <button
+                onClick={() => setQuery('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-claude-text-muted hover:text-claude-text"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-1.5 py-1.5 min-h-0">
@@ -102,14 +134,21 @@ export function SessionHistorySidebar({
               <Loader2 className="h-3 w-3 animate-spin" />
               加载中…
             </div>
-          ) : sessions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-claude-text-muted text-xs gap-2 text-center px-3">
-              <MessageSquare className="h-5 w-5 opacity-40" />
-              <span>还没有会话记录。<br />点击"新会话"开始第一次对话。</span>
-            </div>
+          ) : filtered.length === 0 ? (
+            query ? (
+              <div className="flex flex-col items-center justify-center py-8 text-claude-text-muted text-xs gap-2 text-center px-3">
+                <Search className="h-5 w-5 opacity-40" />
+                <span>未找到匹配 &ldquo;{query}&rdquo; 的会话</span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8 text-claude-text-muted text-xs gap-2 text-center px-3">
+                <MessageSquare className="h-5 w-5 opacity-40" />
+                <span>还没有会话记录。<br />点击&ldquo;新会话&rdquo;开始第一次对话。</span>
+              </div>
+            )
           ) : (
             <ul className="flex flex-col gap-1">
-              {sessions.map((s) => (
+              {filtered.map((s) => (
                 <li key={s.id}>
                   <button
                     onClick={() => onSelect(s.id)}
@@ -152,7 +191,7 @@ export function SessionHistorySidebar({
         </div>
 
         <div className="px-3 py-1.5 border-t border-claude-border text-[10px] text-claude-text-muted">
-          {sessions.length} 个会话 · 自动保存
+          {query ? `${filtered.length}/${sessions.length}` : sessions.length} 个会话 · 自动保存
         </div>
       </aside>
     </>

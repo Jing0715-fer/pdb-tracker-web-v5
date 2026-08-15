@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -151,6 +151,16 @@ export function AgentChatPanel() {
           >
             <Plus className="h-3 w-3" />
           </button>
+          {session.sessionId && session.nodes.length > 0 && (
+            <a
+              href={`/api/agent/sessions/${session.sessionId}/export?format=md`}
+              download
+              className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
+              title="导出为 Markdown"
+            >
+              <Download className="h-3 w-3" />
+            </a>
+          )}
         </div>
       </div>
 
@@ -161,7 +171,7 @@ export function AgentChatPanel() {
         ) : (
           <div className="flex flex-col gap-3">
             {session.nodes.map((node) => (
-              <NodeRenderer key={node.seq} node={node} />
+              <NodeRenderer key={node.seq} node={node} onResend={(text) => void session.sendMessage(text)} />
             ))}
             {session.driving && (
               <div className="flex items-center gap-2 text-xs text-claude-text-muted px-1">
@@ -255,21 +265,10 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-function NodeRenderer({ node }: { node: ConversationNode }) {
+function NodeRenderer({ node, onResend }: { node: ConversationNode; onResend?: (text: string) => void }) {
   switch (node.kind) {
     case 'user-message':
-      return (
-        <div className="flex justify-end">
-          <div className="flex items-start gap-2 max-w-[85%]">
-            <div className="rounded-2xl rounded-tr-sm bg-claude-accent text-white px-3 py-2 text-sm">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.text}</ReactMarkdown>
-            </div>
-            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-accent text-white">
-              <User className="h-3.5 w-3.5" />
-            </div>
-          </div>
-        </div>
-      );
+      return <UserMessageNode key={node.seq} text={node.text} onResend={onResend} />;
     case 'assistant-message':
       return <AssistantMessageNode key={node.seq} text={node.text} reasoning={node.reasoning} />;
     case 'streaming-assistant':
@@ -333,6 +332,96 @@ function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** User message node with hover edit + re-send action. */
+function UserMessageNode({ text, onResend }: { text: string; onResend?: (text: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+
+  const handleSave = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== text && onResend) {
+      onResend(trimmed);
+    }
+    setEditing(false);
+  };
+
+  const handleCancel = () => {
+    setDraft(text);
+    setEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSave();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      handleCancel();
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="flex justify-end">
+        <div className="flex items-start gap-2 max-w-[85%]">
+          <div className="rounded-2xl rounded-tr-sm bg-claude-bg-surface border-2 border-claude-accent/40 px-2 py-1.5 text-sm min-w-[200px]">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              autoFocus
+              className="min-h-[44px] max-h-32 resize-none text-sm bg-transparent border-0 p-0 focus-visible:ring-0"
+              rows={1}
+            />
+            <div className="flex items-center justify-end gap-1.5 mt-1">
+              <button
+                onClick={handleCancel}
+                className="flex items-center gap-0.5 h-5 px-2 rounded text-[10px] text-claude-text-muted hover:text-claude-text hover:bg-claude-bg-elevated transition-colors"
+              >
+                <X className="h-3 w-3" />
+                取消
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!draft.trim() || draft.trim() === text}
+                className="flex items-center gap-0.5 h-5 px-2 rounded text-[10px] bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Send className="h-3 w-3" />
+                重发
+              </button>
+            </div>
+          </div>
+          <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-accent text-white">
+            <User className="h-3.5 w-3.5" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group flex justify-end">
+      <div className="flex items-start gap-2 max-w-[85%]">
+        <div className="relative rounded-2xl rounded-tr-sm bg-claude-accent text-white px-3 py-2 text-sm">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          {onResend && (
+            <button
+              onClick={() => setEditing(true)}
+              className="absolute -bottom-2 -left-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+              title="编辑并重发"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-accent text-white">
+          <User className="h-3.5 w-3.5" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Assistant message node with hover copy action. */

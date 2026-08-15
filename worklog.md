@@ -871,3 +871,82 @@ This is the second cron-triggered review round for the PDB Tracker + DeepSeek Ha
 3. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
 4. Session search/filter in the history sidebar
 5. Export session as markdown/JSON
+
+---
+
+Task ID: cron-review-3
+Agent: main
+Task: Cron-triggered QA + new features (session search, token usage on resume, export markdown, message edit) + style polish
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the third cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the agent subsystem + session persistence + auto titles + token meter + copy actions. This round: QA-tested the UI (no regressions), then added 4 new features: session search/filter, token usage re-accumulation on resume, export session as markdown, and message edit + re-send.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working: session persistence, history sidebar, streaming UI, auto titles, token meter, copy actions, tool timer, 37 PDB tools, full tool-calling loop
+- New this round: session search/filter, token usage on resume, export markdown, message edit + re-send
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded correctly, no console errors (only ChunkLoadError from server restarts + a pre-existing Molstar `[lociFromResidue]` warning from the viewer, not agent code)
+2. **Session search/filter** (new feature):
+   - Added a search input to SessionHistorySidebar with a Search icon, clear (X) button, and live filtering
+   - Filters sessions by title OR session ID (case-insensitive)
+   - Shows "未找到匹配 'query' 的会话" empty state when no results
+   - Footer shows filtered/total count (e.g. "1/13 个会话")
+   - Fixed a React hooks violation (useMemo was after conditional return — moved before)
+   - **Verified**: typed "测试" → filtered from 13 to 1 session ("测试搜索"), footer shows "1/13"
+3. **Token usage re-accumulation on resume** (new feature):
+   - Replaced stateful `setTokenUsage` incremental accumulation with a `useMemo` derived from the full events array
+   - This means token usage is always correct regardless of how events arrive (live OR replayed on resume) — no double-counting, no reset-to-zero on resume
+   - Removed all `setTokenUsage` reset calls in startNewSession/loadSession (events array reset already handles it)
+   - **Verified**: token meter shows "22.8k" after a multi-tool turn; derived computation works for both live and resumed sessions
+4. **Export session as markdown** (new feature):
+   - Built `GET /api/agent/sessions/[sessionId]/export?format=md|json` API route
+   - Markdown format renders a full transcript: session title, ID, event/message/tool counts, then per-turn user/assistant messages with tool call blocks + token usage, tool results in collapsible `<details>` tags
+   - Added a Download icon link to the ChatPanel header (visible when session has messages)
+   - Fixed a ByteString error (Content-Disposition header can't contain Chinese chars — stripped all non-ASCII from filename)
+   - Export route auto-resumes sessions from DB if not in memory
+   - **Verified**: curl returns full markdown transcript with title "问候", stats, and conversation; browser shows "导出为 Markdown" link
+5. **Message edit + re-send** (new feature):
+   - Built `UserMessageNode` component with hover edit (Pencil icon, bottom-left of user bubble)
+   - Click edit → inline Textarea replaces the bubble, with "取消" (cancel) + "重发" (re-send) buttons
+   - Enter saves + re-sends, Escape cancels
+   - Re-sending calls `sendMessage(editedText)` which appends a new user/message and drives the loop
+   - **Verified**: component renders with edit button on hover, inline editor opens on click
+6. **Style polish**:
+   - Search input with Search icon + clear button
+   - Export link with Download icon in header
+   - Edit button (Pencil icon) on user messages with group-hover
+   - Inline editor with border accent + action buttons
+   - Filtered/total count in sidebar footer
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl export**: GET /export?format=md → 200 with full markdown transcript (title, stats, messages, tool calls, token usage)
+- **agent-browser**:
+  - Chat panel renders with all features: auto title "测试搜索", token meter "22.8k", tool count "6 tools", export link "导出为 Markdown", history button "会话历史"
+  - Sidebar search: typed "测试" → filtered 13→1 sessions, footer "1/13 个会话"
+  - Auto title: "测试搜索" (from message "测试搜索功能")
+  - Token meter: "22.8k" (derived from events, correct on resume)
+  - Export link visible after messages exist
+- **Console errors**: only ChunkLoadError (server restarts, auto-recovered) + pre-existing Molstar `[lociFromResidue]` warning (viewer-side, not agent code)
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Message edit re-send**: editing a user message appends a new turn (doesn't truncate the old conversation). A true "edit + fork from here" would need session fork capability (dsh has fork/resume).
+2. **Export JSON format**: the `?format=json` endpoint is implemented but not wired to a UI button (only markdown has a download link).
+3. **Molstar `[lociFromResidue]` warning**: a pre-existing Molcraft issue when tool arguments don't perfectly match viewer state — not introduced by the agent subsystem, but could be improved by validating args before dispatch.
+4. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts. Restart: `(setsid bash dev-watchdog.sh >> watchdog.log 2>&1 &)`
+5. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot); a streaming adapter would give true token-by-token rendering.
+
+### Recommended next priorities
+1. Regenerate/retry response actions (requires session fork — "replay from seq" capability)
+2. Session fork: "edit message → fork session from that point" (dsh has fork/resume)
+3. Export JSON UI button + import session from JSON
+4. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
+5. Per-session settings (model, temperature, system prompt override)

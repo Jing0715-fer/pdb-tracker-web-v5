@@ -231,12 +231,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [tokenUsage, setTokenUsage] = useState<TokenUsageSummary>({
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    requestCount: 0,
-  });
   const executionsRef = useRef<Map<string, ToolExecution>>(new Map());
   const viewerRef = useRef(viewer);
   const sessionIdRef = useRef<string | null>(null);
@@ -301,18 +295,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           const data = ev.data as { title: string };
           setSessionTitle(data.title);
         }
-        // Accumulate token usage from assistant/message events.
-        if (ev.type === 'assistant/message') {
-          const data = ev.data as { usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
-          if (data.usage) {
-            setTokenUsage((prev) => ({
-              promptTokens: prev.promptTokens + (data.usage!.promptTokens ?? 0),
-              completionTokens: prev.completionTokens + (data.usage!.completionTokens ?? 0),
-              totalTokens: prev.totalTokens + (data.usage!.totalTokens ?? 0),
-              requestCount: prev.requestCount + 1,
-            }));
-          }
-        }
       } catch {
         /* ignore parse errors */
       }
@@ -327,6 +309,27 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     () => projectNodes(events, executionsRef.current),
     [events],
   );
+
+  // Compute token usage from ALL events (works for both live + replayed/resumed
+  // sessions — no double-counting because it's derived, not accumulated).
+  const tokenUsage = useMemo<TokenUsageSummary>(() => {
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let totalTokens = 0;
+    let requestCount = 0;
+    for (const ev of events) {
+      if (ev.type === 'assistant/message') {
+        const data = ev.data as { usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
+        if (data.usage) {
+          promptTokens += data.usage.promptTokens ?? 0;
+          completionTokens += data.usage.completionTokens ?? 0;
+          totalTokens += data.usage.totalTokens ?? 0;
+          requestCount += 1;
+        }
+      }
+    }
+    return { promptTokens, completionTokens, totalTokens, requestCount };
+  }, [events]);
 
   /** Execute a client-side tool call against Molstar. */
   const executeToolCall = useCallback(
@@ -513,7 +516,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     setError(null);
     setSessionId(null);
     setSessionTitle('New session');
-    setTokenUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0 });
     try {
       const res = await fetch('/api/agent/sessions', {
         method: 'POST',
@@ -535,7 +537,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     setError(null);
     setSessionId(null);
     setSessionTitle('Loading…');
-    setTokenUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0 });
     try {
       const res = await fetch(`/api/agent/sessions/${id}/resume`, {
         method: 'POST',
