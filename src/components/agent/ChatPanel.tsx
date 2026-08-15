@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings, Upload } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings, Upload, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +30,7 @@ import { ApprovalPanel } from './ApprovalPanel';
 import { SessionHistorySidebar } from './SessionHistorySidebar';
 import { KeyboardShortcutsDialog, useKeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 import { SessionSettingsPopover } from './SessionSettingsPopover';
+import { ToolStatsPopover } from './ToolStatsPopover';
 import { cn } from '@/lib/utils';
 
 const SUGGESTIONS = [
@@ -45,6 +46,7 @@ export function AgentChatPanel() {
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toolStatsOpen, setToolStatsOpen] = useState(false);
   const shortcutsDialog = useKeyboardShortcutsDialog();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -231,6 +233,15 @@ export function AgentChatPanel() {
               <Settings className="h-3 w-3" />
             </button>
           )}
+          {session.sessionId && session.nodes.filter((n) => n.kind === 'tool-call').length > 0 && (
+            <button
+              onClick={() => setToolStatsOpen(true)}
+              className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
+              title="工具执行统计"
+            >
+              <BarChart3 className="h-3 w-3" />
+            </button>
+          )}
           {session.sessionId && session.nodes.length > 0 && (
             <a
               href={`/api/agent/sessions/${session.sessionId}/export?format=md`}
@@ -374,6 +385,7 @@ export function AgentChatPanel() {
       )}
       <KeyboardShortcutsDialog open={shortcutsDialog.open} onClose={() => shortcutsDialog.setOpen(false)} />
       <SessionSettingsPopover sessionId={session.sessionId} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ToolStatsPopover sessionId={session.sessionId} open={toolStatsOpen} onClose={() => setToolStatsOpen(false)} fetchStats={session.getToolStats} />
     </div>
   );
 }

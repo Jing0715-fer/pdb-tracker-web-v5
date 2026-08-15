@@ -88,6 +88,7 @@ export interface AgentSessionState {
   listSessions: () => Promise<SessionListItem[]>;
   regenerate: () => Promise<void>;
   recordFeedback: (messageSeq: number, rating: 'up' | 'down') => Promise<void>;
+  getToolStats: () => Promise<Array<{ name: string; callCount: number; successCount: number; errorCount: number; successRate: number }>>;
 }
 
 function parseArgs(argsStr: string): Record<string, unknown> {
@@ -611,6 +612,25 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     }
   }, []);
 
+  /** Fetch per-tool execution statistics for the current session. */
+  const getToolStats = useCallback(async (): Promise<Array<{
+    name: string;
+    callCount: number;
+    successCount: number;
+    errorCount: number;
+    successRate: number;
+  }>> => {
+    if (!sessionIdRef.current) return [];
+    try {
+      const res = await fetch(`/api/agent/sessions/${sessionIdRef.current}/tool-stats`);
+      if (!res.ok) return [];
+      const data = (await res.json()) as { stats: Array<{ name: string; callCount: number; successCount: number; errorCount: number; successRate: number }> };
+      return data.stats ?? [];
+    } catch {
+      return [];
+    }
+  }, []);
+
   return {
     sessionId,
     sessionTitle,
@@ -630,5 +650,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     listSessions,
     regenerate,
     recordFeedback,
+    getToolStats,
   };
 }

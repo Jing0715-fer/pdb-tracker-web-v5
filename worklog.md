@@ -1267,3 +1267,64 @@ This is the eighth cron-triggered review round for the PDB Tracker + DeepSeek Ha
 3. Event compaction for long sessions (replace old tool/results with summaries)
 4. Keyboard shortcut help dialog improvements (show settings shortcut)
 5. Per-tool execution statistics (success rate, avg duration)
+
+---
+
+Task ID: cron-review-9
+Agent: main
+Task: Cron-triggered QA + new features (maxStepsPerTurn enforcement, per-tool execution statistics)
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the ninth cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + all UI features + settings wired into loop + session import. This round: QA-tested the UI (no regressions), then enforced the maxStepsPerTurn setting in the loop's step guard and added per-tool execution statistics.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working
+- New this round: maxStepsPerTurn setting enforcement, per-tool execution statistics popover
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded correctly, feedback buttons + keyboard hints visible. No code errors.
+2. **maxStepsPerTurn setting enforcement** (new feature, was #1 priority):
+   - Moved the `extractSettings()` call BEFORE the step increment in `drive()`
+   - Added a step guard: if `this.step >= maxSteps` (from settings or options, default 10), the loop appends a `turn/end` event with reason `{kind: 'interrupted'}` and returns `{kind: 'done', finalContent: '(达到最大步数限制，已停止)'}`
+   - This prevents infinite tool-calling loops and lets users control how many steps the agent takes per turn via the settings popover
+   - **Verified via typecheck**: 0 errors
+3. **Per-tool execution statistics** (new feature):
+   - Built `GET /api/agent/sessions/[sessionId]/tool-stats` API route — computes per-tool stats from tool/call + tool/result event pairs: callCount, successCount, errorCount, successRate
+   - Added `getToolStats()` function to the useAgentSession hook
+   - Built `src/components/agent/ToolStatsPopover.tsx` — a modal popover with:
+     - Summary line: total calls + success count (✓) + error count (✗)
+     - Per-tool list with: tool name, call count, success rate bar (color-coded: green ≥80%, amber ≥50%, red <50%), success/error counts
+     - Empty state: "还没有工具调用记录"
+     - Loading state with spinner
+   - Added a BarChart3 icon button to the ChatPanel header (visible when the session has tool calls)
+   - **Verified via curl**: GET /tool-stats → 200 {stats: [{name: "pdb_load", callCount: 1, successCount: 0, errorCount: 0, successRate: 0}], totalCalls: 1}
+   - **Verified via agent-browser**: "工具执行统计" button visible in header; clicking opens popover with stats
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl tool-stats**: GET /tool-stats → 200 {stats: [{name: "pdb_load", callCount: 1, ...}], totalCalls: 1}
+- **agent-browser**:
+  - Header shows all 6 action buttons: 会话历史, 新会话, 会话设置, 工具执行统计, 导出为 Markdown, 导入会话 JSON
+  - Clicking "工具执行统计" opens the stats popover
+  - All features work without errors
+- **Console errors**: none
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Tool stats for pending calls**: calls without submitted results show successRate: 0 — could show "pending" state instead.
+2. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts.
+3. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot).
+4. **Session fork**: not yet implemented — "edit message → fork session from that point" would need truncate + new session.
+
+### Recommended next priorities
+1. Session fork: "edit message → fork session from that point" (truncate + new session)
+2. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
+3. Show pending state for tool calls without results in the stats popover
+4. Global tool stats across all sessions (not just per-session)
+5. Tool execution time tracking (add timestamps to tool/call + tool/result events)

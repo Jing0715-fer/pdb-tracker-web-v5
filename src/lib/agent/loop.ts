@@ -150,6 +150,26 @@ export class AgentLoop {
       return { kind: 'done', finalContent: '', turn: this.turn, steps: this.step };
     }
 
+    // Read the latest per-session settings BEFORE the step guard so
+    // maxStepsPerTurn is honored.
+    const settings = this.extractSettings();
+    const maxSteps = settings.maxStepsPerTurn ?? this.options.maxStepsPerTurn ?? 10;
+
+    // Step guard: if we've hit the max steps for this turn, stop.
+    if (this.step >= maxSteps) {
+      this.session.append('turn/end', {
+        turn: this.turn,
+        reason: { kind: 'interrupted' },
+      });
+      this.setStatusIdle();
+      return {
+        kind: 'done',
+        finalContent: '(达到最大步数限制，已停止)',
+        turn: this.turn,
+        steps: this.step,
+      };
+    }
+
     this.step += 1;
     this.session.append('step/start', { turn: this.turn, step: this.step });
 
@@ -157,9 +177,6 @@ export class AgentLoop {
     for (const m of claimed) {
       this.session.append('user/message', m, { surfaceOp: { op: 'append' } });
     }
-
-    // Read the latest per-session settings (if any) and apply them.
-    const settings = this.extractSettings();
 
     // Assemble prompt.
     const assembly = this.ctx.systemPrompt.assemble({
