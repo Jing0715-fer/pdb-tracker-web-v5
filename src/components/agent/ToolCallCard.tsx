@@ -63,7 +63,7 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
   };
 
   return (
-    <div className="flex justify-start">
+    <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="flex items-start gap-2 max-w-[92%]">
         <div
           className={cn(

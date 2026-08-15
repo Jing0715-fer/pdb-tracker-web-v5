@@ -93,6 +93,12 @@ export interface SessionEventMap {
     decision: 'allowed-once' | 'rejected' | 'cancelled';
   };
   'feedback/record': { messageSeq: number; rating: 'up' | 'down'; comment?: string };
+  'session/settings': {
+    model?: string;
+    temperature?: number;
+    maxStepsPerTurn?: number;
+    systemPromptOverride?: string;
+  };
 }
 
 export type SessionEventType = keyof SessionEventMap;

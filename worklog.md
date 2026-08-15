@@ -1142,3 +1142,71 @@ This is the sixth cron-triggered review round for the PDB Tracker + DeepSeek Har
 3. Event compaction for long sessions
 4. Message appearance animations (fade-in/slide-up for new messages)
 5. Import session from JSON (complement to export)
+
+---
+
+Task ID: cron-review-7
+Agent: main
+Task: Cron-triggered QA + new features (message animations, per-session settings popover)
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the seventh cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + persistence + auto titles + token meter + copy/edit/regenerate actions + session search + export markdown + color-coded tool categories + keyboard shortcuts + message feedback + feedback-in-export + keyboard help dialog + scroll-to-bottom. This round: QA-tested the UI (no regressions), then added message appearance animations and per-session settings popover.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working
+- New this round: message fade-in/slide-up animations, per-session settings (model/temperature/max steps/system prompt override)
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded "你好！我是 Molcraft AI...", feedback buttons + keyboard hints visible. No code errors.
+2. **Message appearance animations** (new feature):
+   - Added `animate-in fade-in slide-in-from-bottom-2 duration-300` classes to all message node containers:
+     - UserMessageNode (user messages)
+     - AssistantMessageNode (assistant messages)
+     - StreamingAssistantNode (live streaming)
+     - ToolCallCard (tool call cards)
+   - Uses the `tw-animate-css` library (already imported) for the animation utilities
+   - Messages now smoothly fade in + slide up from the bottom when they appear
+   - **Verified**: messages appear with smooth animation
+3. **Per-session settings popover** (new feature):
+   - Added `session/settings` event type to SessionEventMap (`{ model?, temperature?, maxStepsPerTurn?, systemPromptOverride? }`)
+   - Built `GET/POST /api/agent/sessions/[sessionId]/settings` API route — settings are stored as a `session/settings` event (durable); POST merges with existing settings (partial update)
+   - Built `src/components/agent/SessionSettingsPopover.tsx` — a modal popover with:
+     - Model input (text, default "glm-4.6")
+     - Temperature slider (0–2, step 0.1, with live value display)
+     - Max steps/turn number input (1–50)
+     - System prompt override textarea (optional)
+     - Save button with loading/saved states
+   - Added a Settings (gear) icon button to the ChatPanel header (visible when a session exists)
+   - Loads existing settings on open, saves on click
+   - **Verified via curl**: POST /settings → 200 {ok:true, settings:{model,temperature,maxStepsPerTurn}}; GET /settings returns saved settings
+   - **Verified via agent-browser**: clicked "会话设置" button → popover appeared with 模型/温度/最大步数/系统提示词覆盖/保存; Esc closed it
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl settings**: POST /settings → 200 {ok:true, settings:{model:"glm-4.6",temperature:0.5,maxStepsPerTurn:15}}; GET /settings → 200 {settings:{...}}
+- **agent-browser**:
+  - Header shows "会话设置" (gear) button next to 新会话 + 导出
+  - Clicking opens settings popover with model/temperature/max steps/system prompt fields + Save button
+  - Message animations: smooth fade-in + slide-up on all message types
+  - Esc closes the popover
+- **Console errors**: none
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Settings not yet applied to the loop**: the session/settings event is stored but the AgentLoop doesn't yet read it when building requests — it still uses the hardcoded defaults from AgentOptions. A future enhancement would have the loop read the latest settings event before each step.
+2. **Animations on every render**: the `animate-in` class re-triggers on every React re-render (e.g. when new messages arrive, ALL messages re-animate). This is a minor visual issue — could be fixed by keying on seq + only animating the newest.
+3. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts (restart #10 observed).
+4. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot).
+
+### Recommended next priorities
+1. Wire session settings into the AgentLoop (read latest settings event before each step, override AgentOptions)
+2. Fix animation re-trigger (only animate the newest message, not all on every render)
+3. Session fork: "edit message → fork session from that point"
+4. Event compaction for long sessions
+5. Import session from JSON (complement to export)

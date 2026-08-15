@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +29,7 @@ import { ToolCallCard } from './ToolCallCard';
 import { ApprovalPanel } from './ApprovalPanel';
 import { SessionHistorySidebar } from './SessionHistorySidebar';
 import { KeyboardShortcutsDialog, useKeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
+import { SessionSettingsPopover } from './SessionSettingsPopover';
 import { cn } from '@/lib/utils';
 
 const SUGGESTIONS = [
@@ -43,6 +44,7 @@ export function AgentChatPanel() {
   const session = useAgentSession({ viewer });
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const shortcutsDialog = useKeyboardShortcutsDialog();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -198,6 +200,15 @@ export function AgentChatPanel() {
           >
             <Plus className="h-3 w-3" />
           </button>
+          {session.sessionId && (
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
+              title="会话设置"
+            >
+              <Settings className="h-3 w-3" />
+            </button>
+          )}
           {session.sessionId && session.nodes.length > 0 && (
             <a
               href={`/api/agent/sessions/${session.sessionId}/export?format=md`}
@@ -325,6 +336,7 @@ export function AgentChatPanel() {
         </div>
       )}
       <KeyboardShortcutsDialog open={shortcutsDialog.open} onClose={() => shortcutsDialog.setOpen(false)} />
+      <SessionSettingsPopover sessionId={session.sessionId} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
@@ -365,7 +377,7 @@ function NodeRenderer({ node, onResend, onRegenerate, isLastAssistant, driving, 
       return <AssistantMessageNode key={node.seq} seq={node.seq} text={node.text} reasoning={node.reasoning} onRegenerate={isLastAssistant ? onRegenerate : undefined} driving={driving} feedback={feedback} onFeedback={onFeedback} />;
     case 'streaming-assistant':
       return (
-        <div className="flex justify-start">
+        <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex items-start gap-2 max-w-[90%]">
             <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-bg-elevated border border-claude-border text-claude-accent">
               <Bot className="h-3.5 w-3.5" />
@@ -494,7 +506,7 @@ function UserMessageNode({ text, onResend }: { text: string; onResend?: (text: s
   }
 
   return (
-    <div className="group flex justify-end">
+    <div className="group flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="flex items-start gap-2 max-w-[85%]">
         <div className="relative rounded-2xl rounded-tr-sm bg-claude-accent text-white px-3 py-2 text-sm">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
@@ -529,7 +541,7 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
     }
   };
   return (
-    <div className="group flex justify-start">
+    <div className="group flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="flex items-start gap-2 max-w-[90%]">
         <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-bg-elevated border border-claude-border text-claude-accent">
           <Bot className="h-3.5 w-3.5" />
