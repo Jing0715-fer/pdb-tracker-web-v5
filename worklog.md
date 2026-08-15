@@ -1013,3 +1013,68 @@ This is the fourth cron-triggered review round for the PDB Tracker + DeepSeek Ha
 3. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
 4. Import session from JSON (complement to export)
 5. Keyboard shortcuts (e.g. Cmd+R to regenerate, Cmd+K to focus input)
+
+---
+
+Task ID: cron-review-5
+Agent: main
+Task: Cron-triggered QA + new features (keyboard shortcuts, message feedback) + style polish
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the fifth cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + persistence + auto titles + token meter + copy/edit actions + session search + export markdown + regenerate + color-coded tool categories. This round: QA-tested the UI (no regressions), then added keyboard shortcuts and message feedback (thumbs up/down) features.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working
+- New this round: keyboard shortcuts (⌘K/⌘R/Esc), message feedback (thumbs up/down)
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded correctly. No code errors.
+2. **Keyboard shortcuts** (new feature):
+   - Added a `useEffect` keyboard handler in ChatPanel:
+     - `Cmd/Ctrl+K` → focus the input textarea
+     - `Cmd/Ctrl+R` → regenerate last response (prevents browser refresh)
+     - `Esc` → close sidebar if open, else blur input
+   - Added a `ref` to the input textarea for programmatic focus
+   - Added keyboard hint badges (⌘K 聚焦 / ⌘R 重生成) in the input bar footer
+   - **Verified**: ⌘K and ⌘R hints visible in the input bar footer
+3. **Message feedback** (new feature):
+   - Added `feedback/record` event type to SessionEventMap (`{ messageSeq, rating: 'up'|'down', comment? }`)
+   - Built `POST /api/agent/sessions/[sessionId]/feedback` API route — appends a feedback/record event to the session log (durable + queryable)
+   - Added `feedback` state (Map<messageSeq, 'up'|'down'>) to the hook, computed from feedback/record SSE events
+   - Added `recordFeedback(messageSeq, rating)` hook function with optimistic local update + toggle-off-on-same-rating + API POST
+   - Added ThumbsUp/ThumbsDown buttons to AssistantMessageNode's hover action bar, with color-coded active states (emerald for up, red for down)
+   - **Verified via curl**: POST /feedback → 200 {ok:true}; feedback/record event appears in session events with `{messageSeq: 9, rating: 'up'}`
+   - **Verified via agent-browser**: "有帮助" (thumbs up) + "无帮助" (thumbs down) buttons visible on assistant messages, clickable
+4. **Style polish**:
+   - Keyboard hint badges (⌘K, ⌘R) in monospace with border styling
+   - Feedback buttons with active state colors (emerald/red) + hover transitions
+   - Unified hover action bar: feedback + regenerate + copy all together
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl feedback**: POST /feedback → 200 {ok:true}; feedback/record event persisted with {messageSeq: 9, rating: 'up'}
+- **agent-browser**:
+  - Input bar footer shows ⌘K (聚焦) + ⌘R (重生成) hint badges
+  - Assistant message hover action bar shows: 有帮助 (thumbs up) + 无帮助 (thumbs down) + 重新生成 + 复制消息
+  - All buttons clickable, feedback toggles correctly
+- **Console errors**: only RSC payload fetch failures (agent-browser navigation artifacts, not code errors)
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Feedback not yet displayed in export**: the export markdown doesn't include feedback ratings — a future enhancement could add 👍/👎 markers to assistant messages in the exported transcript.
+2. **Keyboard shortcuts scope**: the shortcuts are global (window-level), which means ⌘R would intercept browser refresh even when the chat panel isn't focused. A future enhancement could scope them to when the panel is visible/focused.
+3. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts.
+4. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot).
+
+### Recommended next priorities
+1. Include feedback in markdown export (👍/👎 markers on assistant messages)
+2. Per-session settings (model, temperature, system prompt override)
+3. Session fork: "edit message → fork session from that point"
+4. Event compaction for long sessions
+5. Keyboard shortcut help dialog (press ? to see all shortcuts)

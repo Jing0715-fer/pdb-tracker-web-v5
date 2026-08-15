@@ -81,11 +81,13 @@ export interface AgentSessionState {
   pendingApprovals: PendingApproval[];
   toolExecutions: Map<string, ToolExecution>;
   tokenUsage: TokenUsageSummary;
+  feedback: Map<number, 'up' | 'down'>;
   error: string | null;
   startNewSession: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
   listSessions: () => Promise<SessionListItem[]>;
   regenerate: () => Promise<void>;
+  recordFeedback: (messageSeq: number, rating: 'up' | 'down') => Promise<void>;
 }
 
 function parseArgs(argsStr: string): Record<string, unknown> {
@@ -232,6 +234,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<Map<number, 'up' | 'down'>>(new Map());
   const executionsRef = useRef<Map<string, ToolExecution>>(new Map());
   const viewerRef = useRef(viewer);
   const sessionIdRef = useRef<string | null>(null);
@@ -295,6 +298,15 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         if (ev.type === 'session/title') {
           const data = ev.data as { title: string };
           setSessionTitle(data.title);
+        }
+        // Handle feedback events (thumbs up/down on assistant messages).
+        if (ev.type === 'feedback/record') {
+          const data = ev.data as { messageSeq: number; rating: 'up' | 'down' };
+          setFeedback((prev) => {
+            const next = new Map(prev);
+            next.set(data.messageSeq, data.rating);
+            return next;
+          });
         }
       } catch {
         /* ignore parse errors */
@@ -521,6 +533,30 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 
   const clearError = useCallback(() => setError(null), []);
 
+  /** Record user feedback (thumbs up/down) on an assistant message. */
+  const recordFeedback = useCallback(async (messageSeq: number, rating: 'up' | 'down') => {
+    // Optimistic local update.
+    setFeedback((prev) => {
+      const next = new Map(prev);
+      // Toggle off if clicking the same rating.
+      if (next.get(messageSeq) === rating) {
+        next.delete(messageSeq);
+      } else {
+        next.set(messageSeq, rating);
+      }
+      return next;
+    });
+    try {
+      await fetch(`/api/agent/sessions/${sessionIdRef.current}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageSeq, rating }),
+      });
+    } catch {
+      /* best-effort */
+    }
+  }, []);
+
   /** Start a fresh session (clears the current one). */
   const startNewSession = useCallback(async () => {
     setEvents([]);
@@ -584,6 +620,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     pendingApprovals,
     toolExecutions: executionsRef.current,
     tokenUsage,
+    feedback,
     error,
     sendMessage,
     resolveApproval,
@@ -592,5 +629,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     loadSession,
     listSessions,
     regenerate,
+    recordFeedback,
   };
 }

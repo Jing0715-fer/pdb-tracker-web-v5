@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +43,7 @@ export function AgentChatPanel() {
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
   // Auto-scroll to bottom when new nodes arrive.
@@ -51,6 +52,39 @@ export function AgentChatPanel() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [session.nodes, autoScroll]);
+
+  // Keyboard shortcuts:
+  //   Cmd/Ctrl+K → focus the input
+  //   Esc        → close sidebar / blur input
+  //   Cmd/Ctrl+R → regenerate last response
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      // Cmd/Ctrl+K → focus input
+      if (mod && e.key === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+      // Cmd/Ctrl+R → regenerate (prevent browser refresh)
+      if (mod && e.key === 'r' && !e.shiftKey) {
+        e.preventDefault();
+        if (!session.driving) void session.regenerate();
+        return;
+      }
+      // Esc → close sidebar if open, else blur input
+      if (e.key === 'Escape') {
+        if (historyOpen) {
+          setHistoryOpen(false);
+          return;
+        }
+        inputRef.current?.blur();
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [session.driving, session.regenerate, historyOpen]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -187,6 +221,8 @@ export function AgentChatPanel() {
                   onRegenerate={() => void session.regenerate()}
                   isLastAssistant={node.seq === lastAssistantSeq}
                   driving={session.driving}
+                  feedback={node.kind === 'assistant-message' ? session.feedback.get(node.seq) : undefined}
+                  onFeedback={(rating) => void session.recordFeedback(node.seq, rating)}
                 />
               ));
             })()}
@@ -223,6 +259,7 @@ export function AgentChatPanel() {
         <div className="border-t border-claude-border bg-claude-bg-surface px-3 py-2">
           <div className="flex items-end gap-2">
             <Textarea
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -244,9 +281,13 @@ export function AgentChatPanel() {
             <span className="text-[10px] text-claude-text-muted">
               基于会话事件日志的插件式 agent harness
             </span>
-            <span className="text-[10px] text-claude-text-muted font-mono">
-              {session.nodes.length} events
-            </span>
+            <div className="flex items-center gap-2 text-[10px] text-claude-text-muted">
+              <kbd className="px-1 py-0.5 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px]">⌘K</kbd>
+              <span className="opacity-60">聚焦</span>
+              <kbd className="px-1 py-0.5 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px]">⌘R</kbd>
+              <span className="opacity-60">重生成</span>
+              <span className="font-mono opacity-60">{session.nodes.length} events</span>
+            </div>
           </div>
         </div>
       )}
@@ -282,12 +323,12 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-function NodeRenderer({ node, onResend, onRegenerate, isLastAssistant, driving }: { node: ConversationNode; onResend?: (text: string) => void; onRegenerate?: () => void; isLastAssistant?: boolean; driving?: boolean }) {
+function NodeRenderer({ node, onResend, onRegenerate, isLastAssistant, driving, feedback, onFeedback }: { node: ConversationNode; onResend?: (text: string) => void; onRegenerate?: () => void; isLastAssistant?: boolean; driving?: boolean; feedback?: 'up' | 'down'; onFeedback?: (rating: 'up' | 'down') => void }) {
   switch (node.kind) {
     case 'user-message':
       return <UserMessageNode key={node.seq} text={node.text} onResend={onResend} />;
     case 'assistant-message':
-      return <AssistantMessageNode key={node.seq} text={node.text} reasoning={node.reasoning} onRegenerate={isLastAssistant ? onRegenerate : undefined} driving={driving} />;
+      return <AssistantMessageNode key={node.seq} seq={node.seq} text={node.text} reasoning={node.reasoning} onRegenerate={isLastAssistant ? onRegenerate : undefined} driving={driving} feedback={feedback} onFeedback={onFeedback} />;
     case 'streaming-assistant':
       return (
         <div className="flex justify-start">
@@ -441,8 +482,8 @@ function UserMessageNode({ text, onResend }: { text: string; onResend?: (text: s
   );
 }
 
-/** Assistant message node with hover copy + regenerate actions. */
-function AssistantMessageNode({ text, reasoning, onRegenerate, driving }: { text: string; reasoning?: string; onRegenerate?: () => void; driving?: boolean }) {
+/** Assistant message node with hover copy + regenerate + feedback actions. */
+function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, feedback, onFeedback }: { seq: number; text: string; reasoning?: string; onRegenerate?: () => void; driving?: boolean; feedback?: 'up' | 'down'; onFeedback?: (rating: 'up' | 'down') => void }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     try {
@@ -476,6 +517,36 @@ function AssistantMessageNode({ text, reasoning, onRegenerate, driving }: { text
           {/* Hover action bar */}
           {text && (
             <div className="absolute -bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {onFeedback && (
+                <>
+                  <button
+                    onClick={() => onFeedback('up')}
+                    disabled={driving}
+                    className={cn(
+                      'flex items-center justify-center h-5 w-5 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                      feedback === 'up'
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-600'
+                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-emerald-500/40 hover:text-emerald-600',
+                    )}
+                    title="有帮助"
+                  >
+                    <ThumbsUp className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => onFeedback('down')}
+                    disabled={driving}
+                    className={cn(
+                      'flex items-center justify-center h-5 w-5 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                      feedback === 'down'
+                        ? 'bg-red-500/20 border-red-500/50 text-red-600'
+                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-red-500/40 hover:text-red-600',
+                    )}
+                    title="无帮助"
+                  >
+                    <ThumbsDown className="h-3 w-3" />
+                  </button>
+                </>
+              )}
               {onRegenerate && (
                 <button
                   onClick={onRegenerate}

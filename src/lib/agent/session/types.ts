@@ -92,6 +92,7 @@ export interface SessionEventMap {
     callId: CallId;
     decision: 'allowed-once' | 'rejected' | 'cancelled';
   };
+  'feedback/record': { messageSeq: number; rating: 'up' | 'down'; comment?: string };
 }
 
 export type SessionEventType = keyof SessionEventMap;
