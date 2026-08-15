@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -48,6 +48,7 @@ export function AgentChatPanel() {
   const shortcutsDialog = useKeyboardShortcutsDialog();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
@@ -113,6 +114,27 @@ export function AgentChatPanel() {
     if (!text || session.driving) return;
     setInput('');
     void session.sendMessage(text);
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch('/api/agent/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Import failed: ${res.status}`);
+      const result = (await res.json()) as { sessionId: string };
+      await session.loadSession(result.sessionId);
+    } catch (err) {
+      console.error('[import] failed:', err);
+    }
+    // Reset the input so the same file can be re-imported.
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -219,6 +241,21 @@ export function AgentChatPanel() {
               <Download className="h-3 w-3" />
             </a>
           )}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={session.driving}
+            className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="导入会话 JSON"
+          >
+            <Upload className="h-3 w-3" />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleImportFile}
+            className="hidden"
+          />
         </div>
       </div>
 

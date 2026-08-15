@@ -158,21 +158,28 @@ export class AgentLoop {
       this.session.append('user/message', m, { surfaceOp: { op: 'append' } });
     }
 
+    // Read the latest per-session settings (if any) and apply them.
+    const settings = this.extractSettings();
+
     // Assemble prompt.
     const assembly = this.ctx.systemPrompt.assemble({
       scope: this.session.id,
       signal: this.controller.signal,
     });
-    const system = this.ctx.systemPrompt.renderPrompt(assembly);
+    let system = this.ctx.systemPrompt.renderPrompt(assembly);
+    // Override system prompt if the user set one in settings.
+    if (settings.systemPromptOverride?.trim()) {
+      system = settings.systemPromptOverride.trim();
+    }
     const tools = assembly.tools;
 
     // Log request header (initial on first step of the session).
     const header = {
       provider: this.options.provider,
-      model: this.options.model,
+      model: settings.model ?? this.options.model,
       system,
       tools: tools.map((t) => t.name),
-      temperature: this.options.temperature,
+      temperature: settings.temperature ?? this.options.temperature,
       maxTokens: this.options.maxTokens,
     };
     const existingHeader = this.session.getRequestHeader();
@@ -186,11 +193,11 @@ export class AgentLoop {
     const derivedMessages = this.session.deriveMessages();
     const request: GenerateOptions = {
       provider: this.options.provider,
-      model: this.options.model,
+      model: settings.model ?? this.options.model,
       messages: derivedMessages,
       system,
       tools,
-      temperature: this.options.temperature,
+      temperature: settings.temperature ?? this.options.temperature,
       maxTokens: this.options.maxTokens,
       signal: this.controller.signal,
     };
@@ -198,8 +205,8 @@ export class AgentLoop {
     // Stream + accumulate.
     const prepared = this.ctx.llm.prepareCall({
       provider: this.options.provider,
-      model: this.options.model,
-      temperature: this.options.temperature,
+      model: settings.model ?? this.options.model,
+      temperature: settings.temperature ?? this.options.temperature,
       maxTokens: this.options.maxTokens,
     });
     const assembler = new BlockAssembler();
@@ -402,6 +409,28 @@ export class AgentLoop {
   private setStatusIdle(): void {
     this.status = 'idle';
     this.ctx.emit('agent/status', { sessionId: this.session.id, status: 'idle' });
+  }
+
+  /** Read the latest per-session settings from the event log. */
+  private extractSettings(): {
+    model?: string;
+    temperature?: number;
+    maxStepsPerTurn?: number;
+    systemPromptOverride?: string;
+  } {
+    const events = this.session.events_;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i]!;
+      if (ev.type === ('session/settings' as string)) {
+        return ev.data as {
+          model?: string;
+          temperature?: number;
+          maxStepsPerTurn?: number;
+          systemPromptOverride?: string;
+        };
+      }
+    }
+    return {};
   }
 
   cancel(reason = 'cancelled'): void {

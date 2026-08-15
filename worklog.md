@@ -1210,3 +1210,60 @@ This is the seventh cron-triggered review round for the PDB Tracker + DeepSeek H
 3. Session fork: "edit message → fork session from that point"
 4. Event compaction for long sessions
 5. Import session from JSON (complement to export)
+
+---
+
+Task ID: cron-review-8
+Agent: main
+Task: Cron-triggered QA + new features (wire settings into loop, import session from JSON)
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the eighth cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + all UI features (persistence, auto titles, token meter, copy/edit/regenerate, session search, export markdown, color-coded tool cards, keyboard shortcuts, message feedback, settings popover, animations, scroll-to-bottom). This round: QA-tested the UI (no regressions), then wired the per-session settings into the AgentLoop (the #1 recommended priority from last round) and added session import from JSON.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working
+- New this round: settings wired into the agent loop (model/temperature/system prompt override now take effect), session import from JSON
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded correctly, feedback buttons + keyboard hints visible. No code errors.
+2. **Wire session settings into the AgentLoop** (new feature, was #1 priority):
+   - Added `extractSettings()` private method to AgentLoop — walks the session event log backwards to find the latest `session/settings` event
+   - Updated the `drive()` method to call `extractSettings()` before each step and apply:
+     - `model` → overrides `this.options.model` (provider stays as `this.options.provider` = 'zai')
+     - `temperature` → overrides `this.options.temperature`
+     - `systemPromptOverride` → replaces the assembled system prompt if set
+   - The request header, GenerateOptions, and prepareCall all now use the settings-derived values
+   - **Bug fixed**: initial implementation used `settings.model` for BOTH provider AND model, causing "No LLM adapter registered for provider 'glm-4.6'" — fixed by keeping provider as `this.options.provider` and only overriding model
+   - **Verified via curl**: set temperature=0.3 via POST /settings → sent message → request/header shows `provider: zai, temperature: 0.3` (settings applied correctly)
+3. **Import session from JSON** (new feature):
+   - Built `POST /api/agent/sessions/import` API route — accepts the JSON export format, creates a new session, replays all events (user/assistant/tool messages, feedback, settings, request headers)
+   - Added an Upload icon button to the ChatPanel header (next to the export Download button)
+   - Hidden file input accepts `.json` files; on file select, reads the JSON, POSTs to /import, then loads the imported session
+   - Imported session gets a new session ID (avoids collisions) but preserves title + events
+   - **Verified via curl**: exported a session as JSON (5493 bytes) → POST /import → 200 {ok:true, sessionId, title:"settings fix test", eventCount:4}
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl settings wiring**: POST /settings {temperature:0.3} → POST /messages → 200 {done:true, finalContent:"你好！我是Molcraft AI..."}; request/header shows `provider: zai, temperature: 0.3`
+- **curl import**: GET /export?format=json (5493 bytes) → POST /import → 200 {ok:true, sessionId, title, eventCount:4}
+- **Console errors**: none
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Settings maxStepsPerTurn not yet enforced**: the maxStepsPerTurn setting is stored but the loop doesn't read it for the step limit guard — it still uses the hardcoded AgentOptions.maxStepsPerTurn. A future enhancement would apply it.
+2. **Import doesn't replay turn/step boundaries**: the import route skips turn/start, turn/end, step/start, step/end events (they'll be recreated naturally as the user continues). This means the imported conversation shows as a flat list without turn separators — acceptable but could be improved.
+3. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts (restart #15 observed).
+4. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot).
+
+### Recommended next priorities
+1. Apply maxStepsPerTurn setting in the loop's step guard
+2. Session fork: "edit message → fork session from that point"
+3. Event compaction for long sessions (replace old tool/results with summaries)
+4. Keyboard shortcut help dialog improvements (show settings shortcut)
+5. Per-tool execution statistics (success rate, avg duration)
