@@ -43,10 +43,25 @@ function eventsToMarkdown(sessionId: string, title: string, events: SessionEvent
   lines.push(`> Events: ${events.length}`);
   const msgCount = events.filter((e) => e.type === 'user/message' || e.type === 'assistant/message').length;
   const toolCount = events.filter((e) => e.type === 'tool/call').length;
+  const feedbackCount = events.filter((e) => e.type === 'feedback/record').length;
+  const upCount = events.filter((e) => e.type === 'feedback/record' && (e.data as { rating: string }).rating === 'up').length;
+  const downCount = events.filter((e) => e.type === 'feedback/record' && (e.data as { rating: string }).rating === 'down').length;
   lines.push(`> Messages: ${msgCount} · Tool calls: ${toolCount}`);
+  if (feedbackCount > 0) {
+    lines.push(`> Feedback: 👍 ${upCount} · 👎 ${downCount}`);
+  }
   lines.push('');
   lines.push('---');
   lines.push('');
+
+  // Build a map of messageSeq → feedback rating for quick lookup.
+  const feedbackMap = new Map<number, 'up' | 'down'>();
+  for (const ev of events) {
+    if (ev.type === 'feedback/record') {
+      const data = ev.data as { messageSeq: number; rating: 'up' | 'down' };
+      feedbackMap.set(data.messageSeq, data.rating);
+    }
+  }
 
   let currentTurn = 0;
   for (const ev of events) {
@@ -76,7 +91,9 @@ function eventsToMarkdown(sessionId: string, title: string, events: SessionEvent
         const data = ev.data as { message: { content: ContentBlock[] }; usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
         const text = blocksToText(data.message.content);
         const toolCalls = blocksToToolCalls(data.message.content);
-        lines.push(`### 🤖 Assistant`);
+        const rating = feedbackMap.get(ev.seq);
+        const feedbackBadge = rating === 'up' ? ' 👍' : rating === 'down' ? ' 👎' : '';
+        lines.push(`### 🤖 Assistant${feedbackBadge}`);
         lines.push('');
         if (text) {
           lines.push(text);

@@ -28,6 +28,7 @@ import { useAgentSession, type ConversationNode } from './use-agent-session';
 import { ToolCallCard } from './ToolCallCard';
 import { ApprovalPanel } from './ApprovalPanel';
 import { SessionHistorySidebar } from './SessionHistorySidebar';
+import { KeyboardShortcutsDialog, useKeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 import { cn } from '@/lib/utils';
 
 const SUGGESTIONS = [
@@ -42,9 +43,11 @@ export function AgentChatPanel() {
   const session = useAgentSession({ viewer });
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
+  const shortcutsDialog = useKeyboardShortcutsDialog();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   // Auto-scroll to bottom when new nodes arrive.
   useEffect(() => {
@@ -91,6 +94,16 @@ export function AgentChatPanel() {
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     setAutoScroll(atBottom);
+    setShowScrollToBottom(!atBottom && el.scrollHeight > el.clientHeight + 100);
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      setAutoScroll(true);
+      setShowScrollToBottom(false);
+    }
   };
 
   const handleSend = () => {
@@ -199,7 +212,8 @@ export function AgentChatPanel() {
       </div>
 
       {/* Conversation */}
-      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-3 py-3 min-h-0">
+      <div className="relative flex-1 min-h-0">
+      <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-y-auto px-3 py-3">
         {session.nodes.length === 0 ? (
           <EmptyState onPick={(t) => void session.sendMessage(t)} />
         ) : (
@@ -234,6 +248,18 @@ export function AgentChatPanel() {
             )}
           </div>
         )}
+      </div>
+      {/* Scroll-to-bottom button */}
+      {showScrollToBottom && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 h-7 px-3 rounded-full bg-claude-bg-surface border border-claude-border shadow-lg text-xs text-claude-text-muted hover:text-claude-accent hover:border-claude-accent/50 transition-colors"
+          title="滚动到底部"
+        >
+          <ChevronRight className="h-3 w-3 rotate-90" />
+          <span>最新消息</span>
+        </button>
+      )}
       </div>
 
       {/* Error banner */}
@@ -286,11 +312,19 @@ export function AgentChatPanel() {
               <span className="opacity-60">聚焦</span>
               <kbd className="px-1 py-0.5 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px]">⌘R</kbd>
               <span className="opacity-60">重生成</span>
+              <button
+                onClick={() => shortcutsDialog.setOpen(true)}
+                className="flex items-center justify-center h-4 w-4 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px] hover:border-claude-accent/50 hover:text-claude-accent transition-colors"
+                title="快捷键帮助 (?)"
+              >
+                ?
+              </button>
               <span className="font-mono opacity-60">{session.nodes.length} events</span>
             </div>
           </div>
         </div>
       )}
+      <KeyboardShortcutsDialog open={shortcutsDialog.open} onClose={() => shortcutsDialog.setOpen(false)} />
     </div>
   );
 }

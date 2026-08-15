@@ -1078,3 +1078,67 @@ This is the fifth cron-triggered review round for the PDB Tracker + DeepSeek Har
 3. Session fork: "edit message → fork session from that point"
 4. Event compaction for long sessions
 5. Keyboard shortcut help dialog (press ? to see all shortcuts)
+
+---
+
+Task ID: cron-review-6
+Agent: main
+Task: Cron-triggered QA + new features (feedback in export, keyboard shortcut help dialog, scroll-to-bottom button)
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the sixth cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + persistence + auto titles + token meter + copy/edit/regenerate actions + session search + export markdown + color-coded tool categories + keyboard shortcuts + message feedback. This round: QA-tested the UI (no regressions), then added feedback-in-export, keyboard shortcut help dialog, and scroll-to-bottom button.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working
+- New this round: feedback markers in markdown export, keyboard shortcut help dialog (?), scroll-to-bottom button
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded correctly, feedback buttons (有帮助/无帮助) + keyboard hints (⌘K/⌘R) visible. No code errors.
+2. **Feedback in markdown export** (new feature):
+   - Updated `eventsToMarkdown()` in the export route to:
+     - Build a `feedbackMap` (messageSeq → rating) from feedback/record events
+     - Add a feedback summary line to the header: "Feedback: 👍 N · 👎 N"
+     - Append 👍/👎 badges to assistant message headers: "### 🤖 Assistant 👍"
+   - **Verified via curl**: export markdown now shows "Feedback: 👍 1 · 👎 0" in header + "### 🤖 Assistant 👍" on the rated message
+3. **Keyboard shortcut help dialog** (new feature):
+   - Built `src/components/agent/KeyboardShortcutsDialog.tsx` — a modal popover showing all 6 shortcuts (⌘K, ⌘R, Esc, Enter, Shift+Enter, ?) with descriptions
+   - Added `useKeyboardShortcutsDialog()` hook that manages open state + listens for "?" key (only when not typing in an input)
+   - Added a "?" button in the input bar footer (next to ⌘K/⌘R hints) that opens the dialog
+   - Dialog closes on Esc or backdrop click
+   - **Verified via agent-browser**: clicked "?" button → dialog appeared with "键盘快捷键" title + all 6 shortcuts listed; Esc closed it
+4. **Scroll-to-bottom button** (style polish):
+   - Added `showScrollToBottom` state tracked in the onScroll handler
+   - When the user scrolls up (not at bottom + content is tall), a floating "最新消息" button appears at the bottom-center of the conversation area
+   - Clicking it smoothly scrolls to the bottom + re-enables auto-scroll
+   - Wrapped the conversation area in a `relative` container so the button can be absolutely positioned
+   - Uses ChevronRight icon rotated 90° as a down-arrow
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl export with feedback**: markdown header shows "Feedback: 👍 1 · 👎 0"; assistant message header shows "### 🤖 Assistant 👍"
+- **agent-browser**:
+  - Input bar footer shows ⌘K + ⌘R + "?" help button + events count
+  - Clicking "?" opens keyboard shortcuts dialog with all 6 shortcuts
+  - Esc closes the dialog
+  - Feedback buttons (有帮助/无帮助) still work
+- **Console errors**: only ChunkLoadError (server restarts, auto-recovered)
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Scroll-to-bottom button visibility**: the button only appears when scrolled up AND content is tall enough — works correctly but could be tested with a longer conversation.
+2. **Keyboard shortcut scope**: shortcuts are still global (window-level). ⌘R intercepts browser refresh even when the chat panel isn't focused. A future enhancement could check if the panel is visible.
+3. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts.
+4. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot).
+
+### Recommended next priorities
+1. Per-session settings (model, temperature, system prompt override)
+2. Session fork: "edit message → fork session from that point"
+3. Event compaction for long sessions
+4. Message appearance animations (fade-in/slide-up for new messages)
+5. Import session from JSON (complement to export)
