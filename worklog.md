@@ -794,3 +794,80 @@ This is a cron-triggered review round for the PDB Tracker + DeepSeek Harness age
 3. Implement event compaction for long sessions (replace old tool/results with summaries)
 4. Add a per-session token-usage meter (usage events are already logged)
 5. True token streaming: upgrade the ZAI adapter to use the SDK's streaming mode when available
+
+---
+
+Task ID: cron-review-2
+Agent: main
+Task: Cron-triggered QA + new features (auto session titles, token usage meter, copy actions, tool timer) + style polish
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the second cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. The previous round added session persistence, session history sidebar, and live token streaming UI. This round: QA-tested the UI (confirmed the sidebar renders correctly — last round's "sidebar not rendering" was a test error, I was clicking the wrong History button), then added 4 new features and polished styles.
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working: session persistence (survives restarts), session history sidebar, live streaming UI, 37 PDB tools, full tool-calling loop
+- New this round: auto session titles, token usage meter, copy-message + copy-result actions, running-tool elapsed timer
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel. Found + resolved the "sidebar not rendering" issue from last round: there are TWO "History" buttons — the right-panel's viewer-history tab AND the agent panel's 会话历史 button. Clicking the correct one (会话历史, ref e61) shows the sidebar with session list, relative timestamps, and event counts.
+2. **Auto session title generation** (new feature):
+   - Built `src/lib/agent/session-title.ts` — `extractFirstUserMessage()`, `fallbackTitle()` (heuristic truncate), `generateSessionTitle()` (LLM call via z-ai SDK with a constrained prompt: "≤15字中文标题"), `maybeGenerateTitle()` (orchestrator: immediate heuristic fallback, then async LLM title)
+   - Wired into AgentManager: after the first `user/message` event, fires `maybeGenerateTitle()` which appends a `session/title` event + upserts the DB row
+   - Hook handles `session/title` SSE events → updates `sessionTitle` state → ChatPanel header displays the live title
+   - **Verified**: sent "请加载 PDB 4HHB 并分析氢键" → title auto-generated to "4HHB氢键分析" (visible in DB + browser header)
+3. **Per-session token usage meter** (new feature):
+   - Added `TokenUsageSummary` type (promptTokens, completionTokens, totalTokens, requestCount) to the hook
+   - Hook accumulates usage from `assistant/message` events (which carry `usage` from the LLM adapter)
+   - ChatPanel header shows a compact token count (e.g. "7.3k") with a Zap icon + tooltip with full breakdown
+   - Resets on new session / session switch
+   - **Verified**: after one tool-calling turn, header shows "7.3k" tokens; curl confirms usage data (promptTokens: 3607, completionTokens: 31, totalTokens: 3638)
+4. **Copy actions** (new feature):
+   - Assistant messages: hover reveals a copy button (bottom-right of the bubble) that copies the message text to clipboard, shows a green check for 1.5s
+   - Tool result cards: hover reveals a "复制结果" button that copies the JSON result
+   - Built `AssistantMessageNode` component with group-hover copy action
+5. **Running-tool elapsed timer** (style polish):
+   - ToolCallCard's StatusPill now shows a live elapsed timer (e.g. "1.2s", "1m5s") while a tool is running/pending, updating every 100ms
+   - Uses `startedAt` timestamp from the tool-call node
+6. **Session title in header** (style polish):
+   - The header now shows the live session title (auto-generated) instead of the static "DeepSeek Harness Agent" text
+   - Title truncates with ellipsis + tooltip for long titles
+7. **Style polish details**:
+   - Token meter with Zap icon + hover tooltip (prompt/completion/total/request count breakdown)
+   - Tool count with Wrench icon + hover tooltip
+   - Copy buttons with group-hover opacity transition + Check icon confirmation
+   - Running timer with tabular-nums font for stable digit width
+   - Session title truncate with title attribute
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl auto-title**: POST /messages "请加载 PDB 4HHB 并分析氢键" → DB title = "4HHB氢键分析" (LLM-generated)
+- **curl token usage**: assistant/message event carries usage {promptTokens: 3607, completionTokens: 31, totalTokens: 3638}
+- **agent-browser**: 
+  - Chat panel header shows auto-generated title "6LU7加载" (from message "加载 6LU7")
+  - Token meter shows "7.3k" with Zap icon
+  - Tool count shows "1 tools" with Wrench icon
+  - Tool card shows "pdb_load" + "6LU7" arg + "RESULT · PDB_LOAD" + "复制结果" button
+  - Agent loaded 6LU7 in Molstar + summarized "已成功加载6LU7结构。这是SARS-CoV-2主蛋白酶的晶体结构"
+  - Session history sidebar opens correctly (会话历史 button) with session list + timestamps
+- **Console errors**: none (only ChunkLoadError from server restarts, auto-recovered)
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Session title race**: the title LLM call fires after the first user/message but the response may arrive after the agent has already started the turn — the title appears mid-turn. This is fine UX-wise (the sidebar + header update live via SSE) but worth noting.
+2. **Token usage on resume**: when resuming a persisted session, the token usage resets to 0 (the hook doesn't re-accumulate from replayed events). A future enhancement could walk the replayed events and sum usage.
+3. **No regenerate/retry yet**: the copy-message action is implemented but "regenerate response" and "retry from here" are not — these would need a server-side "fork session" or "replay from seq" capability (dsh has fork/resume).
+4. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts. Restart command: `(setsid bash dev-watchdog.sh >> watchdog.log 2>&1 &)`
+5. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot), so the "streaming" effect shows full text at once. A streaming adapter would give true token-by-token rendering.
+
+### Recommended next priorities
+1. Regenerate/retry response actions (requires session fork capability)
+2. Re-accumulate token usage on session resume (walk replayed events)
+3. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
+4. Session search/filter in the history sidebar
+5. Export session as markdown/JSON

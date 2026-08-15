@@ -53,6 +53,13 @@ export interface PendingApproval {
   args: unknown;
 }
 
+export interface TokenUsageSummary {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requestCount: number;
+}
+
 export type ConversationNode =
   | { kind: 'user-message'; seq: number; text: string }
   | { kind: 'assistant-message'; seq: number; text: string; reasoning?: string }
@@ -67,11 +74,13 @@ export interface UseAgentSessionOptions {
 
 export interface AgentSessionState {
   sessionId: string | null;
+  sessionTitle: string;
   connected: boolean;
   driving: boolean;
   nodes: ConversationNode[];
   pendingApprovals: PendingApproval[];
   toolExecutions: Map<string, ToolExecution>;
+  tokenUsage: TokenUsageSummary;
   error: string | null;
   startNewSession: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
@@ -216,11 +225,18 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 } {
   const { viewer } = options;
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionTitle, setSessionTitle] = useState('New session');
   const [connected, setConnected] = useState(false);
   const [driving, setDriving] = useState(false);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<TokenUsageSummary>({
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    requestCount: 0,
+  });
   const executionsRef = useRef<Map<string, ToolExecution>>(new Map());
   const viewerRef = useRef(viewer);
   const sessionIdRef = useRef<string | null>(null);
@@ -278,6 +294,23 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 args: parseArgs(data.arguments),
               },
             ]);
+          }
+        }
+        // Handle session/title updates (auto-generated titles).
+        if (ev.type === 'session/title') {
+          const data = ev.data as { title: string };
+          setSessionTitle(data.title);
+        }
+        // Accumulate token usage from assistant/message events.
+        if (ev.type === 'assistant/message') {
+          const data = ev.data as { usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
+          if (data.usage) {
+            setTokenUsage((prev) => ({
+              promptTokens: prev.promptTokens + (data.usage!.promptTokens ?? 0),
+              completionTokens: prev.completionTokens + (data.usage!.completionTokens ?? 0),
+              totalTokens: prev.totalTokens + (data.usage!.totalTokens ?? 0),
+              requestCount: prev.requestCount + 1,
+            }));
           }
         }
       } catch {
@@ -479,11 +512,13 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     setPendingApprovals([]);
     setError(null);
     setSessionId(null);
+    setSessionTitle('New session');
+    setTokenUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0 });
     try {
       const res = await fetch('/api/agent/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: `Session ${new Date().toLocaleString('zh-CN')}` }),
+        body: JSON.stringify({ title: 'New session' }),
       });
       if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
       const data = (await res.json()) as { sessionId: string };
@@ -499,12 +534,16 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     setPendingApprovals([]);
     setError(null);
     setSessionId(null);
+    setSessionTitle('Loading…');
+    setTokenUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0 });
     try {
       const res = await fetch(`/api/agent/sessions/${id}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
       if (!res.ok) throw new Error(`Failed to resume session: ${res.status}`);
+      const data = (await res.json()) as { title?: string };
+      setSessionTitle(data.title ?? 'Resumed session');
       setSessionId(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -525,11 +564,13 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 
   return {
     sessionId,
+    sessionTitle,
     connected,
     driving,
     nodes,
     pendingApprovals,
     toolExecutions: executionsRef.current,
+    tokenUsage,
     error,
     sendMessage,
     resolveApproval,

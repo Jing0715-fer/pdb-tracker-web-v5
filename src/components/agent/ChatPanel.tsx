@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -99,9 +99,11 @@ export function AgentChatPanel() {
           >
             <History className="h-3.5 w-3.5" />
           </button>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <Sparkles className="h-3.5 w-3.5 text-claude-accent" />
-            <span className="text-xs font-semibold text-claude-text">DeepSeek Harness Agent</span>
+          <div className="flex items-center gap-1.5 shrink-0 min-w-0">
+            <Sparkles className="h-3.5 w-3.5 text-claude-accent shrink-0" />
+            <span className="text-xs font-semibold text-claude-text truncate" title={session.sessionTitle}>
+              {session.sessionTitle || 'DeepSeek Harness Agent'}
+            </span>
           </div>
           <Badge
             variant="outline"
@@ -128,10 +130,19 @@ export function AgentChatPanel() {
               running
             </span>
           )}
-          <span className="flex items-center gap-0.5">
+          <span className="flex items-center gap-0.5" title={`工具调用次数: ${session.nodes.filter((n) => n.kind === 'tool-call').length}`}>
             <Wrench className="h-3 w-3" />
             {session.nodes.filter((n) => n.kind === 'tool-call').length} tools
           </span>
+          {session.tokenUsage.requestCount > 0 && (
+            <span
+              className="flex items-center gap-0.5"
+              title={`Token 使用: prompt ${session.tokenUsage.promptTokens.toLocaleString()} / completion ${session.tokenUsage.completionTokens.toLocaleString()} / 共 ${session.tokenUsage.requestCount} 次请求`}
+            >
+              <Zap className="h-3 w-3" />
+              {formatTokenCount(session.tokenUsage.totalTokens)}
+            </span>
+          )}
           <button
             onClick={() => void session.startNewSession()}
             disabled={session.driving}
@@ -260,30 +271,7 @@ function NodeRenderer({ node }: { node: ConversationNode }) {
         </div>
       );
     case 'assistant-message':
-      return (
-        <div className="flex justify-start">
-          <div className="flex items-start gap-2 max-w-[90%]">
-            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-bg-elevated border border-claude-border text-claude-accent">
-              <Bot className="h-3.5 w-3.5" />
-            </div>
-            <div className="rounded-2xl rounded-tl-sm bg-claude-bg-elevated border border-claude-border px-3 py-2 text-sm text-claude-text">
-              {node.text ? (
-                <div className="prose-sm max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.text}</ReactMarkdown>
-                </div>
-              ) : (
-                <span className="text-claude-text-muted italic text-xs">(调用工具中…)</span>
-              )}
-              {node.reasoning && (
-                <details className="mt-1.5 text-xs text-claude-text-muted">
-                  <summary className="cursor-pointer select-none">推理过程</summary>
-                  <div className="mt-1 whitespace-pre-wrap opacity-80">{node.reasoning}</div>
-                </details>
-              )}
-            </div>
-          </div>
-        </div>
-      );
+      return <AssistantMessageNode key={node.seq} text={node.text} reasoning={node.reasoning} />;
     case 'streaming-assistant':
       return (
         <div className="flex justify-start">
@@ -337,5 +325,59 @@ function StreamingCursor({ done }: { done: boolean }) {
       className="inline-block w-1.5 h-3.5 ml-0.5 align-text-bottom bg-claude-accent animate-pulse rounded-sm"
       aria-hidden
     />
+  );
+}
+
+/** Format a token count compactly (e.g. 1234 → "1.2k"). */
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Assistant message node with hover copy action. */
+function AssistantMessageNode({ text, reasoning }: { text: string; reasoning?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard may be blocked */
+    }
+  };
+  return (
+    <div className="group flex justify-start">
+      <div className="flex items-start gap-2 max-w-[90%]">
+        <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-bg-elevated border border-claude-border text-claude-accent">
+          <Bot className="h-3.5 w-3.5" />
+        </div>
+        <div className="relative rounded-2xl rounded-tl-sm bg-claude-bg-elevated border border-claude-border px-3 py-2 text-sm text-claude-text">
+          {text ? (
+            <div className="prose-sm max-w-none">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            </div>
+          ) : (
+            <span className="text-claude-text-muted italic text-xs">(调用工具中…)</span>
+          )}
+          {reasoning && (
+            <details className="mt-1.5 text-xs text-claude-text-muted">
+              <summary className="cursor-pointer select-none">推理过程</summary>
+              <div className="mt-1 whitespace-pre-wrap opacity-80">{reasoning}</div>
+            </details>
+          )}
+          {text && (
+            <button
+              onClick={handleCopy}
+              className="absolute -bottom-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+              title="复制消息"
+            >
+              {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -8,7 +8,8 @@
 
 'use client';
 
-import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationNode } from './use-agent-session';
 
@@ -27,6 +28,20 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
   const meta = CARD_META['generic']!;
   const Icon = meta.icon;
   const status = node.status;
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyResult = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!node.result) return;
+    try {
+      const text = typeof node.result === 'string' ? node.result : JSON.stringify(node.result, null, 2);
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  };
 
   return (
     <div className="flex justify-start">
@@ -51,7 +66,7 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
                 {describeArgs(node.name, node.args)}
               </span>
             </div>
-            <StatusPill status={status} />
+            <StatusPill status={status} startedAt={node.startedAt} />
           </div>
 
           {/* Arguments (collapsible if verbose) */}
@@ -69,8 +84,15 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
 
           {/* Result */}
           {status === 'ok' && node.result != null && (
-            <div className="px-3 py-2 border-t border-claude-border">
+            <div className="group/result px-3 py-2 border-t border-claude-border relative">
               <ResultView name={node.name} result={node.result} />
+              <button
+                onClick={handleCopyResult}
+                className="absolute top-1.5 right-1.5 opacity-0 group-hover/result:opacity-100 transition-opacity flex items-center justify-center h-5 w-5 rounded bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+                title="复制结果"
+              >
+                {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+              </button>
             </div>
           )}
           {status === 'error' && (
@@ -87,12 +109,21 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({ status, startedAt }: { status: string; startedAt?: number }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (status !== 'running' && status !== 'pending') return;
+    if (!startedAt) return;
+    setElapsed(Date.now() - startedAt);
+    const i = setInterval(() => setElapsed(Date.now() - (startedAt ?? Date.now())), 100);
+    return () => clearInterval(i);
+  }, [status, startedAt]);
   if (status === 'running' || status === 'pending') {
     return (
-      <span className="flex items-center gap-1 text-[10px] text-claude-accent shrink-0">
+      <span className="flex items-center gap-1 text-[10px] text-claude-accent shrink-0 font-mono">
         <Loader2 className="h-3 w-3 animate-spin" />
         {status}
+        {startedAt && <span className="tabular-nums">{formatElapsed(elapsed)}</span>}
       </span>
     );
   }
@@ -110,6 +141,14 @@ function StatusPill({ status }: { status: string }) {
       error
     </span>
   );
+}
+
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m${s}s`;
 }
 
 function ResultView({ name, result }: { name: string; result: unknown }) {

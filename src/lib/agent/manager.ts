@@ -28,6 +28,7 @@ import {
   getSessionRow,
   deleteSessionRow,
 } from './persistence';
+import { maybeGenerateTitle } from './session-title';
 
 export interface CreateSessionOptions {
   id?: string;
@@ -140,6 +141,14 @@ export class AgentManager {
       this.ctx.emit('session/event', { sessionId: id, event });
       // Best-effort persistence — never block the agent loop.
       void appendEventRow(id, event);
+      // Auto-generate a title after the first user message.
+      if (event.type === 'user/message') {
+        const events = this.eventLog.get(id) ?? [];
+        void maybeGenerateTitle(id, events, session.title, (title) => {
+          session.append('session/title', { title });
+          void upsertSessionRow(id, title, session.createdAt);
+        });
+      }
     });
     // Persist the session row.
     void upsertSessionRow(id, session.title, session.createdAt);
