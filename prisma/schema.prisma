@@ -282,3 +282,33 @@ model WeeklyReportRun {
 
   @@index([weekId])
 }
+
+// ── Agent subsystem (DeepSeek Harness-inspired) ─────────────────────────────
+// Persistent session log: one AgentSession per conversation, one
+// AgentSessionEvent per appended event (turn/step/user-message/assistant/
+// tool-call/tool-result/etc.). The event log is the single source of truth —
+// sessions can be resumed on server restart by replaying the events.
+
+model AgentSession {
+  id        String   @id
+  title     String   @default("New session")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  events    AgentSessionEvent[]
+
+  @@index([createdAt])
+}
+
+model AgentSessionEvent {
+  id        String   @id @default(cuid())
+  sessionId String
+  seq       Int      // monotonic per-session sequence
+  type      String   // turn/start, user/message, assistant/message, tool/call, ...
+  data      String   // JSON-encoded event payload
+  time      DateTime @default(now())
+
+  session   AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, seq])
+  @@index([type])
+}

@@ -20,6 +20,14 @@ import { ApprovalService, type ApprovalOutcome } from './tools/approval';
 import { SystemPrompt } from './prompt';
 import { ALL_PDB_TOOLS, SERVER_SIDE_TOOLS, requiresApproval } from './pdb-tools';
 import type { SessionEvent } from './session/types';
+import {
+  upsertSessionRow,
+  appendEventRow,
+  listSessionRows,
+  loadSessionEvents,
+  getSessionRow,
+  deleteSessionRow,
+} from './persistence';
 
 export interface CreateSessionOptions {
   id?: string;
@@ -126,12 +134,15 @@ export class AgentManager {
     this.loops.set(id, loop);
     this.eventLog.set(id, []);
 
-    // Subscribe to session events → buffer + broadcast via ctx events.
+    // Subscribe to session events → buffer + broadcast via ctx events + persist.
     session.subscribe((event) => {
       this.eventLog.get(id)?.push(event);
       this.ctx.emit('session/event', { sessionId: id, event });
-      // If this is an approval/asked event, also emit the agent-context event.
+      // Best-effort persistence — never block the agent loop.
+      void appendEventRow(id, event);
     });
+    // Persist the session row.
+    void upsertSessionRow(id, session.title, session.createdAt);
 
     return { sessionId: id, session };
   }
@@ -159,6 +170,7 @@ export class AgentManager {
     this.loops.delete(sessionId);
     this.sessions.delete(sessionId);
     this.eventLog.delete(sessionId);
+    void deleteSessionRow(sessionId);
     return true;
   }
 
@@ -173,6 +185,57 @@ export class AgentManager {
 
   getEvents(sessionId: string): SessionEvent[] {
     return this.eventLog.get(sessionId) ?? [];
+  }
+
+  /**
+   * Resume a session from persistence. Loads events from the DB, rebuilds
+   * the in-memory Session + AgentLoop, and returns the sessionId. If the
+   * session is already live in memory, returns it as-is.
+   */
+  async resumeSession(sessionId: string): Promise<{ sessionId: string; session: Session } | null> {
+    // Already live in memory?
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      return { sessionId, session: existing };
+    }
+    const row = await getSessionRow(sessionId);
+    if (!row) return null;
+    const events = await loadSessionEvents(sessionId);
+    const session = Session.fromJSON({
+      id: row.id,
+      title: row.title,
+      createdAt: row.createdAt.getTime(),
+      events,
+    });
+    const loop = new AgentLoop(this.ctx, session, {
+      provider: 'zai',
+      model: 'glm-4.6',
+      maxStepsPerTurn: 10,
+    });
+    this.sessions.set(sessionId, session);
+    this.loops.set(sessionId, loop);
+    this.eventLog.set(sessionId, [...events]);
+    // Re-subscribe so future appends broadcast + persist.
+    session.subscribe((event) => {
+      this.eventLog.get(sessionId)?.push(event);
+      this.ctx.emit('session/event', { sessionId, event });
+      void appendEventRow(sessionId, event);
+    });
+    return { sessionId, session };
+  }
+
+  /** List all persisted sessions (for the history sidebar). */
+  async listPersistedSessions(): Promise<
+    Array<{ id: string; title: string; createdAt: number; updatedAt: number; eventCount: number }>
+  > {
+    const rows = await listSessionRows();
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      createdAt: r.createdAt.getTime(),
+      updatedAt: r.updatedAt.getTime(),
+      eventCount: r._count.events,
+    }));
   }
 
   /** Drive the loop one step; execute server-side tools inline; return tool calls or done. */

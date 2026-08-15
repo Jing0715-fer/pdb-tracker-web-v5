@@ -21,7 +21,15 @@ import { executeCommand } from '@/lib/molcraft/commands';
 import type { MolstarViewer } from '@/lib/molcraft/types';
 import { toolToCommand, requiresApproval, SERVER_SIDE_TOOLS } from '@/lib/agent/pdb-tools';
 import type { SessionEvent } from '@/lib/agent/session/types';
-import type { ContentBlock } from '@/lib/agent/llm/types';
+import type { ContentBlock, StreamChunk } from '@/lib/agent/llm/types';
+
+export interface SessionListItem {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  eventCount: number;
+}
 
 export interface PendingToolCall {
   callId: string;
@@ -48,7 +56,8 @@ export interface PendingApproval {
 export type ConversationNode =
   | { kind: 'user-message'; seq: number; text: string }
   | { kind: 'assistant-message'; seq: number; text: string; reasoning?: string }
-  | { kind: 'tool-call'; seq: number; callId: string; name: string; args: Record<string, unknown>; status: 'pending' | 'running' | 'ok' | 'error'; result?: unknown; error?: string }
+  | { kind: 'streaming-assistant'; seq: number; text: string; done: boolean }
+  | { kind: 'tool-call'; seq: number; callId: string; name: string; args: Record<string, unknown>; status: 'pending' | 'running' | 'ok' | 'error'; result?: unknown; error?: string; startedAt?: number }
   | { kind: 'turn-boundary'; seq: number; turn: number; type: 'start' | 'end'; reason?: string }
   | { kind: 'step-boundary'; seq: number; turn: number; step: number; type: 'start' | 'end' };
 
@@ -64,6 +73,9 @@ export interface AgentSessionState {
   pendingApprovals: PendingApproval[];
   toolExecutions: Map<string, ToolExecution>;
   error: string | null;
+  startNewSession: () => Promise<void>;
+  loadSession: (id: string) => Promise<void>;
+  listSessions: () => Promise<SessionListItem[]>;
 }
 
 function parseArgs(argsStr: string): Record<string, unknown> {
@@ -84,6 +96,8 @@ function blocksToText(blocks: ContentBlock[]): string {
 /** Project the session event log into UI conversation nodes. */
 function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecution>): ConversationNode[] {
   const nodes: ConversationNode[] = [];
+  // Track the streaming-assistant node by (turn, step) so chunks accumulate.
+  let streamingKey: string | null = null;
   for (const ev of events) {
     switch (ev.type) {
       case 'user/message': {
@@ -91,18 +105,54 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
         nodes.push({ kind: 'user-message', seq: ev.seq, text: blocksToText(data.content) });
         break;
       }
+      case 'assistant/chunk': {
+        const data = ev.data as { turn: number; step: number; chunk: StreamChunk };
+        const key = `${data.turn}:${data.step}`;
+        // Find or create the streaming node.
+        let node = nodes.find((n) => n.kind === 'streaming-assistant' && `${(n as { turn?: number }).turn ?? ''}:${(n as { step?: number }).step ?? ''}` === key) as
+          | { kind: 'streaming-assistant'; seq: number; text: string; done: boolean; turn: number; step: number }
+          | undefined;
+        if (!node) {
+          node = { kind: 'streaming-assistant', seq: ev.seq, text: '', done: false, turn: data.turn, step: data.step } as never;
+          nodes.push(node as never);
+          streamingKey = key;
+        }
+        // Accumulate text-delta chunks.
+        const chunk = data.chunk;
+        if (chunk.type === 'text-delta') {
+          node.text += chunk.text;
+        } else if (chunk.type === 'block-end' && chunk.block.type === 'text') {
+          // block-end carries the authoritative text — but we already
+          // accumulated deltas, so only set if empty (block-end is final).
+          if (node.text === '') node.text = chunk.block.text;
+        } else if (chunk.type === 'finish') {
+          node.done = true;
+        }
+        break;
+      }
       case 'assistant/message': {
         const data = ev.data as { message: { content: ContentBlock[] } };
+        // Replace the streaming node with the final message (same turn/step).
+        const turn = (ev.data as { turn: number }).turn;
+        const step = (ev.data as { step: number }).step;
+        const key = `${turn}:${step}`;
+        const idx = nodes.findIndex((n) => n.kind === 'streaming-assistant' && `${(n as { turn?: number }).turn ?? ''}:${(n as { step?: number }).step ?? ''}` === key);
         const reasoning = data.message.content
           .filter((b): b is Extract<ContentBlock, { type: 'reasoning' }> => b.type === 'reasoning')
           .map((b) => b.text)
           .join('');
-        nodes.push({
+        const finalNode: ConversationNode = {
           kind: 'assistant-message',
           seq: ev.seq,
           text: blocksToText(data.message.content),
           reasoning: reasoning || undefined,
-        });
+        };
+        if (idx >= 0) {
+          nodes[idx] = finalNode;
+        } else {
+          nodes.push(finalNode);
+        }
+        streamingKey = null;
         break;
       }
       case 'tool/call': {
@@ -117,6 +167,7 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
           status: exec?.status ?? 'pending',
           result: exec?.result,
           error: exec?.error,
+          startedAt: Date.now(),
         });
         break;
       }
@@ -126,7 +177,6 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
         for (let i = nodes.length - 1; i >= 0; i--) {
           const n = nodes[i]!;
           if (n.kind === 'tool-call') {
-            // Find by callId in the data.
             const tr = ev.data as { message: { source: { kind: string; callId?: string } } };
             if (tr.message.source.kind === 'tool' && tr.message.source.callId === n.callId) {
               n.status = data.error ? 'error' : 'ok';
@@ -423,6 +473,56 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 
   const clearError = useCallback(() => setError(null), []);
 
+  /** Start a fresh session (clears the current one). */
+  const startNewSession = useCallback(async () => {
+    setEvents([]);
+    setPendingApprovals([]);
+    setError(null);
+    setSessionId(null);
+    try {
+      const res = await fetch('/api/agent/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: `Session ${new Date().toLocaleString('zh-CN')}` }),
+      });
+      if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
+      const data = (await res.json()) as { sessionId: string };
+      setSessionId(data.sessionId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  /** Resume an existing (persisted) session by id. */
+  const loadSession = useCallback(async (id: string) => {
+    setEvents([]);
+    setPendingApprovals([]);
+    setError(null);
+    setSessionId(null);
+    try {
+      const res = await fetch(`/api/agent/sessions/${id}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) throw new Error(`Failed to resume session: ${res.status}`);
+      setSessionId(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  /** List all persisted sessions (for the history sidebar). */
+  const listSessions = useCallback(async (): Promise<SessionListItem[]> => {
+    try {
+      const res = await fetch('/api/agent/sessions');
+      if (!res.ok) return [];
+      const data = (await res.json()) as { sessions: SessionListItem[] };
+      return data.sessions ?? [];
+    } catch {
+      return [];
+    }
+  }, []);
+
   return {
     sessionId,
     connected,
@@ -434,5 +534,8 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     sendMessage,
     resolveApproval,
     clearError,
+    startNewSession,
+    loadSession,
+    listSessions,
   };
 }

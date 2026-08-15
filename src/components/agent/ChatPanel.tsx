@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -27,6 +27,7 @@ import { useAppStore } from '@/lib/molcraft/store';
 import { useAgentSession, type ConversationNode } from './use-agent-session';
 import { ToolCallCard } from './ToolCallCard';
 import { ApprovalPanel } from './ApprovalPanel';
+import { SessionHistorySidebar } from './SessionHistorySidebar';
 import { cn } from '@/lib/utils';
 
 const SUGGESTIONS = [
@@ -40,6 +41,7 @@ export function AgentChatPanel() {
   const viewer = useAppStore((s) => s.viewer);
   const session = useAgentSession({ viewer });
   const [input, setInput] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -72,10 +74,31 @@ export function AgentChatPanel() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-claude-bg-base min-h-0">
+    <div className="relative flex flex-col h-full bg-claude-bg-base min-h-0">
+      <SessionHistorySidebar
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        currentSessionId={session.sessionId}
+        listSessions={session.listSessions}
+        onSelect={(id) => {
+          void session.loadSession(id);
+          setHistoryOpen(false);
+        }}
+        onNew={async () => {
+          await session.startNewSession();
+          setHistoryOpen(false);
+        }}
+      />
       {/* Header strip */}
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border bg-claude-bg-surface">
         <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={() => setHistoryOpen((v) => !v)}
+            className="flex items-center justify-center h-6 w-6 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors shrink-0"
+            title="会话历史"
+          >
+            <History className="h-3.5 w-3.5" />
+          </button>
           <div className="flex items-center gap-1.5 shrink-0">
             <Sparkles className="h-3.5 w-3.5 text-claude-accent" />
             <span className="text-xs font-semibold text-claude-text">DeepSeek Harness Agent</span>
@@ -109,6 +132,14 @@ export function AgentChatPanel() {
             <Wrench className="h-3 w-3" />
             {session.nodes.filter((n) => n.kind === 'tool-call').length} tools
           </span>
+          <button
+            onClick={() => void session.startNewSession()}
+            disabled={session.driving}
+            className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="新会话"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
         </div>
       </div>
 
@@ -253,6 +284,33 @@ function NodeRenderer({ node }: { node: ConversationNode }) {
           </div>
         </div>
       );
+    case 'streaming-assistant':
+      return (
+        <div className="flex justify-start">
+          <div className="flex items-start gap-2 max-w-[90%]">
+            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-bg-elevated border border-claude-border text-claude-accent">
+              <Bot className="h-3.5 w-3.5" />
+            </div>
+            <div className="rounded-2xl rounded-tl-sm bg-claude-bg-elevated border border-claude-accent/30 px-3 py-2 text-sm text-claude-text shadow-sm">
+              {node.text ? (
+                <div className="prose-sm max-w-none whitespace-pre-wrap break-words">
+                  {node.text}
+                  <StreamingCursor done={node.done} />
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-xs text-claude-text-muted py-0.5">
+                  <span className="flex gap-0.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-claude-accent/60 animate-bounce [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-claude-accent/60 animate-bounce [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-claude-accent/60 animate-bounce" />
+                  </span>
+                  <span>thinking…</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
     case 'tool-call':
       return <ToolCallCard node={node} />;
     case 'turn-boundary':
@@ -269,4 +327,15 @@ function NodeRenderer({ node }: { node: ConversationNode }) {
     default:
       return null;
   }
+}
+
+/** An animated cursor shown after streaming text. */
+function StreamingCursor({ done }: { done: boolean }) {
+  if (done) return null;
+  return (
+    <span
+      className="inline-block w-1.5 h-3.5 ml-0.5 align-text-bottom bg-claude-accent animate-pulse rounded-sm"
+      aria-hidden
+    />
+  );
 }

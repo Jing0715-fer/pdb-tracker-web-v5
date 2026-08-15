@@ -55,6 +55,14 @@ export { AgentContext, type AgentContextServices, type AgentEventMap } from './c
 export { AgentLoop, type AgentOptions, type DriveOutcome, type PendingToolCall, type AgentStatus } from './loop';
 export { AgentManager, getAgentManager, type CreateSessionOptions, requiresApproval } from './manager';
 export {
+  upsertSessionRow,
+  appendEventRow,
+  listSessionRows,
+  loadSessionEvents,
+  getSessionRow,
+  deleteSessionRow,
+} from './persistence';
+export {
   PDB_TOOLS,
   FETCH_METADATA_TOOL,
   ALL_PDB_TOOLS,

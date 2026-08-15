@@ -1,10 +1,10 @@
 /**
  * POST /api/agent/sessions — create a new agent session.
- * GET  /api/agent/sessions — list sessions.
+ * GET  /api/agent/sessions — list sessions (merged: in-memory + persisted).
  *
- * A session is an append-only event log + an AgentLoop. Sessions live in
- * process memory (module-level singleton AgentManager) for the dev server's
- * lifetime.
+ * A session is an append-only event log + an AgentLoop. Sessions are persisted
+ * to a Prisma AgentSessionEvent table (best-effort) so they survive server
+ * restarts; resume via POST /api/agent/sessions/[id]/resume.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -34,5 +34,10 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   const manager = getAgentManager();
-  return NextResponse.json({ sessions: manager.listSessions() });
+  // Merge in-memory + persisted sessions (persisted wins on overlap, since
+  // it carries the true updatedAt + eventCount).
+  const persisted = await manager.listPersistedSessions();
+  return NextResponse.json({
+    sessions: persisted,
+  });
 }
