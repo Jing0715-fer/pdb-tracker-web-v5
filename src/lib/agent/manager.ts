@@ -19,7 +19,10 @@ import { ToolRuntime } from './tools/registry';
 import { ApprovalService, type ApprovalOutcome } from './tools/approval';
 import { SystemPrompt } from './prompt';
 import { ALL_PDB_TOOLS, SERVER_SIDE_TOOLS, requiresApproval } from './pdb-tools';
+import { PROVIDER_CATALOG, isProviderAvailable, listAllProvidersWithStatus, setProviderConfig, deleteProviderConfig, type ProviderProfile } from './providers';
+import { OpenAICompatAdapter } from './providers/openai-compat-adapter';
 import type { SessionEvent } from './session/types';
+import type { StreamChunk } from './llm/types';
 import {
   upsertSessionRow,
   appendEventRow,
@@ -82,7 +85,24 @@ export class AgentManager {
 
   constructor() {
     const llm = new LlmRuntime();
+    // Always register the ZAI adapter (uses the z-ai SDK's built-in auth).
     llm.registerAdapter(['zai', 'auto'], new ZaiLlmAdapter());
+
+    // Dynamically register all available OpenAI-compatible providers.
+    // A provider is "available" if it has an API key configured (in the
+    // credentials store or env var). The ZAI adapter is always available.
+    for (const profile of PROVIDER_CATALOG) {
+      if (profile.id === 'zai') continue; // already registered
+      if (isProviderAvailable(profile.id)) {
+        try {
+          llm.registerAdapter([profile.id], new OpenAICompatAdapter(profile));
+        } catch (err) {
+          // Duplicate registration — skip silently.
+          console.error(`[agent-manager] failed to register provider "${profile.id}":`, err);
+        }
+      }
+    }
+
     const tools = new ToolRuntime();
     const approval = new ApprovalService();
     const systemPrompt = new SystemPrompt();
@@ -120,6 +140,72 @@ export class AgentManager {
 
   get context(): AgentContext {
     return this.ctx;
+  }
+
+  /** List all providers with their availability status (for UI). */
+  listProviders() {
+    return listAllProvidersWithStatus();
+  }
+
+  /** Set/update a provider's config (API key + baseURL). */
+  setProviderConfig(providerId: string, config: { apiKey?: string; baseURL?: string; enabled?: boolean }) {
+    setProviderConfig(providerId, config);
+    // If the provider is now available and not yet registered, register it.
+    if (isProviderAvailable(providerId) && providerId !== 'zai') {
+      const profile = PROVIDER_CATALOG.find((p) => p.id === providerId);
+      if (profile && !this.ctx.llm.getAdapter(providerId)) {
+        try {
+          this.ctx.llm.registerAdapter([providerId], new OpenAICompatAdapter(profile));
+        } catch {
+          // Already registered — fine.
+        }
+      }
+    }
+  }
+
+  /** Delete a provider's config. */
+  deleteProviderConfig(providerId: string) {
+    deleteProviderConfig(providerId);
+  }
+
+  /** Test a provider connection by making a minimal request. */
+  async testProvider(providerId: string): Promise<{ ok: boolean; error?: string; model?: string }> {
+    if (providerId === 'zai') return { ok: true, model: 'glm-4.6' };
+    const profile = PROVIDER_CATALOG.find((p) => p.id === providerId);
+    if (!profile) return { ok: false, error: 'Unknown provider' };
+    if (!isProviderAvailable(providerId)) {
+      return { ok: false, error: 'No API key configured' };
+    }
+    try {
+      // Use the adapter to make a minimal request.
+      const adapter = new OpenAICompatAdapter(profile);
+      const chunks: StreamChunk[] = [];
+      for await (const chunk of adapter.stream({
+        provider: providerId,
+        model: profile.defaultModel,
+        messages: [
+          {
+            id: 'test' as never,
+            role: 'user',
+            content: [{ type: 'text', text: 'Hi' }],
+            source: { kind: 'user' },
+          },
+        ],
+        system: 'Reply with just "OK".',
+        maxTokens: 5,
+        signal: AbortSignal.timeout(15_000),
+      })) {
+        chunks.push(chunk);
+      }
+      const finish = chunks.find((c) => c.type === 'finish');
+      if (finish && finish.type === 'finish') {
+        if (finish.reason.kind === 'error') return { ok: false, error: finish.reason.error };
+        return { ok: true, model: profile.defaultModel };
+      }
+      return { ok: true, model: profile.defaultModel };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Create a new session + loop. */

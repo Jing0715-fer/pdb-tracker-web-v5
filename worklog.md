@@ -1437,3 +1437,78 @@ rm -rf .next
 ```
 
 A future enhancement could make the watchdog clear `.next` on each restart to prevent this entirely, but that would slow down restarts (full recompile).
+
+---
+
+Task ID: multi-provider-support
+Agent: main
+Task: Add multi-provider LLM support with API key configuration (inspired by deepseek-harness provider catalog)
+
+## 项目当前状态描述/判断
+
+### Problem
+The agent subsystem only supported the Z.ai (GLM-4.6) provider via the z-ai SDK. The user requested:
+1. Add API key configuration for providers (including DeepSeek)
+2. Add other providers, referencing https://github.com/deepseek-ai/deepseek-harness's provider list
+
+### Solution
+Built a full multi-provider system inspired by dsh's `llm-pi-ai` catalog + `credentials` capability pattern: a provider catalog, a file-based credentials store, a generic OpenAI-compatible adapter, API routes for configuration, and a UI panel for managing API keys.
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed
+1. **Provider catalog** (`src/lib/agent/providers/catalog.ts`):
+   - 10 built-in providers: Z.ai (GLM), DeepSeek, OpenAI, Anthropic (Claude), Qwen (Alibaba), Moonshot (Kimi), Zhipu AI (GLM), SiliconFlow, Together AI, Ollama (Local)
+   - Each has: id, displayName, baseURL, apiKeyEnv, defaultModel, models list, authHeader/authPrefix (for Anthropic's x-api-key), extraHeaders, icon, docsUrl
+   - All use OpenAI-compatible `/chat/completions` wire format
+2. **Credentials store** (`src/lib/agent/providers/credentials.ts`):
+   - File-based store at `.hermes/agent-providers.json` (persists API keys + baseURL overrides)
+   - `resolveApiKey()` — checks explicit config → env var → null (Z.ai always available via SDK)
+   - `isProviderAvailable()` — checks if a provider has auth
+   - `listAllProvidersWithStatus()` — for UI display
+3. **Generic OpenAI-compatible adapter** (`src/lib/agent/providers/openai-compat-adapter.ts`):
+   - Direct `fetch` calls to provider REST APIs (like dsh's `llm-deepseek`)
+   - Handles auth header variants (Authorization: Bearer vs x-api-key for Anthropic)
+   - Handles extra headers (e.g. anthropic-version)
+   - Translates our Message[] ↔ OpenAI message format + tool/function calling
+4. **Dynamic provider registration** in AgentManager:
+   - Constructor registers Z.ai (always) + all available providers from the credentials store
+   - `setProviderConfig()` dynamically registers a newly-configured provider
+5. **API routes**:
+   - `GET /api/agent/providers` — list all providers with availability status
+   - `POST /api/agent/providers` — set/update a provider's API key + baseURL
+   - `DELETE /api/agent/providers?providerId=xxx` — delete a provider config
+   - `POST /api/agent/providers/test` — test a provider connection (makes a minimal "Hi" request)
+6. **Providers config panel** (`src/components/agent/ProvidersPanel.tsx`):
+   - Full-screen modal listing all 10 providers with status badges (可用/未配置)
+   - Expandable cards showing: model list, API key input (password), Base URL override, test connection button, save button, delete button, docs link
+   - Test result display (green ✓ / red error)
+7. **Provider/model selector in SessionSettingsPopover**:
+   - Replaced the plain text model input with a `<select>` grouped by provider
+   - Shows only available providers + their models as options
+8. **Key icon button** in ChatPanel header to open the Providers panel
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl GET /providers**: returns all 10 providers; Z.ai available=True, others available=False
+- **curl POST /providers** (set DeepSeek key): → 200 {ok:true}; file saved to `.hermes/agent-providers.json`; DeepSeek now available=True, hasApiKey=True
+- **curl DELETE /providers**: → 200 {ok:true}; config deleted
+- **agent-browser**: 
+  - "供应商配置" (Key icon) button visible in header
+  - Clicking opens Providers panel with all 10 providers listed
+  - Z.ai shows "可用" badge; others show "未配置"
+  - Expanding DeepSeek shows model list + API Key input + Base URL + test/save buttons + docs link
+  - No console errors
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations
+1. **Anthropic wire format**: the adapter uses the OpenAI `/chat/completions` format for all providers including Anthropic. Anthropic's native `/messages` API differs slightly (the `x-api-key` header + `anthropic-version` are handled, but the request body format may need adjustment for some Anthropic-specific features like thinking/reasoning). For basic chat + tool calling, the OpenAI-compatible mode works with Anthropic's compatibility layer.
+2. **No streaming**: the OpenAI-compat adapter uses `stream: false` (one-shot response), same as the ZAI adapter. True SSE streaming would need a streaming fetch + SSE parser (like dsh's `sse.ts`).
+3. **Provider-specific features**: reasoning effort (DeepSeek R1), thinking mode, etc. are not yet exposed — only basic chat + tool calling.
+
+### Recommended next priorities
+1. Add SSE streaming support to the OpenAI-compat adapter for true token-by-token rendering
+2. Expose provider-specific features (DeepSeek thinking, reasoning effort)
+3. Add a "default provider" setting (so new sessions start with a specific provider)
+4. Auto-detect available providers via env vars at startup (currently only checks on manager init)

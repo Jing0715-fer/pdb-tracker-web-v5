@@ -56,7 +56,19 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
       .finally(() => setLoading(false));
   }, [open, sessionId]);
 
+  // Fetch available providers when the popover opens.
+  const [providers, setProviders] = useState<Array<{ id: string; displayName: string; icon: string; models: Array<{ id: string; name: string }>; available: boolean }>>([]);
+  useEffect(() => {
+    if (!open) return;
+    fetch('/api/agent/providers')
+      .then((r) => r.json())
+      .then((data: { providers?: typeof providers }) => setProviders(data.providers ?? []))
+      .catch(() => {});
+  }, [open]);
+
   if (!open) return null;
+
+  const availableProviders = providers.filter((p) => p.available);
 
   const model = settings.model ?? DEFAULT_SETTINGS.model;
   const temperature = settings.temperature ?? DEFAULT_SETTINGS.temperature;
@@ -110,15 +122,33 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
           </div>
         ) : (
           <div className="p-3 space-y-3">
-            {/* Model */}
+            {/* Provider + Model selector */}
             <div className="space-y-1">
-              <Label className="text-xs text-claude-text">模型</Label>
-              <Input
+              <Label className="text-xs text-claude-text flex items-center justify-between">
+                <span>供应商 / 模型</span>
+                {availableProviders.length === 0 && (
+                  <span className="text-amber-600 text-[10px]">仅 Z.ai 可用</span>
+                )}
+              </Label>
+              <select
                 value={model}
                 onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
-                className="h-7 text-xs bg-claude-bg-base border-claude-border"
-                placeholder="glm-4.6"
-              />
+                className="w-full h-7 text-xs bg-claude-bg-base border border-claude-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-claude-accent/30"
+              >
+                {availableProviders.map((p) => (
+                  <optgroup key={p.id} label={`${p.icon} ${p.displayName}`}>
+                    {p.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.id})
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+                {/* Include the current model if it's not in any provider list */}
+                {!availableProviders.some((p) => p.models.some((m) => m.id === model)) && (
+                  <option value={model}>{model}</option>
+                )}
+              </select>
             </div>
 
             {/* Temperature */}
