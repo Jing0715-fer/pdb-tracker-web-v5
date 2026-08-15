@@ -1,0 +1,1301 @@
+"use client";
+
+/**
+ * Molcraft structure-analysis Zustand store — adapted for pdb-tracker-web-v4.
+ *
+ * Removed from the original Molcraft store:
+ *   - Chat messages / agent conversation state (we reuse pdb-tracker-web-v4's
+ *     own LLM system in src/lib/llm.ts + /api/ai-* routes instead of
+ *     Molcraft's chatbot).
+ *   - lastSnapshot (was tied to the agent's screenshot verification loop).
+ *
+ * Kept: viewer, structures, UI tabs, command log, alignment, measurements,
+ *       advanced visualization overlays, analysis reports, session save/load.
+ */
+
+import { create } from "zustand";
+import type { MolstarViewer, MolstarPlugin } from "./types";
+import { storeImage, getImagesForMessage, deleteImagesForMessage } from "./image-db";
+import { sessionManager, type SessionEvent } from "./session-manager";
+
+// ---- localStorage persistence helpers ----
+const STORAGE_KEY_REPORTS = "pdb-tracker:molcraft-reports";
+const STORAGE_KEY_CHAT_PROVIDER = "pdb-tracker:llm-provider:v2";
+const STORAGE_KEY_MEASUREMENTS = "pdb-tracker:measurements:v1";
+const STORAGE_KEY_INTERACTION_LINES = "pdb-tracker:interaction-lines:v1";
+const STORAGE_KEY_CHAT_MESSAGES = "pdb-tracker:chat-messages:v1";
+const STORAGE_KEY_CHAT_SESSIONS = "pdb-tracker:chat-sessions:v1";
+const STORAGE_KEY_ACTIVE_SESSION = "pdb-tracker:active-chat-session:v1";
+
+function loadFromStorage<T>(key: string): T[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveReportsToStorage(reports: AnalysisReport[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const cleaned = reports.slice(-50).map((r) => ({
+      ...r,
+      snapshot: undefined,
+    }));
+    localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(cleaned));
+  } catch {
+    /* give up */
+  }
+}
+
+export interface AnalysisReport {
+  id: string;
+  title: string;
+  markdown: string;
+  snapshot?: string;
+  createdAt: number;
+}
+
+export interface LoadedStructure {
+  id: string;
+  label: string;
+  source: "pdb" | "alphafold" | "emdb" | "url" | "file";
+  loadedAt: number;
+  pdbText?: string;
+  color?: string;
+  style?: {
+    representation: "cartoon" | "stick" | "line" | "sphere" | "surface";
+    colorScheme: "chain" | "element" | "secondary" | "single" | "spectrum" | "bfactor" | "residue" | "charge";
+    opacity: number;
+    singleColor: string;
+  };
+  metadata?: {
+    chains?: string[];
+    numAtoms?: number;
+    numResidues?: number;
+    method?: string;
+    resolution?: number | null;
+    title?: string;
+    organism?: string;
+  };
+  transform?: number[][];
+  alignRmsd?: number;
+  alignTmScore?: number;
+}
+
+export const DEFAULT_STYLE = {
+  representation: "cartoon" as const,
+  colorScheme: "spectrum" as const,
+  opacity: 1,
+  singleColor: "#c96442", // pdb-tracker-web-v4 terracotta accent
+};
+
+export interface MolstarStateSnapshot {
+  measurements: Array<{ kind: "distance" | "angle" | "dihedral" | "label"; label: string }>;
+}
+
+interface AppState {
+  // Viewer
+  viewer: MolstarViewer | null;
+  plugin: MolstarPlugin | null;
+  ready: boolean;
+  setViewer: (v: MolstarViewer | null) => void;
+
+  // Structures
+  structures: LoadedStructure[];
+  activeStructureId: string | null;
+  addStructure: (s: LoadedStructure) => void;
+  removeStructure: (id: string) => void;
+  clearStructures: () => void;
+  setActiveStructure: (id: string | null) => void;
+  renameStructure: (id: string, label: string) => void;
+  updateStructureStyle: (id: string, patch: Partial<NonNullable<LoadedStructure["style"]>>) => void;
+  updateStructureMetadata: (id: string, metadata: LoadedStructure["metadata"]) => void;
+  setStructureAlignment: (id: string, rmsd: number, tmScore?: number, transform?: number[][]) => void;
+  structureFileCache: Record<string, { content: string; format: "pdb" | "cif" }>;
+  setStructureFileCache: (id: string, content: string, format: "pdb" | "cif") => void;
+
+  // UI
+  leftPanelTab: "structures" | "measure" | "analysis";
+  setLeftPanelTab: (t: "structures" | "measure" | "analysis") => void;
+  viewerBgDark: boolean;
+  setViewerBgDark: (dark: boolean) => void;
+
+  // Reports (analysis markdown saved from charts)
+  reports: AnalysisReport[];
+  addReport: (r: AnalysisReport) => void;
+  removeReport: (id: string) => void;
+
+  // Active command log
+  commandLog: Array<{ ts: number; type: string; ok: boolean; detail?: string }>;
+  logCommand: (entry: { type: string; ok: boolean; detail?: string }) => void;
+
+  // Alignment
+  lastAlignment: AlignmentResult | null;
+  setLastAlignment: (a: AlignmentResult | null) => void;
+  alignmentHistory: AlignmentResult[];
+  addAlignmentToHistory: (a: AlignmentResult) => void;
+  clearAlignmentHistory: () => void;
+
+  // Measurement
+  measureMode: "off" | "distance" | "angle" | "dihedral" | "label";
+  setMeasureMode: (m: "off" | "distance" | "angle" | "dihedral" | "label") => void;
+  /** Live picking progress for the UI indicator (0/2 → 1/2 → 2/2). */
+  measureProgress: { picked: number; needed: number };
+  setMeasureProgress: (p: { picked: number; needed: number }) => void;
+  /** Labels of atoms picked so far (e.g. ["TRP A 47 C", "LYS A 66 CE"]). */
+  pickedAtoms: string[];
+  setPickedAtoms: (a: string[]) => void;
+  measurements: Array<{
+    id: string;
+    mode: "distance" | "angle" | "dihedral" | "label";
+    label: string;
+    detail: string;
+    ts: number;
+    /** Optional atom coords for the overlay canvas to draw the line. When
+     *  present, the measurement is rendered as an interactionLine (so it
+     *  can be removed individually via removeMeasurement). */
+    atoms?: Array<{ x: number; y: number; z: number; label?: string }>;
+    /** The interactionLine id linked to this measurement, so removing the
+     *  measurement also removes its overlay line. */
+    lineId?: string;
+  }>;
+  addMeasurement: (m: {
+    mode: "distance" | "angle" | "dihedral" | "label";
+    label: string;
+    detail: string;
+    atoms?: Array<{ x: number; y: number; z: number; label?: string }>;
+    lineId?: string;
+  }) => void;
+  removeMeasurement: (id: string) => void;
+  clearMeasurements: () => void;
+
+  /** Interaction overlay lines — drawn by the MeasureOverlay canvas.
+   *  Used by click-to-measure distance/angle and by interaction charts
+   *  to draw dashed distance lines between two atoms in 3D space,
+   *  projected onto the overlay canvas. */
+  interactionLines: Array<{
+    id: string;
+    from: { x: number; y: number; z: number; label?: string };
+    to: { x: number; y: number; z: number; label?: string };
+    color: string;
+    label?: string;
+    dashed?: boolean;
+  }>;
+  addInteractionLine: (line: {
+    id?: string;
+    from: { x: number; y: number; z: number; label?: string };
+    to: { x: number; y: number; z: number; label?: string };
+    color: string;
+    label?: string;
+    dashed?: boolean;
+  }) => void;
+  setInteractionLines: (lines: Array<{
+    from: { x: number; y: number; z: number; label?: string };
+    to: { x: number; y: number; z: number; label?: string };
+    color: string;
+    label?: string;
+    dashed?: boolean;
+  }>) => void;
+  clearInteractionLines: () => void;
+
+  // Advanced visualization overlays
+  electrostaticViz: ElectrostaticViz | null;
+  setElectrostaticViz: (v: ElectrostaticViz | null) => void;
+  druggabilityViz: DruggabilityViz | null;
+  setDruggabilityViz: (v: DruggabilityViz | null) => void;
+  screeningViz: ScreeningViz | null;
+  setScreeningViz: (v: ScreeningViz | null) => void;
+  pocketDetectionViz: PocketDetectionViz | null;
+  setPocketDetectionViz: (v: PocketDetectionViz | null) => void;
+
+  // Session
+  saveSession: () => string;
+  loadSession: (data: unknown) => void;
+
+  // Toast bus
+  toast: (msg: string, kind?: "default" | "success" | "error" | "info") => void;
+
+  // Pending PDB ID to auto-load when the viewer becomes ready (used by the
+  // "Analyze" button in PdbViewerModal to hand off a structure to this module)
+  pendingPdbId: string | null;
+  setPendingPdbId: (id: string | null) => void;
+
+  // Chart favorites and recently used (persisted to localStorage)
+  favoriteCharts: string[];
+  toggleFavoriteChart: (chartId: string) => void;
+  recentCharts: string[];
+  addRecentChart: (chartId: string) => void;
+
+  // Active analysis chart — when the user clicks a chart tile in the left
+  // panel, the chart's result renders in the RIGHT panel (Results tab) instead
+  // of inline in the narrow left panel. This gives the chart more space and
+  // keeps the left panel as a navigation list.
+  activeAnalysisChart: string | null;
+  setActiveAnalysisChart: (chartId: string | null) => void;
+
+  // Chat / agent conversation state (ported from Molcraft, adapted to use
+  // pdb-tracker-web-v5's run-center LLM provider system instead of Molcraft's
+  // CLI agent detection).
+  chatMessages: ChatMessage[];
+  addChatMessage: (m: ChatMessage) => void;
+  updateChatMessage: (id: string, patch: Partial<ChatMessage> | ((prev: ChatMessage) => Partial<ChatMessage>)) => void;
+  clearChat: () => void;
+  /** Session manager integration: events for the current session (fork/replay audit trail) */
+  sessionEvents: SessionEvent[];
+  /** Append an event to the session manager + refresh the store's sessionEvents */
+  appendSessionEvent: (event: Omit<SessionEvent, "id" | "sessionId" | "timestamp">) => void;
+  /** Fork the current session from a given event index */
+  forkCurrentSession: (fromEventIndex?: number, title?: string) => string;
+  /** Get a summary of all tool calls in the current session (audit trail) */
+  getSessionToolCallSummary: () => Array<{ name: string; timestamp: number; ok: boolean }>;
+  /** Clear all session events for the current session */
+  clearSessionEvents: () => void;
+  // Selected LLM provider (persisted to localStorage, shared with run center).
+  // Empty string = auto (use the run center's chosen provider).
+  chatProvider: string;
+  setChatProvider: (providerId: string) => void;
+
+  // Round 33: Chat session management — multiple named conversations
+  chatSessions: ChatSession[];
+  activeSessionId: string | null;
+  createChatSession: (title?: string) => string;
+  switchChatSession: (id: string) => void;
+  deleteChatSession: (id: string) => void;
+  renameChatSession: (id: string, title: string) => void;
+  saveCurrentSession: () => void;
+  /** Round 45: Toggle the pinned state of a chat session (pinned sessions sort to top). */
+  toggleChatSessionPin: (id: string) => void;
+  /** Round 47: Set tags on a chat session for categorization. */
+  setChatSessionTags: (id: string, tags: string[]) => void;
+
+  // Chart presets (save/load chart parameter combinations)
+  chartPresets: ChartPreset[];
+  saveChartPreset: (preset: ChartPreset) => void;
+  deleteChartPreset: (id: string) => void;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  ts: number;
+  pending?: boolean;
+  /** Optional commands the agent requested (for display in the message bubble). */
+  commands?: unknown[];
+  /** Optional analysis results the agent collected (for ReAct display). */
+  analysisResults?: unknown[];
+  /** Provider that produced this message (for the avatar badge). */
+  provider?: string;
+  /** P3: When true, the message bubble shows confirm/deny buttons and the agent
+   *  loop waits for the user to approve destructive commands. */
+  needsConfirmation?: boolean;
+  /** P3: The user's confirmation response (true = proceed, false = skip). */
+  confirmationResult?: boolean;
+  /** Improvement #2: Current agent step for the progress indicator.
+   *  One of: "thinking" | "calling-llm" | "parsing" | "executing" | "done" | "error" */
+  agentStep?: "thinking" | "calling-llm" | "parsing" | "executing" | "done" | "error";
+  /** Improvement #3: When true, the message is an error and shows a Retry button. */
+  isError?: boolean;
+  /** Improvement #3: The user message text that should be re-sent on retry. */
+  retryPrompt?: string;
+  /** Round 30: Whether the error is retryable (e.g. 429 rate limit, timeout).
+   *  When true, shows a more prominent "Retry now" button. */
+  retryable?: boolean;
+  /** Round 3: The specific model name used (e.g. "glm-4.6") for the provider badge. */
+  model?: string;
+  /** Round 3: Total LLM response time in ms (for display in the provider badge). */
+  durationMs?: number;
+  /** Round 5: User reaction emoji (👍 / 👎) for assistant messages. */
+  reaction?: "thumbs-up" | "thumbs-down";
+  /** Round 5: When true, the message is pinned to the top of the chat. */
+  pinned?: boolean;
+  /** Round 5: When true, the message is bookmarked for later reference. */
+  bookmarked?: boolean;
+  /** Round 19: Custom tags for message categorization (e.g., "important", "bug"). */
+  tags?: string[];
+  /** Round 19: Optional note attached when pinning a message. */
+  pinNote?: string;
+  /** Round 19: Original content before editing (for diff view). */
+  originalContent?: string;
+  /** Round 24: Bookmark folder name for organization. */
+  bookmarkFolder?: string;
+  /** Round 61: Structured analysis screenshots captured by the multi-angle
+   *  capture pipeline. Each entry is a base64 data URI (PNG) with metadata
+   *  about the analysis recipe, camera angle, and whether the VLM selected
+   *  it as the best illustration. Rendered as inline images in MessageBubble. */
+  analysisImages?: AnalysisImage[];
+}
+
+/** Round 61: A screenshot captured during structure analysis, with optional
+ *  VLM selection metadata. */
+export interface AnalysisImage {
+  /** Base64 data URI of the screenshot (e.g. "data:image/png;base64,..."). */
+  dataUri: string;
+  /** The analysis recipe this screenshot illustrates (e.g. "binding_pocket"). */
+  recipe: string;
+  /** Camera angle used for this capture. */
+  angle: "front" | "side" | "top" | "back";
+  /** Human-readable label for the screenshot (e.g. "结合口袋 - 正面"). */
+  label: string;
+  /** When true, the VLM selected this as the best illustration for the analysis.
+   *  Only one image per recipe should have this set. */
+  best?: boolean;
+  /** Optional VLM commentary explaining why this angle was selected. */
+  vlmComment?: string;
+  /** Round 64: VLM quality score (1-10, 10=best). Based on structure feature
+   *  visibility, occlusion, and composition balance. */
+  score?: number;
+  /** Round 65: VLM confidence level for the best-index selection.
+   *  "high" = best clearly better (score gap ≥3), "medium" = gap 1-2,
+   *  "low" = scores similar. Same for all images in a recipe. */
+  confidence?: "high" | "medium" | "low";
+  /** R100.3: VLM quality assessment for this screenshot.
+   *  "acceptable" = clear and useful, "degraded" = usable but flawed,
+   *  "unacceptable" = cannot be used for analysis. */
+  quality?: "acceptable" | "degraded" | "unacceptable";
+  /** R100.3: VLM-reported issues for this screenshot (e.g. "侧链未显示"). */
+  issues?: string[];
+}
+
+/** Round 33: A chat session — a named conversation with its own message history. */
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+  /** Optional provider used for this session (for display). */
+  provider?: string;
+  /** Round 45: When true, the session is pinned to the top of the session list. */
+  pinned?: boolean;
+  /** Round 47: User-defined tags for session categorization (e.g., "kinase", "hemoglobin"). */
+  tags?: string[];
+}
+
+export interface ChartPreset {
+  id: string;
+  name: string;
+  chartId: string;
+  chartLabel: string;
+  params: Record<string, unknown>;
+  createdAt: number;
+}
+
+// Advanced visualization state types
+export interface ElectrostaticViz {
+  pdbId: string;
+  chainFilter: string;
+  ionicStrengthMm: number;
+  debyeLengthA: number;
+  forcefield: string;
+  pdb2pqrUsed: boolean;
+  numChargedAtoms: number;
+  totalPotentialKcal: number;
+  meanPotentialKcal: number;
+  mostStabilizing: Array<{
+    chain: string; resno: number; resname: string; atom: string;
+    charge: number; potential_kcal_mol: number;
+  }>;
+  mostDestabilizing: Array<{
+    chain: string; resno: number; resname: string; atom: string;
+    charge: number; potential_kcal_mol: number;
+  }>;
+  surfaceCharged: Array<{
+    chain: string; resno: number; resname: string; atom: string;
+    charge: number; potential_kcal_mol: number;
+  }>;
+  createdAt: number;
+}
+
+export interface DruggabilityViz {
+  pdbId: string;
+  ligand: string;
+  radiusA: number;
+  pocketResidueCount: number;
+  pocketVolumeA3: number;
+  druggabilityScore: number;
+  classification: string;
+  composition: Record<string, number>;
+  hydrophobicPct: number;
+  polarPct: number;
+  chargedPct: number;
+  scoreBreakdown: {
+    volume: number; hydrophobicity: number; polarity: number;
+    depth: number; charge: number;
+  };
+  residues: Array<{
+    chain: string; resno: number; resname: string;
+    min_dist_A: number; category: string;
+  }>;
+  createdAt: number;
+}
+
+export interface ScreeningViz {
+  pdbId: string;
+  ligand: string;
+  pocketScore: number;
+  fragmentSet: string;
+  rankedHits: Array<{
+    name: string; smiles: string; mw: number; logp: number;
+    hbondDonors: number; hbondAcceptors: number;
+    affinityKcal: number; ki_uM: number; score: number; rationale: string;
+  }>;
+  createdAt: number;
+}
+
+export interface PocketDetectionViz {
+  pdbId: string;
+  pockets: Array<{
+    id: number;
+    center: [number, number, number];
+    volume: number;
+    depth: number;
+    druggabilityScore: number;
+    classification: string;
+    residueCount: number;
+    composition: Record<string, number>;
+    topResidues: Array<{ chain: string; resno: number; resname: string }>;
+  }>;
+  createdAt: number;
+}
+
+export interface AlignmentResult {
+  id: string;
+  refId: string;
+  mobileId: string;
+  method: string;
+  rmsd?: number;
+  tmScore?: number;
+  alignedResidues?: number;
+  totalResidues?: number;
+  identity?: number;
+  transform?: number[][];
+  detail?: string;
+  timestamp: number;
+}
+
+let toastFn: ((msg: string, kind?: "default" | "success" | "error" | "info") => void) | null = null;
+export function registerToast(fn: typeof toastFn) {
+  toastFn = fn;
+}
+
+/** Color palette for structure list items — adapted to pdb-tracker-web-v4 warm palette. */
+export const STRUCTURE_PALETTE = [
+  "#c96442", // terracotta (claude accent)
+  "#2d8f8f", // teal (cryo-em)
+  "#7c5cbf", // purple (x-ray)
+  "#c9872e", // amber (nmr)
+  "#6b7280", // gray (other)
+  "#3db5b5", // light teal
+  "#9b7ed8", // light purple
+  "#d9a24e", // light amber
+];
+
+function nextStructureColor(existing: LoadedStructure[]): string {
+  const used = new Set(existing.map((s) => s.color));
+  for (const c of STRUCTURE_PALETTE) if (!used.has(c)) return c;
+  return STRUCTURE_PALETTE[existing.length % STRUCTURE_PALETTE.length];
+}
+
+export const useAppStore = create<AppState>((set, get) => ({
+  viewer: null,
+  plugin: null,
+  ready: false,
+  setViewer: (v) => {
+    if (typeof window !== "undefined" && v?.plugin) {
+      (window as any).__molstarPlugin = v.plugin;
+    }
+    set({
+      viewer: v,
+      plugin: v?.plugin ?? null,
+      ready: !!v,
+    });
+  },
+
+  structures: [],
+  activeStructureId: null,
+  addStructure: (s) =>
+    set((state) => {
+      const filtered = state.structures.filter((x) => x.id !== s.id);
+      const struct: LoadedStructure = {
+        ...s,
+        color: s.color ?? nextStructureColor(filtered),
+        style: s.style ?? { ...DEFAULT_STYLE, singleColor: s.color ?? nextStructureColor(filtered) },
+      };
+      const structures = [...filtered, struct];
+      const activeStructureId =
+        state.activeStructureId && structures.some((x) => x.id === state.activeStructureId)
+          ? state.activeStructureId
+          : structures[0]?.id ?? null;
+      return { structures, activeStructureId };
+    }),
+  removeStructure: (id) =>
+    set((state) => {
+      const structures = state.structures.filter((x) => x.id !== id);
+      const activeStructureId =
+        state.activeStructureId === id
+          ? structures[0]?.id ?? null
+          : state.activeStructureId;
+      const structureFileCache = { ...state.structureFileCache };
+      delete structureFileCache[id];
+      const alignmentHistory = state.alignmentHistory.filter(
+        (a) => a.refId !== id && a.mobileId !== id
+      );
+      // Clear viz state if it belonged to this structure
+      const clearViz = (viz: unknown) => {
+        if (viz && typeof viz === "object" && "pdbId" in viz) {
+          return (viz as { pdbId: string }).pdbId === id ? null : viz;
+        }
+        return viz;
+      };
+      return {
+        structures,
+        activeStructureId,
+        structureFileCache,
+        alignmentHistory,
+        electrostaticViz: clearViz(state.electrostaticViz) as typeof state.electrostaticViz,
+        druggabilityViz: clearViz(state.druggabilityViz) as typeof state.druggabilityViz,
+        screeningViz: clearViz(state.screeningViz) as typeof state.screeningViz,
+        pocketDetectionViz: clearViz(state.pocketDetectionViz) as typeof state.pocketDetectionViz,
+      };
+    }),
+  clearStructures: () =>
+    set({
+      structures: [],
+      activeStructureId: null,
+      structureFileCache: {},
+      alignmentHistory: [],
+      electrostaticViz: null,
+      druggabilityViz: null,
+      screeningViz: null,
+      pocketDetectionViz: null,
+    }),
+  setActiveStructure: (id) => set({ activeStructureId: id }),
+  renameStructure: (id, label) =>
+    set((state) => ({
+      structures: state.structures.map((s) =>
+        s.id === id ? { ...s, label } : s
+      ),
+    })),
+  updateStructureStyle: (id, patch) =>
+    set((state) => ({
+      structures: state.structures.map((s) =>
+        s.id === id
+          ? { ...s, style: { ...DEFAULT_STYLE, ...s.style, ...patch } }
+          : s
+      ),
+    })),
+  updateStructureMetadata: (id, metadata) =>
+    set((state) => ({
+      structures: state.structures.map((s) =>
+        s.id === id ? { ...s, metadata: { ...s.metadata, ...metadata } } : s
+      ),
+    })),
+  setStructureAlignment: (id, rmsd, tmScore, transform) =>
+    set((state) => ({
+      structures: state.structures.map((s) =>
+        s.id === id ? { ...s, alignRmsd: rmsd, alignTmScore: tmScore, transform } : s
+      ),
+    })),
+  structureFileCache: {},
+  setStructureFileCache: (id, content, format) =>
+    set((state) => ({
+      structureFileCache: { ...state.structureFileCache, [id]: { content, format } },
+    })),
+
+  leftPanelTab: "structures",
+  setLeftPanelTab: (t) => set({ leftPanelTab: t }),
+  viewerBgDark: false,
+  setViewerBgDark: (dark) => set({ viewerBgDark: dark }),
+
+  reports: loadFromStorage<AnalysisReport>(STORAGE_KEY_REPORTS),
+  addReport: (r) =>
+    set((state) => {
+      const reports = [r, ...state.reports];
+      saveReportsToStorage(reports);
+      return { reports };
+    }),
+  removeReport: (id) =>
+    set((state) => {
+      const reports = state.reports.filter((r) => r.id !== id);
+      saveReportsToStorage(reports);
+      return { reports };
+    }),
+
+  commandLog: [],
+  logCommand: (entry) =>
+    set((state) => ({
+      commandLog: [
+        { ts: Date.now(), ...entry },
+        ...state.commandLog,
+      ].slice(0, 50),
+    })),
+
+  lastAlignment: null,
+  setLastAlignment: (a) => set({ lastAlignment: a }),
+  alignmentHistory: [],
+  addAlignmentToHistory: (a) =>
+    set((state) => ({
+      alignmentHistory: [...state.alignmentHistory, a].slice(-20),
+    })),
+  clearAlignmentHistory: () => set({ alignmentHistory: [] }),
+
+  measureMode: "off",
+  setMeasureMode: (m) => set({ measureMode: m, measureProgress: { picked: 0, needed: m === "distance" ? 2 : m === "angle" ? 3 : m === "dihedral" ? 4 : m === "label" ? 1 : 0 }, pickedAtoms: [] }),
+  measureProgress: { picked: 0, needed: 0 },
+  setMeasureProgress: (p) => set({ measureProgress: p }),
+  pickedAtoms: [],
+  setPickedAtoms: (a) => set({ pickedAtoms: a }),
+  measurements: loadMeasurements(),
+  addMeasurement: (m) =>
+    set((state) => {
+      const measurements = [
+        { id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, ...m, ts: Date.now() },
+        ...state.measurements,
+      ].slice(0, 50);
+      persistMeasurements(measurements);
+      return { measurements };
+    }),
+  removeMeasurement: (id) =>
+    set((state) => {
+      const target = state.measurements.find((mm) => mm.id === id);
+      const lineId = target?.lineId;
+      const measurements = state.measurements.filter((mm) => mm.id !== id);
+      const interactionLines = lineId
+        ? state.interactionLines.filter((l) => l.id !== lineId)
+        : state.interactionLines;
+      persistMeasurements(measurements);
+      persistInteractionLines(interactionLines);
+      return { measurements, interactionLines };
+    }),
+  clearMeasurements: () => {
+    persistMeasurements([]);
+    set({ measurements: [] });
+  },
+
+  interactionLines: loadInteractionLines(),
+  addInteractionLine: (line) =>
+    set((state) => {
+      const interactionLines = [
+        ...state.interactionLines,
+        {
+          id: line.id ?? `il-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          from: line.from,
+          to: line.to,
+          color: line.color,
+          label: line.label,
+          dashed: line.dashed,
+        },
+      ];
+      persistInteractionLines(interactionLines);
+      return { interactionLines };
+    }),
+  setInteractionLines: (lines) => {
+    const interactionLines = lines.map((line, i) => ({
+      id: `il-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+      ...line,
+    }));
+    persistInteractionLines(interactionLines);
+    set({ interactionLines });
+  },
+  clearInteractionLines: () => {
+    persistInteractionLines([]);
+    set({ interactionLines: [] });
+  },
+
+  electrostaticViz: null,
+  setElectrostaticViz: (v) => set({ electrostaticViz: v }),
+  druggabilityViz: null,
+  setDruggabilityViz: (v) => set({ druggabilityViz: v }),
+  screeningViz: null,
+  setScreeningViz: (v) => set({ screeningViz: v }),
+  pocketDetectionViz: null,
+  setPocketDetectionViz: (v) => set({ pocketDetectionViz: v }),
+
+  saveSession: () => {
+    const s = get();
+    const payload = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      structures: s.structures,
+      measurements: s.measurements,
+      alignmentHistory: s.alignmentHistory,
+      reports: s.reports,
+      structureFileCache: s.structureFileCache,
+    };
+    return JSON.stringify(payload, null, 2);
+  },
+  loadSession: (data) => {
+    if (!data || typeof data !== "object") {
+      get().toast("Invalid session data", "error");
+      return;
+    }
+    const d = data as {
+      structures?: LoadedStructure[];
+      measurements?: AppState["measurements"];
+      alignmentHistory?: AlignmentResult[];
+      reports?: AnalysisReport[];
+      structureFileCache?: Record<string, { content: string; format: "pdb" | "cif" }>;
+    };
+    set({
+      structures: Array.isArray(d.structures) ? d.structures : [],
+      measurements: Array.isArray(d.measurements) ? d.measurements : [],
+      alignmentHistory: Array.isArray(d.alignmentHistory) ? d.alignmentHistory : [],
+      reports: Array.isArray(d.reports) ? d.reports : [],
+      structureFileCache:
+        d.structureFileCache && typeof d.structureFileCache === "object"
+          ? d.structureFileCache
+          : {},
+      activeStructureId:
+        Array.isArray(d.structures) && d.structures.length > 0
+          ? d.structures[0].id
+          : null,
+    });
+    get().toast(
+      `Session loaded: ${d.structures?.length ?? 0} structures, ${d.reports?.length ?? 0} reports`,
+      "success"
+    );
+  },
+
+  toast: (msg, kind = "default") => {
+    if (toastFn) toastFn(msg, kind);
+    else console.log(`[toast:${kind}] ${msg}`);
+  },
+
+  pendingPdbId: null,
+  setPendingPdbId: (id) => set({ pendingPdbId: id }),
+
+  favoriteCharts: loadChartFavorites(),
+  toggleFavoriteChart: (chartId) =>
+    set((state) => {
+      const favorites = state.favoriteCharts.includes(chartId)
+        ? state.favoriteCharts.filter((id) => id !== chartId)
+        : [...state.favoriteCharts, chartId];
+      saveChartFavorites(favorites);
+      return { favoriteCharts: favorites };
+    }),
+  recentCharts: loadRecentCharts(),
+  addRecentChart: (chartId) =>
+    set((state) => {
+      const recent = [chartId, ...state.recentCharts.filter((id) => id !== chartId)].slice(0, 6);
+      saveRecentCharts(recent);
+      return { recentCharts: recent };
+    }),
+
+  activeAnalysisChart: null,
+  setActiveAnalysisChart: (chartId) => set({ activeAnalysisChart: chartId }),
+
+  // Chat / agent conversation state
+  chatMessages: loadChatMessages(),
+  addChatMessage: (m) => {
+    const newMessages = [...get().chatMessages, m];
+    persistChatMessages(newMessages);
+    set({ chatMessages: newMessages });
+    // Session manager integration: log user/assistant messages
+    const sid = get().activeSessionId || `chat-${Date.now()}`;
+    sessionManager.append(sid, {
+      type: m.role === "user" ? "user_message" : "assistant_message",
+      data: { content: m.content, messageId: m.id },
+    });
+    set({ sessionEvents: sessionManager.getEvents(sid) });
+  },
+  updateChatMessage: (id, patch) =>
+    set((state) => {
+      const newMessages = state.chatMessages.map((m) => {
+        if (m.id !== id) return m;
+        const patchObj = typeof patch === "function" ? patch(m) : patch;
+        return { ...m, ...patchObj };
+      });
+      persistChatMessages(newMessages);
+      return { chatMessages: newMessages };
+    }),
+  clearChat: () => {
+    persistChatMessages([]);
+    set({ chatMessages: [] });
+    // Clear session events for the current session
+    const sid = get().activeSessionId || "chat-default";
+    sessionManager.clear(sid);
+    set({ sessionEvents: [] });
+  },
+  // Session manager integration
+  sessionEvents: [],
+  appendSessionEvent: (event) => {
+    const sid = get().activeSessionId || `chat-${Date.now()}`;
+    sessionManager.append(sid, event);
+    set({ sessionEvents: sessionManager.getEvents(sid) });
+  },
+  forkCurrentSession: (fromEventIndex, title) => {
+    const sid = get().activeSessionId || "chat-default";
+    const result = sessionManager.fork(sid, { fromEventIndex, title });
+    set({ sessionEvents: sessionManager.getEvents(result.newSessionId) });
+    return result.newSessionId;
+  },
+  getSessionToolCallSummary: () => {
+    const sid = get().activeSessionId || "chat-default";
+    return sessionManager.getToolCallSummary(sid);
+  },
+  clearSessionEvents: () => {
+    const sid = get().activeSessionId || "chat-default";
+    sessionManager.clear(sid);
+    set({ sessionEvents: [] });
+  },
+  chatProvider: loadChatProvider(),
+  setChatProvider: (providerId) => {
+    persistChatProvider(providerId);
+    set({ chatProvider: providerId });
+  },
+
+  // Round 33: Chat session management
+  chatSessions: loadChatSessions(),
+  activeSessionId: loadActiveSessionId(),
+  createChatSession: (title) => {
+    // Round 51: Save current messages to the current session BEFORE creating a new one.
+    // Previously, creating a new session would lose the current session's messages
+    // because they were cleared without being saved.
+    const currentId = get().activeSessionId;
+    const currentMessages = get().chatMessages;
+    if (currentId && currentMessages.length > 0) {
+      const sessions = get().chatSessions.map((s) =>
+        s.id === currentId
+          ? { ...s, messages: currentMessages.filter((m) => !m.pending), updatedAt: Date.now() }
+          : s
+      );
+      persistChatSessions(sessions);
+      set({ chatSessions: sessions });
+    }
+
+    const id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const now = Date.now();
+    const session: ChatSession = {
+      id,
+      title: title || `Session ${new Date().toLocaleString()}`,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+      provider: get().chatProvider || undefined,
+    };
+    const sessions = [session, ...get().chatSessions];
+    persistChatSessions(sessions);
+    persistActiveSessionId(id);
+    // Clear current messages for the new session
+    persistChatMessages([]);
+    set({ chatSessions: sessions, activeSessionId: id, chatMessages: [] });
+    return id;
+  },
+  switchChatSession: (id) => {
+    const session = get().chatSessions.find((s) => s.id === id);
+    if (!session) return;
+    // Save current messages to the current session before switching
+    const currentId = get().activeSessionId;
+    if (currentId) {
+      const sessions = get().chatSessions.map((s) =>
+        s.id === currentId
+          ? { ...s, messages: get().chatMessages.filter((m) => !m.pending), updatedAt: Date.now() }
+          : s
+      );
+      persistChatSessions(sessions);
+      set({ chatSessions: sessions });
+    }
+    // Load the target session's messages
+    const messages = session.messages.filter((m) => !m.pending);
+    persistChatMessages(messages);
+    persistActiveSessionId(id);
+    set({ activeSessionId: id, chatMessages: messages });
+  },
+  deleteChatSession: (id) => {
+    // Round 73: Clean up IndexedDB images for the deleted session's messages
+    const sessionToDelete = get().chatSessions.find((s) => s.id === id);
+    if (sessionToDelete) {
+      for (const msg of sessionToDelete.messages) {
+        if (msg.analysisImages && msg.analysisImages.length > 0) {
+          deleteImagesForMessage(msg.id);
+        }
+      }
+    }
+    const sessions = get().chatSessions.filter((s) => s.id !== id);
+    persistChatSessions(sessions);
+    // If we deleted the active session, switch to the first remaining or create new
+    if (get().activeSessionId === id) {
+      if (sessions.length > 0) {
+        const next = sessions[0];
+        const messages = next.messages.filter((m) => !m.pending);
+        persistChatMessages(messages);
+        persistActiveSessionId(next.id);
+        set({ chatSessions: sessions, activeSessionId: next.id, chatMessages: messages });
+      } else {
+        persistChatMessages([]);
+        persistActiveSessionId(null);
+        set({ chatSessions: sessions, activeSessionId: null, chatMessages: [] });
+      }
+    } else {
+      set({ chatSessions: sessions });
+    }
+  },
+  renameChatSession: (id, title) => {
+    const sessions = get().chatSessions.map((s) =>
+      s.id === id ? { ...s, title, updatedAt: Date.now() } : s
+    );
+    persistChatSessions(sessions);
+    set({ chatSessions: sessions });
+  },
+  saveCurrentSession: () => {
+    const id = get().activeSessionId;
+    if (!id) return;
+    // Auto-generate title from first user message if title is default
+    const messages = get().chatMessages;
+    const sessions = get().chatSessions.map((s) => {
+      if (s.id !== id) return s;
+      let title = s.title;
+      if (title.startsWith("Session ") && messages.length > 0) {
+        const firstUser = messages.find((m) => m.role === "user");
+        if (firstUser) {
+          title = firstUser.content.slice(0, 40) + (firstUser.content.length > 40 ? "…" : "");
+        }
+      }
+      return {
+        ...s,
+        title,
+        messages: messages.filter((m) => !m.pending),
+        updatedAt: Date.now(),
+        provider: get().chatProvider || undefined,
+      };
+    });
+    persistChatSessions(sessions);
+    set({ chatSessions: sessions });
+  },
+
+  // Round 45: Toggle session pin — pinned sessions sort to top of the list
+  toggleChatSessionPin: (id) => {
+    const sessions = get().chatSessions.map((s) =>
+      s.id === id ? { ...s, pinned: !s.pinned, updatedAt: Date.now() } : s
+    );
+    // Sort: pinned sessions first (by updatedAt desc), then unpinned (by updatedAt desc)
+    const sorted = [...sessions].sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return b.updatedAt - a.updatedAt;
+    });
+    persistChatSessions(sorted);
+    set({ chatSessions: sorted });
+  },
+
+  // Round 47: Set tags on a chat session
+  setChatSessionTags: (id, tags) => {
+    const sessions = get().chatSessions.map((s) =>
+      s.id === id ? { ...s, tags, updatedAt: Date.now() } : s
+    );
+    persistChatSessions(sessions);
+    set({ chatSessions: sessions });
+  },
+
+  chartPresets: loadChartPresets(),
+  saveChartPreset: (preset) =>
+    set((state) => {
+      const presets = [preset, ...state.chartPresets.filter((p) => p.id !== preset.id)];
+      saveChartPresets(presets);
+      return { chartPresets: presets };
+    }),
+  deleteChartPreset: (id) =>
+    set((state) => {
+      const presets = state.chartPresets.filter((p) => p.id !== id);
+      saveChartPresets(presets);
+      return { chartPresets: presets };
+    }),
+}));
+
+// localStorage helpers for chart presets
+const CHART_PRESETS_KEY = "pdb-tracker:chart-presets";
+
+function loadChartPresets(): ChartPreset[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(CHART_PRESETS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChartPresets(presets: ChartPreset[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(CHART_PRESETS_KEY, JSON.stringify(presets));
+  } catch {}
+}
+
+// localStorage helpers for chart favorites and recent
+const FAVORITE_CHARTS_KEY = "pdb-tracker:favorite-charts";
+const RECENT_CHARTS_KEY = "pdb-tracker:recent-charts";
+
+function loadChartFavorites(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(FAVORITE_CHARTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChartFavorites(favorites: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(FAVORITE_CHARTS_KEY, JSON.stringify(favorites));
+  } catch {}
+}
+
+function loadRecentCharts(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(RECENT_CHARTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentCharts(recent: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(RECENT_CHARTS_KEY, JSON.stringify(recent));
+  } catch {}
+}
+
+try { if (typeof window !== "undefined") (window as any).__molcraftStore = useAppStore; } catch {}
+
+export function selectActiveStructure(state: AppState): LoadedStructure | null {
+  if (!state.activeStructureId) return state.structures[0] ?? null;
+  return state.structures.find((s) => s.id === state.activeStructureId) ?? state.structures[0] ?? null;
+}
+
+// ---- chat provider persistence (shared with run center via the same localStorage key) ----
+function loadChatProvider(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return localStorage.getItem(STORAGE_KEY_CHAT_PROVIDER) || "";
+  } catch {
+    return "";
+  }
+}
+
+function persistChatProvider(providerId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_CHAT_PROVIDER, providerId);
+  } catch { /* ignore */ }
+}
+
+// ---- measurement persistence (survive modal close/reopen) ----
+function loadMeasurements(): AppState["measurements"] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_MEASUREMENTS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistMeasurements(measurements: AppState["measurements"]): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Only persist measurements that have atom coords (needed for overlay redraw).
+    // Cap at 50 to avoid localStorage overflow.
+    const toSave = measurements.slice(0, 50).map((m) => ({
+      ...m,
+      // Strip any non-serializable fields
+      atoms: m.atoms?.map((a) => ({ x: a.x, y: a.y, z: a.z, label: a.label })),
+    }));
+    localStorage.setItem(STORAGE_KEY_MEASUREMENTS, JSON.stringify(toSave));
+  } catch { /* ignore quota errors */ }
+}
+
+function loadInteractionLines(): AppState["interactionLines"] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_INTERACTION_LINES);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistInteractionLines(lines: AppState["interactionLines"]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY_INTERACTION_LINES, JSON.stringify(lines.slice(0, 100)));
+  } catch { /* ignore */ }
+}
+
+// ---- chat message persistence (survive page refresh) ----
+function loadChatMessages(): ChatMessage[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CHAT_MESSAGES);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Don't restore pending messages — they'd be stuck in "loading" forever
+    return parsed.filter((m: ChatMessage) => !m.pending).slice(-50);
+  } catch {
+    return [];
+  }
+}
+
+function persistChatMessages(messages: ChatMessage[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Cap at 50 messages, strip pending messages (they're transient)
+    // Round 71: Strip analysisImages (base64 data URIs) to avoid localStorage
+    // overflow. A single screenshot is ~100KB in base64; 60 screenshots across
+    // 20 messages would exceed the 5-10MB localStorage limit, causing all
+    // session data to be lost silently.
+    const toSave = messages.filter((m) => !m.pending).slice(-50).map(m => {
+      if (!m.analysisImages || m.analysisImages.length === 0) return m;
+      // Keep image metadata but strip the dataUri (which is the large part)
+      return {
+        ...m,
+        analysisImages: m.analysisImages.map(img => ({
+          ...img,
+          dataUri: '', // Strip base64 data — too large for localStorage
+        })),
+      };
+    });
+    localStorage.setItem(STORAGE_KEY_CHAT_MESSAGES, JSON.stringify(toSave));
+  } catch { /* ignore */ }
+}
+
+// ---- chat session persistence (Round 33) ----
+function loadChatSessions(): ChatSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CHAT_SESSIONS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Round 72: Mark messages that have stripped images for async restoration
+    const sessions = parsed.slice(0, 20).map((s: ChatSession) => ({
+      ...s,
+      messages: s.messages.map((m: ChatMessage) => ({
+        ...m,
+        // Images have dataUri='' (stripped during save). They will be
+        // restored from IndexedDB by the restoreImages function below.
+        analysisImages: m.analysisImages?.map(img => ({ ...img, dataUri: img.dataUri || '' })),
+      })),
+    }));
+    // Fire-and-forget: restore images from IndexedDB asynchronously
+    if (typeof window !== 'undefined') {
+      restoreSessionImages(sessions);
+    }
+    return sessions;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Round 72: Asynchronously restore analysis images from IndexedDB.
+ * Called after loadChatSessions — iterates all sessions/messages and
+ * replaces stripped dataUri with the actual image from IndexedDB.
+ * Updates the store when restoration is complete.
+ */
+async function restoreSessionImages(sessions: ChatSession[]): Promise<void> {
+  try {
+    let updated = false;
+    for (const session of sessions) {
+      for (const msg of session.messages) {
+        if (!msg.analysisImages || msg.analysisImages.length === 0) continue;
+        const hasStripped = msg.analysisImages.some(img => !img.dataUri);
+        if (!hasStripped) continue;
+        // Load images from IndexedDB
+        const storedImages = await getImagesForMessage(msg.id);
+        if (storedImages.size > 0) {
+          msg.analysisImages = msg.analysisImages.map((img, idx) => {
+            const stored = storedImages.get(idx);
+            return stored ? { ...img, dataUri: stored.dataUri } : img;
+          });
+          updated = true;
+        }
+      }
+    }
+    if (updated) {
+      // Update the store with restored images
+      const store = useAppStore.getState();
+      const currentSessionId = store.activeSessionId;
+      // Update sessions in store
+      useAppStore.setState({ chatSessions: sessions });
+      // If the active session was updated, also update chatMessages
+      if (currentSessionId) {
+        const activeSession = sessions.find(s => s.id === currentSessionId);
+        if (activeSession) {
+          useAppStore.setState({ chatMessages: activeSession.messages });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[restoreSessionImages] Failed:', err);
+  }
+}
+
+function persistChatSessions(sessions: ChatSession[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    // Cap at 20 sessions
+    // Round 71: Strip analysisImages dataUri from session messages to avoid
+    // localStorage overflow.
+    // Round 72: Store images in IndexedDB (larger quota) before stripping.
+    // This allows images to be restored when the session is reloaded.
+    const toSave = sessions.slice(0, 20).map(s => ({
+      ...s,
+      messages: s.messages.map(m => {
+        if (!m.analysisImages || m.analysisImages.length === 0) return m;
+        // Round 72: Store each image in IndexedDB (fire-and-forget)
+        m.analysisImages.forEach((img, idx) => {
+          if (img.dataUri) {
+            storeImage(`${m.id}:${idx}`, img.dataUri, {
+              recipe: img.recipe,
+              angle: img.angle,
+              label: img.label,
+            });
+          }
+        });
+        // Strip base64 data for localStorage — will be restored from IndexedDB on load
+        return {
+          ...m,
+          analysisImages: m.analysisImages.map(img => ({
+            ...img,
+            dataUri: '',
+          })),
+        };
+      }),
+    }));
+    localStorage.setItem(STORAGE_KEY_CHAT_SESSIONS, JSON.stringify(toSave));
+  } catch (err) {
+    console.warn('[persistChatSessions] Failed to save sessions:', err);
+  }
+}
+
+function loadActiveSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(STORAGE_KEY_ACTIVE_SESSION) || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveSessionId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) {
+      localStorage.setItem(STORAGE_KEY_ACTIVE_SESSION, id);
+    } else {
+      localStorage.removeItem(STORAGE_KEY_ACTIVE_SESSION);
+    }
+  } catch { /* ignore */ }
+}
