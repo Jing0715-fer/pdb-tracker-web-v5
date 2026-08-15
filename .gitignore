@@ -59,3 +59,7 @@ server.log
 # Downloaded/generated images during QA
 /tmp/*.pngdb/*.db
 db/*.db-*
+db/custom.db
+dev.log
+watchdog.log
+dev-watchdog.sh
