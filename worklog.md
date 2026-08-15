@@ -1575,3 +1575,28 @@ Task: Fix ChunkLoadError + improve ProvidersPanel UI + beautify DbSetupWizard
 - The ChunkLoadError will recur if the server is OOM-killed during compilation. The fix is to clear `.next` and restart: `rm -rf .next && (setsid bash dev-watchdog.sh >> watchdog.log 2>&1 &)`
 - The ProvidersPanel now uses the Dialog component which is consistent with the DbSetupWizard's styling
 - The DbSetupWizard is fully Chinese-localized now
+
+---
+
+Task ID: providers-ui-simplify
+Agent: main
+Task: Simplify provider UI, add missing providers (MiniMax etc.), replace emoji with text labels
+
+## 完成的修改
+
+1. **供应商目录扩充** (`src/lib/agent/providers/catalog.ts`):
+   - 从 deepseek-harness 的 pi-ai @earendil-works/pi-ai builtinProviders 列表补齐
+   - 新增: Google (Gemini), MiniMax, xAI (Grok), Mistral, Groq, OpenRouter, Fireworks AI
+   - 总计 17 个供应商 (zai, deepseek, openai, anthropic, google, qwen, moonshot, zhipu, minimax, xai, mistral, groq, openrouter, siliconflow, together, fireworks, ollama)
+   - 移除所有 emoji 图标，改用文字标签 (label: 'DS', 'AI', 'AN' 等)
+
+2. **ProvidersPanel 完全简化重写** (`src/components/agent/ProvidersPanel.tsx`):
+   - 移除展开式卡片列表
+   - 新界面: 一个下拉菜单选择供应商 → Base URL 自动填充 → API Key 输入框 → 测试并保存/保存按钮
+   - 已配置供应商以紧凑列表显示，带标签徽章 + 删除按钮
+   - 整体更简洁，操作流程更直观
+
+### 验证结果
+- typecheck: 0 错误
+- agent-browser: 下拉菜单列出全部 16 个可配置供应商; 选择 DeepSeek 后 Base URL 自动填充 "https://api.deepseek.com/v1"; API Key 输入框显示; 已配置列表显示 ZAI 标签
+- 控制台无错误

@@ -2,13 +2,12 @@
  * Provider catalog — the built-in list of LLM providers, their default
  * baseURLs, auth header formats, and default models.
  *
- * Inspired by dsh's pi-ai catalog: each provider has an `api` (wire protocol),
- * a default `baseURL`, an `apiKeyEnv` (the env var that holds the key), and a
- * list of `models` with display names + context windows.
+ * Inspired by dsh's pi-ai catalog (@earendil-works/pi-ai builtinProviders):
+ * the full list includes 40+ providers. We include the most commonly used
+ * ones that support the OpenAI-compatible /chat/completions wire format.
  *
- * All providers here use the OpenAI-compatible `chat/completions` wire format,
- * so a single `OpenAICompatAdapter` can serve them all — only the baseURL,
- * auth header, and model list differ.
+ * Each provider has a short text label (first 1-2 letters) instead of an
+ * emoji — clean, professional, and consistent with the app's Claude theme.
  */
 
 export interface ProviderModel {
@@ -18,10 +17,10 @@ export interface ProviderModel {
 }
 
 export interface ProviderProfile {
-  /** Provider route id (e.g. 'deepseek', 'openai'). */
   id: string;
-  /** Human-readable display name. */
   displayName: string;
+  /** Short text label (1-2 chars) for UI display. */
+  label: string;
   /** Default base URL for the API. */
   baseURL: string;
   /** The env var that typically holds the API key. */
@@ -34,12 +33,10 @@ export interface ProviderProfile {
   defaultModel: string;
   /** Known models for this provider. */
   models: ProviderModel[];
-  /** Optional: extra headers to send (e.g. Anthropic's version header). */
+  /** Optional: extra headers to send. */
   extraHeaders?: Record<string, string>;
   /** Whether this provider supports tool/function calling. */
   supportsToolCalling: boolean;
-  /** Icon/emoji for UI display. */
-  icon: string;
   /** Documentation URL for getting an API key. */
   docsUrl: string;
 }
@@ -49,6 +46,7 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
   {
     id: 'zai',
     displayName: 'Z.ai (GLM)',
+    label: 'ZAI',
     baseURL: 'https://internal-api.z.ai/v1',
     apiKeyEnv: 'ZAI_API_KEY',
     defaultModel: 'glm-4.6',
@@ -58,26 +56,26 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'glm-4-flash', name: 'GLM-4 Flash', contextWindow: 128000 },
     ],
     supportsToolCalling: true,
-    icon: '🤖',
     docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
   },
   {
     id: 'deepseek',
     displayName: 'DeepSeek',
+    label: 'DS',
     baseURL: 'https://api.deepseek.com/v1',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     defaultModel: 'deepseek-chat',
     models: [
-      { id: 'deepseek-chat', name: 'DeepSeek-V3 (Chat)', contextWindow: 64000 },
-      { id: 'deepseek-reasoner', name: 'DeepSeek-R1 (Reasoner)', contextWindow: 64000 },
+      { id: 'deepseek-chat', name: 'DeepSeek-V3', contextWindow: 64000 },
+      { id: 'deepseek-reasoner', name: 'DeepSeek-R1', contextWindow: 64000 },
     ],
     supportsToolCalling: true,
-    icon: '🐋',
     docsUrl: 'https://platform.deepseek.com/api_keys',
   },
   {
     id: 'openai',
     displayName: 'OpenAI',
+    label: 'AI',
     baseURL: 'https://api.openai.com/v1',
     apiKeyEnv: 'OPENAI_API_KEY',
     defaultModel: 'gpt-4o',
@@ -88,12 +86,12 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'o3-mini', name: 'o3-mini', contextWindow: 200000 },
     ],
     supportsToolCalling: true,
-    icon: '🟢',
     docsUrl: 'https://platform.openai.com/api-keys',
   },
   {
     id: 'anthropic',
-    displayName: 'Anthropic (Claude)',
+    displayName: 'Anthropic',
+    label: 'AN',
     baseURL: 'https://api.anthropic.com/v1',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     authHeader: 'x-api-key',
@@ -106,12 +104,27 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
     ],
     supportsToolCalling: true,
     extraHeaders: { 'anthropic-version': '2023-06-01' },
-    icon: '🟠',
     docsUrl: 'https://console.anthropic.com/settings/keys',
+  },
+  {
+    id: 'google',
+    displayName: 'Google (Gemini)',
+    label: 'GG',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    apiKeyEnv: 'GOOGLE_API_KEY',
+    defaultModel: 'gemini-2.0-flash',
+    models: [
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', contextWindow: 1048576 },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', contextWindow: 1048576 },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', contextWindow: 2000000 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://aistudio.google.com/apikey',
   },
   {
     id: 'qwen',
     displayName: 'Qwen (Alibaba)',
+    label: 'QW',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiKeyEnv: 'DASHSCOPE_API_KEY',
     defaultModel: 'qwen-plus',
@@ -121,12 +134,12 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'qwen-turbo', name: 'Qwen Turbo', contextWindow: 1000000 },
     ],
     supportsToolCalling: true,
-    icon: '🔮',
     docsUrl: 'https://dashscope.console.aliyun.com/apiKey',
   },
   {
     id: 'moonshot',
     displayName: 'Moonshot (Kimi)',
+    label: 'MS',
     baseURL: 'https://api.moonshot.cn/v1',
     apiKeyEnv: 'MOONSHOT_API_KEY',
     defaultModel: 'moonshot-v1-8k',
@@ -136,12 +149,12 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'moonshot-v1-128k', name: 'Moonshot v1 (128k)', contextWindow: 128000 },
     ],
     supportsToolCalling: true,
-    icon: '🌙',
     docsUrl: 'https://platform.moonshot.cn/console/api-keys',
   },
   {
     id: 'zhipu',
-    displayName: 'Zhipu AI (GLM)',
+    displayName: 'Zhipu AI',
+    label: 'ZP',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     apiKeyEnv: 'ZHIPU_API_KEY',
     defaultModel: 'glm-4',
@@ -151,12 +164,86 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'glm-4-flash', name: 'GLM-4 Flash', contextWindow: 128000 },
     ],
     supportsToolCalling: true,
-    icon: '✨',
     docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+  },
+  {
+    id: 'minimax',
+    displayName: 'MiniMax',
+    label: 'MM',
+    baseURL: 'https://api.minimax.chat/v1',
+    apiKeyEnv: 'MINIMAX_API_KEY',
+    defaultModel: 'MiniMax-Text-01',
+    models: [
+      { id: 'MiniMax-Text-01', name: 'MiniMax Text 01', contextWindow: 1000000 },
+      { id: 'abab6.5s-chat', name: 'abab6.5s', contextWindow: 245760 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+  },
+  {
+    id: 'xai',
+    displayName: 'xAI (Grok)',
+    label: 'xA',
+    baseURL: 'https://api.x.ai/v1',
+    apiKeyEnv: 'XAI_API_KEY',
+    defaultModel: 'grok-3',
+    models: [
+      { id: 'grok-3', name: 'Grok 3', contextWindow: 131072 },
+      { id: 'grok-3-mini', name: 'Grok 3 Mini', contextWindow: 131072 },
+      { id: 'grok-2', name: 'Grok 2', contextWindow: 131072 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://console.x.ai',
+  },
+  {
+    id: 'mistral',
+    displayName: 'Mistral',
+    label: 'MI',
+    baseURL: 'https://api.mistral.ai/v1',
+    apiKeyEnv: 'MISTRAL_API_KEY',
+    defaultModel: 'mistral-large-latest',
+    models: [
+      { id: 'mistral-large-latest', name: 'Mistral Large', contextWindow: 128000 },
+      { id: 'mistral-small-latest', name: 'Mistral Small', contextWindow: 32000 },
+      { id: 'codestral-latest', name: 'Codestral', contextWindow: 256000 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://console.mistral.ai/api-keys',
+  },
+  {
+    id: 'groq',
+    displayName: 'Groq',
+    label: 'GQ',
+    baseURL: 'https://api.groq.com/openai/v1',
+    apiKeyEnv: 'GROQ_API_KEY',
+    defaultModel: 'llama-3.3-70b-versatile',
+    models: [
+      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', contextWindow: 131072 },
+      { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B', contextWindow: 131072 },
+      { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill', contextWindow: 131072 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://console.groq.com/keys',
+  },
+  {
+    id: 'openrouter',
+    displayName: 'OpenRouter',
+    label: 'OR',
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    defaultModel: 'deepseek/deepseek-chat',
+    models: [
+      { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', contextWindow: 64000 },
+      { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', contextWindow: 200000 },
+      { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', contextWindow: 1048576 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://openrouter.ai/keys',
   },
   {
     id: 'siliconflow',
     displayName: 'SiliconFlow',
+    label: 'SF',
     baseURL: 'https://api.siliconflow.cn/v1',
     apiKeyEnv: 'SILICONFLOW_API_KEY',
     defaultModel: 'deepseek-ai/DeepSeek-V3',
@@ -166,12 +253,12 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', contextWindow: 32768 },
     ],
     supportsToolCalling: true,
-    icon: '🔮',
     docsUrl: 'https://cloud.siliconflow.cn/account/ak',
   },
   {
     id: 'together',
     displayName: 'Together AI',
+    label: 'TG',
     baseURL: 'https://api.together.xyz/v1',
     apiKeyEnv: 'TOGETHER_API_KEY',
     defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
@@ -180,12 +267,26 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek R1', contextWindow: 131072 },
     ],
     supportsToolCalling: true,
-    icon: '🤝',
     docsUrl: 'https://api.together.xyz/settings/api-keys',
+  },
+  {
+    id: 'fireworks',
+    displayName: 'Fireworks AI',
+    label: 'FW',
+    baseURL: 'https://api.fireworks.ai/inference/v1',
+    apiKeyEnv: 'FIREWORKS_API_KEY',
+    defaultModel: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
+    models: [
+      { id: 'accounts/fireworks/models/llama-v3p3-70b-instruct', name: 'Llama 3.3 70B', contextWindow: 131072 },
+      { id: 'accounts/fireworks/models/deepseek-v3', name: 'DeepSeek V3', contextWindow: 64000 },
+    ],
+    supportsToolCalling: true,
+    docsUrl: 'https://fireworks.ai/account/api-keys',
   },
   {
     id: 'ollama',
     displayName: 'Ollama (Local)',
+    label: 'OL',
     baseURL: 'http://localhost:11434/v1',
     apiKeyEnv: 'OLLAMA_API_KEY',
     defaultModel: 'llama3.2',
@@ -195,7 +296,6 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'deepseek-r1', name: 'DeepSeek R1', contextWindow: 128000 },
     ],
     supportsToolCalling: true,
-    icon: '🦙',
     docsUrl: 'https://ollama.com',
   },
 ];
