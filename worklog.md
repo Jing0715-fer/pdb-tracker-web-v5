@@ -1512,3 +1512,66 @@ Built a full multi-provider system inspired by dsh's `llm-pi-ai` catalog + `cred
 2. Expose provider-specific features (DeepSeek thinking, reasoning effort)
 3. Add a "default provider" setting (so new sessions start with a specific provider)
 4. Auto-detect available providers via env vars at startup (currently only checks on manager init)
+
+---
+
+Task ID: ui-polish-providers-db
+Agent: main
+Task: Fix ChunkLoadError + improve ProvidersPanel UI + beautify DbSetupWizard
+
+## 项目当前状态描述/判断
+
+### Problem
+1. ChunkLoadError on structure-analysis-view chunk (corrupted .next cache from OOM restarts)
+2. ProvidersPanel UI was unclear — user couldn't easily see provider selection + API key input
+3. DbSetupWizard had mixed English/Chinese text and needed visual polish
+
+## 当前目标/已完成的修改/验证结果
+
+### Fix Applied
+1. **ChunkLoadError fix**: killed all dev processes, cleared `.next` directory (`rm -rf .next`), restarted with clean compile. The corrupted webpack chunks were the root cause (not a code error).
+
+2. **ProvidersPanel redesign** (`src/components/agent/ProvidersPanel.tsx`):
+   - Replaced the raw `fixed inset-0` overlay with a proper `Dialog` component (matching the app's existing dialog pattern)
+   - Added header with description text explaining what the panel does
+   - Added toolbar showing "X / N 个供应商可用" + refresh button
+   - Provider cards now use Claude theme tokens (bg-claude-*, text-claude-*, border-claude-border)
+   - Available providers have accent-colored borders; unavailable have neutral borders
+   - Expandable cards with smooth framer-motion height animation
+   - Each card shows: provider icon (emoji), display name, status badges (可用/未配置/Key/URL), model count
+   - Expanded view: model badges, API key input (password), Base URL input with default shown, test/save/delete buttons, docs link
+   - Added footer with security note about local storage
+   - Color-coded: green for available, sky for Key, amber for URL override, red for delete
+
+3. **DbSetupWizard improvements** (`src/components/db-setup-wizard.tsx`):
+   - **Chinese translation**: converted all remaining English strings to Chinese:
+     - "Create a new empty SQLite database file..." → "创建一个新的空 SQLite 数据库文件并自动初始化表结构..."
+     - "Click to select an existing database file..." → "从已有数据库文件列表中选择一个..."
+     - "Default location: project db/ directory" → "默认位置：项目 db/ 目录"
+     - "Will create a SQLite file with .db extension" → "将创建一个带 .db 扩展名的 SQLite 文件"
+     - "Refresh List" → "刷新列表"
+     - "Back" → "返回"
+     - "Back to Retry" → "返回重试"
+     - "tables结构" → "表结构"
+     - "tables" → "表"
+     - "Current database内容统计" → "当前数据库内容统计"
+   - **Visual polish**: rounded-xl cards with larger icons (w-10 h-10 rounded-lg), group-hover scale animation on icons
+   - **Database list**: rounded-lg border with bg-muted/10, refined selection state (ring-1 instead of ring-2)
+   - **Buttons**: use claude-accent color for primary actions
+
+### Verification Results
+- **typecheck**: 0 errors in modified files
+- **ChunkLoadError**: completely gone after .next cache clear + clean compile
+- **agent-browser**:
+  - Providers panel renders as a proper Dialog with header, description, toolbar, provider list
+  - DeepSeek card expands to show models + API key input + Base URL + test/save buttons
+  - All Claude theme colors applied correctly
+  - No console errors
+- **dev.log**: no compile errors
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Notes
+- The ChunkLoadError will recur if the server is OOM-killed during compilation. The fix is to clear `.next` and restart: `rm -rf .next && (setsid bash dev-watchdog.sh >> watchdog.log 2>&1 &)`
+- The ProvidersPanel now uses the Dialog component which is consistent with the DbSetupWizard's styling
+- The DbSetupWizard is fully Chinese-localized now

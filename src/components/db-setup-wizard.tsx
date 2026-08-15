@@ -352,38 +352,38 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                   <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
                   <div className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
                     <div className="font-semibold mb-0.5">{t.dbSetupTestTitle}</div>
-                    默认的 <code className="font-mono text-3xs bg-amber-500/10 px-1 rounded">db/custom.db</code> is a test database, not for real data. We recommend creating a new database for daily work.
+                    默认的 <code className="font-mono text-3xs bg-amber-500/10 px-1 rounded">db/custom.db</code> 是测试数据库，不适合存储正式数据。建议创建新数据库用于日常工作。
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <button
                     onClick={() => setMode('create')}
-                    className="group text-left rounded-lg border border-border hover:border-claude-accent/50 hover:bg-claude-accent/5 p-5 transition-all"
+                    className="group text-left rounded-xl border border-border hover:border-claude-accent/50 hover:bg-claude-accent/5 p-5 transition-all"
                   >
-                    <div className="flex items-center gap-2 mb-2.5">
-                      <div className="w-8 h-8 rounded-md bg-emerald-500/10 flex items-center justify-center">
-                        <FilePlus2 className="h-4 w-4 text-emerald-600" />
+                    <div className="flex items-center gap-2.5 mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <FilePlus2 className="h-5 w-5 text-emerald-600" />
                       </div>
                       <span className="text-sm font-medium">{t.dbSetupCreate}</span>
                     </div>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Create a new empty SQLite database file and auto-initialize the schema. Recommended for first use.
+                      创建一个新的空 SQLite 数据库文件并自动初始化表结构。首次使用推荐此选项。
                     </p>
                   </button>
 
                   <button
                     onClick={handleEnterSelectMode}
-                    className="group text-left rounded-lg border border-border hover:border-claude-accent/50 hover:bg-claude-accent/5 p-5 transition-all"
+                    className="group text-left rounded-xl border border-border hover:border-claude-accent/50 hover:bg-claude-accent/5 p-5 transition-all"
                   >
-                    <div className="flex items-center gap-2 mb-2.5">
-                      <div className="w-8 h-8 rounded-md bg-sky-500/10 flex items-center justify-center">
-                        <FolderOpen className="h-4 w-4 text-sky-600" />
+                    <div className="flex items-center gap-2.5 mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-sky-500/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <FolderOpen className="h-5 w-5 text-sky-600" />
                       </div>
                       <span className="text-sm font-medium">{t.dbSetupSelect}</span>
                     </div>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Click to select an existing database file from the list. Missing tables will be auto-created.
+                      从已有数据库文件列表中选择一个。缺失的表将自动创建。
                     </p>
                   </button>
                 </div>
@@ -415,7 +415,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                     placeholder="db"
                     className="h-9 text-xs font-mono mt-1"
                   />
-                  <p className="text-3xs text-muted-foreground mt-1">Default location: project <code>db/</code> directory.</p>
+                  <p className="text-3xs text-muted-foreground mt-1">默认位置：项目 <code>db/</code> 目录。</p>
                 </div>
                 <div>
                   <Label className="text-xs uppercase tracking-wider text-muted-foreground">{t.dbSetupDbName}</Label>
@@ -425,7 +425,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                     placeholder="my-pdb-tracker.db"
                     className="h-9 text-xs font-mono mt-1"
                   />
-                  <p className="text-3xs text-muted-foreground mt-1">Will create a SQLite file with <code>.db</code> extension.</p>
+                  <p className="text-3xs text-muted-foreground mt-1">将创建一个带 <code>.db</code> 扩展名的 SQLite 文件。</p>
                 </div>
                 <div className="rounded-md bg-muted/40 p-3 text-xs">
                   <div className="text-muted-foreground mb-1">最终路径：</div>
@@ -433,9 +433,9 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                 </div>
                 <div className="flex justify-between gap-2 pt-2">
                   <Button variant="ghost" size="sm" className="text-xs h-8" onClick={() => setMode('choose')}>
-                    <ArrowLeft className="h-3 w-3 mr-1" /> Back
+                    <ArrowLeft className="h-3 w-3 mr-1" /> 返回
                   </Button>
-                  <Button size="sm" className="h-8 text-xs" onClick={handleCreate}>
+                  <Button size="sm" className="h-8 text-xs bg-claude-accent hover:bg-claude-accent-hover text-white" onClick={handleCreate}>
                     <FilePlus2 className="h-3 w-3 mr-1" /> {t.dbSetupCreateInit}
                   </Button>
                 </div>
@@ -465,7 +465,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                     size="sm"
                     className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
                     onClick={loadDbList}
-                    title="Refresh List"
+                    title="刷新列表"
                   >
                     <RefreshCw className={`h-3 w-3 ${dbListLoading ? 'animate-spin' : ''}`} />
                   </Button>
@@ -492,7 +492,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                     </p>
                   </div>
                 ) : (
-                  <ScrollArea className="h-[280px] rounded-md border border-border/40">
+                  <ScrollArea className="h-[280px] rounded-lg border border-border/40 bg-muted/10">
                     <div className="divide-y divide-border/30">
                       {filteredDbList.map((db) => {
                                               const isSel = selectedDbUrl === db.dbUrl
@@ -502,9 +502,9 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                                                   type="button"
                                                   aria-pressed={isSel}
                                                   onClick={() => setSelectedDbUrl(isSel ? null : db.dbUrl)}
-                                                  className={`w-full text-left px-3 py-2.5 transition-colors flex items-start gap-2.5 ${
+                                                  className={`w-full text-left px-3 py-3 transition-colors flex items-start gap-2.5 ${
                                                     isSel
-                                                      ? 'bg-sky-500/15 ring-2 ring-sky-500 border-l-[3px] border-l-sky-500'
+                                                      ? 'bg-sky-500/10 ring-1 ring-sky-500/40 border-l-[3px] border-l-sky-500'
                                                       : 'hover:bg-muted/40 border-l-[3px] border-l-transparent'
                                                   }`}
                                                 >
@@ -519,7 +519,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                                                       )}
                                                       {db.hasSchema === true && (
                                                         <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300">
-                                                          {db.tableCount}  tables
+                                                          {db.tableCount} 表
                                                         </Badge>
                                                       )}
                                                       {db.hasSchema === false && (
@@ -528,7 +528,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                                                         </Badge>
                                                       )}
                                                       {db.hasSchema === null && (
-                                                        <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300" title={db.probeError || '探测失败，请点击刷新按钮Retry'}>
+                                                        <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300" title={db.probeError || '探测失败，请点击刷新按钮重试'}>
                                                           探测失败
                                                         </Badge>
                                                       )}
@@ -573,11 +573,11 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                 </div>
                 <div className="flex justify-between gap-2 pt-2">
                   <Button variant="ghost" size="sm" className="text-xs h-8" onClick={() => setMode('choose')}>
-                    <ArrowLeft className="h-3 w-3 mr-1" /> Back
+                    <ArrowLeft className="h-3 w-3 mr-1" /> 返回
                   </Button>
                   <Button
                     size="sm"
-                    className="h-8 text-xs"
+                    className="h-8 text-xs bg-claude-accent hover:bg-claude-accent-hover text-white"
                     onClick={() => handleSelect(selectedDbUrl || undefined)}
                     disabled={!selectedDbUrl && !existingPath.trim()}
                   >
@@ -598,7 +598,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
               >
                 <Loader2 className="h-8 w-8 animate-spin text-claude-accent" />
                 <p className="text-sm text-foreground">{workingMsg}</p>
-                <p className="text-xs text-muted-foreground">正在初始化 tables结构，请稍候…</p>
+                <p className="text-xs text-muted-foreground">正在初始化表结构，请稍候…</p>
               </motion.div>
             )}
 
@@ -620,10 +620,10 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                     </div>
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300">
-                        <CheckCircle2 className="h-2.5 w-2.5" />  tables结构已初始化
+                        <CheckCircle2 className="h-2.5 w-2.5" /> 表结构已初始化
                       </Badge>
                       <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-border/60 bg-muted/40 text-muted-foreground">
-                        {resultStatus.tableCount}  tables
+                        {resultStatus.tableCount} 表
                       </Badge>
                       {!resultStatus.isTest && (
                         <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300">
@@ -637,7 +637,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                 <div className="rounded-md border border-border/60 bg-muted/20 p-3">
                   <div className="text-xs font-medium text-foreground mb-2 flex items-center gap-1.5">
                     <Database className="h-3.5 w-3.5 text-muted-foreground" />
-                    Current database内容统计
+                    当前数据库内容统计
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-[11px]">
                     <CountCell label="PDB 结构" value={resultStatus.counts?.PdbStructure ?? 0} icon={<FileText className="h-3 w-3" />} />
@@ -680,7 +680,7 @@ export function DbSetupWizard({ open, onComplete, onClose, allowSkip, initialMod
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
                   <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleRetry}>
-                    Back to Retry
+                    返回重试
                   </Button>
                 </div>
               </motion.div>
