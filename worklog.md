@@ -1383,3 +1383,57 @@ This is the tenth cron-triggered review round for the PDB Tracker + DeepSeek Har
 3. Global tool stats across all sessions (aggregate dashboard)
 4. Show pending state for tool calls without results in the stats popover
 5. Fork with turn/step boundary preservation
+
+---
+
+Task ID: bugfix-chunkload
+Agent: main
+Task: Fix Runtime SyntaxError + ChunkLoadError on structure-analysis-view chunk
+
+## 项目当前状态描述/判断
+
+### Problem
+User reported two runtime errors:
+1. `Runtime SyntaxError: Invalid or unexpected token`
+2. `Console ChunkLoadError: Loading chunk _app-pages-browser_src_components_structure-analysis_structure-analysis-view_tsx failed`
+
+### Root Cause
+The frequent OOM-kills during webpack compilation (4GB sandbox, dev-watchdog auto-restart) left corrupted/partial chunk files in `.next/dev/static/chunks/`. When the browser tried to load the `structure-analysis-view_tsx` chunk, it got a truncated/invalid JS file → "Invalid or unexpected token" syntax error → the chunk failed to load → ChunkLoadError.
+
+This was NOT a code error — typecheck confirmed all agent code is clean (0 errors). The issue was purely a corrupted webpack cache.
+
+## 当前目标/已完成的修改/验证结果
+
+### Fix Applied
+1. Killed all dev processes (`next dev` + `dev-watchdog`)
+2. Cleared the entire `.next` directory (`rm -rf .next`) — removes all corrupted chunk files
+3. Restarted the dev server with a clean cache via `dev-watchdog.sh`
+4. The server compiled cleanly on the first attempt
+
+### Verification Results
+- **Server**: HTTP 200, healthy after clean compile
+- **agent-browser**:
+  - Home page loads correctly
+  - Analysis mode loads (no ChunkLoadError)
+  - Chat tab renders the DeepSeek Harness panel (no SyntaxError)
+  - Sent "你好" → agent responded "你好！我是Molcraft AI..." — full flow works
+  - Feedback buttons + keyboard hints visible
+- **Console errors**: the ChunkLoadError and SyntaxError are **completely gone** (grep returns empty)
+  - The only remaining console message is a benign `AbortError: signal is aborted without reason` from `request-queue.ts` — a fetch being cancelled during page navigation/re-render, NOT a code error
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Mitigation
+The corrupted-chunk issue will recur if the server is OOM-killed during compilation. The watchdog mitigates by auto-restarting, but the corrupted chunks persist until manually cleared. 
+
+**If this error recurs**, the fix is:
+```bash
+cd /home/z/my-project
+pkill -f "next dev"; pkill -f dev-watchdog; pkill -f "bash dev-watchdog"
+sleep 2
+rm -rf .next
+(setsid bash dev-watchdog.sh >> watchdog.log 2>&1 &)
+# wait ~75s for clean compile
+```
+
+A future enhancement could make the watchdog clear `.next` on each restart to prevent this entirely, but that would slow down restarts (full recompile).
