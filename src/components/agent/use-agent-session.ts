@@ -89,6 +89,7 @@ export interface AgentSessionState {
   regenerate: () => Promise<void>;
   recordFeedback: (messageSeq: number, rating: 'up' | 'down') => Promise<void>;
   getToolStats: () => Promise<Array<{ name: string; callCount: number; successCount: number; errorCount: number; successRate: number }>>;
+  forkFromSeq: (fromSeq: number) => Promise<string | null>;
 }
 
 function parseArgs(argsStr: string): Record<string, unknown> {
@@ -631,6 +632,25 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     }
   }, []);
 
+  /** Fork the session from a specific event seq (creates a new session). */
+  const forkFromSeq = useCallback(async (fromSeq: number): Promise<string | null> => {
+    if (!sessionIdRef.current) return null;
+    try {
+      const res = await fetch(`/api/agent/sessions/${sessionIdRef.current}/fork`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromSeq }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { sessionId: string };
+      // Load the forked session.
+      await loadSession(data.sessionId);
+      return data.sessionId;
+    } catch {
+      return null;
+    }
+  }, [loadSession]);
+
   return {
     sessionId,
     sessionTitle,
@@ -651,5 +671,6 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     regenerate,
     recordFeedback,
     getToolStats,
+    forkFromSeq,
   };
 }

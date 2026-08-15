@@ -16,7 +16,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings, Upload, BarChart3 } from 'lucide-react';
+import { Send, Loader2, Sparkles, Bot, User, Wrench, Check, X, ChevronRight, Activity, Zap, History, Plus, Copy, Download, Pencil, RotateCw, ThumbsUp, ThumbsDown, Settings, Upload, BarChart3, GitFork } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -296,6 +296,7 @@ export function AgentChatPanel() {
                   driving={session.driving}
                   feedback={node.kind === 'assistant-message' ? session.feedback.get(node.seq) : undefined}
                   onFeedback={(rating) => void session.recordFeedback(node.seq, rating)}
+                  onFork={(seq) => void session.forkFromSeq(seq)}
                 />
               ));
             })()}
@@ -418,10 +419,10 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
-function NodeRenderer({ node, onResend, onRegenerate, isLastAssistant, driving, feedback, onFeedback }: { node: ConversationNode; onResend?: (text: string) => void; onRegenerate?: () => void; isLastAssistant?: boolean; driving?: boolean; feedback?: 'up' | 'down'; onFeedback?: (rating: 'up' | 'down') => void }) {
+function NodeRenderer({ node, onResend, onRegenerate, isLastAssistant, driving, feedback, onFeedback, onFork }: { node: ConversationNode; onResend?: (text: string) => void; onRegenerate?: () => void; isLastAssistant?: boolean; driving?: boolean; feedback?: 'up' | 'down'; onFeedback?: (rating: 'up' | 'down') => void; onFork?: (seq: number) => void }) {
   switch (node.kind) {
     case 'user-message':
-      return <UserMessageNode key={node.seq} text={node.text} onResend={onResend} />;
+      return <UserMessageNode key={node.seq} seq={node.seq} text={node.text} onResend={onResend} onFork={onFork} />;
     case 'assistant-message':
       return <AssistantMessageNode key={node.seq} seq={node.seq} text={node.text} reasoning={node.reasoning} onRegenerate={isLastAssistant ? onRegenerate : undefined} driving={driving} feedback={feedback} onFeedback={onFeedback} />;
     case 'streaming-assistant':
@@ -487,8 +488,8 @@ function formatTokenCount(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-/** User message node with hover edit + re-send action. */
-function UserMessageNode({ text, onResend }: { text: string; onResend?: (text: string) => void }) {
+/** User message node with hover edit + re-send + fork actions. */
+function UserMessageNode({ seq, text, onResend, onFork }: { seq: number; text: string; onResend?: (text: string) => void; onFork?: (seq: number) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
 
@@ -559,15 +560,27 @@ function UserMessageNode({ text, onResend }: { text: string; onResend?: (text: s
       <div className="flex items-start gap-2 max-w-[85%]">
         <div className="relative rounded-2xl rounded-tr-sm bg-claude-accent text-white px-3 py-2 text-sm">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-          {onResend && (
-            <button
-              onClick={() => setEditing(true)}
-              className="absolute -bottom-2 -left-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
-              title="编辑并重发"
-            >
-              <Pencil className="h-3 w-3" />
-            </button>
-          )}
+          {/* Hover action bar */}
+          <div className="absolute -bottom-2 left-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {onFork && (
+              <button
+                onClick={() => onFork(seq)}
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+                title="从此处分叉"
+              >
+                <GitFork className="h-3 w-3" />
+              </button>
+            )}
+            {onResend && (
+              <button
+                onClick={() => setEditing(true)}
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+                title="编辑并重发"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
         <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-accent text-white">
           <User className="h-3.5 w-3.5" />

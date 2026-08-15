@@ -1328,3 +1328,58 @@ This is the ninth cron-triggered review round for the PDB Tracker + DeepSeek Har
 3. Show pending state for tool calls without results in the stats popover
 4. Global tool stats across all sessions (not just per-session)
 5. Tool execution time tracking (add timestamps to tool/call + tool/result events)
+
+---
+
+Task ID: cron-review-10
+Agent: main
+Task: Cron-triggered QA + new feature (session fork)
+
+## 项目当前状态描述/判断
+
+### Project Overview
+This is the tenth cron-triggered review round for the PDB Tracker + DeepSeek Harness agent integration. Previous rounds built the full agent subsystem + all UI features + settings wired into loop + session import + maxStepsPerTurn enforcement + per-tool execution statistics. This round: QA-tested the UI (no regressions), then added the session fork feature (was #1 recommended priority from last round).
+
+### Current State: STABLE & FEATURE-RICH
+- Dev server: running on port 3000 with dev-watchdog.sh (auto-restart on OOM)
+- All previous features working
+- New this round: session fork (branch a conversation from any user message)
+
+## 当前目标/已完成的修改/验证结果
+
+### Completed this round
+1. **QA via agent-browser** — verified: home page loads (HTTP 200), Analysis mode loads, Chat tab renders the DeepSeek Harness panel, sent "你好" → agent responded correctly, all header buttons + feedback + keyboard hints visible. No code errors.
+2. **Session fork** (new feature, was #1 priority):
+   - Built `POST /api/agent/sessions/[sessionId]/fork` API route:
+     - Accepts `{ fromSeq: number, title?: string }`
+     - Creates a NEW session with a new session ID
+     - Copies all events from the source session up to and including `fromSeq` (truncate)
+     - Preserves event type + data + surfaceOp; re-appends with new seqs + times
+     - Returns `{ ok, sessionId, title, eventCount, forkedFrom, forkedAtSeq }`
+     - Auto-resumes the source session from DB if not in memory
+   - Added `forkFromSeq(fromSeq)` function to the useAgentSession hook — POSTs to /fork, then loads the forked session
+   - Added a GitFork icon button ("从此处分叉") to UserMessageNode's hover action bar (next to "编辑并重发")
+   - Clicking fork creates a new session from that user message point and switches to it
+   - **Verified via curl**: source session had 12 events → POST /fork {fromSeq:5} → new session with 6 events (seq 0-5 inclusive) → {ok:true, sessionId, title:"Fork of fork source", eventCount:6}
+   - **Verified via agent-browser**: "从此处分叉" button visible on user messages (hover); "编辑并重发" also visible
+
+### Verification Results
+- **typecheck**: agent code 0 errors
+- **curl fork**: POST /fork {fromSeq:5} → 200 {ok:true, sessionId, title:"Fork of fork source", eventCount:6, forkedFrom, forkedAtSeq:5}
+- **agent-browser**: "从此处分叉" (GitFork icon) + "编辑并重发" (Pencil icon) buttons visible on user messages; all header buttons working
+- **Console errors**: none
+
+## 未解决问题或风险，建议下一阶段优先事项
+
+### Known limitations / next steps
+1. **Fork doesn't preserve turn/step boundaries**: the fork route replays events but skips turn/start, turn/end, step/start, step/end (they'll be recreated naturally). This means the forked conversation shows as a flat list without turn separators — acceptable but could be improved.
+2. **Fork title is generic**: defaults to "Fork of <original title>" — could auto-generate a better title via LLM.
+3. **Dev server stability**: still OOM-kills during heavy compiles; the watchdog robustly restarts.
+4. **Streaming text accumulation**: the ZAI adapter emits one text-delta per block (SDK is one-shot).
+
+### Recommended next priorities
+1. Event compaction for long sessions (replace old tool/results with summaries via surfaceOp replace)
+2. Tool execution time tracking (add timestamps to tool/call + tool/result events, display in tool card + stats)
+3. Global tool stats across all sessions (aggregate dashboard)
+4. Show pending state for tool calls without results in the stats popover
+5. Fork with turn/step boundary preservation
