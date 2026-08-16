@@ -53,6 +53,7 @@ interface Props {
 
 export function ProvidersPanel({ open, onClose }: Props) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [defaultProvider, setDefaultProvider] = useState<string>('zai');
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -60,8 +61,9 @@ export function ProvidersPanel({ open, onClose }: Props) {
     try {
       const res = await fetch('/api/agent/providers');
       if (!res.ok) return;
-      const data = (await res.json()) as { providers: ProviderInfo[] };
+      const data = (await res.json()) as { providers: ProviderInfo[]; defaultProvider?: string };
       setProviders(data.providers ?? []);
+      setDefaultProvider(data.defaultProvider ?? 'zai');
     } catch {
       /* ignore */
     } finally {
@@ -105,12 +107,26 @@ export function ProvidersPanel({ open, onClose }: Props) {
               {/* Configured providers list */}
               {configuredProviders.length > 0 && (
                 <div>
-                  <div className="text-[10px] uppercase tracking-wider text-claude-text-muted mb-2">
-                    已配置 ({configuredProviders.length})
+                  <div className="text-[10px] uppercase tracking-wider text-claude-text-muted mb-2 flex items-center justify-between">
+                    <span>已配置 ({configuredProviders.length})</span>
+                    <span className="text-[9px] text-claude-text-muted/60">点击选中默认供应商</span>
                   </div>
                   <div className="space-y-1.5">
                     {configuredProviders.map((p) => (
-                      <ConfiguredProviderRow key={p.id} provider={p} onChanged={() => void refresh()} />
+                      <ConfiguredProviderRow
+                        key={p.id}
+                        provider={p}
+                        isDefault={defaultProvider === p.id}
+                        onSetDefault={async (id) => {
+                          await fetch('/api/agent/providers', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ providerId: id, setDefault: true }),
+                          });
+                          setDefaultProvider(id);
+                        }}
+                        onChanged={() => void refresh()}
+                      />
                     ))}
                   </div>
                 </div>
@@ -382,8 +398,13 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
   );
 }
 
-/** A single configured provider row with delete option. */
-function ConfiguredProviderRow({ provider, onChanged }: { provider: ProviderInfo; onChanged: () => void }) {
+/** A single configured provider row with default indicator + delete option. */
+function ConfiguredProviderRow({ provider, isDefault, onSetDefault, onChanged }: {
+  provider: ProviderInfo;
+  isDefault: boolean;
+  onSetDefault: (id: string) => Promise<void>;
+  onChanged: () => void;
+}) {
   const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
@@ -398,11 +419,22 @@ function ConfiguredProviderRow({ provider, onChanged }: { provider: ProviderInfo
 
   return (
     <div className={cn(
-      'flex items-center gap-2.5 rounded-md border px-3 py-2 transition-colors',
-      provider.available
-        ? 'border-emerald-500/30 bg-emerald-500/5'
-        : 'border-claude-border bg-claude-surface',
-    )}>
+      'flex items-center gap-2.5 rounded-md border px-3 py-2 transition-colors cursor-pointer',
+      isDefault
+        ? 'border-claude-accent bg-claude-accent-light/20 ring-1 ring-claude-accent/30'
+        : provider.available
+          ? 'border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10'
+          : 'border-claude-border bg-claude-surface hover:bg-claude-bg-elevated/30',
+    )}
+    onClick={() => void onSetDefault(provider.id)}
+    >
+      {/* Radio indicator */}
+      <div className={cn(
+        'h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors',
+        isDefault ? 'border-claude-accent' : 'border-claude-border',
+      )}>
+        {isDefault && <div className="h-2 w-2 rounded-full bg-claude-accent" />}
+      </div>
       {/* Label badge */}
       <div className={cn(
         'w-8 h-8 rounded shrink-0 flex items-center justify-center text-[10px] font-bold',
@@ -416,20 +448,23 @@ function ConfiguredProviderRow({ provider, onChanged }: { provider: ProviderInfo
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-claude-text truncate">{provider.displayName}</span>
-          {provider.available && (
+          {isDefault && (
+            <Badge variant="outline" className="h-4 px-1 text-[9px] border-claude-accent/40 text-claude-accent bg-claude-accent/10 shrink-0">
+              默认
+            </Badge>
+          )}
+          {provider.available && !isDefault && (
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
           )}
         </div>
         <div className="text-[10px] text-claude-text-muted truncate">
           <span className="font-mono">{provider.effectiveModel || provider.defaultModel}</span>
-          <span className="mx-1">·</span>
-          <span className="font-mono opacity-70">{provider.baseURL}</span>
         </div>
       </div>
-      {/* Delete */}
+      {/* Delete — stop propagation so clicking delete doesn't set default */}
       {provider.id !== 'zai' && (
         <button
-          onClick={handleDelete}
+          onClick={(e) => { e.stopPropagation(); void handleDelete(); }}
           disabled={deleting}
           className="shrink-0 text-claude-text-muted hover:text-red-500 transition-colors p-1"
           title="删除"

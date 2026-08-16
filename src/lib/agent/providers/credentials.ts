@@ -35,6 +35,41 @@ export type ProviderConfigMap = Record<string, ProviderConfig>;
 
 const CONFIG_DIR = resolve(process.cwd(), '.hermes');
 const CONFIG_FILE = resolve(CONFIG_DIR, 'agent-providers.json');
+const DEFAULT_FILE = resolve(CONFIG_DIR, 'agent-default-provider.json');
+
+/** In-memory cache for default provider. */
+let cachedDefaultProvider: string | null | undefined = undefined;
+let cachedDefaultMtime = 0;
+
+/** Get the default provider ID. Returns null if not set. */
+export function getDefaultProvider(): string | null {
+  try {
+    if (!existsSync(DEFAULT_FILE)) return null;
+    const stat = statSync(DEFAULT_FILE);
+    if (cachedDefaultProvider !== undefined && stat.mtimeMs === cachedDefaultMtime) {
+      return cachedDefaultProvider;
+    }
+    const raw = readFileSync(DEFAULT_FILE, 'utf-8');
+    const data = JSON.parse(raw) as { providerId?: string };
+    cachedDefaultProvider = data.providerId ?? null;
+    cachedDefaultMtime = stat.mtimeMs;
+    return cachedDefaultProvider;
+  } catch {
+    return null;
+  }
+}
+
+/** Set the default provider ID. */
+export function setDefaultProvider(providerId: string | null): void {
+  try {
+    if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(DEFAULT_FILE, JSON.stringify({ providerId }, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    cachedDefaultProvider = providerId;
+    cachedDefaultMtime = statSync(DEFAULT_FILE).mtimeMs;
+  } catch (err) {
+    console.error('[provider-config] setDefaultProvider failed:', err);
+  }
+}
 
 /** In-memory cache with mtime invalidation — eliminates repeated disk reads. */
 let cachedConfigs: ProviderConfigMap | null = null;

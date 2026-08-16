@@ -19,7 +19,7 @@ import { ToolRuntime } from './tools/registry';
 import { ApprovalService, type ApprovalOutcome } from './tools/approval';
 import { SystemPrompt } from './prompt';
 import { ALL_PDB_TOOLS, SERVER_SIDE_TOOLS, requiresApproval } from './pdb-tools';
-import { PROVIDER_CATALOG, isProviderAvailable, listAllProvidersWithStatus, setProviderConfig, deleteProviderConfig, type ProviderProfile } from './providers';
+import { PROVIDER_CATALOG, isProviderAvailable, listAllProvidersWithStatus, setProviderConfig, deleteProviderConfig, getDefaultProvider, setDefaultProvider as setDefaultProviderConfig, getProviderConfig, type ProviderProfile } from './providers';
 import { OpenAICompatAdapter } from './providers/openai-compat-adapter';
 import type { SessionEvent } from './session/types';
 import type { StreamChunk } from './llm/types';
@@ -190,6 +190,20 @@ export class AgentManager {
   /** Delete a provider's config. */
   deleteProviderConfig(providerId: string) {
     deleteProviderConfig(providerId);
+    // If the deleted provider was the default, reset default to 'zai'.
+    if (getDefaultProvider() === providerId) {
+      setDefaultProviderConfig('zai');
+    }
+  }
+
+  /** Get the default provider ID. */
+  getDefaultProvider(): string {
+    return getDefaultProvider() ?? 'zai';
+  }
+
+  /** Set the default provider ID. */
+  setDefaultProvider(providerId: string) {
+    setDefaultProviderConfig(providerId);
   }
 
   /** Test a provider connection by making a minimal request. */
@@ -236,9 +250,15 @@ export class AgentManager {
   createSession(opts: CreateSessionOptions = {}): { sessionId: string; session: Session } {
     const id = opts.id ?? newSessionId();
     const session = new Session({ id, title: opts.title ?? 'New session' });
+    // Use the default provider if set, otherwise fall back to zai.
+    const defaultProviderId = getDefaultProvider() ?? 'zai';
+    const defaultProfile = PROVIDER_CATALOG.find((p) => p.id === defaultProviderId);
+    const defaultModel = defaultProfile
+      ? (getProviderConfig(defaultProviderId).defaultModel ?? defaultProfile.defaultModel)
+      : 'glm-4.6';
     const loop = new AgentLoop(this.ctx, session, opts.agent ?? {
-      provider: 'zai',
-      model: 'glm-4.6',
+      provider: defaultProviderId,
+      model: defaultModel,
       maxStepsPerTurn: 10,
     });
     this.sessions.set(id, session);

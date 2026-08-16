@@ -12,20 +12,30 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const manager = getAgentManager();
-  return NextResponse.json({ providers: manager.listProviders() });
+  return NextResponse.json({
+    providers: manager.listProviders(),
+    defaultProvider: manager.getDefaultProvider(),
+  });
 }
 
 export async function POST(request: NextRequest) {
-  let body: { providerId?: string; apiKey?: string; baseURL?: string; defaultModel?: string; enabled?: boolean };
+  let body: { providerId?: string; apiKey?: string; baseURL?: string; defaultModel?: string; enabled?: boolean; setDefault?: boolean };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
+  const manager = getAgentManager();
+
+  // Handle "set as default" action
+  if (body.setDefault && body.providerId) {
+    manager.setDefaultProvider(body.providerId);
+    return NextResponse.json({ ok: true });
+  }
+
   if (!body.providerId) {
     return NextResponse.json({ error: 'providerId is required' }, { status: 400 });
   }
-  const manager = getAgentManager();
   manager.setProviderConfig(body.providerId, {
     apiKey: body.apiKey,
     baseURL: body.baseURL,
