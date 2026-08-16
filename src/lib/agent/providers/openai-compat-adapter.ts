@@ -159,14 +159,38 @@ export class OpenAICompatAdapter implements LlmAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => resp.statusText);
+      // Check if response is HTML (not JSON)
+      const isHtml = errText.trimStart().startsWith('<');
+      const errMsg = isHtml
+        ? `${this.profile.displayName} API error ${resp.status} (server returned HTML, not JSON — check if the API endpoint is correct)`
+        : `${this.profile.displayName} API error ${resp.status}: ${errText.slice(0, 500)}`;
       yield {
         type: 'finish',
-        reason: { kind: 'error', error: `${this.profile.displayName} API error ${resp.status}: ${errText.slice(0, 500)}` },
+        reason: { kind: 'error', error: errMsg },
       };
       return;
     }
 
-    const json = (await resp.json()) as OpenAIResponse;
+    // Parse JSON safely — handle non-JSON responses (e.g. HTML error pages)
+    let json: OpenAIResponse;
+    try {
+      const raw = await resp.text();
+      // Check if response is HTML
+      if (raw.trimStart().startsWith('<')) {
+        yield {
+          type: 'finish',
+          reason: { kind: 'error', error: `${this.profile.displayName} API returned HTML instead of JSON — the API endpoint may be incorrect` },
+        };
+        return;
+      }
+      json = JSON.parse(raw) as OpenAIResponse;
+    } catch {
+      yield {
+        type: 'finish',
+        reason: { kind: 'error', error: `${this.profile.displayName} API returned invalid JSON response` },
+      };
+      return;
+    }
     const choice = json.choices?.[0];
     if (!choice) {
       yield { type: 'finish', reason: { kind: 'error', error: 'No choices in response' } };

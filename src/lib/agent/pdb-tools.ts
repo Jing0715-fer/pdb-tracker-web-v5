@@ -53,6 +53,10 @@ export function toolToCommand(name: string, args: Record<string, unknown>): Reco
   switch (name) {
     // Structure loading
     case 'pdb_load':
+      // Track the loaded PDB ID so pdb_analyze can use it automatically
+      if (typeof window !== 'undefined') {
+        (window as unknown as { __currentPdbId?: string }).__currentPdbId = String(args.id || '').toUpperCase();
+      }
       return { type: 'load_pdb', id: args.id };
     case 'load_alphafold':
       return { type: 'load_alphafold', uniprotId: args.uniprotId };
@@ -70,7 +74,11 @@ export function toolToCommand(name: string, args: Record<string, unknown>): Reco
       const params: Record<string, unknown> = { chain1: args.chain1, chain2: args.chain2 };
       if (args.ligandCompId) params.ligandCompId = args.ligandCompId;
       if (args.radius) params.radius = args.radius;
-      return { type: 'analyze_run', pdbId: args.pdbId || '', recipe: args.recipe, params };
+      // Get the currently loaded PDB ID from the store (the agent doesn't need to pass it)
+      const currentPdbId = args.pdbId || (typeof window !== 'undefined'
+        ? (window as unknown as { __currentPdbId?: string }).__currentPdbId || ''
+        : '');
+      return { type: 'analyze_run', pdbId: currentPdbId, recipe: args.recipe, params };
     }
     case 'fetch_interface':
       return { type: 'analyze_interface', id: args.id, assembly: args.assembly ?? 1 };

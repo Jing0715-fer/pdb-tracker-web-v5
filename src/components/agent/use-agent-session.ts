@@ -379,6 +379,10 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
       });
       try {
         const result = await executeCommand(v, cmd as never);
+        // For structure loading commands, wait for the viewer to render
+        if (call.name === 'pdb_load' || call.name === 'load_alphafold' || call.name === 'load_emdb' || call.name === 'load_structure_url') {
+          await new Promise((r) => setTimeout(r, 1500));
+        }
         executionsRef.current.set(call.callId, {
           callId: call.callId,
           name: call.name,
