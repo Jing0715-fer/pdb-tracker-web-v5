@@ -21,6 +21,8 @@ interface SessionSettings {
   temperature?: number;
   maxStepsPerTurn?: number;
   systemPromptOverride?: string;
+  /** Explicit provider ID — when set, overrides model-based provider resolution. */
+  providerId?: string;
 }
 
 interface Props {
@@ -29,7 +31,7 @@ interface Props {
   onClose: () => void;
 }
 
-const DEFAULT_SETTINGS: Required<Omit<SessionSettings, 'systemPromptOverride'>> = {
+const DEFAULT_SETTINGS: Required<Omit<SessionSettings, 'systemPromptOverride' | 'providerId'>> = {
   model: 'glm-4.6',
   temperature: 0.7,
   maxStepsPerTurn: 10,
@@ -57,7 +59,7 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
   }, [open, sessionId]);
 
   // Fetch available providers when the popover opens.
-  const [providers, setProviders] = useState<Array<{ id: string; displayName: string; icon: string; models: Array<{ id: string; name: string }>; available: boolean }>>([]);
+  const [providers, setProviders] = useState<Array<{ id: string; displayName: string; label: string; models: Array<{ id: string; name: string }>; available: boolean; effectiveModel?: string }>>([]);
   useEffect(() => {
     if (!open) return;
     fetch('/api/agent/providers')
@@ -70,7 +72,11 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
 
   const availableProviders = providers.filter((p) => p.available);
 
-  const model = settings.model ?? DEFAULT_SETTINGS.model;
+  // Determine the currently selected provider + model.
+  const selectedProviderId = settings.providerId ?? 'zai';
+  const selectedProvider = availableProviders.find((p) => p.id === selectedProviderId);
+  const providerModels = selectedProvider?.models ?? [];
+  const model = settings.model ?? selectedProvider?.effectiveModel ?? selectedProvider?.models?.[0]?.id ?? DEFAULT_SETTINGS.model;
   const temperature = settings.temperature ?? DEFAULT_SETTINGS.temperature;
   const maxSteps = settings.maxStepsPerTurn ?? DEFAULT_SETTINGS.maxStepsPerTurn;
   const systemPromptOverride = settings.systemPromptOverride ?? '';
@@ -84,6 +90,7 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          providerId: selectedProviderId,
           model,
           temperature: Number(temperature),
           maxStepsPerTurn: Number(maxSteps),
@@ -122,30 +129,44 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
           </div>
         ) : (
           <div className="p-3 space-y-3">
-            {/* Provider + Model selector */}
+            {/* Provider selector */}
+            <div className="space-y-1">
+              <Label className="text-xs text-claude-text">供应商</Label>
+              <select
+                value={selectedProviderId}
+                onChange={(e) => {
+                  const newProviderId = e.target.value;
+                  const newProvider = availableProviders.find((p) => p.id === newProviderId);
+                  const newModel = newProvider?.effectiveModel ?? newProvider?.models?.[0]?.id ?? '';
+                  setSettings((s) => ({ ...s, providerId: newProviderId, model: newModel }));
+                }}
+                className="w-full h-7 text-xs bg-claude-bg-base border border-claude-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-claude-accent/30"
+              >
+                {availableProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Model selector (filtered by selected provider) */}
             <div className="space-y-1">
               <Label className="text-xs text-claude-text flex items-center justify-between">
-                <span>供应商 / 模型</span>
-                {availableProviders.length === 0 && (
-                  <span className="text-amber-600 text-[10px]">仅 Z.ai 可用</span>
-                )}
+                <span>模型</span>
               </Label>
               <select
                 value={model}
                 onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}
                 className="w-full h-7 text-xs bg-claude-bg-base border border-claude-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-claude-accent/30"
               >
-                {availableProviders.map((p) => (
-                  <optgroup key={p.id} label={`${p.icon} ${p.displayName}`}>
-                    {p.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.id})
-                      </option>
-                    ))}
-                  </optgroup>
+                {providerModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.id})
+                  </option>
                 ))}
-                {/* Include the current model if it's not in any provider list */}
-                {!availableProviders.some((p) => p.models.some((m) => m.id === model)) && (
+                {/* Include current model if not in this provider's list */}
+                {!providerModels.some((m) => m.id === model) && (
                   <option value={model}>{model}</option>
                 )}
               </select>

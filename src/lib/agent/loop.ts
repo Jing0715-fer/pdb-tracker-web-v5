@@ -193,9 +193,9 @@ export class AgentLoop {
     const tools = assembly.tools;
 
     // Resolve the effective provider + model from settings.
-    // If the user set a model that belongs to a configured provider, use that provider.
+    // Priority: explicit providerId in settings → model-based lookup → default.
     const effectiveModel = settings.model ?? this.options.model;
-    const effectiveProvider = this.resolveProvider(effectiveModel);
+    const effectiveProvider = settings.providerId ?? this.resolveProvider(effectiveModel);
 
     // Log request header (initial on first step of the session).
     const header = {
@@ -463,6 +463,7 @@ export class AgentLoop {
   /** Read the latest per-session settings from the event log. */
   private extractSettings(): {
     model?: string;
+    providerId?: string;
     temperature?: number;
     maxStepsPerTurn?: number;
     systemPromptOverride?: string;
@@ -473,6 +474,7 @@ export class AgentLoop {
       if (ev.type === ('session/settings' as string)) {
         return ev.data as {
           model?: string;
+          providerId?: string;
           temperature?: number;
           maxStepsPerTurn?: number;
           systemPromptOverride?: string;

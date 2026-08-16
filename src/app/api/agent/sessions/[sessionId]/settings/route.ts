@@ -17,6 +17,7 @@ export const dynamic = 'force-dynamic';
 
 export interface SessionSettings {
   model?: string;
+  providerId?: string;
   temperature?: number;
   maxStepsPerTurn?: number;
   systemPromptOverride?: string;

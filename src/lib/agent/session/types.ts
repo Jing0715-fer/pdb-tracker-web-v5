@@ -95,6 +95,7 @@ export interface SessionEventMap {
   'feedback/record': { messageSeq: number; rating: 'up' | 'down'; comment?: string };
   'session/settings': {
     model?: string;
+    providerId?: string;
     temperature?: number;
     maxStepsPerTurn?: number;
     systemPromptOverride?: string;
