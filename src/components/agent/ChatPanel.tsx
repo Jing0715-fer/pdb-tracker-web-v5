@@ -190,7 +190,7 @@ export function AgentChatPanel() {
           >
             <History className="h-3.5 w-3.5" />
           </button>
-          <div className="flex items-center gap-1.5 shrink-0 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0 max-w-[120px] sm:max-w-[160px]">
             <Sparkles className="h-3.5 w-3.5 text-claude-accent shrink-0" />
             <span className="text-xs font-semibold text-claude-text truncate" title={session.sessionTitle}>
               {session.sessionTitle || 'DeepSeek Harness Agent'}
