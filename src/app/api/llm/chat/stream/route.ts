@@ -25,6 +25,7 @@
 
 import { NextRequest } from 'next/server';
 import { generateText, type LlmConfig } from '@/lib/llm';
+import { ensureAgentSkillRegistered } from '@/lib/molcraft/agent-skill-bootstrap';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -156,6 +157,16 @@ export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
 
   try {
+    // Round 102: auto-register pdb-tracker-agent-skill with Hermes (no-op after first call)
+    try {
+      const reg = await ensureAgentSkillRegistered();
+      if (reg.status === 'installed' || reg.status === 'updated') {
+        console.log(`[chat/stream] pdb-tracker-agent-skill ${reg.status}`);
+      }
+    } catch (skillErr) {
+      console.warn('[chat/stream] skill bootstrap failed:', skillErr);
+    }
+
     const body = (await request.json()) as ChatRequestBody;
     const { messages, context, provider } = body;
 

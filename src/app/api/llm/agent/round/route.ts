@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllToolSchemas } from '@/lib/molcraft/tool-definitions';
+import { ensureAgentSkillRegistered } from '@/lib/molcraft/agent-skill-bootstrap';
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
@@ -145,6 +146,16 @@ interface AgentRequestBody {
 
 export async function POST(request: NextRequest) {
   try {
+    // Round 102: auto-register pdb-tracker-agent-skill with Hermes (no-op after first call)
+    try {
+      const reg = await ensureAgentSkillRegistered();
+      if (reg.status === 'installed' || reg.status === 'updated') {
+        console.log(`[agent/round] pdb-tracker-agent-skill ${reg.status}`);
+      }
+    } catch (skillErr) {
+      console.warn('[agent/round] skill bootstrap failed:', skillErr);
+    }
+
     let body: AgentRequestBody;
     try {
       body = (await request.json()) as AgentRequestBody;
