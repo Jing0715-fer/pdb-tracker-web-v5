@@ -82,6 +82,8 @@ export class AgentManager {
   private readonly sessions = new Map<string, Session>();
   private readonly approvals = new Map<CallId, PendingApproval>();
   private readonly eventLog = new Map<string, SessionEvent[]>();
+  /** Per-session drive serialization: prevents concurrent drive() calls from corrupting loop state. */
+  private readonly driveLocks = new Map<string, Promise<unknown>>();
 
   constructor() {
     const llm = new LlmRuntime();
@@ -364,39 +366,77 @@ export class AgentManager {
   }
 
   /** Drive the loop one step; execute server-side tools inline; return tool calls or done. */
-  async drive(sessionId: string): Promise<DriveOutcome> {
-    const loop = this.loops.get(sessionId);
-    if (!loop) return { kind: 'error', error: `Session not found: ${sessionId}` };
-    let outcome = await loop.drive();
-    // If the step produced tool calls, execute server-side ones inline and re-drive.
-    let guard = 0;
-    while (outcome.kind === 'tool-calls' && guard < 5) {
-      const calls = outcome.calls;
-      const { executed, deferred } = await loop.executeServerSideTools(calls, SERVER_SIDE_TOOLS);
-      if (deferred.length === 0) {
-        // All server-side — drive the next step.
-        outcome = await loop.drive();
-        guard += 1;
-        continue;
+  /** Serialize drive calls per-session to prevent concurrent state corruption. */
+  private async serializedDrive(sessionId: string, fn: () => Promise<DriveOutcome>): Promise<DriveOutcome> {
+    const prev = this.driveLocks.get(sessionId) ?? Promise.resolve();
+    let resolve!: () => void;
+    const next = new Promise<void>((r) => { resolve = r; });
+    this.driveLocks.set(sessionId, prev.then(() => next));
+    await prev.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      resolve();
+      // Clean up if this was the last in chain
+      if (this.driveLocks.get(sessionId) === next) {
+        this.driveLocks.delete(sessionId);
       }
-      // Some tools need client-side execution — return them.
-      return {
-        kind: 'tool-calls',
-        turn: outcome.turn,
-        step: outcome.step,
-        calls: deferred.map((c) => ({ callId: c.callId as CallId, name: c.name, arguments: c.arguments })),
-        assistantText: outcome.assistantText,
-      };
     }
-    return outcome;
+  }
+
+  async drive(sessionId: string): Promise<DriveOutcome> {
+    return this.serializedDrive(sessionId, async () => {
+      const loop = this.loops.get(sessionId);
+      if (!loop) return { kind: 'error', error: `Session not found: ${sessionId}` };
+      let outcome = await loop.drive();
+      let guard = 0;
+      while (outcome.kind === 'tool-calls' && guard < 5) {
+        const calls = outcome.calls;
+        const { executed, deferred } = await loop.executeServerSideTools(calls, SERVER_SIDE_TOOLS);
+        if (deferred.length === 0) {
+          outcome = await loop.drive();
+          guard += 1;
+          continue;
+        }
+        return {
+          kind: 'tool-calls',
+          turn: outcome.turn,
+          step: outcome.step,
+          calls: deferred.map((c) => ({ callId: c.callId as CallId, name: c.name, arguments: c.arguments })),
+          assistantText: outcome.assistantText,
+        };
+      }
+      return outcome;
+    });
   }
 
   /** Submit client-side tool results, then drive the next step. */
   async submitResults(sessionId: string, results: Array<{ callId: CallId; name: string; ok: boolean; result?: unknown; error?: string }>): Promise<DriveOutcome> {
-    const loop = this.loops.get(sessionId);
-    if (!loop) return { kind: 'error', error: `Session not found: ${sessionId}` };
-    loop.submitToolResults(results);
-    return await this.drive(sessionId);
+    return this.serializedDrive(sessionId, async () => {
+      const loop = this.loops.get(sessionId);
+      if (!loop) return { kind: 'error', error: `Session not found: ${sessionId}` };
+      loop.submitToolResults(results);
+      // Inline the drive logic (can't call this.drive() — would deadlock on the same lock)
+      let outcome = await loop.drive();
+      let guard = 0;
+      while (outcome.kind === 'tool-calls' && guard < 5) {
+        const calls = outcome.calls;
+        const { executed, deferred } = await loop.executeServerSideTools(calls, SERVER_SIDE_TOOLS);
+        if (deferred.length === 0) {
+          outcome = await loop.drive();
+          guard += 1;
+          continue;
+        }
+        return {
+          kind: 'tool-calls',
+          turn: outcome.turn,
+          step: outcome.step,
+          calls: deferred.map((c) => ({ callId: c.callId as CallId, name: c.name, arguments: c.arguments })),
+          assistantText: outcome.assistantText,
+        };
+      }
+      return outcome;
+    });
   }
 }
 

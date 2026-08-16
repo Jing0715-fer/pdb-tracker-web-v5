@@ -52,6 +52,29 @@ export async function POST(
     return NextResponse.json({ error: 'results array is required' }, { status: 400 });
   }
 
+  // Security gate: verify approval-required tools have a corresponding
+  // approval/decided event before accepting the result. This prevents a
+  // malicious client from bypassing approval by POSTing tool-results directly.
+  const { requiresApproval } = await import('@/lib/agent/pdb-tools');
+  const events = manager.getEvents(sessionId);
+  const decidedCallIds = new Set<string>();
+  for (const ev of events) {
+    if (ev.type === 'approval/decided') {
+      const data = ev.data as { callId: string; decision: string };
+      if (data.decision === 'allowed-once') {
+        decidedCallIds.add(data.callId);
+      }
+    }
+  }
+  for (const r of body.results) {
+    if (requiresApproval(r.name) && !decidedCallIds.has(r.callId)) {
+      return NextResponse.json(
+        { error: `Tool "${r.name}" requires approval before results can be submitted` },
+        { status: 403 },
+      );
+    }
+  }
+
   try {
     const outcome = await manager.submitResults(
       sessionId,

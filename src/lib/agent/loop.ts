@@ -406,6 +406,7 @@ export class AgentLoop {
         preExecute: [],
         postExecute: [],
         guards: [],
+        parentSignal: this.controller.signal,
         onDeferContext: (msg) => this.inject(msg),
       });
       this.submitToolResults([

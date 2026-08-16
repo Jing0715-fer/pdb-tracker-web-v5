@@ -181,7 +181,7 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
           status: exec?.status ?? 'pending',
           result: exec?.result,
           error: exec?.error,
-          startedAt: Date.now(),
+          startedAt: ev.time,
         });
         break;
       }
@@ -281,9 +281,14 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     decisionsRef.current = new Map();
     setPendingApprovals([]);
     const es = new EventSource(`/api/agent/sessions/${sessionId}/events`);
+    // Track seen seqs to deduplicate events on SSE reconnect (EventSource auto-reconnects).
+    const seenSeqs = new Set<number>();
     es.addEventListener('event', (e) => {
       try {
         const ev = JSON.parse((e as MessageEvent).data) as SessionEvent;
+        // Skip duplicates from SSE replay on reconnect.
+        if (seenSeqs.has(ev.seq)) return;
+        seenSeqs.add(ev.seq);
         setEvents((prev) => [...prev, ev]);
         // Detect approval/asked.
         if (ev.type === 'tool/call') {
@@ -570,6 +575,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     setError(null);
     setSessionId(null);
     setSessionTitle('New session');
+    setFeedback(new Map());
     try {
       const res = await fetch('/api/agent/sessions', {
         method: 'POST',
@@ -591,6 +597,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     setError(null);
     setSessionId(null);
     setSessionTitle('Loading…');
+    setFeedback(new Map());
     try {
       const res = await fetch(`/api/agent/sessions/${id}/resume`, {
         method: 'POST',

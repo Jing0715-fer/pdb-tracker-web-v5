@@ -15,7 +15,7 @@
  * file) and does NOT need an explicit API key — it's always available.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ProviderProfile } from './catalog';
 import { PROVIDER_CATALOG, getProviderProfile } from './catalog';
@@ -34,22 +34,39 @@ export type ProviderConfigMap = Record<string, ProviderConfig>;
 const CONFIG_DIR = resolve(process.cwd(), '.hermes');
 const CONFIG_FILE = resolve(CONFIG_DIR, 'agent-providers.json');
 
-/** Load the provider config from disk. Returns an empty map if missing. */
+/** In-memory cache with mtime invalidation — eliminates repeated disk reads. */
+let cachedConfigs: ProviderConfigMap | null = null;
+let cachedMtime = 0;
+
+/** Load the provider config from disk (with in-memory caching). */
 export function loadProviderConfigs(): ProviderConfigMap {
   try {
-    if (!existsSync(CONFIG_FILE)) return {};
+    if (!existsSync(CONFIG_FILE)) {
+      cachedConfigs = {};
+      cachedMtime = 0;
+      return {};
+    }
+    const stat = statSync(CONFIG_FILE);
+    if (cachedConfigs && stat.mtimeMs === cachedMtime) {
+      return cachedConfigs;
+    }
     const raw = readFileSync(CONFIG_FILE, 'utf-8');
-    return JSON.parse(raw) as ProviderConfigMap;
+    cachedConfigs = JSON.parse(raw) as ProviderConfigMap;
+    cachedMtime = stat.mtimeMs;
+    return cachedConfigs;
   } catch {
     return {};
   }
 }
 
-/** Save the provider config to disk with restrictive permissions. */
+/** Save the provider config to disk with restrictive permissions + invalidate cache. */
 export function saveProviderConfigs(configs: ProviderConfigMap): void {
   try {
     if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
     writeFileSync(CONFIG_FILE, JSON.stringify(configs, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    // Invalidate cache so next read picks up the new file.
+    cachedConfigs = null;
+    cachedMtime = 0;
   } catch (err) {
     console.error('[provider-config] save failed:', err);
   }
