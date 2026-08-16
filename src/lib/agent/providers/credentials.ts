@@ -45,11 +45,11 @@ export function loadProviderConfigs(): ProviderConfigMap {
   }
 }
 
-/** Save the provider config to disk. */
+/** Save the provider config to disk with restrictive permissions. */
 export function saveProviderConfigs(configs: ProviderConfigMap): void {
   try {
-    if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-    writeFileSync(CONFIG_FILE, JSON.stringify(configs, null, 2), 'utf-8');
+    if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(CONFIG_FILE, JSON.stringify(configs, null, 2), { encoding: 'utf-8', mode: 0o600 });
   } catch (err) {
     console.error('[provider-config] save failed:', err);
   }

@@ -130,9 +130,31 @@ export class AgentManager {
     approval.setResolver(async (req) => {
       return await new Promise<ApprovalOutcome>((resolve, reject) => {
         this.approvals.set(req.callId, { resolve, reject, signal: req.signal });
-        // Broadcast to listeners (the SSE layer) so the UI shows the card.
-        // We can't know sessionId here cheaply; the loop emits the session event.
+        // Auto-reject if the client never responds within 5 minutes.
+        const timeout = setTimeout(() => {
+          if (this.approvals.has(req.callId)) {
+            this.approvals.delete(req.callId);
+            resolve('cancelled');
+          }
+        }, 5 * 60 * 1000);
+        // Also reject if the abort signal fires (session cancelled/deleted).
+        req.signal.addEventListener('abort', () => {
+          clearTimeout(timeout);
+          if (this.approvals.has(req.callId)) {
+            this.approvals.delete(req.callId);
+            resolve('cancelled');
+          }
+        });
       });
+    });
+
+    // Register server-side pre-execute listener for approval-required tools.
+    // This ensures the approval gate is enforced server-side, not just client-side.
+    tools.usePreExecute((ctx, next) => {
+      if (requiresApproval(ctx.name)) {
+        return { kind: 'ask', reason: 'destructive action requires approval' };
+      }
+      return next();
     });
 
     this.ctx = new AgentContext({ llm, tools, systemPrompt, approval });
@@ -257,6 +279,14 @@ export class AgentManager {
       createdAt: s.createdAt,
       eventCount: s.eventCount,
     }));
+  }
+
+  /** Ensure a session is in memory, auto-resuming from DB if needed. */
+  async ensureSession(sessionId: string): Promise<Session | null> {
+    const existing = this.getSession(sessionId);
+    if (existing) return existing;
+    const resumed = await this.resumeSession(sessionId);
+    return resumed?.session ?? null;
   }
 
   deleteSession(sessionId: string): boolean {

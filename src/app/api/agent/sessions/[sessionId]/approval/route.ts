@@ -23,7 +23,7 @@ export async function POST(
 ) {
   const { sessionId } = await params;
   const manager = getAgentManager();
-  const session = manager.getSession(sessionId);
+  const session = await manager.ensureSession(sessionId);
   if (!session) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 });
   }

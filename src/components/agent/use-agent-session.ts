@@ -276,6 +276,10 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   // Subscribe to SSE events.
   useEffect(() => {
     if (!sessionId) return;
+    // Clean up cross-session refs when switching sessions.
+    executionsRef.current = new Map();
+    decisionsRef.current = new Map();
+    setPendingApprovals([]);
     const es = new EventSource(`/api/agent/sessions/${sessionId}/events`);
     es.addEventListener('event', (e) => {
       try {

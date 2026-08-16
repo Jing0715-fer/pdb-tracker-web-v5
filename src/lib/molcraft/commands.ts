@@ -13,6 +13,31 @@ import type { MolstarPlugin, MolstarViewer } from "./types";
 import { useAppStore, type ElectrostaticViz, type DruggabilityViz, type ScreeningViz, type PocketDetectionViz } from "./store";
 import { normalizeRecipeName } from "./recipe-aliases";
 
+/** Check screenshot quality by sampling pixel variance. Returns 'ok' | 'black' | 'white'. */
+async function checkScreenshotQuality(dataUri: string): Promise<'ok' | 'black' | 'white'> {
+  try {
+    const img = new Image();
+    img.src = dataUri;
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return 'ok';
+    canvas.width = 32; canvas.height = 32;
+    ctx.drawImage(img, 0, 0, 32, 32);
+    const data = ctx.getImageData(0, 0, 32, 32).data;
+    let minR = 255, maxR = 0, minG = 255, maxG = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      minR = Math.min(minR, data[i]!); maxR = Math.max(maxR, data[i]!);
+      minG = Math.min(minG, data[i + 1]!); maxG = Math.max(maxG, data[i + 1]!);
+    }
+    if (maxR < 10 && maxG < 10) return 'black';
+    if (minR > 245 && minG > 245) return 'white';
+    return 'ok';
+  } catch {
+    return 'ok';
+  }
+}
+
 export interface CommandResult {
   ok: boolean;
   detail?: string;
