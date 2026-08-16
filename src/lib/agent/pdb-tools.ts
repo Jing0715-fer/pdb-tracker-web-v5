@@ -179,10 +179,33 @@ function clientTool(
 ): ToolDefinition {
   const card = opts.card ?? 'generic';
   const kind = opts.kind ?? name;
+  // Wrap parameters in { type: 'object', properties: {...}, required: [...] } if not already wrapped.
+  // OpenAI-compatible APIs require this format for function parameters.
+  const wrappedParams: Json = (() => {
+    const p = parameters as Record<string, unknown>;
+    if (!p || typeof p !== 'object') return { type: 'object', properties: {} } as Json;
+    if (p.type === 'object') return parameters; // Already wrapped
+    // Extract required fields from individual property definitions
+    const required: string[] = [];
+    const properties: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(p)) {
+      if (val && typeof val === 'object') {
+        const prop = { ...(val as Record<string, unknown>) };
+        if (prop.required === true) {
+          required.push(key);
+          delete prop.required;
+        }
+        properties[key] = prop;
+      }
+    }
+    const result: Record<string, unknown> = { type: 'object', properties };
+    if (required.length > 0) result.required = required;
+    return result as Json;
+  })();
   return {
     name,
     description,
-    parameters,
+    parameters: wrappedParams,
     output: {
       schema: { type: 'object' },
       render: (_args, value) => {
@@ -243,20 +266,20 @@ export const PDB_TOOLS: ToolDefinition[] = [
   clientTool('focus_ligand', 'Move camera to focus on a ligand.', { compId: { type: 'string', description: 'Ligand compId (e.g. HEM)', required: true } }, { card: 'pdb', kind: 'focus', title: 'Focus Ligand' }),
   clientTool('focus_residue', 'Move camera to focus on a residue.', { chain: { type: 'string', description: 'Chain ID', required: true }, resno: { type: 'number', description: 'Residue number', required: true } }, { card: 'pdb', kind: 'focus', title: 'Focus Residue' }),
   clientTool('focus_chain', 'Move camera to focus on a chain.', { chain: { type: 'string', description: 'Chain ID', required: true } }, { card: 'pdb', kind: 'focus', title: 'Focus Chain' }),
-  clientTool('reset_camera', 'Reset the camera position.', {}, { card: 'pdb', kind: 'camera', title: 'Reset Camera' }),
+  clientTool('reset_camera', 'Reset the camera position.', { type: 'object', properties: {} }, { card: 'pdb', kind: 'camera', title: 'Reset Camera' }),
   clientTool('set_background', 'Set the viewport background color.', { color: { type: 'string', description: 'Hex color (e.g. #000000)', required: true } }, { card: 'pdb', kind: 'background', title: 'Set Background' }),
   clientTool('toggle_spin', 'Toggle structure spin animation.', { spin: { type: 'boolean', description: 'true to spin, false to stop (default true)' } }, { card: 'pdb', kind: 'animation', title: 'Toggle Spin' }),
   clientTool('toggle_rock', 'Toggle structure rock animation.', { rock: { type: 'boolean', description: 'true to rock, false to stop (default true)' } }, { card: 'pdb', kind: 'animation', title: 'Toggle Rock' }),
   clientTool('toggle_component_visibility', 'Show or hide a chain.', { chain: { type: 'string', description: 'Chain ID', required: true }, visible: { type: 'boolean', description: 'true to show, false to hide', required: true } }, { card: 'pdb', kind: 'visibility', title: 'Toggle Visibility' }),
   clientTool('select', 'Select a residue or entity.', { chain: { type: 'string', description: 'Chain ID' }, resno: { type: 'number', description: 'Residue number' }, entityType: { type: 'string', description: 'Entity type' } }, { card: 'pdb', kind: 'select', title: 'Select' }),
-  clientTool('clear_selection', 'Clear the current selection.', {}, { card: 'pdb', kind: 'select', title: 'Clear Selection' }),
-  clientTool('clear_interactions', 'Clear all interaction overlays.', {}, { card: 'pdb', kind: 'clear', title: 'Clear Interactions' }),
+  clientTool('clear_selection', 'Clear the current selection.', { type: 'object', properties: {} }, { card: 'pdb', kind: 'select', title: 'Clear Selection' }),
+  clientTool('clear_interactions', 'Clear all interaction overlays.', { type: 'object', properties: {} }, { card: 'pdb', kind: 'clear', title: 'Clear Interactions' }),
   clientTool('label_residue', 'Add a text label to a residue.', { chain: { type: 'string', description: 'Chain ID', required: true }, resno: { type: 'number', description: 'Residue number', required: true }, label: { type: 'string', description: 'Label text', required: true } }, { card: 'pdb', kind: 'label', title: 'Label Residue' }),
   // ── Measurement ──
   clientTool('measure_distance', 'Measure the distance between two atoms.', { a: { type: 'string', description: 'Atom A (e.g. "A:145:CA")', required: true }, b: { type: 'string', description: 'Atom B', required: true } }, { card: 'measure', kind: 'distance', title: 'Measure Distance' }),
   clientTool('measure_angle', 'Measure the angle between three atoms.', { a: { type: 'string', description: 'Atom A', required: true }, b: { type: 'string', description: 'Atom B', required: true }, c: { type: 'string', description: 'Atom C', required: true } }, { card: 'measure', kind: 'angle', title: 'Measure Angle' }),
   clientTool('measure_dihedral', 'Measure the dihedral angle between four atoms.', { a: { type: 'string', description: 'Atom A', required: true }, b: { type: 'string', description: 'Atom B', required: true }, c: { type: 'string', description: 'Atom C', required: true }, d: { type: 'string', description: 'Atom D', required: true } }, { card: 'measure', kind: 'dihedral', title: 'Measure Dihedral' }),
-  clientTool('clear_measurements', 'Clear all measurements.', {}, { card: 'measure', kind: 'clear', title: 'Clear Measurements' }),
+  clientTool('clear_measurements', 'Clear all measurements.', { type: 'object', properties: {} }, { card: 'measure', kind: 'clear', title: 'Clear Measurements' }),
   // ── Screenshot ──
   clientTool(
     'capture_multi_angle',
@@ -267,11 +290,11 @@ export const PDB_TOOLS: ToolDefinition[] = [
     },
     { card: 'screenshot', kind: 'capture', title: 'Capture Multi-Angle', timeoutMs: 60_000 },
   ),
-  clientTool('capture_snapshot', 'Capture a single screenshot of the current view.', {}, { card: 'screenshot', kind: 'snapshot', title: 'Capture Snapshot' }),
+  clientTool('capture_snapshot', 'Capture a single screenshot of the current view.', { type: 'object', properties: {} }, { card: 'screenshot', kind: 'snapshot', title: 'Capture Snapshot' }),
   clientTool(
     'export_snapshot',
     'Export the viewport as a PNG file. REQUIRES APPROVAL.',
-    {},
+    { type: 'object', properties: {} },
     { card: 'screenshot', kind: 'export', title: 'Export Snapshot' },
   ),
   clientTool(
@@ -284,15 +307,15 @@ export const PDB_TOOLS: ToolDefinition[] = [
     { card: 'screenshot', kind: 'recapture', title: 'Recapture Screenshot', timeoutMs: 60_000 },
   ),
   // ── Advanced analysis ──
-  clientTool('show_electrostatic_surface', 'Show the APBS electrostatic potential surface.', {}, { card: 'analysis', kind: 'electrostatic', title: 'Show Electrostatic Surface', timeoutMs: 90_000 }),
+  clientTool('show_electrostatic_surface', 'Show the APBS electrostatic potential surface.', { type: 'object', properties: {} }, { card: 'analysis', kind: 'electrostatic', title: 'Show Electrostatic Surface', timeoutMs: 90_000 }),
   clientTool('show_druggable_pocket', 'Highlight the druggable pocket around a ligand.', { ligandCompId: { type: 'string', description: 'Ligand compId', required: true } }, { card: 'analysis', kind: 'pocket', title: 'Show Druggable Pocket' }),
   clientTool('run_virtual_screening', 'Run virtual screening against a pocket.', { ligandCompId: { type: 'string', description: 'Ligand compId', required: true } }, { card: 'analysis', kind: 'screening', title: 'Virtual Screening', timeoutMs: 120_000 }),
-  clientTool('detect_pockets', 'Detect all surface pockets.', {}, { card: 'analysis', kind: 'pockets', title: 'Detect Pockets' }),
+  clientTool('detect_pockets', 'Detect all surface pockets.', { type: 'object', properties: {} }, { card: 'analysis', kind: 'pockets', title: 'Detect Pockets' }),
   // ── Session ──
   clientTool(
     'clear_chat',
     'Clear all chat messages. REQUIRES APPROVAL.',
-    {},
+    { type: 'object', properties: {} },
     { card: 'generic', kind: 'clear', title: 'Clear Chat' },
   ),
 ];
@@ -303,8 +326,12 @@ export const FETCH_METADATA_TOOL: ToolDefinition = {
   description:
     'Fetch RCSB metadata for a PDB entry (publication, method, resolution, title, deposit date). Runs server-side.',
   parameters: {
-    id: { type: 'string', description: '4-character PDB ID', required: true },
-    includeInterfaces: { type: 'boolean', description: 'Include interface data (default true)' },
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: '4-character PDB ID' },
+      includeInterfaces: { type: 'boolean', description: 'Include interface data (default true)' },
+    },
+    required: ['id'],
   },
   output: {
     schema: { type: 'object' },

@@ -25,6 +25,8 @@ import type {
   StreamChunk,
   ToolResultBlock,
 } from './llm/types';
+import { PROVIDER_CATALOG } from './providers/catalog';
+import { isProviderAvailable, getProviderConfig } from './providers/credentials';
 import type { SessionEvent, TurnEndReason, StepEndReason } from './session/types';
 import { Session } from './session';
 import { Inbox, type InboxMessage } from './inbox';
@@ -190,10 +192,15 @@ export class AgentLoop {
     }
     const tools = assembly.tools;
 
+    // Resolve the effective provider + model from settings.
+    // If the user set a model that belongs to a configured provider, use that provider.
+    const effectiveModel = settings.model ?? this.options.model;
+    const effectiveProvider = this.resolveProvider(effectiveModel);
+
     // Log request header (initial on first step of the session).
     const header = {
-      provider: this.options.provider,
-      model: settings.model ?? this.options.model,
+      provider: effectiveProvider,
+      model: effectiveModel,
       system,
       tools: tools.map((t) => t.name),
       temperature: settings.temperature ?? this.options.temperature,
@@ -209,8 +216,8 @@ export class AgentLoop {
     // Build the LLM request.
     const derivedMessages = this.session.deriveMessages();
     const request: GenerateOptions = {
-      provider: this.options.provider,
-      model: settings.model ?? this.options.model,
+      provider: effectiveProvider,
+      model: effectiveModel,
       messages: derivedMessages,
       system,
       tools,
@@ -221,8 +228,8 @@ export class AgentLoop {
 
     // Stream + accumulate.
     const prepared = this.ctx.llm.prepareCall({
-      provider: this.options.provider,
-      model: settings.model ?? this.options.model,
+      provider: effectiveProvider,
+      model: effectiveModel,
       temperature: settings.temperature ?? this.options.temperature,
       maxTokens: this.options.maxTokens,
     });
@@ -427,6 +434,30 @@ export class AgentLoop {
   private setStatusIdle(): void {
     this.status = 'idle';
     this.ctx.emit('agent/status', { sessionId: this.session.id, status: 'idle' });
+  }
+
+  /**
+   * Resolve which provider to use for a given model.
+   * Checks if any configured provider's model list contains the model id,
+   * or if a provider's defaultModel override matches.
+   * Falls back to this.options.provider (default: 'zai').
+   */
+  private resolveProvider(modelId: string): string {
+    for (const profile of PROVIDER_CATALOG) {
+      // Check if the model is in the provider's catalog
+      if (profile.models.some((m) => m.id === modelId)) {
+        // Check if this provider is available (has API key or is zai)
+        if (isProviderAvailable(profile.id)) {
+          return profile.id;
+        }
+      }
+      // Check if a provider has a custom defaultModel override matching
+      const config = getProviderConfig(profile.id);
+      if (config.defaultModel === modelId && isProviderAvailable(profile.id)) {
+        return profile.id;
+      }
+    }
+    return this.options.provider;
   }
 
   /** Read the latest per-session settings from the event log. */
