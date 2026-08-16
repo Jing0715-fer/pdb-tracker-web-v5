@@ -16,7 +16,7 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { providerId?: string; apiKey?: string; baseURL?: string; enabled?: boolean };
+  let body: { providerId?: string; apiKey?: string; baseURL?: string; defaultModel?: string; enabled?: boolean };
   try {
     body = await request.json();
   } catch {
@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
   manager.setProviderConfig(body.providerId, {
     apiKey: body.apiKey,
     baseURL: body.baseURL,
+    defaultModel: body.defaultModel,
     enabled: body.enabled,
   });
   return NextResponse.json({ ok: true });

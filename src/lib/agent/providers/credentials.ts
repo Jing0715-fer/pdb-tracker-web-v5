@@ -25,6 +25,8 @@ export interface ProviderConfig {
   apiKey?: string;
   /** Override the default baseURL. */
   baseURL?: string;
+  /** Override the default model for this provider. */
+  defaultModel?: string;
   /** Whether this provider is enabled (default: true if apiKey is set). */
   enabled?: boolean;
 }
@@ -137,6 +139,7 @@ export function listAllProvidersWithStatus(): Array<ProviderProfile & {
   available: boolean;
   hasApiKey: boolean;
   hasBaseURLOverride: boolean;
+  effectiveModel: string;
 }> {
   return PROVIDER_CATALOG.map((p) => {
     const config = getProviderConfig(p.id);
@@ -145,6 +148,7 @@ export function listAllProvidersWithStatus(): Array<ProviderProfile & {
       available: isProviderAvailable(p.id),
       hasApiKey: !!config.apiKey || (!!process.env[p.apiKeyEnv] && p.id !== 'zai'),
       hasBaseURLOverride: !!config.baseURL,
+      effectiveModel: config.defaultModel ?? p.defaultModel,
     };
   });
 }

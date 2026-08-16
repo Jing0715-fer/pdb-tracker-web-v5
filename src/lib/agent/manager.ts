@@ -171,8 +171,8 @@ export class AgentManager {
     return listAllProvidersWithStatus();
   }
 
-  /** Set/update a provider's config (API key + baseURL). */
-  setProviderConfig(providerId: string, config: { apiKey?: string; baseURL?: string; enabled?: boolean }) {
+  /** Set/update a provider's config (API key + baseURL + defaultModel). */
+  setProviderConfig(providerId: string, config: { apiKey?: string; baseURL?: string; defaultModel?: string; enabled?: boolean }) {
     setProviderConfig(providerId, config);
     // If the provider is now available and not yet registered, register it.
     if (isProviderAvailable(providerId) && providerId !== 'zai') {

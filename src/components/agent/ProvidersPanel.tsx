@@ -13,7 +13,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Key, Globe, Loader2, Check, AlertCircle, ExternalLink, RefreshCw,
-  Trash2, Zap, ShieldCheck, Plus,
+  Trash2, Zap, ShieldCheck, Plus, Box,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,6 +43,7 @@ interface ProviderInfo {
   available: boolean;
   hasApiKey: boolean;
   hasBaseURLOverride: boolean;
+  effectiveModel: string;
 }
 
 interface Props {
@@ -144,19 +145,26 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
   const [selectedId, setSelectedId] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseURL, setBaseURL] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [useCustomModel, setUseCustomModel] = useState(false);
+  const [customModel, setCustomModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
 
-  // Auto-fill baseURL when provider changes.
+  // Auto-fill baseURL + default model when provider changes.
   useEffect(() => {
     const selected = providers.find((p) => p.id === selectedId);
     if (selected) {
       setBaseURL(selected.baseURL);
+      setSelectedModel(selected.defaultModel);
+      setUseCustomModel(false);
+      setCustomModel('');
     }
   }, [selectedId, providers]);
 
   const selected = providers.find((p) => p.id === selectedId);
+  const effectiveModel = useCustomModel ? customModel.trim() : selectedModel;
 
   const handleSave = async () => {
     if (!selectedId || !apiKey.trim()) return;
@@ -165,11 +173,14 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
       await fetch('/api/agent/providers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerId: selectedId, apiKey: apiKey.trim(), baseURL: baseURL.trim() || undefined }),
+        body: JSON.stringify({ providerId: selectedId, apiKey: apiKey.trim(), baseURL: baseURL.trim() || undefined, defaultModel: effectiveModel || undefined }),
       });
       setSelectedId('');
       setApiKey('');
       setBaseURL('');
+      setSelectedModel('');
+      setCustomModel('');
+      setUseCustomModel(false);
       setTestResult(null);
       onSaved();
     } finally {
@@ -181,12 +192,11 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
     if (!selectedId || !apiKey.trim()) return;
     setTesting(true);
     setTestResult(null);
-    // Save first, then test.
     try {
       await fetch('/api/agent/providers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerId: selectedId, apiKey: apiKey.trim(), baseURL: baseURL.trim() || undefined }),
+        body: JSON.stringify({ providerId: selectedId, apiKey: apiKey.trim(), baseURL: baseURL.trim() || undefined, defaultModel: effectiveModel || undefined }),
       });
       const res = await fetch('/api/agent/providers/test', {
         method: 'POST',
@@ -196,10 +206,12 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
       const data = (await res.json()) as { ok: boolean; error?: string };
       setTestResult(data);
       if (data.ok) {
-        // Auto-clear on success.
         setSelectedId('');
         setApiKey('');
         setBaseURL('');
+        setSelectedModel('');
+        setCustomModel('');
+        setUseCustomModel(false);
         onSaved();
       }
     } catch (err) {
@@ -254,13 +266,51 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
               onChange={(e) => setBaseURL(e.target.value)}
               className="h-8 text-xs bg-claude-bg-base border-claude-border font-mono"
             />
-            {selected.models.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {selected.models.map((m) => (
-                  <Badge key={m.id} variant="outline" className="text-[9px] h-4 px-1 font-mono text-claude-text-muted border-claude-border">
-                    {m.id}
-                  </Badge>
-                ))}
+          </div>
+
+          {/* Model selector */}
+          <div>
+            <Label className="text-[10px] uppercase tracking-wider text-claude-text-muted mb-1.5 flex items-center gap-1">
+              <Box className="h-2.5 w-2.5" />
+              默认模型
+            </Label>
+            {!useCustomModel ? (
+              <>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full h-8 text-xs bg-claude-bg-base border border-claude-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-claude-accent/30"
+                >
+                  {selected.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({m.id})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => { setUseCustomModel(true); setCustomModel(selectedModel); }}
+                  className="mt-1 text-[10px] text-claude-accent hover:underline"
+                >
+                  + 自定义模型…
+                </button>
+              </>
+            ) : (
+              <div className="flex gap-1.5">
+                <Input
+                  type="text"
+                  value={customModel}
+                  onChange={(e) => setCustomModel(e.target.value)}
+                  placeholder="输入自定义模型 ID…"
+                  className="h-8 text-xs bg-claude-bg-base border-claude-border font-mono flex-1"
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setUseCustomModel(false); }}
+                  className="h-8 text-[10px] text-claude-text-muted shrink-0"
+                >
+                  列表
+                </Button>
               </div>
             )}
           </div>
@@ -370,7 +420,11 @@ function ConfiguredProviderRow({ provider, onChanged }: { provider: ProviderInfo
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
           )}
         </div>
-        <div className="text-[10px] text-claude-text-muted truncate font-mono">{provider.baseURL}</div>
+        <div className="text-[10px] text-claude-text-muted truncate">
+          <span className="font-mono">{provider.effectiveModel || provider.defaultModel}</span>
+          <span className="mx-1">·</span>
+          <span className="font-mono opacity-70">{provider.baseURL}</span>
+        </div>
       </div>
       {/* Delete */}
       {provider.id !== 'zai' && (
