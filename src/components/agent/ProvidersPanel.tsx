@@ -13,7 +13,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Key, Globe, Loader2, Check, AlertCircle, ExternalLink, RefreshCw,
-  Trash2, Zap, ShieldCheck, Plus, Box,
+  Trash2, Zap, ShieldCheck, Plus, Box, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -398,7 +398,7 @@ function AddProviderForm({ providers, onSaved }: { providers: ProviderInfo[]; on
   );
 }
 
-/** A single configured provider row with default indicator + delete option. */
+/** A single configured provider row with default indicator, expand to edit, test, delete. */
 function ConfiguredProviderRow({ provider, isDefault, onSetDefault, onChanged }: {
   provider: ProviderInfo;
   isDefault: boolean;
@@ -406,6 +406,13 @@ function ConfiguredProviderRow({ provider, isDefault, onSetDefault, onChanged }:
   onChanged: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [editApiKey, setEditApiKey] = useState('');
+  const [editBaseURL, setEditBaseURL] = useState('');
+  const [editModel, setEditModel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -417,60 +424,236 @@ function ConfiguredProviderRow({ provider, isDefault, onSetDefault, onChanged }:
     }
   };
 
+  const handleExpand = () => {
+    if (!expanded) {
+      // Pre-fill edit fields with current values
+      setEditBaseURL(provider.baseURL);
+      setEditModel(provider.effectiveModel || provider.defaultModel);
+      setEditApiKey('');
+    }
+    setExpanded(!expanded);
+  };
+
+  const handleSave = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSaving(true);
+    try {
+      await fetch('/api/agent/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: provider.id,
+          apiKey: editApiKey.trim() || undefined,
+          baseURL: editBaseURL.trim() || undefined,
+          defaultModel: editModel.trim() || undefined,
+        }),
+      });
+      setEditApiKey('');
+      setExpanded(false);
+      onChanged();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Save first if there are unsaved edits
+    if (editApiKey.trim() || editBaseURL !== provider.baseURL || editModel !== (provider.effectiveModel || provider.defaultModel)) {
+      setSaving(true);
+      await fetch('/api/agent/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: provider.id,
+          apiKey: editApiKey.trim() || undefined,
+          baseURL: editBaseURL.trim() || undefined,
+          defaultModel: editModel.trim() || undefined,
+        }),
+      });
+      setSaving(false);
+      setEditApiKey('');
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/agent/providers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId: provider.id }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      setTestResult(data);
+    } catch (err) {
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className={cn(
-      'flex items-center gap-2.5 rounded-md border px-3 py-2 transition-colors cursor-pointer',
+      'rounded-md border transition-colors overflow-hidden',
       isDefault
         ? 'border-claude-accent bg-claude-accent-light/20 ring-1 ring-claude-accent/30'
         : provider.available
-          ? 'border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10'
-          : 'border-claude-border bg-claude-surface hover:bg-claude-bg-elevated/30',
-    )}
-    onClick={() => void onSetDefault(provider.id)}
-    >
-      {/* Radio indicator */}
-      <div className={cn(
-        'h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors',
-        isDefault ? 'border-claude-accent' : 'border-claude-border',
-      )}>
-        {isDefault && <div className="h-2 w-2 rounded-full bg-claude-accent" />}
-      </div>
-      {/* Label badge */}
-      <div className={cn(
-        'w-8 h-8 rounded shrink-0 flex items-center justify-center text-[10px] font-bold',
-        provider.available
-          ? 'bg-emerald-500/15 text-emerald-600'
-          : 'bg-claude-bg-elevated text-claude-text-muted',
-      )}>
-        {provider.label}
-      </div>
-      {/* Info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-claude-text truncate">{provider.displayName}</span>
-          {isDefault && (
-            <Badge variant="outline" className="h-4 px-1 text-[9px] border-claude-accent/40 text-claude-accent bg-claude-accent/10 shrink-0">
-              默认
-            </Badge>
-          )}
-          {provider.available && !isDefault && (
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
-          )}
+          ? 'border-emerald-500/30 bg-emerald-500/5'
+          : 'border-claude-border bg-claude-surface',
+    )}>
+      {/* Header row — click to set default, has expand chevron */}
+      <div
+        className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-claude-bg-elevated/30 transition-colors"
+        onClick={() => void onSetDefault(provider.id)}
+      >
+        {/* Radio indicator */}
+        <div className={cn(
+          'h-4 w-4 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors',
+          isDefault ? 'border-claude-accent' : 'border-claude-border',
+        )}>
+          {isDefault && <div className="h-2 w-2 rounded-full bg-claude-accent" />}
         </div>
-        <div className="text-[10px] text-claude-text-muted truncate">
-          <span className="font-mono">{provider.effectiveModel || provider.defaultModel}</span>
+        {/* Label badge */}
+        <div className={cn(
+          'w-8 h-8 rounded shrink-0 flex items-center justify-center text-[10px] font-bold',
+          provider.available
+            ? 'bg-emerald-500/15 text-emerald-600'
+            : 'bg-claude-bg-elevated text-claude-text-muted',
+        )}>
+          {provider.label}
         </div>
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-claude-text truncate">{provider.displayName}</span>
+            {isDefault && (
+              <Badge variant="outline" className="h-4 px-1 text-[9px] border-claude-accent/40 text-claude-accent bg-claude-accent/10 shrink-0">
+                默认
+              </Badge>
+            )}
+            {provider.available && !isDefault && (
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+            )}
+          </div>
+          <div className="text-[10px] text-claude-text-muted truncate">
+            <span className="font-mono">{provider.effectiveModel || provider.defaultModel}</span>
+          </div>
+        </div>
+        {/* Actions */}
+        {provider.id !== 'zai' && (
+          <button
+            onClick={(e) => { e.stopPropagation(); void handleExpand(); }}
+            className="shrink-0 text-claude-text-muted hover:text-claude-accent transition-colors p-1"
+            title={expanded ? "收起" : "编辑"}
+          >
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')} />
+          </button>
+        )}
+        {provider.id !== 'zai' && (
+          <button
+            onClick={(e) => { e.stopPropagation(); void handleDelete(); }}
+            disabled={deleting}
+            className="shrink-0 text-claude-text-muted hover:text-red-500 transition-colors p-1"
+            title="删除"
+          >
+            {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+          </button>
+        )}
       </div>
-      {/* Delete — stop propagation so clicking delete doesn't set default */}
-      {provider.id !== 'zai' && (
-        <button
-          onClick={(e) => { e.stopPropagation(); void handleDelete(); }}
-          disabled={deleting}
-          className="shrink-0 text-claude-text-muted hover:text-red-500 transition-colors p-1"
-          title="删除"
+
+      {/* Expanded edit panel */}
+      {expanded && provider.id !== 'zai' && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          className="overflow-hidden"
         >
-          {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-        </button>
+          <div className="px-3 pb-3 pt-1 border-t border-claude-border/50 space-y-2.5">
+            {/* API Key */}
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-claude-text-muted mb-1 flex items-center gap-1">
+                <Key className="h-2.5 w-2.5" />
+                API Key {provider.hasApiKey && <span className="text-emerald-600 normal-case tracking-normal">（已设置，输入新值替换）</span>}
+              </Label>
+              <Input
+                type="password"
+                value={editApiKey}
+                onChange={(e) => setEditApiKey(e.target.value)}
+                placeholder={provider.hasApiKey ? '••••••••（输入新值替换）' : '输入 API Key…'}
+                className="h-8 text-xs bg-claude-bg-base border-claude-border font-mono"
+              />
+            </div>
+            {/* Base URL */}
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-claude-text-muted mb-1 flex items-center gap-1">
+                <Globe className="h-2.5 w-2.5" />
+                Base URL
+              </Label>
+              <Input
+                type="text"
+                value={editBaseURL}
+                onChange={(e) => setEditBaseURL(e.target.value)}
+                className="h-8 text-xs bg-claude-bg-base border-claude-border font-mono"
+              />
+            </div>
+            {/* Model */}
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-claude-text-muted mb-1 flex items-center gap-1">
+                <Box className="h-2.5 w-2.5" />
+                默认模型
+              </Label>
+              <select
+                value={editModel}
+                onChange={(e) => setEditModel(e.target.value)}
+                className="w-full h-8 text-xs bg-claude-bg-base border border-claude-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-claude-accent/30"
+              >
+                {provider.models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.id})
+                  </option>
+                ))}
+                {/* Include current if not in list */}
+                {!provider.models.some((m) => m.id === editModel) && editModel && (
+                  <option value={editModel}>{editModel}</option>
+                )}
+              </select>
+            </div>
+            {/* Test result */}
+            {testResult && (
+              <div className={cn(
+                'rounded-md px-2.5 py-1.5 text-[11px] flex items-center gap-1.5 border',
+                testResult.ok
+                  ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300'
+                  : 'border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-300',
+              )}>
+                {testResult.ok ? <Check className="h-3 w-3 shrink-0" /> : <AlertCircle className="h-3 w-3 shrink-0" />}
+                <span className="break-words">{testResult.ok ? '连接成功！' : testResult.error}</span>
+              </div>
+            )}
+            {/* Action buttons */}
+            <div className="flex items-center justify-end gap-1.5 pt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleTest}
+                disabled={testing}
+                className="h-7 text-[10px] border-claude-border"
+              >
+                {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                测试
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={saving || (!editApiKey.trim() && editBaseURL === provider.baseURL && editModel === (provider.effectiveModel || provider.defaultModel))}
+                className="h-7 text-[10px] bg-claude-accent hover:bg-claude-accent-hover text-white"
+              >
+                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                保存
+              </Button>
+            </div>
+          </div>
+        </motion.div>
       )}
     </div>
   );
