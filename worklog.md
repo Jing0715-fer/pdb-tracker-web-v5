@@ -1791,3 +1791,58 @@ Task: Restart server, run complete analysis test, identify problems, propose nex
 7. **Performance monitoring**: Add timing display for each tool call in the DSH agent UI.
 
 8. **SSE reconnection**: When the SSE connection drops (server restart), automatically reconnect and resume the session.
+
+---
+Task ID: round-113-dsh-agent-autocapture-vlm-carousel-verification-retry-timing
+Agent: main
+Task: Implement Round 113 plan — DSH agent auto-capture, VLM integration, screenshot carousel, structure verification, retry button, timing display, SSE reconnection.
+
+### R113.2: Auto-Capture After pdb_analyze
+- use-agent-session.ts: Auto-trigger capture_multi_angle after visualizable recipes
+- Auto-injects vizParams from analysis result
+
+### R113.3: VLM Integration
+- Calls selectBestWithRetry() on auto-captured screenshots
+- VLM result attached to tool result
+
+### R113.4: Screenshot Carousel
+- Replaced grid with carousel: quality badge, best highlight, score, VLM commentary, issues, thumbnails
+
+### R113.5: Structure Loading Verification
+- Checks Molstar hierarchy after load_pdb
+- Returns error if no structure found (prevents ghost entries)
+
+### R113.6: Retry Button
+- '重试' button on failed tool calls
+- Dispatches 'agent-retry-tool' event, re-executes tool
+
+### R113.7: Timing Display
+- durationMs tracked in executeToolCall
+- StatusPill shows live timer (running) or final duration (done/error)
+
+### R113.8: SSE Reconnection (already working)
+- EventSource auto-reconnects, seenSeqs deduplicates
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- main branch: 7baf501 (Round 113 complete, pushed to remote)
+
+### Next Round Recommendations (Round 114)
+
+1. **Browser E2E test**: Verify the carousel renders with VLM commentary, quality badges, and best-image highlighting in a real browser session.
+
+2. **Auto-capture effectiveness**: Verify that auto-capture triggers after pdb_analyze and screenshots appear in the tool card.
+
+3. **VLM result display**: Verify VLM commentary and quality badges render correctly in the carousel.
+
+4. **Retry button**: Verify the retry button re-executes failed tools and updates the UI.
+
+5. **Timing display**: Verify durationMs shows correctly for completed tool calls.
+
+6. **Structure verification**: Verify that ghost loads are caught and reported as errors.
+
+7. **Performance**: The auto-capture + VLM adds ~15-40s to each pdb_analyze. Consider making it async (non-blocking).
+
+8. **Session persistence**: Verify that sessions survive server restarts (already implemented via Prisma, needs testing).
