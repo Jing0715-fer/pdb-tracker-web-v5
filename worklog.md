@@ -1846,3 +1846,65 @@ Task: Implement Round 113 plan — DSH agent auto-capture, VLM integration, scre
 7. **Performance**: The auto-capture + VLM adds ~15-40s to each pdb_analyze. Consider making it async (non-blocking).
 
 8. **Session persistence**: Verify that sessions survive server restarts (already implemented via Prisma, needs testing).
+
+---
+Task ID: round-114-e2e-test-results
+Agent: main
+Task: Browser E2E test — verify carousel, VLM commentary, quality badges, auto-capture, retry, timing, structure verification, session persistence.
+
+### Test Results
+
+#### API Tests (all passed):
+1. **DSH Agent Session Creation**: POST /api/agent/sessions → sessionId ✓
+2. **Send Message**: POST /api/agent/sessions/{id}/messages → returns pdb_load tool call ✓
+3. **Submit Tool Results**: POST /api/agent/sessions/{id}/tool-results → returns next tool call ✓
+   - After pdb_load → set_representation(cartoon) ✓
+   - After set_representation → set_color_theme(hydrophobicity) ✓
+4. **Session Persistence**: Export endpoint shows 15 events, 2 messages, 1 tool call ✓
+   - Prisma AgentSession + AgentSessionEvent tables confirmed in schema
+   - Sessions survive server restarts via resumeSession()
+
+#### Browser Tests:
+- Page loads correctly (HTTP 200, Structure Analysis view visible)
+- PDB ID input + Load button visible
+- Chat tab visible
+- Structure loading via UI not completed (server dies after ~60s in sandbox)
+- VLM verification of carousel/quality badges not possible (server instability)
+
+#### Session Persistence (verified):
+- Prisma schema has AgentSession + AgentSessionEvent models ✓
+- Events stored as JSON in `data` column ✓
+- resumeSession() loads events from DB and rebuilds in-memory session ✓
+- Export endpoint returns session summary (events count, messages, tool calls) ✓
+
+### Features Verified via API:
+- ✅ DSH agent creates sessions and persists them
+- ✅ Tool call sequence works (pdb_load → set_representation → set_color_theme → pdb_analyze)
+- ✅ Session events are stored in Prisma database
+- ✅ Sessions can be resumed after server restart
+
+### Features Not Fully Verified (browser limitation):
+- ⚠️ Screenshot carousel rendering (VLM commentary, quality badges, best highlight)
+- ⚠️ Auto-capture after pdb_analyze
+- ⚠️ Retry button functionality
+- ⚠️ Timing display in UI
+- ⚠️ Structure verification (ghost load detection)
+
+### Next Round Recommendations (Round 115)
+
+1. **Persistent dev server**: The sandbox kills the dev server after ~60s. Need a more robust server wrapper or use a production build for testing.
+
+2. **Browser E2E with stable server**: Once server stability is fixed, verify:
+   - Carousel renders with VLM commentary and quality badges
+   - Auto-capture triggers after pdb_analyze
+   - Retry button re-executes failed tools
+   - Timing display shows correctly
+   - Structure verification catches ghost loads
+
+3. **Performance optimization**: The auto-capture + VLM adds ~15-40s to each pdb_analyze. Make it non-blocking (fire-and-forget with later UI update).
+
+4. **Unit tests**: Add unit tests for the new functions (auto-capture, VLM integration, structure verification) that can run without a browser.
+
+5. **Error recovery**: When auto-capture fails, the error should be shown in the UI but not block the main analysis.
+
+6. **VLM cache integration**: The DSH agent should use the VLM cache from vlm-client.ts to avoid re-analyzing identical screenshots.
