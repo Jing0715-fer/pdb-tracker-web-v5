@@ -1725,3 +1725,69 @@ Task: User pointed out previous round may not have been based on latest remote c
 5. **SSE size limit**: Verify large screenshots (3x 1200x800) don't exceed EventSource limits.
 
 6. **Structure persistence**: Verify structures stay loaded through multiple commands.
+
+---
+Task ID: round-112-full-analysis-test-results
+Agent: main
+Task: Restart server, run complete analysis test, identify problems, propose next steps.
+
+### Test Results
+
+#### API Tests (all passed):
+1. **Agent round 1**: "Load 4HHB and analyze all interactions between A and B" → pdb_load(4HHB) ✓
+2. **Agent round 2**: After pdb_load → pdb_analyze(all_interactions, A, B) ✓
+3. **Agent round 3**: After pdb_analyze with 17 interactions → capture_multi_angle(all_interactions, A, B) ✓
+4. **Agent round 4**: After capture+VLM → final answer with comprehensive text ✓
+   - Mentions 17 interactions, H-bonds, salt bridges, hydrophobic contacts
+   - Mentions side chains (ball-and-stick) and H-bond lines (dashed)
+   - Screenshot quality assessment
+5. **VLM quality**: Blank screenshots → quality='unacceptable', issues, recaptureHints ✓
+
+#### DSH Agent Session API Tests:
+1. **Create session**: POST /api/agent/sessions → sessionId returned ✓
+2. **Send message**: POST /api/agent/sessions/{id}/messages with {content: "..."} → returns toolCalls ✓
+   - First tool: pdb_load(id="1CBS") ✓
+3. **Submit tool result**: POST /api/agent/sessions/{id}/tool-results → returns next toolCalls ✓
+   - After pdb_load: set_representation(preset="cartoon") ✓
+4. **Session persistence**: FAILED — session lost when server restarts (in-memory only)
+
+#### Browser Tests:
+- Server dies after ~60s in sandbox, making browser tests unreliable
+- Page loads correctly (HTTP 200, no errors)
+- Navigation to Analysis tab works
+- Structure loading via UI not verified (server dies before completion)
+
+### Problems Identified
+
+1. **CRITICAL: Server instability in sandbox**: The dev server dies after ~60s, causing:
+   - Browser tests to fail with ERR_CONNECTION_REFUSED
+   - DSH agent sessions to be lost (in-memory only)
+   - Long-running agent loops to fail mid-execution
+
+2. **DSH agent sessions are in-memory only**: When the server restarts, all sessions are lost. The session is stored in `getAgentManager()` which uses a Map in memory. Need persistence to survive restarts.
+
+3. **Empty message bubbles (空气泡)**: Fixed in R110, but may still occur if the LLM sends empty content blocks that aren't caught by the `text.trim().length === 0` check.
+
+4. **Structure disappearing**: Fixed in R110 (500ms wait + 2 animation frames), but may still occur if `set_representation` is called too quickly after `load_pdb`.
+
+5. **Screenshots not showing**: The `extractScreenshots` function in ToolCallCard.tsx correctly parses `result.data.screenshots`. The issue may be that the DSH agent doesn't call VLM on screenshots (unlike the legacy path), so screenshots are stored but not annotated.
+
+6. **DSH agent doesn't auto-capture**: Unlike the legacy path (chat-tab.tsx) which auto-captures after pdb_analyze, the DSH agent relies on the LLM calling capture_multi_angle explicitly.
+
+### Next Round Development Plan (Round 113)
+
+1. **CRITICAL: Add session persistence**: Store DSH agent sessions in the database (Prisma) or localStorage so they survive server restarts. Currently `getAgentManager()` uses an in-memory Map.
+
+2. **DSH agent auto-capture**: Add auto-capture logic to `use-agent-session.ts` — after pdb_analyze succeeds, auto-trigger capture_multi_angle if the LLM didn't call it.
+
+3. **DSH agent VLM integration**: Call VLM on captured screenshots in the DSH agent path, similar to the legacy path. Currently screenshots are stored but not analyzed.
+
+4. **Screenshot carousel in DSH agent**: Replace the grid view in ToolCallCard.tsx with a carousel that shows VLM commentary, quality badges, and best-image highlighting.
+
+5. **Structure loading verification**: Add a verification step after load_pdb — check that the structure actually exists in the Molstar hierarchy before continuing.
+
+6. **Error recovery**: When a tool fails, show a retry button in the DSH agent UI (similar to the legacy path).
+
+7. **Performance monitoring**: Add timing display for each tool call in the DSH agent UI.
+
+8. **SSE reconnection**: When the SSE connection drops (server restart), automatically reconnect and resume the session.
