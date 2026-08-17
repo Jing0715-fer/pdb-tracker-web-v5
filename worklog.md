@@ -1908,3 +1908,49 @@ Task: Browser E2E test — verify carousel, VLM commentary, quality badges, auto
 5. **Error recovery**: When auto-capture fails, the error should be shown in the UI but not block the main analysis.
 
 6. **VLM cache integration**: The DSH agent should use the VLM cache from vlm-client.ts to avoid re-analyzing identical screenshots.
+
+---
+Task ID: round-115-non-blocking-autocapture-vlm-error-recovery-cache
+Agent: main
+Task: Implement non-blocking auto-capture + VLM, error recovery, VLM cache integration for DSH agent.
+
+### R115.1: Non-Blocking Auto-Capture + VLM
+- Fire-and-forget async IIFE instead of blocking await
+- pdb_analyze returns immediately with autoCapturePending=true
+- UI updates when auto-capture completes (setEvents triggers re-render)
+- Saves ~15-40s per pdb_analyze call
+
+### R115.2: Error Recovery
+- Auto-capture failure → autoCaptureError on result (non-blocking)
+- VLM failure → vlmError on capture result (non-blocking)
+- ToolCallCard shows pending/error/complete states
+- Main analysis never blocked by screenshot/VLM failures
+
+### R115.3: VLM Cache Integration
+- selectBestWithRetry already uses VLM cache (R108.4)
+- DSH agent calls selectBestWithRetry → cache checked first
+- Cache cleared on new structure load (R109.4)
+
+### ToolCallCard UI
+- pdb_analyze: pending spinner, error warning, or carousel + text
+- Carousel: VLM commentary, quality badges, best highlight, thumbnails
+
+### Lint
+- All changed files: 0 errors, 1 pre-existing warning
+
+### Git
+- main branch: a5321eb (Round 115 complete, pushed to remote)
+
+### Next Round Recommendations (Round 116)
+
+1. **Browser E2E test**: Verify the non-blocking auto-capture shows pending → complete transition in the UI.
+
+2. **Performance measurement**: Measure the actual time saved by non-blocking auto-capture.
+
+3. **VLM cache effectiveness**: Verify that repeated analysis of the same structure uses cached VLM results.
+
+4. **Error recovery UI**: Verify that auto-capture errors show correctly without blocking the chat.
+
+5. **Carousel rendering**: Verify the carousel shows VLM commentary, quality badges, and best-image highlighting.
+
+6. **Session persistence test**: Verify sessions survive server restarts and the UI reconnects via SSE.
