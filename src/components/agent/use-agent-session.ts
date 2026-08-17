@@ -155,10 +155,21 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
           .filter((b): b is Extract<ContentBlock, { type: 'reasoning' }> => b.type === 'reasoning')
           .map((b) => b.text)
           .join('');
+        const text = blocksToText(data.message.content);
+        const hasToolCalls = data.message.content.some((b) => b.type === 'tool-call');
+        // Skip empty assistant messages that also have tool calls — these are
+        // the "I'll do X now" preambles the LLM emits before calling tools.
+        // Only show the text if it's non-trivial (non-whitespace).
+        if (hasToolCalls && text.trim().length === 0) {
+          // Remove the streaming node if it exists — don't add an empty message.
+          if (idx >= 0) nodes.splice(idx, 1);
+          streamingKey = null;
+          break;
+        }
         const finalNode: ConversationNode = {
           kind: 'assistant-message',
           seq: ev.seq,
-          text: blocksToText(data.message.content),
+          text,
           reasoning: reasoning || undefined,
         };
         if (idx >= 0) {
@@ -382,6 +393,23 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         // For structure loading commands, wait for the viewer to render fully.
         // 2.5s gives Molstar enough time to download + parse + render the structure.
         if (call.name === 'pdb_load' || call.name === 'load_alphafold' || call.name === 'load_emdb' || call.name === 'load_structure_url') {
+          // Update the Zustand store so the structure list + UI stays in sync.
+          // Without this, the structure disappears when the store re-renders
+          // (the store doesn't know about the loaded structure).
+          try {
+            const { useAppStore } = await import('@/lib/molcraft/store');
+            const addStructure = useAppStore.getState().addStructure;
+            const pdbId = call.name === 'pdb_load' ? String(args.id || '').toUpperCase()
+              : call.name === 'load_alphafold' ? String(args.uniprotId || '')
+              : call.name === 'load_emdb' ? String(args.emdbId || '')
+              : String(args.url || '');
+            if (pdbId) {
+              const source = call.name === 'pdb_load' ? 'pdb'
+                : call.name === 'load_alphafold' ? 'alphafold'
+                : call.name === 'load_emdb' ? 'emdb' : 'url';
+              addStructure({ id: pdbId, label: pdbId, source: source as never, loadedAt: Date.now() });
+            }
+          } catch { /* store update is best-effort */ }
           await new Promise((r) => setTimeout(r, 2500));
         }
         // For set_color_theme after a load, add extra delay to ensure components exist
