@@ -197,18 +197,32 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
         break;
       }
       case 'tool/result': {
-        const data = ev.data as { message: { content: ContentBlock[] }; error?: { message: string } };
+        const data = ev.data as { message: { content: ContentBlock[]; source: { kind: string; callId?: string } }; error?: { message: string } };
         // Update the matching tool-call node by walking back.
         for (let i = nodes.length - 1; i >= 0; i--) {
           const n = nodes[i]!;
           if (n.kind === 'tool-call') {
-            const tr = ev.data as { message: { source: { kind: string; callId?: string } } };
-            if (tr.message.source.kind === 'tool' && tr.message.source.callId === n.callId) {
+            if (data.message.source.kind === 'tool' && data.message.source.callId === n.callId) {
               n.status = data.error ? 'error' : 'ok';
               n.error = data.error?.message;
-              n.result = data.message.content
-                .map((b) => (b.type === 'text' ? b.text : ''))
-                .join('');
+              // The message content is [ToolResultBlock{ type: 'tool-result', content: [TextBlock{ type: 'text', text: '...' }] }]
+              // Extract the inner text from the tool-result block's content.
+              let rawText = '';
+              for (const block of data.message.content) {
+                if (block.type === 'tool-result') {
+                  for (const inner of block.content) {
+                    if (inner.type === 'text') rawText += inner.text;
+                  }
+                } else if (block.type === 'text') {
+                  rawText += block.text;
+                }
+              }
+              // Parse the result JSON string back into an object.
+              try {
+                n.result = JSON.parse(rawText);
+              } catch {
+                n.result = rawText;
+              }
             }
             break;
           }

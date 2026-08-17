@@ -346,8 +346,14 @@ export class AgentLoop {
     }>,
   ): void {
     for (const r of results) {
+      // For screenshot results (capture_multi_angle, capture_snapshot),
+      // the dataUri fields are large base64 strings. Don't truncate them —
+      // the full data is needed for the UI to render images.
+      // Use a larger limit (2MB) for these, normal limit (8000) for others.
+      const isScreenshot = r.name === 'capture_multi_angle' || r.name === 'capture_snapshot' || r.name === 'recapture_screenshot';
+      const maxLen = isScreenshot ? 2_000_000 : 8000;
       const content: ContentBlock[] = r.ok
-        ? [{ type: 'text', text: JSON.stringify(r.result ?? {}).slice(0, 8000) }]
+        ? [{ type: 'text', text: JSON.stringify(r.result ?? {}).slice(0, maxLen) }]
         : [{ type: 'text', text: r.error || 'Tool execution failed' }];
       const toolResultBlock: ToolResultBlock = {
         type: 'tool-result',
