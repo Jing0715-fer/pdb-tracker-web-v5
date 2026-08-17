@@ -509,8 +509,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           durationMs, // R113.7: Store timing for UI display
         });
 
-        // R113.2: Auto-capture screenshots after pdb_analyze if the recipe
-        // is visualizable and the LLM didn't call capture_multi_angle.
+        // R115.1: Non-blocking auto-capture + VLM — fire and forget, update later
         if (call.name === 'pdb_analyze' && result.ok) {
           const recipeName = String(args.recipe || '');
           const visualizableRecipes = new Set([
@@ -522,40 +521,51 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
             'detect_pockets', 'oligomer_analysis', 'surface_residues',
             'conformational_changes', 'protonation_states', 'summary',
           ]);
-          // Check if capture_multi_angle is already in the current tool calls
-          // (we can't check here, so just auto-capture — the LLM will see both results)
           if (visualizableRecipes.has(recipeName)) {
-            try {
-              // R113.3: Auto-capture with VLM analysis
-              const captureResult = await executeCommand(v, {
-                type: 'capture_multi_angle',
-                recipe: recipeName,
-                angles: ['front', 'side', 'top'],
-                // Auto-inject vizParams from analysis result
-                vizParams: (result as any).analysisResult?.data || {},
-              } as never);
-              if (captureResult.ok && (captureResult as any).data?.screenshots) {
-                const screenshots = (captureResult as any).data.screenshots;
-                // R113.3: Run VLM on the auto-captured screenshots
-                if (screenshots.length > 1) {
-                  try {
-                    const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
-                    const analysisSummary = JSON.stringify((result as any).analysisResult?.data || {}).slice(0, 2000);
-                    const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
-                    if (vlmResult) {
-                      // Attach VLM result to the capture result
-                      (captureResult as any).vlmResult = vlmResult;
+            // R115.1: Fire-and-forget — don't block the main analysis
+            const analysisData = (result as any).analysisResult?.data || {};
+            void (async () => {
+              try {
+                const captureResult = await executeCommand(v, {
+                  type: 'capture_multi_angle',
+                  recipe: recipeName,
+                  angles: ['front', 'side', 'top'],
+                  vizParams: analysisData,
+                } as never);
+                if (captureResult.ok && (captureResult as any).data?.screenshots) {
+                  const screenshots = (captureResult as any).data.screenshots;
+                  // R115.3: VLM with cache (selectBestWithRetry already caches)
+                  if (screenshots.length > 1) {
+                    try {
+                      const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
+                      const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
+                      const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                      if (vlmResult) {
+                        (captureResult as any).vlmResult = vlmResult;
+                      }
+                    } catch (vlmErr) {
+                      console.warn('[agent] VLM failed (non-blocking):', vlmErr);
+                      (captureResult as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
                     }
-                  } catch (vlmErr) {
-                    console.warn('[agent] VLM analysis failed:', vlmErr);
+                  }
+                  // R115.1: Update execution result + trigger UI re-render
+                  const exec = executionsRef.current.get(call.callId);
+                  if (exec) {
+                    (exec.result as any).autoCapture = captureResult;
+                    setEvents((prev) => [...prev]);
                   }
                 }
-                // Merge capture result into the analysis result
-                (result as any).autoCapture = captureResult;
+              } catch (captureErr) {
+                console.warn('[agent] Auto-capture failed (non-blocking):', captureErr);
+                // R115.2: Show error in UI but don't block the main analysis
+                const exec = executionsRef.current.get(call.callId);
+                if (exec) {
+                  (exec.result as any).autoCaptureError = captureErr instanceof Error ? captureErr.message : String(captureErr);
+                  setEvents((prev) => [...prev]);
+                }
               }
-            } catch (captureErr) {
-              console.warn('[agent] Auto-capture failed:', captureErr);
-            }
+            })();
+            (result as any).autoCapturePending = true;
           }
         }
 

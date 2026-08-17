@@ -203,6 +203,44 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
   if (screenshots.length > 0) {
     return <ScreenshotResult name={name} screenshots={screenshots} result={result} />;
   }
+  // R115.2: Show auto-capture pending/error for pdb_analyze results
+  const r = result as any;
+  if (name === 'pdb_analyze' && r) {
+    if (r.autoCapturePending && !r.autoCapture) {
+      return (
+        <div className="text-xs">
+          <div className="flex items-center gap-1.5 text-[10px] text-claude-text-muted">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>正在自动截图 + VLM 分析...</span>
+          </div>
+          <ResultText name={name} result={result} />
+        </div>
+      );
+    }
+    if (r.autoCaptureError) {
+      return (
+        <div className="text-xs">
+          <div className="flex items-center gap-1.5 text-[10px] text-amber-600 mb-1">
+            <AlertCircle className="h-3 w-3" />
+            <span>截图失败: {r.autoCaptureError}</span>
+          </div>
+          <ResultText name={name} result={result} />
+        </div>
+      );
+    }
+    // If auto-capture completed, show the screenshots
+    if (r.autoCapture) {
+      const autoScreenshots = extractScreenshots('capture_multi_angle', r.autoCapture);
+      if (autoScreenshots.length > 0) {
+        return (
+          <div className="text-xs">
+            <ScreenshotResult name="capture_multi_angle" screenshots={autoScreenshots} result={r.autoCapture} />
+            <ResultText name={name} result={result} />
+          </div>
+        );
+      }
+    }
+  }
   const text =
     typeof result === 'string'
       ? result
@@ -389,6 +427,22 @@ function ScreenshotResult({ name, screenshots, result }: {
         </pre>
       )}
     </div>
+  );
+}
+
+// R115.2: Helper to show text result for pdb_analyze
+function ResultText({ name, result }: { name: string; result: unknown }) {
+  const r = result as any;
+  const text = typeof result === 'string' ? result : r?.detail || JSON.stringify(result, null, 2).slice(0, 300);
+  return (
+    <details className="mt-1.5">
+      <summary className="cursor-pointer text-[10px] text-claude-text-muted hover:text-claude-text select-none">
+        查看分析结果
+      </summary>
+      <pre className="mt-1 whitespace-pre-wrap break-words text-claude-text-muted font-mono leading-relaxed text-[10px] max-h-32 overflow-y-auto">
+        {text}
+      </pre>
+    </details>
   );
 }
 
