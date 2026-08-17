@@ -232,8 +232,28 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
     if (r.autoCapture) {
       const autoScreenshots = extractScreenshots('capture_multi_angle', r.autoCapture);
       if (autoScreenshots.length > 0) {
+        const captureMs = r.autoCapture.captureDurationMs;
+        const vlmMs = r.autoCapture.vlmDurationMs;
         return (
           <div className="text-xs">
+            {/* R116.2: Show timing for auto-capture + VLM */}
+            {(captureMs != null || vlmMs != null) && (
+              <div className="flex items-center gap-2 text-[9px] text-claude-text-muted mb-1">
+                {captureMs != null && (
+                  <span className="flex items-center gap-0.5">
+                    <Timer className="h-2.5 w-2.5" />
+                    截图 {captureMs < 1000 ? `${captureMs}ms` : `${(captureMs / 1000).toFixed(1)}s`}
+                  </span>
+                )}
+                {vlmMs != null && (
+                  <span className="flex items-center gap-0.5">
+                    <Timer className="h-2.5 w-2.5" />
+                    VLM {vlmMs < 1000 ? `${vlmMs}ms` : `${(vlmMs / 1000).toFixed(1)}s`}
+                    {vlmMs < 1000 && <span className="text-emerald-500">(缓存)</span>}
+                  </span>
+                )}
+              </div>
+            )}
             <ScreenshotResult name="capture_multi_angle" screenshots={autoScreenshots} result={r.autoCapture} />
             <ResultText name={name} result={result} />
           </div>

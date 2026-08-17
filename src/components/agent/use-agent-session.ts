@@ -525,6 +525,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
             // R115.1: Fire-and-forget — don't block the main analysis
             const analysisData = (result as any).analysisResult?.data || {};
             void (async () => {
+              const captureStartTime = Date.now(); // R116.2: Track auto-capture timing
               try {
                 const captureResult = await executeCommand(v, {
                   type: 'capture_multi_angle',
@@ -532,16 +533,23 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   angles: ['front', 'side', 'top'],
                   vizParams: analysisData,
                 } as never);
+                const captureDuration = Date.now() - captureStartTime; // R116.2
                 if (captureResult.ok && (captureResult as any).data?.screenshots) {
                   const screenshots = (captureResult as any).data.screenshots;
+                  (captureResult as any).captureDurationMs = captureDuration; // R116.2
                   // R115.3: VLM with cache (selectBestWithRetry already caches)
                   if (screenshots.length > 1) {
+                    const vlmStartTime = Date.now(); // R116.2
                     try {
                       const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
                       const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
                       const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                      const vlmDuration = Date.now() - vlmStartTime; // R116.2
                       if (vlmResult) {
                         (captureResult as any).vlmResult = vlmResult;
+                        (captureResult as any).vlmDurationMs = vlmDuration; // R116.2
+                        // R116.3: Log cache hit/miss
+                        console.log(`[agent] VLM: ${vlmDuration}ms (cache: ${vlmDuration < 1000 ? 'HIT' : 'MISS'})`);
                       }
                     } catch (vlmErr) {
                       console.warn('[agent] VLM failed (non-blocking):', vlmErr);
