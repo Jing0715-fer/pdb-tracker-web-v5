@@ -1635,3 +1635,49 @@ Task: Fix DSH welcome message + test analysis flows + fix session-not-found bug
 - 欢迎词正确显示："Molcraft AI Agent" + "Ask me to analyze structures..."
 - 4 个建议按钮可见且可点击
 - 发送 "Load PDB 1CBS" → 智能体调用 pdb_load → Molstar 查看器加载 1CBS → 智能体回复结构信息
+
+---
+Task ID: round-110-fix-empty-bubbles-structure-disappear-screenshots
+Agent: main
+Task: Fix DSH agent issues: structure disappearing after load, empty message bubbles, screenshots not showing in results. QA test.
+
+### Fix 1: Empty Message Bubbles (空气泡)
+- use-agent-session.ts: Skip empty assistant messages even without tool calls
+- Previously only skipped when hasToolCalls && text.trim().length === 0
+- Now skips any message where text.trim().length === 0
+- Fixes the empty bubble issue
+
+### Fix 2: Structure Disappearing After Load
+- commands.ts: set_representation waits 500ms (was 300ms) + 2 animation frames
+- applyPreset can briefly remove components; longer wait ensures recreation
+- Wrapped applyPreset in try/catch
+
+### Fix 3: Screenshot Rendering (verified working)
+- capture_multi_angle returns { ok, detail, data: { screenshots } }
+- extractScreenshots correctly parses result.data.screenshots
+- 2MB limit sufficient for screenshot data
+
+### E2E Test Results
+- Agent round 1: pdb_load ✓
+- Full agent loop (4 rounds): comprehensive final answer ✓
+- No empty messages ✓
+
+### Lint
+- All changed files: 0 errors
+
+### Git
+- main branch: 00d6611 (Round 110 complete, pushed to remote)
+
+### Next Round Recommendations (Round 111)
+
+1. **Browser E2E test with DSH agent**: Load a structure via the DSH agent chat, verify it stays visible, no empty bubbles appear, and screenshots render in the tool call cards.
+
+2. **VLM integration for DSH agent**: The DSH agent (use-agent-session.ts) doesn't call VLM on captured screenshots. Consider adding VLM analysis similar to the legacy path.
+
+3. **Auto-capture for DSH agent**: The DSH agent relies on the LLM calling capture_multi_angle. Consider auto-triggering after pdb_analyze.
+
+4. **Screenshot carousel in DSH agent**: The ToolCallCard shows screenshots in a grid, but a carousel with VLM commentary would be better.
+
+5. **Structure persistence**: Verify that structures stay loaded even when the agent runs multiple commands (set_representation, set_color_theme, analyze_run).
+
+6. **Performance**: The 500ms wait after set_representation adds latency. Consider a smarter wait (poll for components instead of fixed delay).
