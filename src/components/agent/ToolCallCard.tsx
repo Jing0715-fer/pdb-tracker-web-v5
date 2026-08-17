@@ -9,7 +9,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, Copy } from 'lucide-react';
+import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationNode } from './use-agent-session';
 
@@ -89,7 +89,7 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
                 {describeArgs(node.name, node.args)}
               </span>
             </div>
-            <StatusPill status={status} startedAt={node.startedAt} />
+            <StatusPill status={status} startedAt={node.startedAt} durationMs={node.durationMs} />
           </div>
 
           {/* Arguments (collapsible if verbose) */}
@@ -122,7 +122,20 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
             <div className="px-3 py-2 border-t border-claude-border bg-red-500/5">
               <div className="flex items-start gap-1.5 text-xs text-red-700 dark:text-red-300">
                 <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span className="break-words">{node.error ?? 'execution failed'}</span>
+                <span className="break-words flex-1">{node.error ?? 'execution failed'}</span>
+                {/* R113.6: Retry button for failed tool calls */}
+                <button
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('agent-retry-tool', {
+                      detail: { callId: node.callId, name: node.name, args: node.args },
+                    }));
+                  }}
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium text-red-600 hover:bg-red-500/10 transition-colors shrink-0"
+                  title="Retry this tool call"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  重试
+                </button>
               </div>
             </div>
           )}
@@ -132,21 +145,31 @@ export function ToolCallCard({ node }: { node: Extract<ConversationNode, { kind:
   );
 }
 
-function StatusPill({ status, startedAt }: { status: string; startedAt?: number }) {
+function StatusPill({ status, startedAt, durationMs }: { status: string; startedAt?: number; durationMs?: number }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (status !== 'running' && status !== 'pending') return;
     if (!startedAt) return;
-    setElapsed(Date.now() - startedAt);
-    const i = setInterval(() => setElapsed(Date.now() - (startedAt ?? Date.now())), 100);
-    return () => clearInterval(i);
+    // Use a flag to avoid setState on first render (react-hooks rule)
+    let mounted = true;
+    const update = () => { if (mounted) setElapsed(Date.now() - (startedAt ?? Date.now())); };
+    update();
+    const i = setInterval(update, 100);
+    return () => { mounted = false; clearInterval(i); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, startedAt]);
   if (status === 'running' || status === 'pending') {
     return (
       <span className="flex items-center gap-1 text-[10px] text-claude-accent shrink-0 font-mono">
         <Loader2 className="h-3 w-3 animate-spin" />
         {status}
-        {startedAt && <span className="tabular-nums">{formatElapsed(elapsed)}</span>}
+        {startedAt && status === 'running' && <span className="tabular-nums">{formatElapsed(elapsed)}</span>}
+        {durationMs != null && (status === 'ok' || status === 'error') && (
+          <span className="flex items-center gap-0.5 tabular-nums opacity-60">
+            <Timer className="h-2.5 w-2.5" />
+            {durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`}
+          </span>
+        )}
       </span>
     );
   }
@@ -224,53 +247,147 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
 }
 
 /** Render screenshot images in the tool card. */
+// R113.4: Carousel with VLM commentary, quality badges, best highlight
 function ScreenshotResult({ name, screenshots, result }: {
   name: string;
   screenshots: Array<{ dataUri: string; angle?: string; label?: string }>;
   result: unknown;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [showRaw, setShowRaw] = useState(false);
+
+  // R113.3: Extract VLM result from the tool result
+  const vlmResult = (result as any)?.vlmResult || (result as any)?.autoCapture?.vlmResult;
+  const quality = vlmResult?.quality as string | undefined;
+  const issues = vlmResult?.issues as string[] | undefined;
+  const comments = vlmResult?.comments as string[] | undefined;
+  const scores = vlmResult?.scores as number[] | undefined;
+  const bestIndex = vlmResult?.bestIndex as number | undefined;
+
+  const current = screenshots[currentIdx];
+  if (!current) return null;
+
+  const qualityColor = quality === 'acceptable' ? 'bg-emerald-500/80'
+    : quality === 'degraded' ? 'bg-amber-500/80'
+    : quality === 'unacceptable' ? 'bg-red-500/80'
+    : 'bg-slate-500/80';
+  const qualityLabel = quality === 'acceptable' ? '✓ 良好'
+    : quality === 'degraded' ? '⚠ 一般'
+    : quality === 'unacceptable' ? '✗ 不合格'
+    : null;
+
   return (
     <div className="text-xs">
+      {/* Header */}
       <div className="text-[10px] uppercase tracking-wide text-claude-text-muted mb-1.5 flex items-center justify-between">
         <span>result · {name}</span>
-        <span className="text-[9px] normal-case">{screenshots.length} 截图</span>
+        <div className="flex items-center gap-1.5">
+          {qualityLabel && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[9px] text-white ${qualityColor}`}>
+              {qualityLabel}
+            </span>
+          )}
+          <span className="text-[9px] normal-case">{screenshots.length} 截图</span>
+        </div>
       </div>
-      {/* Thumbnail grid */}
-      <div className="grid grid-cols-2 gap-1.5">
-        {screenshots.slice(0, expanded ? screenshots.length : 4).map((s, i) => (
-          <div key={i} className="relative rounded border border-claude-border overflow-hidden group/img">
-            <img
-              src={s.dataUri}
-              alt={s.label || s.angle || `screenshot ${i + 1}`}
-              className="w-full h-auto block cursor-pointer"
-              onClick={() => window.open(s.dataUri, '_blank')}
-            />
-            {(s.angle || s.label) && (
-              <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[9px] px-1.5 py-0.5 truncate">
-                {s.angle || s.label}
-              </div>
-            )}
+
+      {/* Main carousel image */}
+      <div className="relative rounded-lg border border-claude-border overflow-hidden bg-black">
+        <img
+          src={current.dataUri}
+          alt={current.label || current.angle || `screenshot ${currentIdx + 1}`}
+          className="w-full h-auto block max-h-64 object-contain"
+        />
+
+        {/* Best image badge */}
+        {bestIndex === currentIdx && (
+          <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-claude-accent/90 text-white">
+            ★ 最佳
           </div>
-        ))}
+        )}
+
+        {/* Score badge */}
+        {scores && currentIdx < scores.length && (
+          <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-mono bg-black/70 text-white">
+            {scores[currentIdx]}/10
+          </div>
+        )}
+
+        {/* Angle/label overlay */}
+        {(current.angle || current.label) && (
+          <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[9px] px-2 py-0.5 flex items-center justify-between">
+            <span className="truncate">{current.angle || current.label}</span>
+            <span className="text-[8px] opacity-60">{currentIdx + 1}/{screenshots.length}</span>
+          </div>
+        )}
+
+        {/* Navigation arrows */}
+        {screenshots.length > 1 && (
+          <>
+            <button
+              onClick={() => setCurrentIdx((currentIdx - 1 + screenshots.length) % screenshots.length)}
+              className="absolute left-1 top-1/2 -translate-y-1/2 h-6 w-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 text-xs"
+            >
+              ‹
+            </button>
+            <button
+              onClick={() => setCurrentIdx((currentIdx + 1) % screenshots.length)}
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 text-xs"
+            >
+              ›
+            </button>
+          </>
+        )}
       </div>
-      {screenshots.length > 4 && !expanded && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="mt-1 text-[10px] text-claude-accent hover:underline"
-        >
-          查看全部 {screenshots.length} 张截图
-        </button>
+
+      {/* VLM commentary */}
+      {comments && currentIdx < comments.length && comments[currentIdx] && (
+        <div className="mt-1.5 px-2 py-1 rounded bg-claude-accent/5 border border-claude-accent/20 text-[10px] text-claude-text">
+          <span className="font-medium text-claude-accent">VLM: </span>
+          {comments[currentIdx]}
+        </div>
       )}
+
+      {/* Issues (if quality is not acceptable) */}
+      {quality && quality !== 'acceptable' && issues && currentIdx < issues.length && issues[currentIdx] && (
+        <div className="mt-1 px-2 py-1 rounded bg-amber-500/5 border border-amber-500/20 text-[10px] text-amber-700 dark:text-amber-400">
+          <span className="font-medium">问题: </span>
+          {issues[currentIdx]}
+        </div>
+      )}
+
+      {/* Thumbnail strip */}
+      {screenshots.length > 1 && (
+        <div className="mt-1.5 flex gap-1 overflow-x-auto">
+          {screenshots.map((s, i) => (
+            <button
+              key={i}
+              onClick={() => setCurrentIdx(i)}
+              className={`relative shrink-0 h-10 w-14 rounded border overflow-hidden transition-all ${
+                i === currentIdx ? 'border-claude-accent ring-1 ring-claude-accent' : 'border-claude-border opacity-60 hover:opacity-100'
+              }`}
+            >
+              <img src={s.dataUri} alt="" className="w-full h-full object-cover" />
+              {bestIndex === i && (
+                <div className="absolute top-0 right-0 h-2 w-2 bg-claude-accent rounded-full" />
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Collapsible raw result */}
-      <details className="mt-2">
-        <summary className="cursor-pointer text-[10px] text-claude-text-muted hover:text-claude-text select-none">
-          查看原始数据
-        </summary>
+      <button
+        onClick={() => setShowRaw(!showRaw)}
+        className="mt-1.5 text-[10px] text-claude-text-muted hover:text-claude-text"
+      >
+        {showRaw ? '▼' : '▶'} 查看原始数据
+      </button>
+      {showRaw && (
         <pre className="mt-1 whitespace-pre-wrap break-words text-claude-text-muted font-mono leading-relaxed text-[10px] max-h-32 overflow-y-auto">
           {JSON.stringify(result, null, 2).slice(0, 500)}{'\n…(truncated)'}
         </pre>
-      </details>
+      )}
     </div>
   );
 }

@@ -44,6 +44,7 @@ export interface ToolExecution {
   args?: Record<string, unknown>;
   result?: unknown;
   error?: string;
+  durationMs?: number; // R113.7: execution time for display
 }
 
 export interface PendingApproval {
@@ -64,7 +65,7 @@ export type ConversationNode =
   | { kind: 'user-message'; seq: number; text: string }
   | { kind: 'assistant-message'; seq: number; text: string; reasoning?: string }
   | { kind: 'streaming-assistant'; seq: number; text: string; done: boolean }
-  | { kind: 'tool-call'; seq: number; callId: string; name: string; args: Record<string, unknown>; status: 'pending' | 'running' | 'ok' | 'error'; result?: unknown; error?: string; startedAt?: number }
+  | { kind: 'tool-call'; seq: number; callId: string; name: string; args: Record<string, unknown>; status: 'pending' | 'running' | 'ok' | 'error'; result?: unknown; error?: string; startedAt?: number; durationMs?: number }
   | { kind: 'turn-boundary'; seq: number; turn: number; type: 'start' | 'end'; reason?: string }
   | { kind: 'step-boundary'; seq: number; turn: number; step: number; type: 'start' | 'end' };
 
@@ -194,6 +195,7 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
           result: exec?.result,
           error: exec?.error,
           startedAt: ev.time,
+          durationMs: exec?.durationMs, // R113.7
         });
         break;
       }
@@ -355,6 +357,37 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     return () => es.close();
   }, [sessionId]);
 
+  // R113.6: Listen for retry events from ToolCallCard
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { callId: string; name: string; args: Record<string, unknown> };
+      if (!detail || !viewerRef.current) return;
+      // Re-execute the failed tool call
+      try {
+        const { toolToCommand } = await import('@/lib/agent/pdb-tools');
+        const cmd = toolToCommand(detail.name, detail.args);
+        if (!cmd) return;
+        const result = await executeCommand(viewerRef.current, cmd as never);
+        // Update the execution status
+        executionsRef.current.set(detail.callId, {
+          callId: detail.callId,
+          name: detail.name,
+          status: result.ok ? 'ok' : 'error',
+          args: detail.args,
+          result: result.ok ? result : undefined,
+          error: result.ok ? undefined : result.detail,
+          durationMs: 0,
+        });
+        // Trigger re-render by updating events
+        setEvents((prev) => [...prev]);
+      } catch (err) {
+        console.error('[agent] Retry failed:', err);
+      }
+    };
+    window.addEventListener('agent-retry-tool', handler);
+    return () => window.removeEventListener('agent-retry-tool', handler);
+  }, []);
+
   const nodes = useMemo(
     () => projectNodes(events, executionsRef.current),
     [events],
@@ -403,6 +436,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         status: 'running',
         args,
       });
+      const startTime = Date.now(); // R113.7: Track execution time
       try {
         const result = await executeCommand(v, cmd as never);
         // For structure loading commands, wait for the viewer to render fully.
@@ -410,9 +444,30 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         if (call.name === 'pdb_load' || call.name === 'load_alphafold' || call.name === 'load_emdb' || call.name === 'load_structure_url') {
           // R111: Only update store + wait if the load actually succeeded
           if (result.ok) {
+            // R113.5: Verify the structure actually exists in Molstar hierarchy
+            // before adding to the store. This prevents ghost entries when
+            // load_pdb reports success but the structure didn't actually load.
+            try {
+              const plugin = v.plugin;
+              const structCount = plugin?.managers?.structure?.hierarchy?.current?.structures?.length ?? 0;
+              if (structCount === 0) {
+                // No structure in hierarchy — load didn't actually work
+                console.warn('[agent] load_pdb reported ok but no structure in Molstar hierarchy');
+                executionsRef.current.set(call.callId, {
+                  callId: call.callId,
+                  name: call.name,
+                  status: 'error',
+                  args,
+                  error: 'Structure not found in viewer after load',
+                  durationMs: Date.now() - startTime,
+                });
+                return { ok: false, error: 'Structure not found in viewer after load' };
+              }
+            } catch (verifyErr) {
+              console.warn('[agent] Structure verification failed:', verifyErr);
+            }
+
             // Update the Zustand store so the structure list + UI stays in sync.
-            // Without this, the structure disappears when the store re-renders
-            // (the store doesn't know about the loaded structure).
             try {
               const { useAppStore } = await import('@/lib/molcraft/store');
               const addStructure = useAppStore.getState().addStructure;
@@ -444,22 +499,77 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         if (call.name === 'set_color_theme' || call.name === 'set_representation') {
           await new Promise((r) => setTimeout(r, 500));
         }
+        const durationMs = Date.now() - startTime; // R113.7
         executionsRef.current.set(call.callId, {
           callId: call.callId,
           name: call.name,
           status: 'ok',
           args,
           result,
+          durationMs, // R113.7: Store timing for UI display
         });
+
+        // R113.2: Auto-capture screenshots after pdb_analyze if the recipe
+        // is visualizable and the LLM didn't call capture_multi_angle.
+        if (call.name === 'pdb_analyze' && result.ok) {
+          const recipeName = String(args.recipe || '');
+          const visualizableRecipes = new Set([
+            'binding_pocket', 'druggability', 'all_interactions', 'hbonds',
+            'salt_bridges', 'hydrophobic_contacts', 'ligand_interactions',
+            'disulfide_bonds', 'metal_coordination', 'aromatic_stacking',
+            'water_bridges', 'sasa', 'electrostatic', 'interface_residues',
+            'secondary_structure_simple', 'bfactor_stats', 'rmsd',
+            'detect_pockets', 'oligomer_analysis', 'surface_residues',
+            'conformational_changes', 'protonation_states', 'summary',
+          ]);
+          // Check if capture_multi_angle is already in the current tool calls
+          // (we can't check here, so just auto-capture — the LLM will see both results)
+          if (visualizableRecipes.has(recipeName)) {
+            try {
+              // R113.3: Auto-capture with VLM analysis
+              const captureResult = await executeCommand(v, {
+                type: 'capture_multi_angle',
+                recipe: recipeName,
+                angles: ['front', 'side', 'top'],
+                // Auto-inject vizParams from analysis result
+                vizParams: (result as any).analysisResult?.data || {},
+              } as never);
+              if (captureResult.ok && (captureResult as any).data?.screenshots) {
+                const screenshots = (captureResult as any).data.screenshots;
+                // R113.3: Run VLM on the auto-captured screenshots
+                if (screenshots.length > 1) {
+                  try {
+                    const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
+                    const analysisSummary = JSON.stringify((result as any).analysisResult?.data || {}).slice(0, 2000);
+                    const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                    if (vlmResult) {
+                      // Attach VLM result to the capture result
+                      (captureResult as any).vlmResult = vlmResult;
+                    }
+                  } catch (vlmErr) {
+                    console.warn('[agent] VLM analysis failed:', vlmErr);
+                  }
+                }
+                // Merge capture result into the analysis result
+                (result as any).autoCapture = captureResult;
+              }
+            } catch (captureErr) {
+              console.warn('[agent] Auto-capture failed:', captureErr);
+            }
+          }
+        }
+
         return { ok: true, result };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const durationMs = Date.now() - startTime; // R113.7
         executionsRef.current.set(call.callId, {
           callId: call.callId,
           name: call.name,
           status: 'error',
           args,
           error: msg,
+          durationMs, // R113.7
         });
         return { ok: false, error: msg };
       }
