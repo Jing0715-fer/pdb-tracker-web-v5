@@ -1681,3 +1681,47 @@ Task: Fix DSH agent issues: structure disappearing after load, empty message bub
 5. **Structure persistence**: Verify that structures stay loaded even when the agent runs multiple commands (set_representation, set_color_theme, analyze_run).
 
 6. **Performance**: The 500ms wait after set_representation adds latency. Consider a smarter wait (poll for components instead of fixed delay).
+
+---
+Task ID: round-111-check-result-ok-before-addstructure
+Agent: main
+Task: User pointed out previous round may not have been based on latest remote code. Verified we're on latest remote main (2db555a), then fixed structure loading error handling.
+
+### Verification: Latest Remote Code
+- Confirmed local main = origin/main = 2db555a (Round 110)
+- All Round 110 fixes verified present:
+  - Empty message skip (text.trim().length === 0)
+  - set_representation 500ms + 2 animation frames
+- All Round 109 fixes verified present:
+  - Agent settings wiring (autoCapture, vlmEnabled, maxRecaptures)
+  - VLM cache invalidation on new structure
+  - Agent retry button
+
+### Fix: Structure Loading Error Handling
+- use-agent-session.ts: executeToolCall now checks result.ok before:
+  - Calling addStructure (prevents ghost entries in store)
+  - Waiting 2.5s (avoids unnecessary delay on failure)
+- Failed loads now return { ok: false, error: result.detail } immediately
+- Execution status set to 'error' with failure detail
+
+### E2E Test Results
+- Agent round 1: pdb_load ✓
+- Full agent loop (4 rounds): comprehensive final answer ✓
+- Lint: 0 errors
+
+### Git
+- main branch: 79a9b04 (Round 111 complete, pushed to remote)
+
+### Next Round Recommendations (Round 112)
+
+1. **Browser E2E test with DSH agent**: Load a structure via the DSH agent chat, verify it stays visible after set_representation, no empty bubbles, screenshots render in tool cards.
+
+2. **VLM integration for DSH agent**: The DSH agent doesn't call VLM on captured screenshots. Add VLM analysis similar to legacy path.
+
+3. **Auto-capture for DSH agent**: Auto-trigger capture_multi_angle after pdb_analyze.
+
+4. **Screenshot carousel in DSH agent**: Replace grid with carousel + VLM commentary.
+
+5. **SSE size limit**: Verify large screenshots (3x 1200x800) don't exceed EventSource limits.
+
+6. **Structure persistence**: Verify structures stay loaded through multiple commands.
