@@ -408,24 +408,37 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         // For structure loading commands, wait for the viewer to render fully.
         // 2.5s gives Molstar enough time to download + parse + render the structure.
         if (call.name === 'pdb_load' || call.name === 'load_alphafold' || call.name === 'load_emdb' || call.name === 'load_structure_url') {
-          // Update the Zustand store so the structure list + UI stays in sync.
-          // Without this, the structure disappears when the store re-renders
-          // (the store doesn't know about the loaded structure).
-          try {
-            const { useAppStore } = await import('@/lib/molcraft/store');
-            const addStructure = useAppStore.getState().addStructure;
-            const pdbId = call.name === 'pdb_load' ? String(args.id || '').toUpperCase()
-              : call.name === 'load_alphafold' ? String(args.uniprotId || '')
-              : call.name === 'load_emdb' ? String(args.emdbId || '')
-              : String(args.url || '');
-            if (pdbId) {
-              const source = call.name === 'pdb_load' ? 'pdb'
-                : call.name === 'load_alphafold' ? 'alphafold'
-                : call.name === 'load_emdb' ? 'emdb' : 'url';
-              addStructure({ id: pdbId, label: pdbId, source: source as never, loadedAt: Date.now() });
-            }
-          } catch { /* store update is best-effort */ }
-          await new Promise((r) => setTimeout(r, 2500));
+          // R111: Only update store + wait if the load actually succeeded
+          if (result.ok) {
+            // Update the Zustand store so the structure list + UI stays in sync.
+            // Without this, the structure disappears when the store re-renders
+            // (the store doesn't know about the loaded structure).
+            try {
+              const { useAppStore } = await import('@/lib/molcraft/store');
+              const addStructure = useAppStore.getState().addStructure;
+              const pdbId = call.name === 'pdb_load' ? String(args.id || '').toUpperCase()
+                : call.name === 'load_alphafold' ? String(args.uniprotId || '')
+                : call.name === 'load_emdb' ? String(args.emdbId || '')
+                : String(args.url || '');
+              if (pdbId) {
+                const source = call.name === 'pdb_load' ? 'pdb'
+                  : call.name === 'load_alphafold' ? 'alphafold'
+                  : call.name === 'load_emdb' ? 'emdb' : 'url';
+                addStructure({ id: pdbId, label: pdbId, source: source as never, loadedAt: Date.now() });
+              }
+            } catch { /* store update is best-effort */ }
+            await new Promise((r) => setTimeout(r, 2500));
+          } else {
+            // Load failed — don't add to store, return error
+            executionsRef.current.set(call.callId, {
+              callId: call.callId,
+              name: call.name,
+              status: 'error',
+              args,
+              error: result.detail || 'Load failed',
+            });
+            return { ok: false, error: result.detail || 'Load failed' };
+          }
         }
         // For set_color_theme after a load, add extra delay to ensure components exist
         if (call.name === 'set_color_theme' || call.name === 'set_representation') {
