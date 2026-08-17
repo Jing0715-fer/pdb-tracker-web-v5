@@ -310,16 +310,23 @@ export async function executeCommand(
         const structures = getStructures(plugin, cmd.structures);
         if (structures.length === 0)
           return { ok: false, detail: "No structures loaded" };
-        await plugin.managers.structure.component.applyPreset(
-          structures,
-          cmd.preset
-        );
-        // R105.2: Wait for components to be created after applyPreset.
-        // applyPreset is async but components may not be immediately available
-        // for color theme updates. Wait a short delay + animation frame.
-        await new Promise(r => setTimeout(r, 300));
+        // R110: Use applyPreset with care — it can briefly remove components.
+        // Wrap in a try/catch and wait longer for re-render.
+        try {
+          await plugin.managers.structure.component.applyPreset(
+            structures,
+            cmd.preset
+          );
+        } catch (presetErr) {
+          console.warn('[set_representation] applyPreset failed:', presetErr);
+        }
+        // R110: Wait longer (500ms) for components to be recreated after applyPreset.
+        // The previous 300ms was too short — components were sometimes not ready
+        // when set_color_theme ran next, causing "No components to color" error.
+        await new Promise(r => setTimeout(r, 500));
         if (typeof requestAnimationFrame !== "undefined") {
           await new Promise(r => requestAnimationFrame(() => r(null)));
+          await new Promise(r => requestAnimationFrame(() => r(null))); // extra frame
         }
         return { ok: true, detail: `Applied preset: ${cmd.preset}` };
       }

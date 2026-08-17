@@ -157,10 +157,11 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
           .join('');
         const text = blocksToText(data.message.content);
         const hasToolCalls = data.message.content.some((b) => b.type === 'tool-call');
-        // Skip empty assistant messages that also have tool calls — these are
-        // the "I'll do X now" preambles the LLM emits before calling tools.
-        // Only show the text if it's non-trivial (non-whitespace).
-        if (hasToolCalls && text.trim().length === 0) {
+        // Skip empty assistant messages — these are either:
+        // (a) "I'll do X now" preambles before tool calls, or
+        // (b) truly empty messages with no text and no tool calls.
+        // R110: Also skip when text is empty even without tool calls (fixes 空气泡).
+        if (text.trim().length === 0) {
           // Remove the streaming node if it exists — don't add an empty message.
           if (idx >= 0) nodes.splice(idx, 1);
           streamingKey = null;
