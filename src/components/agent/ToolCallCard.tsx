@@ -175,6 +175,11 @@ function formatElapsed(ms: number): string {
 }
 
 function ResultView({ name, result }: { name: string; result: unknown }) {
+  // Check for screenshot data (capture_snapshot or capture_multi_angle)
+  const screenshots = extractScreenshots(name, result);
+  if (screenshots.length > 0) {
+    return <ScreenshotResult name={name} screenshots={screenshots} result={result} />;
+  }
   const text =
     typeof result === 'string'
       ? result
@@ -189,6 +194,83 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
       <pre className="whitespace-pre-wrap break-words text-claude-text-muted font-mono leading-relaxed text-[10px] max-h-48 overflow-y-auto">
         {truncated ? text.slice(0, 1500) + '\n…(truncated)' : text}
       </pre>
+    </div>
+  );
+}
+
+/** Extract screenshot data URIs from tool results. */
+function extractScreenshots(name: string, result: unknown): Array<{ dataUri: string; angle?: string; label?: string }> {
+  if (!result || typeof result !== 'object') return [];
+  const r = result as Record<string, unknown>;
+  // capture_snapshot: { ok: true, data: { dataUri, label, angle } }
+  if (name === 'capture_snapshot' && r.data) {
+    const data = r.data as Record<string, unknown>;
+    if (data.dataUri) {
+      return [{ dataUri: String(data.dataUri), angle: String(data.angle || ''), label: String(data.label || '') }];
+    }
+  }
+  // capture_multi_angle: { ok: true, data: { screenshots: [{ dataUri, angle, label }] } }
+  if (name === 'capture_multi_angle' && r.data) {
+    const data = r.data as Record<string, unknown>;
+    if (Array.isArray(data.screenshots)) {
+      return (data.screenshots as Array<Record<string, unknown>>).map((s) => ({
+        dataUri: String(s.dataUri || ''),
+        angle: String(s.angle || ''),
+        label: String(s.label || ''),
+      })).filter((s) => s.dataUri);
+    }
+  }
+  return [];
+}
+
+/** Render screenshot images in the tool card. */
+function ScreenshotResult({ name, screenshots, result }: {
+  name: string;
+  screenshots: Array<{ dataUri: string; angle?: string; label?: string }>;
+  result: unknown;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="text-xs">
+      <div className="text-[10px] uppercase tracking-wide text-claude-text-muted mb-1.5 flex items-center justify-between">
+        <span>result · {name}</span>
+        <span className="text-[9px] normal-case">{screenshots.length} 截图</span>
+      </div>
+      {/* Thumbnail grid */}
+      <div className="grid grid-cols-2 gap-1.5">
+        {screenshots.slice(0, expanded ? screenshots.length : 4).map((s, i) => (
+          <div key={i} className="relative rounded border border-claude-border overflow-hidden group/img">
+            <img
+              src={s.dataUri}
+              alt={s.label || s.angle || `screenshot ${i + 1}`}
+              className="w-full h-auto block cursor-pointer"
+              onClick={() => window.open(s.dataUri, '_blank')}
+            />
+            {(s.angle || s.label) && (
+              <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[9px] px-1.5 py-0.5 truncate">
+                {s.angle || s.label}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {screenshots.length > 4 && !expanded && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="mt-1 text-[10px] text-claude-accent hover:underline"
+        >
+          查看全部 {screenshots.length} 张截图
+        </button>
+      )}
+      {/* Collapsible raw result */}
+      <details className="mt-2">
+        <summary className="cursor-pointer text-[10px] text-claude-text-muted hover:text-claude-text select-none">
+          查看原始数据
+        </summary>
+        <pre className="mt-1 whitespace-pre-wrap break-words text-claude-text-muted font-mono leading-relaxed text-[10px] max-h-32 overflow-y-auto">
+          {JSON.stringify(result, null, 2).slice(0, 500)}{'\n…(truncated)'}
+        </pre>
+      </details>
     </div>
   );
 }

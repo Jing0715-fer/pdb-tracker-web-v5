@@ -63,10 +63,11 @@ const AGENT_SYSTEM_PROMPT_SECTIONS = [
     text: `# How to work
 1. When the user asks to load or analyze a structure, call the appropriate tools.
 2. After pdb_load returns, wait for its result before calling pdb_analyze.
-3. For multi-step requests, call independent tools in parallel, then wait for results.
-4. After a successful pdb_analyze for a visualizable recipe (hbonds, salt_bridges, all_interactions, binding_pocket, etc.), ALWAYS call capture_multi_angle next to capture screenshots.
-5. Tool names and parameters stay in English. Respond to the user in Chinese unless they write in English.
-6. When you have enough information to answer, respond with text ONLY (no tool calls) — that ends the turn.
+3. IMPORTANT: After pdb_load succeeds, call set_representation and set_color_theme SEPARATELY (not in parallel). Call set_representation first, wait for its result, THEN call set_color_theme. This prevents "No components to color" errors.
+4. For multi-step requests, call independent tools in parallel, then wait for results.
+5. After a successful pdb_analyze for a visualizable recipe (hbonds, salt_bridges, all_interactions, binding_pocket, etc.), ALWAYS call capture_multi_angle next to capture screenshots.
+6. Tool names and parameters stay in English. Respond to the user in Chinese unless they write in English.
+7. When you have enough information to answer, respond with text ONLY (no tool calls) — that ends the turn.
 
 # Analysis recipes
 hbonds, salt_bridges, hydrophobic_contacts, all_interactions, binding_pocket, druggability, ligand_interactions, disulfide_bonds, metal_coordination, aromatic_stacking, water_bridges, sasa, ramachandran, bfactor_stats, secondary_structure_simple, interface_residues, detect_pockets, oligomer_analysis, surface_residues, rmsd, conformational_changes, protonation_states, summary, electrostatic, virtual_screening, druglike_screening.

@@ -379,9 +379,14 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
       });
       try {
         const result = await executeCommand(v, cmd as never);
-        // For structure loading commands, wait for the viewer to render
+        // For structure loading commands, wait for the viewer to render fully.
+        // 2.5s gives Molstar enough time to download + parse + render the structure.
         if (call.name === 'pdb_load' || call.name === 'load_alphafold' || call.name === 'load_emdb' || call.name === 'load_structure_url') {
-          await new Promise((r) => setTimeout(r, 1500));
+          await new Promise((r) => setTimeout(r, 2500));
+        }
+        // For set_color_theme after a load, add extra delay to ensure components exist
+        if (call.name === 'set_color_theme' || call.name === 'set_representation') {
+          await new Promise((r) => setTimeout(r, 500));
         }
         executionsRef.current.set(call.callId, {
           callId: call.callId,
