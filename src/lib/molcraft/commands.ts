@@ -310,12 +310,31 @@ export async function executeCommand(
         const structures = getStructures(plugin, cmd.structures);
         if (structures.length === 0)
           return { ok: false, detail: "No structures loaded" };
-        // R110: Use applyPreset with care — it can briefly remove components.
-        // Wrap in a try/catch and wait longer for re-render.
+
+        // R120: Normalize preset name — LLM sends "cartoon" but Molstar needs
+        // "polymer-cartoon". Without this, applyPreset removes existing components
+        // and fails to create new ones → structure disappears.
+        const presetAliases: Record<string, string> = {
+          'cartoon': 'polymer-cartoon',
+          'surface': 'coarse-surface',
+          'ball-and-stick': 'atomic-detail',
+          'putty': 'atomic-detail',
+          'auto': 'auto',
+          'polymer-cartoon': 'polymer-cartoon',
+          'polymer-and-ligand': 'polymer-and-ligand',
+          'protein-and-nucleic': 'protein-and-nucleic',
+          'coarse-surface': 'coarse-surface',
+          'atomic-detail': 'atomic-detail',
+        };
+        const preset = presetAliases[cmd.preset] ?? cmd.preset;
+        if (preset !== cmd.preset) {
+          console.warn(`[set_representation] Normalized "${cmd.preset}" -> "${preset}"`);
+        }
+
         try {
           await plugin.managers.structure.component.applyPreset(
             structures,
-            cmd.preset
+            preset
           );
         } catch (presetErr) {
           console.warn('[set_representation] applyPreset failed:', presetErr);
