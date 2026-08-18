@@ -768,11 +768,7 @@ export async function executeCommand(
 
         for (const angle of angles) {
           try {
-            // R122: Reset camera before each angle to ensure structure is centered
-            // (previous angle's rotation may have moved it off-screen)
-            plugin.managers.camera.reset();
-            await new Promise(r => setTimeout(r, 50));
-            // Apply camera angle
+            // R125: applyCameraAngle now does camera.reset() internally
             await applyCameraAngle(plugin, angle);
             // Round 87: Wait for camera + 2 animation frames so the render
             // pipeline settles before we grab the screenshot. The previous
