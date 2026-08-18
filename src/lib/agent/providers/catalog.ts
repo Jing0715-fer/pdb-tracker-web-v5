@@ -185,7 +185,7 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
     id: 'minimax',
     displayName: 'MiniMax',
     label: 'MM',
-    baseURL: 'https://api.minimax.chat/v1',
+    baseURL: 'https://api.minimaxi.com/v1',
     apiKeyEnv: 'MINIMAX_API_KEY',
     defaultModel: 'MiniMax-Text-01',
     models: [
