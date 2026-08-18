@@ -66,10 +66,8 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
     label: 'DS',
     baseURL: 'https://api.deepseek.com/v1',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
-    defaultModel: 'deepseek-v4-flash',
+    defaultModel: 'deepseek-chat',
     models: [
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 64000 },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 128000 },
       { id: 'deepseek-chat', name: 'DeepSeek V3 (Chat)', contextWindow: 64000 },
       { id: 'deepseek-reasoner', name: 'DeepSeek R1 (Reasoner)', contextWindow: 64000 },
     ],
@@ -103,6 +101,7 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     authHeader: 'x-api-key',
     authPrefix: '',
+    extraHeaders: { 'anthropic-version': '2023-06-01' },
     defaultModel: 'claude-sonnet-4-20250514',
     models: [
       { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', contextWindow: 200000 },
@@ -111,7 +110,6 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
       { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', contextWindow: 200000 },
     ],
     supportsToolCalling: true,
-    extraHeaders: { 'anthropic-version': '2023-06-01' },
     docsUrl: 'https://console.anthropic.com/settings/keys',
   },
   {
