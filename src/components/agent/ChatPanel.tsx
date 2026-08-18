@@ -177,7 +177,9 @@ export function AgentChatPanel() {
         }}
         onNew={async () => {
           await session.startNewSession();
-          setHistoryOpen(false);
+          // R121: Don't close sidebar — keep it open so user sees history
+          // The sidebar will auto-refresh when session list changes
+          setHistoryOpen(true);
         }}
       />
       {/* Header strip */}
@@ -589,24 +591,24 @@ function UserMessageNode({ seq, text, onResend, onFork }: { seq: number; text: s
       <div className="flex items-start gap-2 max-w-[85%]">
         <div className="relative rounded-2xl rounded-tr-sm bg-claude-accent text-white px-3 py-2 text-sm">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-          {/* Hover action bar */}
-          <div className="absolute -bottom-2 left-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* R121: Action bar — always visible with subtle opacity, full on hover */}
+          <div className="absolute -bottom-2.5 left-1 flex items-center gap-1 opacity-40 group-hover:opacity-100 transition-opacity">
             {onFork && (
               <button
                 onClick={() => onFork(seq)}
-                className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
-                title="从此处分叉"
+                className="flex items-center justify-center h-6 w-6 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent hover:bg-claude-accent/10 hover:text-claude-accent text-claude-text-muted transition-colors"
+                title="从此处分叉对话"
               >
-                <GitFork className="h-3 w-3" />
+                <GitFork className="h-3.5 w-3.5" />
               </button>
             )}
             {onResend && (
               <button
                 onClick={() => setEditing(true)}
-                className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
+                className="flex items-center justify-center h-6 w-6 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent hover:bg-claude-accent/10 hover:text-claude-accent text-claude-text-muted transition-colors"
                 title="编辑并重发"
               >
-                <Pencil className="h-3 w-3" />
+                <Pencil className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
@@ -651,36 +653,36 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
               <div className="mt-1 whitespace-pre-wrap opacity-80">{reasoning}</div>
             </details>
           )}
-          {/* Hover action bar */}
+          {/* R121: Action bar — always visible with subtle opacity, full on hover */}
           {text && (
-            <div className="absolute -bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute -bottom-2.5 right-2 flex items-center gap-1 opacity-40 group-hover:opacity-100 transition-opacity">
               {onFeedback && (
                 <>
                   <button
                     onClick={() => onFeedback('up')}
                     disabled={driving}
                     className={cn(
-                      'flex items-center justify-center h-5 w-5 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                      'flex items-center justify-center h-6 w-6 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
                       feedback === 'up'
                         ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-600'
-                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-emerald-500/40 hover:text-emerald-600',
+                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-600',
                     )}
                     title="有帮助"
                   >
-                    <ThumbsUp className="h-3 w-3" />
+                    <ThumbsUp className="h-3.5 w-3.5" />
                   </button>
                   <button
                     onClick={() => onFeedback('down')}
                     disabled={driving}
                     className={cn(
-                      'flex items-center justify-center h-5 w-5 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                      'flex items-center justify-center h-6 w-6 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
                       feedback === 'down'
                         ? 'bg-red-500/20 border-red-500/50 text-red-600'
-                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-red-500/40 hover:text-red-600',
+                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-red-500 hover:bg-red-500/10 hover:text-red-600',
                     )}
                     title="无帮助"
                   >
-                    <ThumbsDown className="h-3 w-3" />
+                    <ThumbsDown className="h-3.5 w-3.5" />
                   </button>
                 </>
               )}
@@ -688,10 +690,10 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
                 <button
                   onClick={onRegenerate}
                   disabled={driving}
-                  className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center h-6 w-6 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent hover:bg-claude-accent/10 hover:text-claude-accent text-claude-text-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   title="重新生成"
                 >
-                  <RotateCw className="h-3 w-3" />
+                  <RotateCw className="h-3.5 w-3.5" />
                 </button>
               )}
               <button

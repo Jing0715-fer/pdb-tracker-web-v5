@@ -50,12 +50,12 @@ export function SessionHistorySidebar({
 
   useEffect(() => {
     if (open) void refresh();
-  }, [open]);
+  }, [open, currentSessionId]); // R121: Refresh when session changes
 
   // Auto-refresh every 15s while open.
   useEffect(() => {
     if (!open) return;
-    const i = setInterval(() => void refresh(), 15_000);
+    const i = setInterval(() => void refresh(), 5_000); // R121: Faster refresh
     return () => clearInterval(i);
   }, [open]);
 
