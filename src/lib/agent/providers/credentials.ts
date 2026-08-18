@@ -148,7 +148,24 @@ export function resolveApiKey(providerId: string): string | null {
 /** Resolve the effective baseURL for a provider: config override → catalog default. */
 export function resolveBaseURL(providerId: string): string | null {
   const config = getProviderConfig(providerId);
-  if (config.baseURL) return config.baseURL;
+  if (config.baseURL) {
+    // R118: Auto-fix stale base URLs saved before catalog fixes.
+    // If the saved URL doesn't match the catalog, prefer the catalog.
+    const profile = getProviderProfile(providerId);
+    if (profile && config.baseURL !== profile.baseURL) {
+      // Check if the saved URL is a known-bad URL that was fixed
+      const knownBadUrls: Record<string, string> = {
+        'https://api.minimax.chat/v1': 'https://api.minimaxi.com/v1',
+      };
+      const fixed = knownBadUrls[config.baseURL];
+      if (fixed) {
+        // Auto-update the saved config with the correct URL
+        setProviderConfig(providerId, { ...config, baseURL: fixed });
+        return fixed;
+      }
+    }
+    return config.baseURL;
+  }
   const profile = getProviderProfile(providerId);
   return profile?.baseURL ?? null;
 }

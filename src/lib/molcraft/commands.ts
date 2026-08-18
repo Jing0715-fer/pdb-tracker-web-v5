@@ -735,7 +735,8 @@ export async function executeCommand(
           await new Promise((r) => setTimeout(r, 50));
         }
 
-        // Round 78: Set dark background for consistent screenshot contrast
+        // R118: Save original background BEFORE changing it, so we can always restore
+        let originalBgColor: number | null = null;
         try {
           const canvas3d = plugin.canvas3d as
             | { setProps?: (fn: (p: unknown) => void) => void }
@@ -743,9 +744,10 @@ export async function executeCommand(
           if (canvas3d?.setProps) {
             canvas3d.setProps((p: unknown) => {
               const props = p as { renderer?: { backgroundColor?: unknown } };
+              originalBgColor = (props.renderer?.backgroundColor as number) ?? null;
               props.renderer = props.renderer ?? {};
-              // Dark navy background (#1a1a2e) for better label/screenshot contrast
-              props.renderer.backgroundColor = 0xffffff; // White background for better screenshot readability
+              // R118: Use light cream instead of pure white to avoid "blank screen" appearance
+              props.renderer.backgroundColor = 0xfaf7f4;
             });
           }
         } catch { /* best-effort */ }
@@ -893,29 +895,22 @@ export async function executeCommand(
           }
         } catch { /* best-effort */ }
 
-        // Round 86: Restore original background color after capture.
-        // Previously set backgroundColor = 0 (Molstar treats 0 as BLACK), which
-        // made the viewer go fully black after every screenshot capture. Now we
-        // restore to the original viewerBgDark preference from the toolbar, or
-        // fall back to the same dark navy used during capture.
+        // R118: ALWAYS restore background color — use saved original or fallback.
+        // This is critical: if capture fails mid-way, the viewer would stay white
+        // without this restore. Using try/finally ensures it always runs.
         try {
           const canvas3d = plugin.canvas3d as
             | { setProps?: (fn: (p: unknown) => void) => void }
             | undefined;
           if (canvas3d?.setProps) {
-            // Read viewerBgDark from a window-level hint set by the toolbar.
-            // Fall back to dark navy (matching the capture frame) so the user
-            // doesn't see a jarring black viewer post-capture.
-            // 0 = pure BLACK in Molstar, so we avoid that value entirely.
             const w = window as unknown as { __viewerBgDark?: boolean };
-            // Round 88: Fix — restore to light cream for light mode, dark navy for dark mode
-            const restoreColor = w.__viewerBgDark === false ? 0xfaf7f4 : 0x1a1a2e;
+            // R118: Prefer the saved original color, fall back to preference-based default
+            const restoreColor = originalBgColor ?? (w.__viewerBgDark === false ? 0xfaf7f4 : 0x1a1a2e);
             canvas3d.setProps((p: unknown) => {
               const props = p as { renderer?: { backgroundColor?: unknown } };
               props.renderer = props.renderer ?? {};
               props.renderer.backgroundColor = restoreColor;
             });
-            // Round 88: Wait for restore to render
             await nextFrame();
           }
         } catch { /* best-effort */ }

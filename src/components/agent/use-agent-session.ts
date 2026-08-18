@@ -479,7 +479,46 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 const source = call.name === 'pdb_load' ? 'pdb'
                   : call.name === 'load_alphafold' ? 'alphafold'
                   : call.name === 'load_emdb' ? 'emdb' : 'url';
-                addStructure({ id: pdbId, label: pdbId, source: source as never, loadedAt: Date.now() });
+
+                // R118: Fetch PDB text + populate metadata (sequences, chains, etc.)
+                // This is needed because the agent path bypasses the UI's
+                // structure loading logic which normally fetches PDB text from
+                // RCSB and parses it for sequence/metadata display.
+                let pdbText: string | undefined;
+                let metadata: Record<string, unknown> | undefined;
+                if (call.name === 'pdb_load') {
+                  try {
+                    const pdbRes = await fetch(`https://files.rcsb.org/download/${pdbId}.pdb`);
+                    if (pdbRes.ok) {
+                      pdbText = await pdbRes.text();
+                      // Parse PDB for metadata
+                      try {
+                        const { parsePdb } = await import('@/lib/molcraft/structure-utils');
+                        const parsed = parsePdb(pdbText);
+                        metadata = {
+                          chains: parsed.chains,
+                          numAtoms: parsed.numAtoms,
+                          numResidues: parsed.numResidues,
+                          title: parsed.title || undefined,
+                        };
+                      } catch {}
+                      // Cache PDB text for sequence viewer + interaction analysis
+                      try {
+                        const { setStructureFileCache } = await import('@/lib/molcraft/store');
+                        setStructureFileCache(pdbId, pdbText, 'pdb');
+                      } catch {}
+                    }
+                  } catch { /* RCSB fetch is best-effort */ }
+                }
+
+                addStructure({
+                  id: pdbId,
+                  label: pdbId,
+                  source: source as never,
+                  loadedAt: Date.now(),
+                  pdbText: pdbText || undefined,
+                  metadata: metadata as never,
+                } as never);
               }
             } catch { /* store update is best-effort */ }
             await new Promise((r) => setTimeout(r, 2500));
