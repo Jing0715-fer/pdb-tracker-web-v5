@@ -576,24 +576,27 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 if (captureResult.ok && (captureResult as any).data?.screenshots) {
                   const screenshots = (captureResult as any).data.screenshots;
                   (captureResult as any).captureDurationMs = captureDuration; // R116.2
-                  // R115.3: VLM with cache (selectBestWithRetry already caches)
-                  if (screenshots.length > 1) {
-                    const vlmStartTime = Date.now(); // R116.2
-                    try {
-                      const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
-                      const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
-                      const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
-                      const vlmDuration = Date.now() - vlmStartTime; // R116.2
-                      if (vlmResult) {
-                        (captureResult as any).vlmResult = vlmResult;
-                        (captureResult as any).vlmDurationMs = vlmDuration; // R116.2
-                        // R116.3: Log cache hit/miss
-                        console.log(`[agent] VLM: ${vlmDuration}ms (cache: ${vlmDuration < 1000 ? 'HIT' : 'MISS'})`);
-                      }
-                    } catch (vlmErr) {
-                      console.warn('[agent] VLM failed (non-blocking):', vlmErr);
-                      (captureResult as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
+                  // R122: Run VLM on ALL captures (including single screenshots)
+                  // Previously skipped single screenshots, but we need VLM
+                  // commentary for quality assessment even with 1 screenshot
+                  const vlmStartTime = Date.now();
+                  try {
+                    const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
+                    const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
+                    console.log(`[agent] Starting VLM analysis for ${screenshots.length} screenshots (recipe: ${recipeName})`);
+                    const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                    const vlmDuration = Date.now() - vlmStartTime;
+                    if (vlmResult) {
+                      (captureResult as any).vlmResult = vlmResult;
+                      (captureResult as any).vlmDurationMs = vlmDuration;
+                      console.log(`[agent] VLM completed: ${vlmDuration}ms (cache: ${vlmDuration < 1000 ? 'HIT' : 'MISS'}) quality=${vlmResult.quality} bestIndex=${vlmResult.bestIndex}`);
+                    } else {
+                      console.warn('[agent] VLM returned null — no result');
+                      (captureResult as any).vlmError = 'VLM analysis returned no result';
                     }
+                  } catch (vlmErr) {
+                    console.warn('[agent] VLM failed (non-blocking):', vlmErr);
+                    (captureResult as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
                   }
                   // R115.1: Update execution result + trigger UI re-render
                   const exec = executionsRef.current.get(call.callId);

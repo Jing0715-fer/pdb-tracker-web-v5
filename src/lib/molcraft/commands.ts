@@ -768,6 +768,10 @@ export async function executeCommand(
 
         for (const angle of angles) {
           try {
+            // R122: Reset camera before each angle to ensure structure is centered
+            // (previous angle's rotation may have moved it off-screen)
+            plugin.managers.camera.reset();
+            await new Promise(r => setTimeout(r, 50));
             // Apply camera angle
             await applyCameraAngle(plugin, angle);
             // Round 87: Wait for camera + 2 animation frames so the render
@@ -1664,19 +1668,18 @@ async function applyRecipeVisualization(
       case "hbonds":
       case "salt_bridges":
       case "hydrophobic_contacts": {
-        // Show interactions (dashed lines for H-bonds, salt bridges, etc.)
+        // R122: Do NOT focus on a single residue — it zooms in too much and
+        // pushes the rest of the structure off-screen. Instead, reset the
+        // camera to show the full structure, then apply the camera angle.
         await safe(async () => {
           const chain1 = params?.chain1 as string | undefined;
           const chain2 = params?.chain2 as string | undefined;
           if (chain1 && chain2) {
-            // Round 91: Use show_interactions to display contact lines
-            // between the two chains
-            const targetLoci = await resolveInteractionsTarget(viewer, "ligand" as any);
-            // Focus on the interface region
-            const loci = await lociFromResidue(viewer, { chain: chain1 });
-            if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 20 });
+            // Reset camera to show full structure
+            plugin.managers.camera.reset();
+            await new Promise(r => setTimeout(r, 100));
           }
-        }, "show_interactions");
+        }, "reset_camera_for_interactions");
         // Round 91/94: Add ball-and-stick for interaction residues to make
         // side chains visible in the screenshot. Use the interactions data
         // directly to find which residues to show.
