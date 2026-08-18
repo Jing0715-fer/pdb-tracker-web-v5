@@ -2000,3 +2000,37 @@ Task: Browser E2E test, performance measurement, VLM cache verification, error r
 5. **Timing display**: Verify capture/VLM durations render correctly in the tool card.
 
 6. **VLM cache effectiveness**: Run the same analysis twice and verify the second call uses cache (faster).
+
+---
+Task ID: round-117-fix-provider-selection-minimax-html-error
+Agent: main
+Task: Fix DSH agent not respecting selected provider (MiniMax → still using DeepSeek) and MiniMax returning HTML error.
+
+### Fix 1: Provider Not Respected
+- Root cause: SessionSettingsPopover only saved on 'Save' button click
+- If user changed provider dropdown and sent message without saving, old provider used
+- Fix: Auto-save settings via POST /settings on provider dropdown change
+- Added console logging: '[agent-loop] Provider: X | Model: Y'
+
+### Fix 2: MiniMax HTML Error
+- Root cause: MiniMax API returns HTML when API key invalid/missing
+- Fix: Better error message explaining 3 possible causes
+- Added HTML check on 200 responses
+
+### How Provider Selection Works
+1. User selects MiniMax → auto-save POST /settings
+2. Session appends session/settings event
+3. Agent loop reads settings.providerId → uses minimax adapter
+4. MiniMax adapter checks API key → calls MiniMax API or returns error
+
+### Lint
+- All changed files: 0 errors
+
+### Git
+- main branch: d46fbca (Round 117 complete, pushed to remote)
+
+### Next Round Recommendations (Round 118)
+1. Verify MiniMax API key is configured in provider settings
+2. Test that provider auto-save works correctly
+3. Add provider status indicator in the chat UI
+4. Add API key validation before attempting calls
