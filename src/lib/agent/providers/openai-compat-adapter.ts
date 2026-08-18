@@ -162,7 +162,11 @@ export class OpenAICompatAdapter implements LlmAdapter {
       // Check if response is HTML (not JSON)
       const isHtml = errText.trimStart().startsWith('<');
       const errMsg = isHtml
-        ? `${this.profile.displayName} API error ${resp.status} (server returned HTML, not JSON — check if the API endpoint is correct)`
+        ? `${this.profile.displayName} API error ${resp.status}: server returned HTML instead of JSON. This usually means:
+           1. The API key is invalid or missing (check provider settings)
+           2. The API endpoint URL is incorrect (current: ${url})
+           3. The API service is temporarily unavailable
+           Configure the API key in Settings → Providers.`
         : `${this.profile.displayName} API error ${resp.status}: ${errText.slice(0, 500)}`;
       yield {
         type: 'finish',
@@ -175,7 +179,7 @@ export class OpenAICompatAdapter implements LlmAdapter {
     let json: OpenAIResponse;
     try {
       const raw = await resp.text();
-      // Check if response is HTML
+      // R117: Check if response is HTML (even on 200 — some APIs return HTML errors)
       if (raw.trimStart().startsWith('<')) {
         yield {
           type: 'finish',

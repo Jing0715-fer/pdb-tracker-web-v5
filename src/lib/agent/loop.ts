@@ -196,6 +196,8 @@ export class AgentLoop {
     // Priority: explicit providerId in settings → model-based lookup → default.
     const effectiveModel = settings.model ?? this.options.model;
     const effectiveProvider = settings.providerId ?? this.resolveProvider(effectiveModel);
+    // R117: Log the resolved provider for debugging
+    console.log(`[agent-loop] Provider: ${effectiveProvider} | Model: ${effectiveModel} | settings.providerId: ${settings.providerId ?? 'none'} | settings.model: ${settings.model ?? 'none'}`);
 
     // Log request header (initial on first step of the session).
     const header = {

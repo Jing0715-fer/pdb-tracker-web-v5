@@ -139,6 +139,17 @@ export function SessionSettingsPopover({ sessionId, open, onClose }: Props) {
                   const newProvider = availableProviders.find((p) => p.id === newProviderId);
                   const newModel = newProvider?.effectiveModel ?? newProvider?.models?.[0]?.id ?? '';
                   setSettings((s) => ({ ...s, providerId: newProviderId, model: newModel }));
+                  // R117: Auto-save when provider changes (don't wait for Save button)
+                  if (sessionId) {
+                    void fetch(`/api/agent/sessions/${sessionId}/settings`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        providerId: newProviderId,
+                        model: newModel,
+                      }),
+                    });
+                  }
                 }}
                 className="w-full h-7 text-xs bg-claude-bg-base border border-claude-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-claude-accent/30"
               >
