@@ -2034,3 +2034,49 @@ Task: Fix DSH agent not respecting selected provider (MiniMax → still using De
 2. Test that provider auto-save works correctly
 3. Add provider status indicator in the chat UI
 4. Add API key validation before attempting calls
+
+---
+Task ID: round-119b-test-route-creation-browser-test
+Agent: main
+Task: Real browser test to verify structure loading, screenshot display, and test button.
+
+### Fix: Missing /api/agent/providers/test Route
+- Root cause: The Test button in ProvidersPanel calls POST /api/agent/providers/test
+  but this route NEVER EXISTED. Next.js returned HTML 404 page → JSON parse error
+  → "Unexpected token '<'" error.
+- This was NOT a base URL issue — the user's MiniMax config is correct and chat
+  works fine. Only the test button was broken.
+- Fix: Created src/app/api/agent/providers/test/route.ts that:
+  1. Tests API key via GET /models (cheapest)
+  2. Falls back to POST /chat/completions if /models returns 404
+  3. Handles HTML responses, JSON errors, timeouts
+  4. Returns { ok, error?, models? }
+- Verified: zai test returns ok=True ✓
+
+### Browser Test Results
+- Server instability (dies after ~60s) prevents full browser E2E
+- Successfully navigated to Structure Analysis page (confirmed via VLM):
+  - PDB ID input visible ✓
+  - Load button visible ✓
+  - 3D viewer area visible ✓
+- Structure loading (1CBS) could not complete — server dies during the
+  2.5s wait after load_pdb
+- Screenshot verification could not complete — server dies before capture
+
+### API Test Results
+- DSH Agent session creation: ✓
+- Message sending: ✓ (returns pdb_load tool call)
+- Provider test endpoint: ✓ (zai returns ok=True)
+- Session persistence: ✓ (sessions stored in Prisma)
+
+### Issues Still Pending
+1. **Browser E2E**: Server dies after ~60s, preventing full browser testing.
+   Need `bun run build` + `bun run start` for stable production server.
+2. **White screen fix verification**: R119 removed background color change
+   in capture_multi_angle, but couldn't verify in browser.
+3. **Screenshot display verification**: Couldn't verify carousel rendering.
+4. **set_color_theme timing fix**: Increased retry to 10×500ms=5s, but
+   couldn't verify in browser.
+
+### Git
+- main branch: 23835ba (test route created, pushed to remote)
