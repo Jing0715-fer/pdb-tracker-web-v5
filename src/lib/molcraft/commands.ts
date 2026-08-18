@@ -1919,14 +1919,20 @@ async function applyCameraAngle(
   plugin: MolstarPlugin,
   angle: "front" | "side" | "top" | "back"
 ): Promise<void> {
-  // Reset first to a known orientation
+  // R123: Use a simpler, safer camera rotation approach.
+  // Previous code manually calculated position vectors which could push
+  // the structure off-screen if the camera target wasn't at the structure center.
+  // New approach: Reset to default view, then use canvas3d.camera.rotate
+  // to rotate around the current target (which is the structure center after reset).
+
+  // Reset first to a known orientation (centers on the full structure)
   try {
     plugin.managers.camera.reset();
   } catch {
     /* ignore */
   }
   // Allow the reset to settle
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 100));
 
   if (angle === "front") {
     // already front after reset
@@ -1935,19 +1941,37 @@ async function applyCameraAngle(
 
   const canvas3d = plugin.canvas3d as
     | {
-        setProps?: (fn: (p: unknown) => void) => void;
         camera?: {
-          position?: { toArray?: () => [number, number, number] } | [number, number, number];
-          up?: { toArray?: () => [number, number, number] } | [number, number, number];
-          target?: { toArray?: () => [number, number, number] } | [number, number, number];
+          rotate?: (axis: [number, number, number], angleRad: number) => void;
+          position?: { toArray?: () => number[] } | number[];
+          target?: { toArray?: () => number[] } | number[];
+          up?: { toArray?: () => number[] } | number[];
           setState?: (s: { position?: [number, number, number]; up?: [number, number, number]; target?: [number, number, number] }) => void;
         };
       }
     | undefined;
-  if (!canvas3d?.camera?.setState) return;
+  if (!canvas3d?.camera) return;
 
   try {
-    // Extract current camera basis vectors as plain tuples.
+    // Try using camera.rotate (rotates around the target, keeping it centered)
+    if (typeof canvas3d.camera.rotate === 'function') {
+      if (angle === "side") {
+        // Rotate 90° around the Y (up) axis
+        canvas3d.camera.rotate([0, 1, 0], Math.PI / 2);
+      } else if (angle === "back") {
+        // Rotate 180° around the Y axis
+        canvas3d.camera.rotate([0, 1, 0], Math.PI);
+      } else if (angle === "top") {
+        // Rotate 90° around the X axis (look from above)
+        canvas3d.camera.rotate([1, 0, 0], -Math.PI / 2);
+      }
+      // Wait for the rotation to render
+      await new Promise(r => setTimeout(r, 50));
+      return;
+    }
+
+    // Fallback: manual rotation using setState (same as before but with
+    // better target handling)
     const toTuple = (v: unknown): [number, number, number] => {
       if (Array.isArray(v) && v.length === 3) return v as [number, number, number];
       if (v && typeof v === "object" && "toArray" in v && typeof (v as { toArray: () => number[] }).toArray === "function") {
@@ -1960,39 +1984,28 @@ async function applyCameraAngle(
     const tgt = toTuple(canvas3d.camera.target);
     const up = toTuple(canvas3d.camera.up);
 
-    // Direction from target to camera (the view vector).
     const dx = pos[0] - tgt[0];
     const dy = pos[1] - tgt[1];
     const dz = pos[2] - tgt[2];
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
     if (angle === "side") {
-      // Rotate 90° around the Y (up) axis: (x, z) -> (-z, x)
-      const newPos: [number, number, number] = [
-        tgt[0] - dz,
-        tgt[1] + dy,
-        tgt[2] + dx,
-      ];
-      canvas3d.camera.setState({ position: newPos, up, target: tgt });
+      // Rotate 90° around Y: swap X and Z components
+      const newPos: [number, number, number] = [tgt[0] - dz, pos[1], tgt[2] + dx];
+      canvas3d.camera.setState?.({ position: newPos, up, target: tgt });
     } else if (angle === "back") {
-      // Rotate 180° around Y: (x, z) -> (-x, -z)
-      const newPos: [number, number, number] = [
-        tgt[0] - dx,
-        tgt[1] + dy,
-        tgt[2] - dz,
-      ];
-      canvas3d.camera.setState({ position: newPos, up, target: tgt });
+      const newPos: [number, number, number] = [tgt[0] - dx, pos[1], tgt[2] - dz];
+      canvas3d.camera.setState?.({ position: newPos, up, target: tgt });
     } else if (angle === "top") {
-      // Look down the Y axis: place camera directly above the target,
-      // keeping the distance constant. Up vector points toward -Z (front).
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      // Camera directly above target, same distance
       const newPos: [number, number, number] = [tgt[0], tgt[1] + dist, tgt[2]];
-      // "Up" should point toward the previous front direction (negative Z
-      // in Molstar's default). Project the old view direction onto XZ plane
-      // and use it as the new up.
-      const xzLen = Math.sqrt(dx * dx + dz * dz) || 1;
-      const newUp: [number, number, number] = [dx / xzLen, 0, dz / xzLen];
-      canvas3d.camera.setState({ position: newPos, up: newUp, target: tgt });
+      // Up vector points toward the front (-Z in Molstar default)
+      const newUp: [number, number, number] = [0, 0, -1];
+      canvas3d.camera.setState?.({ position: newPos, up: newUp, target: tgt });
     }
+
+    // Force a render
+    await new Promise(r => setTimeout(r, 50));
   } catch {
     /* ignore — camera manipulation is best-effort */
   }
