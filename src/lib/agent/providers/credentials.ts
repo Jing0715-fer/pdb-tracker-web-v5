@@ -145,29 +145,17 @@ export function resolveApiKey(providerId: string): string | null {
   return null;
 }
 
-/** Resolve the effective baseURL for a provider: config override → catalog default. */
+/** Resolve the effective baseURL for a provider.
+ * R119: Always prefer the catalog URL (source of truth) over saved config.
+ * The saved config URL was causing stale-URL bugs (e.g. MiniMax api.minimax.chat
+ * saved before the fix to api.minimaxi.com). The catalog is always up-to-date.
+ */
 export function resolveBaseURL(providerId: string): string | null {
-  const config = getProviderConfig(providerId);
-  if (config.baseURL) {
-    // R118: Auto-fix stale base URLs saved before catalog fixes.
-    // If the saved URL doesn't match the catalog, prefer the catalog.
-    const profile = getProviderProfile(providerId);
-    if (profile && config.baseURL !== profile.baseURL) {
-      // Check if the saved URL is a known-bad URL that was fixed
-      const knownBadUrls: Record<string, string> = {
-        'https://api.minimax.chat/v1': 'https://api.minimaxi.com/v1',
-      };
-      const fixed = knownBadUrls[config.baseURL];
-      if (fixed) {
-        // Auto-update the saved config with the correct URL
-        setProviderConfig(providerId, { ...config, baseURL: fixed });
-        return fixed;
-      }
-    }
-    return config.baseURL;
-  }
   const profile = getProviderProfile(providerId);
-  return profile?.baseURL ?? null;
+  if (profile?.baseURL) return profile.baseURL;
+  // Fallback: use saved config if catalog doesn't have it
+  const config = getProviderConfig(providerId);
+  return config.baseURL ?? null;
 }
 
 /** Check if a provider is available (has an API key or is 'zai'). */

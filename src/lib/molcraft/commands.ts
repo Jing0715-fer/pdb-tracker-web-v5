@@ -334,11 +334,12 @@ export async function executeCommand(
       case "set_color_theme": {
         const structures = getStructures(plugin, cmd.structures);
         let components = collectComponents(plugin, structures);
-        // R105.2: If no components yet, wait and retry (they may still be
-        // loading after a recent set_representation)
+        // R119: If no components yet, poll for up to 5 seconds (10 retries × 500ms).
+        // Structure loading + applyPreset can take several seconds, especially
+        // for large structures like 4HHB. The previous 3×300ms (900ms) was too short.
         if (components.length === 0) {
-          for (let i = 0; i < 3; i++) {
-            await new Promise(r => setTimeout(r, 300));
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 500));
             components = collectComponents(plugin, structures);
             if (components.length > 0) break;
           }
@@ -735,22 +736,10 @@ export async function executeCommand(
           await new Promise((r) => setTimeout(r, 50));
         }
 
-        // R118: Save original background BEFORE changing it, so we can always restore
-        let originalBgColor: number | null = null;
-        try {
-          const canvas3d = plugin.canvas3d as
-            | { setProps?: (fn: (p: unknown) => void) => void }
-            | undefined;
-          if (canvas3d?.setProps) {
-            canvas3d.setProps((p: unknown) => {
-              const props = p as { renderer?: { backgroundColor?: unknown } };
-              originalBgColor = (props.renderer?.backgroundColor as number) ?? null;
-              props.renderer = props.renderer ?? {};
-              // R118: Use light cream instead of pure white to avoid "blank screen" appearance
-              props.renderer.backgroundColor = 0xfaf7f4;
-            });
-          }
-        } catch { /* best-effort */ }
+        // R119: DO NOT change background color for screenshots.
+        // Previous code set bg to white/cream which caused the viewer to go
+        // white screen when the restore step didn't execute (e.g. non-blocking
+        // auto-capture failure). Screenshots work fine with the current bg.
 
         const results: Array<{
           dataUri: string;
@@ -895,25 +884,7 @@ export async function executeCommand(
           }
         } catch { /* best-effort */ }
 
-        // R118: ALWAYS restore background color — use saved original or fallback.
-        // This is critical: if capture fails mid-way, the viewer would stay white
-        // without this restore. Using try/finally ensures it always runs.
-        try {
-          const canvas3d = plugin.canvas3d as
-            | { setProps?: (fn: (p: unknown) => void) => void }
-            | undefined;
-          if (canvas3d?.setProps) {
-            const w = window as unknown as { __viewerBgDark?: boolean };
-            // R118: Prefer the saved original color, fall back to preference-based default
-            const restoreColor = originalBgColor ?? (w.__viewerBgDark === false ? 0xfaf7f4 : 0x1a1a2e);
-            canvas3d.setProps((p: unknown) => {
-              const props = p as { renderer?: { backgroundColor?: unknown } };
-              props.renderer = props.renderer ?? {};
-              props.renderer.backgroundColor = restoreColor;
-            });
-            await nextFrame();
-          }
-        } catch { /* best-effort */ }
+        // R119: No background restore needed — we didn't change it (see above).
 
         // Round 91: Reset camera to restore user's view after capture.
         // The applyCameraAngle function moves the camera to specific angles,
