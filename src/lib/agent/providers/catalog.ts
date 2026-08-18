@@ -66,8 +66,10 @@ export const PROVIDER_CATALOG: ProviderProfile[] = [
     label: 'DS',
     baseURL: 'https://api.deepseek.com/v1',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-flash',
     models: [
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 64000 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 128000 },
       { id: 'deepseek-chat', name: 'DeepSeek V3 (Chat)', contextWindow: 64000 },
       { id: 'deepseek-reasoner', name: 'DeepSeek R1 (Reasoner)', contextWindow: 64000 },
     ],
