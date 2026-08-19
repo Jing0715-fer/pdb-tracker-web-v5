@@ -1650,8 +1650,7 @@ async function applyRecipeVisualization(
             }
           }, "focus_all_ligands");
         }
-        // Round 63: Use cartoon + residue-name color for pocket context
-        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        // R133: Don't applyPreset — just apply color on existing cartoon
         await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;
       }
@@ -1874,8 +1873,7 @@ async function applyRecipeVisualization(
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 18 });
           }, "focus_druggable_pocket");
         }
-        // Round 63: Surface representation for pocket visualization
-        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        // R133: Don't applyPreset — just apply color on existing representation
         await safe(async () => { await applyColorTheme("hydrophobicity"); }, "color_hydrophobicity");
         break;
       }
@@ -1890,8 +1888,7 @@ async function applyRecipeVisualization(
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 16 });
           }, "focus_screening_pocket");
         }
-        // Round 63: Cartoon + element-symbol for ligand detail
-        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        // R133: Don't applyPreset — just apply color on existing cartoon
         await safe(async () => { await applyColorTheme("element-symbol"); }, "color_element");
         break;
       }
@@ -1918,16 +1915,16 @@ async function applyRecipeVisualization(
             }
           }
         }, "focus_chain_for_special_bonds");
-        // Round 63: Stick representation for bond detail
-        await safe(async () => { await applyPreset("ball-and-stick"); }, "preset_stick");
+        // R133: Don't applyPreset — just apply color on existing cartoon
+
         await safe(async () => { await applyColorTheme("element-symbol"); }, "color_element");
         break;
       }
 
       case "sasa":
       case "surface_residues": {
-        // Round 63: Surface representation for solvent accessibility
-        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        // R133: Don't applyPreset — just apply color
+
         await safe(async () => { await applyColorTheme("hydrophobicity"); }, "color_hydrophobicity");
         await safe(async () => {
           plugin.managers.camera.reset();
@@ -1937,8 +1934,7 @@ async function applyRecipeVisualization(
 
       case "electrostatic":
       case "apbs_electrostatic": {
-        // Round 63: Surface + charge color for electrostatic
-        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        // R133: Don't applyPreset — just apply color on existing representation
         await safe(async () => { await applyColorTheme("partial-charge"); }, "color_charge");
         await safe(async () => {
           plugin.managers.camera.reset();
@@ -1947,8 +1943,8 @@ async function applyRecipeVisualization(
       }
 
       case "bfactor_stats": {
-        // Round 63: Putty representation for B-factor (Molstar uses "putty" preset)
-        await safe(async () => { await applyPreset("putty"); }, "preset_putty");
+        // R133: Don't applyPreset("putty") — it removes cartoon.
+        // Just apply bfactor color on existing cartoon.
         await safe(async () => { await applyColorTheme("bfactor"); }, "color_bfactor");
         await safe(async () => {
           plugin.managers.camera.reset();
@@ -1957,8 +1953,7 @@ async function applyRecipeVisualization(
       }
 
       case "secondary_structure_simple": {
-        // Round 63: Cartoon + secondary-structure color
-        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        // R133: Don't applyPreset — just apply color on existing cartoon
         await safe(async () => { await applyColorTheme("secondary-structure"); }, "color_ss");
         await safe(async () => {
           plugin.managers.camera.reset();
@@ -1966,22 +1961,10 @@ async function applyRecipeVisualization(
         break;
       }
 
-      case "interface_residues":
-      case "oligomer_analysis": {
-        // Round 63: Cartoon + chain-id for assembly/interface
-        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
-        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
-        await safe(async () => {
-          plugin.managers.camera.reset();
-        }, "reset_for_assembly");
-        break;
-      }
-
       case "rmsd":
       case "conformational_changes":
       case "per_residue_rmsd_two": {
-        // Round 63: Putty for RMSD deviation visualization
-        await safe(async () => { await applyPreset("putty"); }, "preset_putty");
+        // R133: Don't applyPreset("putty") — just apply color
         await safe(async () => { await applyColorTheme("uncertainty"); }, "color_rmsd");
         await safe(async () => {
           plugin.managers.camera.reset();
@@ -1990,8 +1973,7 @@ async function applyRecipeVisualization(
       }
 
       case "detect_pockets": {
-        // Round 63: Surface for pocket detection
-        await safe(async () => { await applyPreset("surface"); }, "preset_surface");
+        // R133: Don't applyPreset — just apply color
         await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         await safe(async () => {
           plugin.managers.camera.reset();
@@ -2000,8 +1982,7 @@ async function applyRecipeVisualization(
       }
 
       case "summary": {
-        // Round 63: Cartoon + spectrum for overview
-        await safe(async () => { await applyPreset("cartoon"); }, "preset_cartoon");
+        // R133: Don't applyPreset — just apply color
         await safe(async () => { await applyColorTheme("sequence-id"); }, "color_spectrum");
         await safe(async () => {
           plugin.managers.camera.reset();
