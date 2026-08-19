@@ -2227,3 +2227,76 @@ Next Steps Recommendation (Round 138):
    `selection.getLociFromExpression`; if not, consider opening an upstream issue or
    vendoring a small helper that resolves MolScript expressions without mutating
    selection state.
+
+---
+Task ID: round-138-commands-refactor
+Agent: general-purpose (sub-agent)
+Task: Rewrite commands.ts as a thin wrapper importing from the new submodules.
+
+Work Log:
+- Read the current `src/lib/molcraft/commands.ts` (2609 lines) to understand its
+  layout. Confirmed the file had three sections: (1) helper functions + `CommandResult`
+  interface at the top (lines 1-165), (2) the `executeCommand` dispatcher function
+  (lines 167-1342, 1176 lines), (3) more helper functions below (lines 1344-2609).
+- Read the last ~100 lines of `worklog.md` (round 137 stage summary) for context.
+- Verified the new submodules in `src/lib/molcraft/commands/` export exactly the
+  expected symbols: `types.ts` → `CommandResult`; `color-theme.ts` →
+  `normalizeColorTheme`, `categoryLabel`, `hexToNumber`; `structure-helpers.ts` →
+  `getStructures`, `collectComponents`, `getFirstStructureData`, `isLociEmpty`;
+  `screenshot-utils.ts` → `checkScreenshotQuality`, `checkIfBlackScreen`, `nextFrame`;
+  `api.ts` → `fetchWithRetry`, `fetchMetadata`, `fetchInterface`, `fetchCliList`,
+  `runRecipe`; `loci.ts` → `lociFromResidue`, `lociFromChain`, `resolveInteractionsTarget`;
+  `camera.ts` → `saveCameraState`, `restoreCameraState`, `applyCameraAngle`;
+  `interactions.ts` → `showInteractionsAround`, `clearInteractions`; `animation.ts` →
+  `setTrackballAnimate`; `recipe-viz.ts` → `applyRecipeVisualization`; `alignment.ts` →
+  `alignStructures`.
+- Verified via grep that `executeCommand` (lines 167-1342 of the original) calls
+  every helper listed in the task spec. Note: `checkIfBlackScreen`, `fetchWithRetry`,
+  `ResidueRef`, and `MolstarPlugin` are NOT directly referenced inside `executeCommand`
+  (they were defined at module scope and used by sibling helpers, all of which have
+  moved to submodules). They are imported anyway per the task instructions, and the
+  project's ESLint config disables `@typescript-eslint/no-unused-vars` so this does
+  not produce lint errors.
+- Backed up the original file to `/tmp/commands.ts.bak` and extracted the
+  `executeCommand` body (lines 167-1342) to `/tmp/executeCommand_body.txt` (1176 lines).
+- Built a 75-line header containing: `"use client";` directive, the original module
+  JSDoc (extended with a Round 138 note explaining the new wrapper role), all four
+  pre-existing imports (`./command-schema`, `./types`, `./store`, `./recipe-aliases`),
+  `import type { CommandResult } from "./commands/types"` (needed so `executeCommand`'s
+  return type resolves locally), eleven new submodule imports covering all 24 helper
+  functions, and `export type { CommandResult } from "./commands/types"` (re-export so
+  existing `import { CommandResult } from "@/lib/molcraft/commands"` callers work).
+- Concatenated header + verbatim `executeCommand` body into the new
+  `src/lib/molcraft/commands.ts`. Final size: 1251 lines (close to the ~1200 target).
+- Ran `NODE_OPTIONS="--max-old-space-size=3072" npx eslint src/lib/molcraft/commands.ts`.
+  Result: 0 errors, 0 warnings (clean exit, no output).
+- Verified byte-for-byte that the `executeCommand` body in the new file is identical
+  to the original via `diff` — confirmed VERBATIM MATCH.
+- Ran `npx tsc --noEmit` to spot-check type integrity. The file produces the same set
+  of pre-existing `TS2551/TS2339/TS2554/TS2322` errors against the loosely-typed
+  Mol* API that the original file produced (untyped `plugin.managers.*` calls, missing
+  `getLociFromExpression` on the prebuilt bundle's selection manager type, etc.).
+  These are pre-existing issues unrelated to the refactor — `executeCommand` was copied
+  verbatim and the new imports all resolve cleanly. No NEW type errors were introduced.
+
+Stage Summary:
+- **Files changed**: 1 — `src/lib/molcraft/commands.ts` (rewritten in place).
+  - Before: 2609 lines (top helpers + executeCommand + bottom helpers).
+  - After: 1251 lines (75-line header with imports + 1176-line `executeCommand` body).
+- **Lint**: 0 errors, 0 warnings on `src/lib/molcraft/commands.ts` per
+  `NODE_OPTIONS="--max-old-space-size=3072" npx eslint src/lib/molcraft/commands.ts`.
+- **`executeCommand` integrity**: byte-for-byte identical to the original
+  (verified with `diff`).
+- **Backward compatibility**: `import { executeCommand } from "@/lib/molcraft/commands"`
+  and `import type { CommandResult } from "@/lib/molcraft/commands"` both continue to
+  work because the function is still exported from this module and `CommandResult` is
+  re-exported via `export type { CommandResult } from "./commands/types"`.
+- **Imports added**: 11 new submodule imports covering all 24 helper functions listed
+  in the task spec, plus `import type { CommandResult }` for local use in
+  `executeCommand`'s return type.
+- **No new files created** (only the rewritten `commands.ts`), per the task rules.
+- **Pre-existing tsc errors**: unchanged — they existed in the original
+  `commands.ts` and remain because `executeCommand` was copied verbatim. Fixing them
+  is out of scope for this refactor (the task explicitly forbids modifying the
+  `executeCommand` body).
+- **Backup**: original `commands.ts` saved at `/tmp/commands.ts.bak` for diffing.
