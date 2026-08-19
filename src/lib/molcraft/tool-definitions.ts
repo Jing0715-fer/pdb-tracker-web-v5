@@ -30,6 +30,11 @@ export const ANALYSIS_RECIPES = [
   "secondary_structure_simple", "interface_residues", "detect_pockets",
   "oligomer_analysis", "surface_residues", "rmsd", "conformational_changes",
   "protonation_states", "summary",
+  // R134: Additional recipes
+  "contact_map", "distances", "entity_analysis", "sequence_align",
+  "sequence_features", "structure_validation", "align_and_superpose",
+  "align_save_transformed", "cross_pdb_rmsd", "cross_pdb_rmsd_aligned",
+  "blast_chain_id", "per_residue_rmsd_two",
 ] as const;
 
 /**

@@ -1990,6 +1990,85 @@ async function applyRecipeVisualization(
         break;
       }
 
+      // R134: Additional recipe visualizations
+
+      case "ramachandran": {
+        // R134: Cartoon + secondary-structure color for Ramachandran context
+        await safe(async () => { await applyColorTheme("secondary-structure"); }, "color_ss_rama");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_ramachandran");
+        break;
+      }
+
+      case "contact_map": {
+        // R134: Cartoon + chain-id for contact map context
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain_cm");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_contact_map");
+        break;
+      }
+
+      case "distances":
+      case "align_and_superpose":
+      case "align_save_transformed":
+      case "cross_pdb_rmsd":
+      case "cross_pdb_rmsd_aligned": {
+        // R134: These are structural comparison recipes — show both structures
+        // with chain-id coloring and reset camera
+        await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain_align");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_alignment");
+        break;
+      }
+
+      case "entity_analysis": {
+        // R134: Cartoon + entity-id color for entity analysis
+        await safe(async () => { await applyColorTheme("entity-id"); }, "color_entity");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_entity");
+        break;
+      }
+
+      case "protonation_states": {
+        // R134: Cartoon + element-symbol for protonation state visualization
+        await safe(async () => { await applyColorTheme("element-symbol"); }, "color_protonation");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_protonation");
+        break;
+      }
+
+      case "sequence_align":
+      case "sequence_features": {
+        // R134: Cartoon + sequence-id color for sequence analysis
+        await safe(async () => { await applyColorTheme("sequence-id"); }, "color_seq");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_sequence");
+        break;
+      }
+
+      case "structure_validation": {
+        // R134: Cartoon + uncertainty color for validation (B-factor-like)
+        await safe(async () => { await applyColorTheme("uncertainty"); }, "color_validation");
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_validation");
+        break;
+      }
+
+      case "blast_chain_id": {
+        // R134: BLAST chain ID — just reset camera
+        await safe(async () => {
+          plugin.managers.camera.reset();
+        }, "reset_for_blast");
+        break;
+      }
+
       default: {
         // Unknown recipe — just reset camera for a clean shot
         await safe(async () => {

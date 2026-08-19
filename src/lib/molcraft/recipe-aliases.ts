@@ -22,6 +22,10 @@ export const CANONICAL_RECIPES = [
   "oligomer_analysis", "surface_residues", "rmsd", "conformational_changes",
   "protonation_states", "summary", "distances", "contact_map",
   "sequence_align", "sequence_features", "structure_validation",
+  // R134: Additional recipes
+  "align_and_superpose", "align_save_transformed", "cross_pdb_rmsd",
+  "cross_pdb_rmsd_aligned", "blast_chain_id", "entity_analysis",
+  "per_residue_rmsd_two",
 ] as const;
 
 /** Alias → canonical recipe name mapping. */
