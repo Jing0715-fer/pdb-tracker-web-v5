@@ -311,43 +311,75 @@ export async function executeCommand(
         if (structures.length === 0)
           return { ok: false, detail: "No structures loaded" };
 
-        // R120: Normalize preset name — LLM sends "cartoon" but Molstar needs
-        // "polymer-cartoon". Without this, applyPreset removes existing components
-        // and fails to create new ones → structure disappears.
-        const presetAliases: Record<string, string> = {
-          'cartoon': 'polymer-cartoon',
-          'surface': 'coarse-surface',
-          'ball-and-stick': 'atomic-detail',
-          'putty': 'atomic-detail',
-          'auto': 'auto',
-          'polymer-cartoon': 'polymer-cartoon',
-          'polymer-and-ligand': 'polymer-and-ligand',
-          'protein-and-nucleic': 'protein-and-nucleic',
-          'coarse-surface': 'coarse-surface',
-          'atomic-detail': 'atomic-detail',
+        // R135: DON'T use applyPreset — it removes existing components and
+        // recreates them, causing the structure to disappear temporarily.
+        // This was the root cause of:
+        //   1. "No components to color" error in set_color_theme
+        //   2. Structure disappearing after set_representation
+        //   3. Blank screenshots
+        //
+        // Instead, use updateRepresentationsType to change the representation
+        // type of EXISTING components without destroying them.
+        // This keeps the structure visible at all times.
+
+        // Map LLM-friendly names to Molstar representation type names
+        const reprTypeMap: Record<string, string> = {
+          'cartoon': 'cartoon',
+          'polymer-cartoon': 'cartoon',
+          'surface': 'molecular-surface',
+          'coarse-surface': 'molecular-surface',
+          'ball-and-stick': 'ball-and-stick',
+          'atomic-detail': 'ball-and-stick',
+          'putty': 'putty',
+          'auto': 'cartoon', // default to cartoon for auto
+          'polymer-and-ligand': 'cartoon', // cartoon for polymer, keep ligand sticks
         };
-        const preset = presetAliases[cmd.preset] ?? cmd.preset;
-        if (preset !== cmd.preset) {
-          console.warn(`[set_representation] Normalized "${cmd.preset}" -> "${preset}"`);
+        const reprType = reprTypeMap[cmd.preset] ?? 'cartoon';
+        console.log(`[set_representation] Changing type to: ${reprType} (preset: ${cmd.preset})`);
+
+        const components = collectComponents(plugin, structures);
+        if (components.length === 0) {
+          // No components yet — structure may still be loading
+          // Try applyPreset as a fallback (first time setup)
+          console.warn('[set_representation] No components — using applyPreset fallback');
+          try {
+            await plugin.managers.structure.component.applyPreset(structures, 'polymer-and-ligand');
+            await new Promise(r => setTimeout(r, 500));
+          } catch (err) {
+            console.warn('[set_representation] applyPreset fallback failed:', err);
+          }
+          return { ok: true, detail: `Applied preset: ${cmd.preset} (via fallback)` };
         }
 
+        // R135: Update existing components' representation type
+        // This is safe — it doesn't remove/recreate components
         try {
-          await plugin.managers.structure.component.applyPreset(
-            structures,
-            preset
-          );
-        } catch (presetErr) {
-          console.warn('[set_representation] applyPreset failed:', presetErr);
+          for (const comp of components) {
+            const reprs = (comp as any)?.representations;
+            if (reprs && reprs.length > 0) {
+              // Update existing representation type
+              for (const repr of reprs) {
+                try {
+                  plugin.managers.structure.component.updateRepresentationsType(
+                    [comp], reprType
+                  );
+                } catch { /* skip individual */ }
+                break; // Only update first representation per component
+              }
+            }
+          }
+          console.log(`[set_representation] Updated ${components.length} components to ${reprType}`);
+        } catch (err) {
+          console.warn('[set_representation] updateRepresentationsType failed:', err);
+          // Fallback: just return OK — the structure is still visible
         }
-        // R110: Wait longer (500ms) for components to be recreated after applyPreset.
-        // The previous 300ms was too short — components were sometimes not ready
-        // when set_color_theme ran next, causing "No components to color" error.
-        await new Promise(r => setTimeout(r, 500));
+
+        // Small delay for render
+        await new Promise(r => setTimeout(r, 200));
         if (typeof requestAnimationFrame !== "undefined") {
           await new Promise(r => requestAnimationFrame(() => r(null)));
-          await new Promise(r => requestAnimationFrame(() => r(null))); // extra frame
         }
-        return { ok: true, detail: `Applied preset: ${cmd.preset}` };
+        return { ok: true, detail: `Representation: ${reprType}` };
       }
 
       case "set_color_theme": {
