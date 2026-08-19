@@ -766,15 +766,13 @@ export async function executeCommand(
           label: string;
         }> = [];
 
+        // R130: Save camera state before capture loop, restore after
+        saveCameraState(plugin);
         for (const angle of angles) {
           try {
-            // R125: applyCameraAngle now does camera.reset() internally
+            // R130: applyCameraAngle rotates from current position (no reset)
             await applyCameraAngle(plugin, angle);
-            // Round 87: Wait for camera + 2 animation frames so the render
-            // pipeline settles before we grab the screenshot. The previous
-            // 80ms setTimeout was unreliable — on busy machines the frame
-            // hasn't been drawn yet, producing a black/empty screenshot.
-            await new Promise((r) => setTimeout(r, 80));
+            // R130: Wait for render to settle (500ms total in applyCameraAngle)
             await nextFrame();
             await nextFrame();
             // Capture
@@ -905,13 +903,11 @@ export async function executeCommand(
 
         // R119: No background restore needed — we didn't change it (see above).
 
-        // Round 91: Reset camera to restore user's view after capture.
-        // The applyCameraAngle function moves the camera to specific angles,
-        // which "locks" the view. Reset to let the user freely rotate again.
-        try {
-          plugin.managers.camera.reset();
-          await nextFrame();
-        } catch { /* best-effort */ }
+        // R130: Restore saved camera state so structure stays visible
+        // (instead of camera.reset() which could push structure off-screen)
+        restoreCameraState(plugin);
+        await new Promise(r => setTimeout(r, 200));
+        await nextFrame();
 
         return {
           ok: true,
@@ -1984,100 +1980,125 @@ async function applyRecipeVisualization(
   }
 }
 
+// R130: Save/restore camera state for capture — prevents structure from
+// disappearing after capture (learned from 3Dmol camera-test.html).
+// The key insight: DON'T call camera.reset() before each angle.
+// Instead, save the current view, rotate from current position, capture,
+// then restore the saved view.
+
+let savedCameraState: { position: number[]; target: number[]; up: number[] } | null = null;
+
+function saveCameraState(plugin: MolstarPlugin): void {
+  try {
+    const canvas3d = plugin.canvas3d as any;
+    const cam = canvas3d?.camera;
+    if (!cam) return;
+    const getArr = (v: any) => {
+      if (v?.toArray) return v.toArray();
+      if (Array.isArray(v)) return v;
+      return [0, 0, 0];
+    };
+    savedCameraState = {
+      position: getArr(cam.position),
+      target: getArr(cam.target),
+      up: getArr(cam.up),
+    };
+  } catch { /* best-effort */ }
+}
+
+function restoreCameraState(plugin: MolstarPlugin): void {
+  if (!savedCameraState) return;
+  try {
+    const canvas3d = plugin.canvas3d as any;
+    const cam = canvas3d?.camera;
+    if (cam?.setState) {
+      cam.setState({
+        position: savedCameraState.position as [number, number, number],
+        target: savedCameraState.target as [number, number, number],
+        up: savedCameraState.up as [number, number, number],
+      });
+    }
+    savedCameraState = null;
+  } catch { /* best-effort */ }
+}
+
 async function applyCameraAngle(
   plugin: MolstarPlugin,
   angle: "front" | "side" | "top" | "back"
 ): Promise<void> {
-  // R123: Use a simpler, safer camera rotation approach.
-  // Previous code manually calculated position vectors which could push
-  // the structure off-screen if the camera target wasn't at the structure center.
-  // New approach: Reset to default view, then use canvas3d.camera.rotate
-  // to rotate around the current target (which is the structure center after reset).
-
-  // Reset first to a known orientation (centers on the full structure)
-  try {
-    plugin.managers.camera.reset();
-  } catch {
-    /* ignore */
-  }
-  // Allow the reset to settle
-  await new Promise((r) => setTimeout(r, 100));
+  // R130: Based on 3Dmol camera-test findings:
+  // - DON'T call camera.reset() — it pushes structure off-screen
+  // - For front: capture current view as-is (no rotation)
+  // - For other angles: rotate from current position
+  // - Double render + delay for WebGL buffer to populate
 
   if (angle === "front") {
-    // already front after reset
+    // Front = current view, no rotation needed
+    // Just ensure the buffer is rendered
+    plugin.canvas3d?.requestSnapshot?.();
+    await new Promise(r => setTimeout(r, 100));
     return;
   }
 
-  const canvas3d = plugin.canvas3d as
-    | {
-        camera?: {
-          rotate?: (axis: [number, number, number], angleRad: number) => void;
-          position?: { toArray?: () => number[] } | number[];
-          target?: { toArray?: () => number[] } | number[];
-          up?: { toArray?: () => number[] } | number[];
-          setState?: (s: { position?: [number, number, number]; up?: [number, number, number]; target?: [number, number, number] }) => void;
-        };
-      }
-    | undefined;
+  const canvas3d = plugin.canvas3d as any;
   if (!canvas3d?.camera) return;
 
   try {
-    // Try using camera.rotate (rotates around the target, keeping it centered)
+    // R130: Use camera.rotate — rotates around target, keeps structure centered
     if (typeof canvas3d.camera.rotate === 'function') {
       if (angle === "side") {
-        // Rotate 90° around the Y (up) axis
-        canvas3d.camera.rotate([0, 1, 0], Math.PI / 2);
+        canvas3d.camera.rotate([0, 1, 0], Math.PI / 2);  // 90° around Y
       } else if (angle === "back") {
-        // Rotate 180° around the Y axis
-        canvas3d.camera.rotate([0, 1, 0], Math.PI);
+        canvas3d.camera.rotate([0, 1, 0], Math.PI);       // 180° around Y
       } else if (angle === "top") {
-        // Rotate 90° around the X axis (look from above)
-        canvas3d.camera.rotate([1, 0, 0], -Math.PI / 2);
+        canvas3d.camera.rotate([1, 0, 0], -Math.PI / 2);  // 90° around X
       }
-      // Wait for the rotation to render
-      await new Promise(r => setTimeout(r, 50));
+      // R130: Double render + 500ms delay (proven to work in 3Dmol test)
+      plugin.canvas3d?.requestSnapshot?.();
+      await new Promise(r => setTimeout(r, 300));
+      plugin.canvas3d?.requestSnapshot?.();
+      await new Promise(r => setTimeout(r, 200));
       return;
     }
 
-    // Fallback: manual rotation using setState (same as before but with
-    // better target handling)
-    const toTuple = (v: unknown): [number, number, number] => {
-      if (Array.isArray(v) && v.length === 3) return v as [number, number, number];
-      if (v && typeof v === "object" && "toArray" in v && typeof (v as { toArray: () => number[] }).toArray === "function") {
-        const a = (v as { toArray: () => number[] }).toArray();
-        return [a[0] || 0, a[1] || 0, a[2] || 0];
-      }
+    // Fallback: manual setState rotation
+    const getArr = (v: any) => {
+      if (v?.toArray) return v.toArray();
+      if (Array.isArray(v)) return v;
       return [0, 0, 0];
     };
-    const pos = toTuple(canvas3d.camera.position);
-    const tgt = toTuple(canvas3d.camera.target);
-    const up = toTuple(canvas3d.camera.up);
+    const pos = getArr(canvas3d.camera.position);
+    const tgt = getArr(canvas3d.camera.target);
+    const up = getArr(canvas3d.camera.up);
 
     const dx = pos[0] - tgt[0];
     const dy = pos[1] - tgt[1];
     const dz = pos[2] - tgt[2];
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    let newPos: [number, number, number];
+    let newUp: [number, number, number] = [up[0], up[1], up[2]];
 
     if (angle === "side") {
-      // Rotate 90° around Y: swap X and Z components
-      const newPos: [number, number, number] = [tgt[0] - dz, pos[1], tgt[2] + dx];
-      canvas3d.camera.setState?.({ position: newPos, up, target: tgt });
+      newPos = [tgt[0] - dz, pos[1], tgt[2] + dx];
     } else if (angle === "back") {
-      const newPos: [number, number, number] = [tgt[0] - dx, pos[1], tgt[2] - dz];
-      canvas3d.camera.setState?.({ position: newPos, up, target: tgt });
-    } else if (angle === "top") {
-      // Camera directly above target, same distance
-      const newPos: [number, number, number] = [tgt[0], tgt[1] + dist, tgt[2]];
-      // Up vector points toward the front (-Z in Molstar default)
-      const newUp: [number, number, number] = [0, 0, -1];
-      canvas3d.camera.setState?.({ position: newPos, up: newUp, target: tgt });
+      newPos = [tgt[0] - dx, pos[1], tgt[2] - dz];
+    } else { // top
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      newPos = [tgt[0], tgt[1] + dist, tgt[2]];
+      const xzLen = Math.sqrt(dx*dx + dz*dz) || 1;
+      newUp = [dx / xzLen, 0, dz / xzLen];
     }
 
-    // Force a render
-    await new Promise(r => setTimeout(r, 50));
-  } catch {
-    /* ignore — camera manipulation is best-effort */
-  }
+    if (canvas3d.camera.setState) {
+      canvas3d.camera.setState({ position: newPos, up: newUp, target: tgt });
+    }
+
+    // Double render + delay
+    plugin.canvas3d?.requestSnapshot?.();
+    await new Promise(r => setTimeout(r, 300));
+    plugin.canvas3d?.requestSnapshot?.();
+    await new Promise(r => setTimeout(r, 200));
+  } catch { /* best-effort */ }
 }
 
 function hexToNumber(hex: string): number {
