@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Camera Test — 3Dmol</title>
+<title>Camera + Focus Test — 3Dmol</title>
 <style>
 body { margin:0; font-family:system-ui; background:#1a1a2e; color:#fff; display:flex; flex-direction:column; height:100vh; }
 .header { padding:8px 16px; background:#0f0f1e; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -11,9 +11,10 @@ body { margin:0; font-family:system-ui; background:#1a1a2e; color:#fff; display:
 .btn-load { background:#4a9eff; color:#fff; }
 .btn-angle { background:#333; color:#ccc; }
 .btn-capture { background:#e85d3a; color:#fff; }
+.btn-focus { background:#10b981; color:#fff; }
 #viewer { flex:1; position:relative; background:#222; min-height:300px; }
 #viewer canvas { display:block; }
-#log { height:80px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:5px; overflow-y:auto; }
+#log { height:120px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:5px; overflow-y:auto; }
 #shots { height:90px; background:#111; padding:5px; overflow-x:auto; display:flex; gap:5px; align-items:center; }
 #shots img { height:75px; border:1px solid #444; border-radius:4px; }
 .shot-wrap { position:relative; flex-shrink:0; }
@@ -25,6 +26,8 @@ body { margin:0; font-family:system-ui; background:#1a1a2e; color:#fff; display:
   <input type="text" id="pdbId" value="4HHB">
   <button class="btn-load" id="btnLoad">Load</button>
   <button class="btn-angle" id="btnReset">Reset</button>
+  <button class="btn-focus" id="btnFocusAB">Focus A-B Interface</button>
+  <button class="btn-focus" id="btnFocusCD">Focus C-D Interface</button>
   <button class="btn-angle" data-angle="front">Front</button>
   <button class="btn-angle" data-angle="side">Side</button>
   <button class="btn-angle" data-angle="top">Top</button>
@@ -40,6 +43,7 @@ body { margin:0; font-family:system-ui; background:#1a1a2e; color:#fff; display:
 <script>
 let glviewer = null;
 let savedView = null;
+let pdbData = null; // Store PDB text for interaction parsing
 const logEl = document.getElementById('log');
 const statusEl = document.getElementById('status');
 const shotsEl = document.getElementById('shots');
@@ -69,17 +73,123 @@ async function loadPdb(id) {
   addLog('Loading ' + id + '...');
   try {
     const resp = await fetch('https://files.rcsb.org/download/' + id.toUpperCase() + '.pdb');
-    const pdbText = await resp.text();
-    addLog('Fetched: ' + pdbText.length + ' chars');
+    pdbData = await resp.text();
+    addLog('Fetched: ' + pdbData.length + ' chars');
     glviewer.clear();
-    glviewer.addModel(pdbText, 'pdb');
+    glviewer.addModel(pdbData, 'pdb');
     glviewer.setStyle({}, { cartoon: { colorscheme: 'chain' } });
     glviewer.setStyle({ hetflag: true }, { stick: { radius: 0.15 } });
     glviewer.zoomTo();
     glviewer.render();
-    addLog('Loaded ' + id + ' OK');
+    addLog('Loaded ' + id + ' OK — cartoon + chain colors');
     setStatus('Loaded ' + id);
   } catch(err) { addLog('ERROR: ' + err); setStatus('Failed'); }
+}
+
+// R131: Focus on ALL interacting residues between two chains
+// Parse PDB to find residues at the interface, then zoom to them
+function focusOnInterface(chain1, chain2) {
+  if (!glviewer || !pdbData) { addLog('No viewer or PDB data'); return; }
+
+  addLog('=== Focus on ' + chain1 + '-' + chain2 + ' interface ===');
+
+  // Parse PDB to find CA atoms for each chain
+  var lines = pdbData.split('\n');
+  var chainResidues = {}; // {chain: {resno: {resname, x, y, z}}}
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.substring(0, 4) !== 'ATOM') continue;
+    var atomName = line.substring(12, 16).trim();
+    if (atomName !== 'CA') continue;
+    var resName = line.substring(17, 20).trim();
+    var chain = line.substring(21, 22).trim();
+    var resno = parseInt(line.substring(22, 26).trim());
+    var x = parseFloat(line.substring(30, 38).trim());
+    var y = parseFloat(line.substring(38, 46).trim());
+    var z = parseFloat(line.substring(46, 54).trim());
+    if (!chainResidues[chain]) chainResidues[chain] = {};
+    if (!chainResidues[chain][resno]) {
+      chainResidues[chain][resno] = { resname: resName, x: x, y: y, z: z };
+    }
+  }
+
+  var c1Res = chainResidues[chain1] || {};
+  var c2Res = chainResidues[chain2] || {};
+  addLog('Chain ' + chain1 + ': ' + Object.keys(c1Res).length + ' residues');
+  addLog('Chain ' + chain2 + ': ' + Object.keys(c2Res).length + ' residues');
+
+  // Find interface residues: residues where CA-CA distance < 10 Angstroms
+  var interfaceResidues = []; // [{chain, resno, resname, x, y, z}]
+  var seen = {};
+  for (var r1 in c1Res) {
+    for (var r2 in c2Res) {
+      var a = c1Res[r1];
+      var b = c2Res[r2];
+      var dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      var dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < 10.0) { // Interface cutoff
+        var key1 = chain1 + ':' + r1;
+        var key2 = chain2 + ':' + r2;
+        if (!seen[key1]) { seen[key1] = 1; interfaceResidues.push({chain: chain1, resno: parseInt(r1), resname: a.resname, x: a.x, y: a.y, z: a.z}); }
+        if (!seen[key2]) { seen[key2] = 1; interfaceResidues.push({chain: chain2, resno: parseInt(r2), resname: b.resname, x: b.x, y: b.y, z: b.z}); }
+      }
+    }
+  }
+
+  addLog('Interface residues (CA dist < 10A): ' + interfaceResidues.length);
+
+  if (interfaceResidues.length === 0) {
+    addLog('No interface residues found');
+    return;
+  }
+
+  // Calculate center of all interface residues
+  var cx = 0, cy = 0, cz = 0;
+  for (var i = 0; i < interfaceResidues.length; i++) {
+    cx += interfaceResidues[i].x;
+    cy += interfaceResidues[i].y;
+    cz += interfaceResidues[i].z;
+  }
+  cx /= interfaceResidues.length;
+  cy /= interfaceResidues.length;
+  cz /= interfaceResidues.length;
+  addLog('Center: (' + cx.toFixed(1) + ', ' + cy.toFixed(1) + ', ' + cz.toFixed(1) + ')');
+
+  // Calculate max distance from center (for zoom radius)
+  var maxDist = 0;
+  for (var i = 0; i < interfaceResidues.length; i++) {
+    var dx = interfaceResidues[i].x - cx;
+    var dy = interfaceResidues[i].y - cy;
+    var dz = interfaceResidues[i].z - cz;
+    var d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (d > maxDist) maxDist = d;
+  }
+  maxDist += 5; // padding
+  addLog('Max distance from center: ' + maxDist.toFixed(1) + ' A');
+
+  // Show interface residues as sticks (ball-and-stick for side chains)
+  var sel = interfaceResidues.map(function(r) {
+    return { chain: r.chain, resi: r.resno };
+  });
+  glviewer.setStyle(sel, { cartoon: { colorscheme: 'chain' }, stick: { colorscheme: 'chain', radius: 0.15 } });
+  glviewer.render();
+  addLog('Applied ball-and-stick to ' + sel.length + ' interface residues');
+
+  // Zoom to center with enough distance to see all residues
+  glviewer.zoomTo({x: cx, y: cy, z: cz});
+  // Adjust zoom to show the full interface
+  glviewer.setZoom(Math.max(100, 200 / maxDist * 50));
+  glviewer.centerAt({x: cx, y: cy, z: cz});
+  glviewer.render();
+  addLog('Focused on interface center, zoom set for ' + maxDist.toFixed(0) + 'A radius');
+
+  // Log some key residues
+  var keyRes = interfaceResidues.slice(0, 5).map(function(r) {
+    return r.resname + r.resno + '(' + r.chain + ')';
+  });
+  addLog('Key residues: ' + keyRes.join(', '));
+
+  setStatus('Focused on ' + chain1 + '-' + chain2 + ' interface (' + interfaceResidues.length + ' residues)');
 }
 
 async function captureScreenshot(angle) {
@@ -87,19 +197,17 @@ async function captureScreenshot(angle) {
   addLog('--- ' + angle + ' ---');
   setStatus('Capturing ' + angle + '...');
 
-  // Save current view
   savedView = glviewer.getView();
 
-  // For non-front angles: rotate from current position (no reset)
   if (angle === 'side') glviewer.rotate(90, { x: 0, y: 1, z: 0 });
   else if (angle === 'top') glviewer.rotate(90, { x: 1, y: 0, z: 0 });
   else if (angle === 'back') glviewer.rotate(180, { x: 0, y: 1, z: 0 });
-  // front: no rotation, capture as-is
 
   glviewer.render();
   await new Promise(r => setTimeout(r, 500));
+  glviewer.render();
+  await new Promise(r => setTimeout(r, 100));
 
-  // Capture
   var imgData = glviewer.pngURI();
   addLog('Capture: ' + (imgData ? imgData.length : 0) + ' chars');
 
@@ -116,7 +224,6 @@ async function captureScreenshot(angle) {
     shotsEl.appendChild(wrap);
   }
 
-  // Restore view
   if (savedView) {
     glviewer.setView(savedView);
     glviewer.render();
@@ -134,17 +241,15 @@ async function captureAll() {
 document.getElementById('btnLoad').onclick = function() { loadPdb(document.getElementById('pdbId').value); };
 document.getElementById('btnReset').onclick = function() {
   if (glviewer) {
-    // Properly reset view
-    var view = glviewer.getView();
-    view.rotation = { x: 0, y: 0, z: 0, w: 1 };
-    view.translate = { x: 0, y: 0 };
-    view.zoom = 0;
-    glviewer.setView(view);
+    glviewer.setStyle({}, { cartoon: { colorscheme: 'chain' } });
+    glviewer.setStyle({ hetflag: true }, { stick: { radius: 0.15 } });
     glviewer.zoomTo();
     glviewer.render();
-    addLog('Reset');
+    addLog('Reset — full structure view');
   }
 };
+document.getElementById('btnFocusAB').onclick = function() { focusOnInterface('A', 'B'); };
+document.getElementById('btnFocusCD').onclick = function() { focusOnInterface('C', 'D'); };
 document.querySelectorAll('button[data-angle]').forEach(function(btn) {
   btn.onclick = function() { captureScreenshot(btn.dataset.angle); };
 });
