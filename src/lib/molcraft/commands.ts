@@ -351,27 +351,37 @@ export async function executeCommand(
           return { ok: true, detail: `Applied preset: ${cmd.preset} (via fallback)` };
         }
 
-        // R135: Update existing components' representation type
-        // This is safe — it doesn't remove/recreate components
-        try {
-          for (const comp of components) {
-            const reprs = (comp as any)?.representations;
-            if (reprs && reprs.length > 0) {
-              // Update existing representation type
-              for (const repr of reprs) {
-                try {
-                  plugin.managers.structure.component.updateRepresentationsType(
-                    [comp], reprType
-                  );
-                } catch { /* skip individual */ }
-                break; // Only update first representation per component
-              }
+        // R136: Try updateRepresentationsType (doesn't exist in prebuilt bundle)
+        // Fall back to applyPreset if not available
+        const hasUpdateType = typeof plugin.managers.structure.component.updateRepresentationsType === 'function';
+        if (hasUpdateType) {
+          try {
+            for (const comp of components) {
+              try {
+                plugin.managers.structure.component.updateRepresentationsType([comp], reprType);
+              } catch { /* skip */ }
             }
+            console.log(`[set_representation] Updated via updateRepresentationsType`);
+          } catch (err) {
+            console.warn('[set_representation] updateRepresentationsType failed, using applyPreset');
+            await plugin.managers.structure.component.applyPreset(structures, 'polymer-and-ligand');
           }
-          console.log(`[set_representation] Updated ${components.length} components to ${reprType}`);
-        } catch (err) {
-          console.warn('[set_representation] updateRepresentationsType failed:', err);
-          // Fallback: just return OK — the structure is still visible
+        } else {
+          // R136: updateRepresentationsType not available — use applyPreset
+          // This is the only option in the prebuilt bundle.
+          // The structure will briefly disappear during component recreation.
+          console.warn('[set_representation] updateRepresentationsType not available, using applyPreset');
+          try {
+            await plugin.managers.structure.component.applyPreset(structures, 'polymer-and-ligand');
+            // Wait longer for components to be recreated (1s + 2 frames)
+            await new Promise(r => setTimeout(r, 1000));
+            if (typeof requestAnimationFrame !== "undefined") {
+              await new Promise(r => requestAnimationFrame(() => r(null)));
+              await new Promise(r => requestAnimationFrame(() => r(null)));
+            }
+          } catch (err) {
+            console.warn('[set_representation] applyPreset also failed:', err);
+          }
         }
 
         // Small delay for render
@@ -2169,7 +2179,7 @@ async function applyCameraAngle(
   if (angle === "front") {
     // Front = current view, no rotation needed
     // Just ensure the buffer is rendered
-    plugin.canvas3d?.requestSnapshot?.();
+    // R136: requestSnapshot not in prebuilt bundle — use canvas3d.reset() or just wait
     await new Promise(r => setTimeout(r, 100));
     return;
   }
@@ -2188,9 +2198,9 @@ async function applyCameraAngle(
         canvas3d.camera.rotate([1, 0, 0], -Math.PI / 2);  // 90° around X
       }
       // R130: Double render + 500ms delay (proven to work in 3Dmol test)
-      plugin.canvas3d?.requestSnapshot?.();
+      // R136: requestSnapshot not in prebuilt bundle — use canvas3d.reset() or just wait
       await new Promise(r => setTimeout(r, 300));
-      plugin.canvas3d?.requestSnapshot?.();
+      // R136: requestSnapshot not in prebuilt bundle — use canvas3d.reset() or just wait
       await new Promise(r => setTimeout(r, 200));
       return;
     }
@@ -2228,9 +2238,9 @@ async function applyCameraAngle(
     }
 
     // Double render + delay
-    plugin.canvas3d?.requestSnapshot?.();
+    // R136: requestSnapshot not in prebuilt bundle — use canvas3d.reset() or just wait
     await new Promise(r => setTimeout(r, 300));
-    plugin.canvas3d?.requestSnapshot?.();
+    // R136: requestSnapshot not in prebuilt bundle — use canvas3d.reset() or just wait
     await new Promise(r => setTimeout(r, 200));
   } catch { /* best-effort */ }
 }
