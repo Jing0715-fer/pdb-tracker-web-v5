@@ -2438,3 +2438,115 @@ Recommended Next Steps:
    probably came from a previous filesystem operation. A future
    commit could normalize them back to 100644 with
    `git update-index --chmod=-x` to keep the tree tidy.
+
+---
+Task ID: round-139-screenshot-fix-verify
+Agent: general-purpose (sub agent)
+Task: Verify and commit the R139 screenshot display fix.
+
+Work Log:
+- Read the tail of worklog.md (R138 context) to understand the
+  project state and the pre-existing dev-server memory fragility.
+- Inspected the already-applied fix in
+  `src/components/agent/use-agent-session.ts` (projectNodes
+  tool/result handler, lines ~202-255). Confirmed the new logic:
+  when an `executions.get(callId)` entry has a non-null `result`,
+  that result (which retains the full unstripped screenshot data
+  URIs from client-side `executeToolCall`) is used for display;
+  only when the executions ref is empty (e.g. resumed sessions
+  where the tool was executed in a prior page load) does the
+  handler fall back to parsing the session event's stripped text.
+- Ran `NODE_OPTIONS="--max-old-space-size=3072" npx eslint
+  src/components/agent/use-agent-session.ts` → 0 errors, 0
+  warnings (clean exit, no output).
+- Ran `bun test src/lib/molcraft/commands/` → 106 pass, 0 fail
+  across 2 files (color-theme.test.ts, loci.test.ts), 132
+  expect() calls, 156ms. No regressions from the R138 module
+  split.
+- Dev server bring-up was the hardest part (as the R138 worklog
+  warned). The 4 GB sandbox cgroup (`/sys/fs/cgroup/memory.max`
+  = 4294967296) combined with Molstar's enormous webpack cold
+  compile made the server OOM-kill repeatedly. Attempted
+  backgrounded launches (`setsid` + `nohup` + `disown`) were
+  reaped by the sandbox ~25 s after the launching shell exited,
+  even with no HTTP request. The working pattern was to run
+  `next dev` in the FOREGROUND of one long-lived Bash command
+  (240 s timeout) and poll from a parallel Bash command. Even
+  then, two earlier parallel attempts timed out at 240 s because
+  the cold compile of `/` takes ~25 s and the polling curl
+  timeouts were too tight. Final successful configuration:
+  `NODE_OPTIONS="--max-old-space-size=2048" ./node_modules/.bin/next
+  dev --webpack -p 3000` in foreground + `curl --max-time 60`.
+  First successful 200 came back in 25.15 s
+  (`GET / 200 in 25.1s (next.js: 24.9s, application-code: 225ms)`).
+  Peak next-server RSS during compile was ~465 MB — well within
+  limits once the compile finished. (For reference: the kernel
+  OOM counter `memory.oom_control`'s `oom_kill` field held at 2
+  for the whole session, meaning the backgrounded-process deaths
+  were sandbox reaping, NOT OOM — only the very first attempt at
+  uptime 8357 s was a true cgroup OOM of pid 5960 at 3.27 GB
+  anon-rss.)
+- Once the server was healthy, ran `agent-browser open
+  http://127.0.0.1:3000/` then `agent-browser snapshot`. The
+  page rendered correctly: h1 "PDB Structure Tracker", subtitle
+  "Protein Data Bank Weekly Monitor", nav tabs (Weekly /
+  Evaluation / Literature / Analysis), breadcrumb (PDB Tracker ›
+  Weekly), sidebar with "WEEKLY SNAPSHOTS", "RECENT ACTIVITY",
+  "QUICK ACTIONS" (Load Demo Data, Run Center, Evaluate Target,
+  Literature, Structure Analysis), filter bar, and the weekly
+  table with 0 entries. No render errors.
+- Staged ONLY `src/components/agent/use-agent-session.ts` (left
+  `db/custom.db` unstaged — it's runtime DB state, not part of
+  the fix). Committed as `5dc2bbe` with the R139 commit message
+  and pushed to `origin/main` (`d1f938f..5dc2bbe main -> main`).
+
+Stage Summary:
+- Fix verified: `src/components/agent/use-agent-session.ts`
+  projectNodes tool/result handler now prefers the executions ref
+  (full unstripped screenshot data URIs) over the session event's
+  R128-stripped text, with a safe fallback for resumed sessions.
+- Lint: 0 errors / 0 warnings on the fixed file.
+- Tests: 106 pass / 0 fail in `src/lib/molcraft/commands/`.
+- Dev server: eventually brought up healthy on port 3000 (HTTP
+  200, ~25 s cold compile). agent-browser snapshot confirms the
+  page renders with the expected "PDB Structure Tracker" heading
+  and full nav/sidebar/table chrome.
+- Commit: `5dc2bbe3f831c7e9761984a1599e28b77b6c17bf` pushed to
+  `origin/main`. 1 file changed, 36 insertions(+), 15 deletions(-).
+
+Recommended Next Steps:
+1. **End-to-end screenshot verification**: The current
+   verification only confirms the homepage renders. A follow-up
+   round should actually trigger an agent tool call that produces
+   a screenshot (e.g. `capture_view` or `analyze_structure` with
+   auto-capture), then confirm the `<img>` in the tool-result card
+   loads a real `data:image/png;base64,...` src rather than the
+   "[image data omitted — front]" placeholder. This requires a
+   loaded Molstar structure and a multi-turn agent run, which is
+   out of scope for a verification round.
+2. **Address the dev-server memory fragility**: The 4 GB sandbox
+   cgroup + Molstar webpack cold compile is a persistent footgun
+   (R138 and R139 both lost significant time to it). Options:
+   (a) persist `.next/` build artifacts across sessions so cold
+   compiles are cheaper; (b) switch to `next dev --turbopack`
+   once Molstar is compatible (R138 worklog noted this);
+   (c) run `next build && next start` for verification rounds
+   (the production server is far more memory-stable, but the
+   task spec forbade `bun run build` for R138/R139); (d) request
+   a larger sandbox memory limit for agent-verification rounds.
+3. **Investigate sandbox background-process reaping**: Backgrounded
+   `next dev` processes (even with `setsid` + `nohup` +
+   `disown`) were killed ~25 s after the launching Bash tool
+   command returned, despite no OOM. This suggests the sandbox
+   reaps processes whose parent shell has exited. The workaround
+   (foreground server + parallel polling command) works but is
+   awkward. A `systemd-run --user` or persistent process supervisor
+   inside the sandbox would be cleaner if available.
+4. **Consider stripping strategy**: The R128 strip-and-placeholder
+   approach is correct for the LLM context window, but it created
+   this UI bug because the session event log doubles as the UI's
+   source of truth. A cleaner long-term design might store the
+   FULL result in a separate client-side cache (which is
+   effectively what `executionsRef` now is) and treat the session
+   event log as LLM-context-only. The R139 fix is a pragmatic
+   patch; a future refactor could formalize the separation.
