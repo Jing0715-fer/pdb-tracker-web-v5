@@ -353,9 +353,29 @@ export class AgentLoop {
       // the full data is needed for the UI to render images.
       // Use a larger limit (2MB) for these, normal limit (8000) for others.
       const isScreenshot = r.name === 'capture_multi_angle' || r.name === 'capture_snapshot' || r.name === 'recapture_screenshot';
-      const maxLen = isScreenshot ? 2_000_000 : 3000; // R126: Reduced from 8000 to prevent context overflow
-      // R126: For pdb_analyze, strip the raw interaction list to keep only summary
+      // R128: For screenshot results, DON'T send the actual base64 data URIs
+      // to the LLM — they're huge (2MB each) and blow up the context window.
+      // The LLM can't see images via tool results anyway. Just send a summary.
+      // The full data is still stored in the session events for the UI.
       let resultToSend = r.result;
+      if (isScreenshot && r.ok && resultToSend) {
+        try {
+          const parsed = typeof resultToSend === 'string' ? JSON.parse(resultToSend) : JSON.parse(JSON.stringify(resultToSend));
+          // Strip dataUri from screenshots — replace with placeholder
+          if (parsed?.data?.screenshots && Array.isArray(parsed.data.screenshots)) {
+            const angles = parsed.data.screenshots.map((s: any) => s.angle || s.label || 'unknown');
+            parsed.data.screenshots = parsed.data.screenshots.map((s: any) => ({
+              angle: s.angle || '',
+              label: s.label || '',
+              dataUri: `[image data omitted — ${s.angle || s.label || 'screenshot'}]`,
+            }));
+            parsed.detail = `Captured ${angles.length} screenshots (${angles.join(', ')})`;
+          }
+          resultToSend = parsed;
+        } catch { /* keep original if parsing fails */ }
+      }
+      const maxLen = isScreenshot ? 500 : 3000; // R128: Screenshots only need 500 chars (no image data)
+      // R126: For pdb_analyze, strip the raw interaction list to keep only summary
       if (r.name === 'pdb_analyze' && r.ok && resultToSend) {
         try {
           const parsed = typeof resultToSend === 'string' ? JSON.parse(resultToSend) : resultToSend;
