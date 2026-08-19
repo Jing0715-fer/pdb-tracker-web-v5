@@ -2080,3 +2080,150 @@ Task: Real browser test to verify structure loading, screenshot display, and tes
 
 ### Git
 - main branch: 23835ba (test route created, pushed to remote)
+
+---
+Task ID: round-137-verify-and-commit
+Agent: main
+Task: Verify R137 bug fixes, run lint, commit, and update worklog.
+
+Work Log:
+- Read last 200 lines of worklog.md to understand project history (current HEAD was Round 136 / commit 0bdce5c).
+- Reviewed the uncommitted diff across the 3 modified files:
+  - src/lib/molcraft/commands.ts (+108 / -16)
+  - src/lib/agent/loop.ts (+11 / -4)
+  - src/lib/agent/session/types.ts (+1 / -1)
+- Confirmed all 5 bug fixes are present in the source code (see Bug Fix Verification below).
+- Dev server lifecycle:
+  1. Initial `curl http://127.0.0.1:3000/` returned HTTP 000 (no server running).
+  2. Started dev server with NODE_OPTIONS=--max-old-space-size=2560 — killed by OOM during first compile (next-server reached ~3.1 GB RSS, global OOM kill, dmesg confirmed).
+  3. Restarted with NODE_OPTIONS=--max-old-space-size=2048 — survived the compile (webpack cache in .next/dev/cache/ likely helped).
+  4. `curl http://127.0.0.1:3000/` returned HTTP 200 in ~27s, size 26206 bytes, title `<title>PDB Structure Tracker</title>`.
+- Ran ESLint on the 3 changed files with NODE_OPTIONS=--max-old-space-size=3072:
+  `npx eslint src/lib/molcraft/commands.ts src/lib/agent/loop.ts src/lib/agent/session/types.ts`
+  Result: EXIT 0 — 0 errors, 0 warnings.
+- Committed the changes:
+  `git add -A && git commit -m "fix: Round 137 — 5 bug fixes from comprehensive code review ..."`
+  Result: commit d4803de on main branch, 3 files changed, 121 insertions(+), 24 deletions(-).
+- Verified app loads with agent-browser:
+  - `agent-browser open http://127.0.0.1:3000/` → ✓ PDB Structure Tracker loaded
+  - `agent-browser snapshot` showed fully hydrated UI: header with title "PDB Structure Tracker" + subtitle "Protein Data Bank Weekly Monitor", mode tabs (Weekly/Evaluation/Literature/Analysis), search box, sidebar with WEEKLY SNAPSHOTS / RECENT ACTIVITY / QUICK ACTIONS (Load Demo Data, Run Center, Evaluate Target, Literature, Structure Analysis), main panel with Dashboard Charts, filter chips (All/★ Bookmarks/Cryo-EM/X-ray/NMR/High IF/Top IF), Date sort combobox, table.
+  - `agent-browser screenshot /tmp/r137-home.png` → 24338-byte PNG saved.
+- Appended this section to worklog.md.
+
+Bug Fix Verification (5 bugs from Round 137 code review):
+
+1. **beforeMeasCount undefined in capture_multi_angle**
+   - File: src/lib/molcraft/commands.ts, function `executeCommand` (capture_multi_angle branch).
+   - Root cause: `beforeMeasCount` was declared but never assigned a value, so the
+     post-capture cleanup fell through to `meas.clear()`, which wiped EVERY measurement
+     in the scene (distances, angles, labels — including ones the user had placed).
+   - Fix: Capture `beforeMeasCount` from `plugin.managers.structure.measurement.state.items`
+     BEFORE adding residue labels. Cleanup now trims only the labels we added, leaving
+     user measurements intact. Wrapped in try/catch so a malformed state falls back to
+     `undefined` (legacy clear-all behavior) instead of throwing.
+
+2. **normalizeColorTheme returning invalid 'bfactor'**
+   - File: src/lib/molcraft/commands.ts, function `normalizeColorTheme`.
+   - Root cause: The ALIASES map had `"bfactor": "bfactor"` and `"b-factor": "bfactor"`,
+     but Molstar has NO `bfactor` color theme — B-factor coloring is done via the
+     `uncertainty` color theme. Passing the literal `"bfactor"` into
+     `updateRepresentationsTheme` broke the representation and the structure
+     visually disappeared.
+   - Fix: `bfactor` / `b-factor` / `bfact` / `temperature` now all map to `uncertainty`.
+
+3. **applyColorTheme silent no-ops for partial-charge, secondary-structure**
+   - File: src/lib/molcraft/commands.ts, function `normalizeColorTheme` (CANONICAL set).
+   - Root cause: The CANONICAL set was missing `partial-charge`, `secondary-structure`,
+     `formal-charge`, `residue-charge`, `molecule-type`, `polymer-id`, `operator-name`,
+     `element-index`, `carbohydrate-symbol`, `cartoon`, `illustrative`, `shape-group`,
+     `trajectory-index`, `unit-index`, `volume-value`, `volume-segment`,
+     `volume-instance`, `external-structure`, `external-volume`, `atom-id`.
+     When an LLM emitted `partial-charge` or `secondary-structure` (e.g. for the
+     electrostatic/apbs, secondary_structure, or ramachandran recipe visualizations),
+     `normalizeColorTheme` returned `null` and `applyColorTheme` silently did nothing.
+   - Fix: Expanded CANONICAL to the complete list of Molstar built-in color themes
+     (verified against node_modules/molstar/lib/mol-theme/color/). Added the missing
+     aliases: `secondary`/`ss`/`secstruc`/`helix-sheet` → `secondary-structure`,
+     `charge`/`partial`/`electrostatic` → `partial-charge`, `formal` → `formal-charge`,
+     `molecule`/`mol-type` → `molecule-type`. Also updated the "Unknown color theme"
+     error message to list the newly-supported themes.
+
+4. **lociFromResidue destructively clearing user selection**
+   - File: src/lib/molcraft/commands.ts, function `lociFromResidue`.
+   - Root cause: The function called `plugin.managers.structure.selection.clear()`
+     + `structureInteractivity(...)` to SET the selection, then read the loci back from
+     the selection manager. This destroyed the user's current selection on EVERY call —
+     and `lociFromResidue` is invoked in loops (e.g. 30× when drawing interaction lines),
+     so the user's selection was wiped repeatedly.
+   - Fix: Prefer the non-destructive `plugin.managers.structure.selection.getLociFromExpression(expr, data)`
+     which resolves a MolScript expression to a Loci WITHOUT touching the selection
+     manager. Only fall back to the select-then-read pattern when
+     `getLociFromExpression` is unavailable (older prebuilt Molstar bundles). In the
+     fallback path, the previous destructive behavior is preserved but a `console.warn`
+     is emitted if a user selection was cleared without finding a matching loci.
+
+5. **stepEnd computed but unused + max-tokens reason lost in agent loop**
+   - File: src/lib/agent/loop.ts (`AgentLoop.step`) + src/lib/agent/session/types.ts.
+   - Root cause: `stepEnd` was computed and then thrown away — `step/end` was appended
+     with only `{ turn, step }`. Separately, when the LLM emitted `finish_reason: length`
+     (hit maxTokens without emitting a `stop`), `TurnEndReason` was hardcoded to
+     `{ kind: 'completed' }`, hiding the truncation from the UI.
+   - Fix: `SessionEventMap['step/end']` now accepts an optional `reason?: StepEndReason`,
+     and `loop.ts` passes `stepEnd` into the `step/end` event. The `turn/end` reason is
+     now `max-tokens` when `finish.kind === 'max-tokens'`, so the UI can show "turn was
+     truncated by max-tokens" instead of falsely reporting "completed".
+
+Stage Summary:
+- **Lint**: 0 errors, 0 warnings on all 3 changed files (commands.ts, loop.ts, types.ts).
+- **Git**: commit `d4803de` on `main` branch — "fix: Round 137 — 5 bug fixes from comprehensive code review".
+  - 3 files changed, 121 insertions(+), 24 deletions(-).
+  - Not yet pushed to remote (no `git push` was performed in this round).
+- **Dev server**: OOM-killed on first attempt (2560 MB heap → next-server reached ~3.1 GB RSS,
+  global OOM kill, dmesg confirmed at timestamp 7689s). Successfully started with
+  `NODE_OPTIONS=--max-old-space-size=2048` and the webpack cache in `.next/dev/cache/`
+  enabled a clean compile: `GET / 200 in 26.6s` (next.js 26.4s, application-code 208ms).
+  Server is unstable — dies after ~30-60s of idle — but lives long enough to verify a
+  page load + agent-browser snapshot.
+- **Agent-browser verification**: ✓ Page loads and hydrates. Snapshot confirms the full
+  PDB Structure Tracker UI renders: header, mode tabs, sidebar (Weekly Snapshots / Quick
+  Actions), main panel (Dashboard Charts, filter chips, table). Screenshot saved to
+  /tmp/r137-home.png (24338 bytes).
+
+Next Steps Recommendation (Round 138):
+
+1. **Push to remote**: `git push origin main` to publish commit d4803de.
+
+2. **Browser E2E for the 5 fixes**: Once a stable server is available, verify each fix
+   end-to-end in the browser:
+   - Bug #1 (beforeMeasCount): Place a user measurement, then trigger
+     `capture_multi_angle` with labels — confirm the user measurement survives.
+   - Bug #2 (bfactor): Send "set_color_theme bfactor" via the DSH agent — confirm the
+     structure remains visible and is colored by uncertainty (B-factor).
+   - Bug #3 (partial-charge / secondary-structure): Trigger the electrostatic/apbs,
+     secondary_structure, or ramachandran recipe visualizations — confirm colors apply
+     instead of silently no-opping.
+   - Bug #4 (lociFromResidue): Make a user selection in the 3D viewer, then trigger an
+     interaction-line draw (which calls lociFromResidue 30×) — confirm the user
+     selection survives.
+   - Bug #5 (max-tokens reason): Set max_tokens very low and send a long prompt —
+     confirm the UI shows "turn truncated by max-tokens" instead of "completed".
+
+3. **Stable dev server**: The 2048 MB heap workaround works for a single compile, but
+   the server still dies after ~30-60s of idle. Consider:
+   - Using `next dev --turbopack` (faster, lower memory) once Molstar is compatible.
+   - Or running `next build && next start` for E2E tests (production server is stable).
+   - The task spec forbade `bun run build` for this round, so this is a future option.
+
+4. **Unit tests for normalizeColorTheme / lociFromResidue**: These are pure-ish
+   functions that would benefit from regression tests:
+   - `normalizeColorTheme('bfactor')` → `'uncertainty'`
+   - `normalizeColorTheme('partial-charge')` → `'partial-charge'`
+   - `normalizeColorTheme('garbage')` → `null`
+   - `lociFromResidue` does not call `selection.clear()` when
+     `getLociFromExpression` is available.
+
+5. **Investigate getLociFromExpression availability**: The fallback path is still
+   destructive. Confirm whether the prebuilt Molstar bundle exposes
+   `selection.getLociFromExpression`; if not, consider opening an upstream issue or
+   vendoring a small helper that resolves MolScript expressions without mutating
+   selection state.
