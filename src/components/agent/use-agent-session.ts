@@ -208,23 +208,44 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
             if (data.message.source.kind === 'tool' && data.message.source.callId === n.callId) {
               n.status = data.error ? 'error' : 'ok';
               n.error = data.error?.message;
-              // The message content is [ToolResultBlock{ type: 'tool-result', content: [TextBlock{ type: 'text', text: '...' }] }]
-              // Extract the inner text from the tool-result block's content.
-              let rawText = '';
-              for (const block of data.message.content) {
-                if (block.type === 'tool-result') {
-                  for (const inner of block.content) {
-                    if (inner.type === 'text') rawText += inner.text;
+
+              // R139 (screenshot display fix): Prefer the executions ref result
+              // over the session event's stripped version.
+              //
+              // The R128 optimization in loop.ts strips screenshot data URIs
+              // (replacing them with "[image data omitted — front]") before
+              // storing the tool/result in the session event log, to prevent
+              // 2MB base64 strings from blowing up the LLM context window.
+              //
+              // However, the UI reads from the session event to display
+              // screenshots, so it was getting the stripped version and the
+              // <img> tags couldn't load "[image data omitted]" as a src.
+              //
+              // The executions ref (populated client-side in executeToolCall)
+              // has the FULL unstripped result with real data URIs. We prefer
+              // it for display, falling back to the event's parsed text only
+              // when the executions ref doesn't have data (e.g. resumed sessions).
+              const exec = executions.get(n.callId);
+              if (exec?.result != null) {
+                n.result = exec.result;
+                if (exec.durationMs != null) n.durationMs = exec.durationMs;
+              } else {
+                // Fall back to parsing the event's result text (stripped version)
+                let rawText = '';
+                for (const block of data.message.content) {
+                  if (block.type === 'tool-result') {
+                    for (const inner of block.content) {
+                      if (inner.type === 'text') rawText += inner.text;
+                    }
+                  } else if (block.type === 'text') {
+                    rawText += block.text;
                   }
-                } else if (block.type === 'text') {
-                  rawText += block.text;
                 }
-              }
-              // Parse the result JSON string back into an object.
-              try {
-                n.result = JSON.parse(rawText);
-              } catch {
-                n.result = rawText;
+                try {
+                  n.result = JSON.parse(rawText);
+                } catch {
+                  n.result = rawText;
+                }
               }
             }
             break;
