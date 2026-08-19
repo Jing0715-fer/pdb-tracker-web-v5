@@ -61,26 +61,21 @@ const nextConfig: NextConfig = {
   // We keep webpack (not Turbopack) because the project relies on
   // serverExternalPackages + snapshot tuning that webpack supports natively.
   webpack: (config, { dev }) => {
-    // ── OOM mitigation (4GB / no-swap sandboxes) ─────────────────────────
-    // molstar (~95 MB of TypeScript source) is the #1 cause of dev-mode
-    // OOM kills. Even though it's loaded via dynamic import, webpack still
-    // traces its package.json exports on first compile. In dev we use
-    // IgnorePlugin to completely skip molstar's TS/JS source — the 3D
-    // viewer shows a placeholder in dev and works normally in production.
-    if (dev) {
-      // Obtain the webpack instance that Next.js bundles. Using createRequire
-      // avoids ESM/CJS interop issues with a top-level `import webpack`.
-      const webpack = localRequire('webpack');
-      config.plugins = config.plugins || [];
-      // IgnorePlugin with a contextRegExp matches any `import('molstar/...')`
-      // deep path (not just the bare `import 'molstar'`). This completely
-      // removes molstar's 95MB of TS source from the dev compile graph.
-      // The 3D viewer shows a placeholder in dev; production builds are
-      // unaffected (IgnorePlugin only runs in the `dev` branch).
-      config.plugins.push(new webpack.IgnorePlugin({
-        resourceRegExp: /^molstar(\/|$)/,
-      }));
-    }
+    // ── OOM mitigation ─────────────────────────────────────────────────────
+    // R135: REMOVED the IgnorePlugin for molstar — it was causing Molstar
+    // to NEVER load in dev mode, which meant:
+    //   - Structure viewer showed a placeholder (not real 3D)
+    //   - set_color_theme failed with "No components to color"
+    //   - set_representation / updateRepresentationsType had no effect
+    //   - Screenshots were blank (capturing placeholder, not 3D canvas)
+    //   - camera.rotate / camera.setState had no effect
+    //
+    // Instead of ignoring molstar entirely, we use:
+    //   1. serverExternalPackages (already set above) — molstar is loaded
+    //      as an external package, not bundled by webpack
+    //   2. optimizePackageImports — reduces barrel import overhead
+    //   3. parallelism: 1 — prevents parallel compilation OOM
+    //   4. infrastructureLogging: 'warn' — reduces log memory
 
     config.parallelism = 1;
     config.infrastructureLogging = Object.assign(config.infrastructureLogging || {}, {
