@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Molstar Camera Test</title>
+<link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/molstar@3.20.0/build/viewer/molstar.css">
+<style>
+body { margin:0; font-family:system-ui; background:#1a1a2e; color:#fff; }
+.header { padding:10px 20px; background:#0f0f1e; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.header input { padding:6px 10px; background:#222; border:1px solid #444; border-radius:4px; color:#fff; width:100px; }
+.header button { padding:6px 12px; border:none; border-radius:4px; cursor:pointer; font-size:13px; }
+.btn-load { background:#4a9eff; color:#fff; }
+.btn-angle { background:#333; color:#ccc; }
+.btn-angle:hover { background:#444; }
+.btn-capture { background:#e85d3a; color:#fff; }
+#viewer { position:absolute; top:50px; left:0; right:0; bottom:0; }
+#log { position:fixed; bottom:0; left:0; right:50%; height:150px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:5px; overflow-y:auto; z-index:100; }
+#shots { position:fixed; bottom:0; left:50%; right:0; height:150px; background:#111; padding:5px; overflow-y:auto; z-index:100; display:flex; flex-wrap:wrap; gap:5px; }
+#shots img { height:80px; border:1px solid #444; border-radius:4px; }
+#shots .label { position:absolute; bottom:0; left:0; background:rgba(0,0,0,0.7); color:#fff; font-size:10px; padding:1px 4px; }
+.shot-wrap { position:relative; }
+</style>
+</head>
+<body>
+<div class="header">
+  <input type="text" id="pdbId" value="4HHB" placeholder="PDB ID">
+  <button class="btn-load" onclick="loadPdb()">Load</button>
+  <button class="btn-angle" onclick="resetCam()">Reset</button>
+  <button class="btn-angle" onclick="capture('front')">Front</button>
+  <button class="btn-angle" onclick="capture('side')">Side</button>
+  <button class="btn-angle" onclick="capture('top')">Top</button>
+  <button class="btn-angle" onclick="capture('back')">Back</button>
+  <button class="btn-capture" onclick="captureAll()">Capture All</button>
+  <span id="status" style="font-size:12px;color:#888;"></span>
+</div>
+<div id="viewer"></div>
+<div id="log"></div>
+<div id="shots"></div>
+
+<script type="module">
+import { Viewer } from 'https://cdn.jsdelivr.net/npm/molstar@3.20.0/build/viewer/molstar.js';
+
+let viewer;
+const log = document.getElementById('log');
+const status = document.getElementById('status');
+const shots = document.getElementById('shots');
+
+function addLog(msg) {
+  const time = new Date().toLocaleTimeString();
+  log.innerHTML += `[${time}] ${msg}<br>`;
+  log.scrollTop = log.scrollHeight;
+}
+
+window.loadPdb = async function() {
+  const id = document.getElementById('pdbId').value.trim();
+  if (!id) return;
+  status.textContent = `Loading ${id}...`;
+  addLog(`Loading PDB ${id}...`);
+  try {
+    await viewer.loadPdb(id);
+    addLog(`Loaded ${id} OK`);
+    // Wait for render
+    await new Promise(r => setTimeout(r, 2000));
+    // Apply cartoon + chain color
+    addLog('Applying polymer-cartoon preset...');
+    const structs = viewer.plugin.managers.structure.hierarchy.current.structures;
+    if (structs.length > 0) {
+      await viewer.plugin.managers.structure.component.applyPreset(structs, 'polymer-and-ligand');
+      await new Promise(r => setTimeout(r, 500));
+      // Apply chain-id color
+      const components = [];
+      for (const s of structs) {
+        if (s.components) components.push(...s.components);
+      }
+      if (components.length > 0) {
+        viewer.plugin.managers.structure.component.updateRepresentationsTheme(components, { color: 'chain-id' });
+        addLog('Color: chain-id applied');
+      }
+    }
+    // Reset camera
+    viewer.plugin.managers.camera.reset();
+    await new Promise(r => setTimeout(r, 300));
+    status.textContent = `Loaded ${id}`;
+    addLog('Ready for capture');
+  } catch (err) {
+    addLog(`ERROR: ${err}`);
+    status.textContent = `Error: ${err}`;
+  }
+};
+
+window.resetCam = function() {
+  viewer.plugin.managers.camera.reset();
+  addLog('Camera reset');
+};
+
+async function rotateCamera(angle) {
+  const plugin = viewer.plugin;
+  // Reset first
+  plugin.managers.camera.reset();
+  await new Promise(r => setTimeout(r, 150));
+  await new Promise(r => requestAnimationFrame(() => {}));
+  
+  if (angle === 'front') return; // front is default
+  
+  const cam = plugin.canvas3d?.camera;
+  if (!cam) { addLog('No camera!'); return; }
+  
+  const getArr = (v) => {
+    if (v?.toArray) return v.toArray();
+    if (Array.isArray(v)) return v;
+    return [0,0,0];
+  };
+  
+  const pos = getArr(cam.position);
+  const tgt = getArr(cam.target);
+  const up = getArr(cam.up);
+  
+  const dx = pos[0]-tgt[0], dy = pos[1]-tgt[1], dz = pos[2]-tgt[2];
+  const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  
+  addLog(`After reset: pos=[${pos.map(n=>n.toFixed(1))}] tgt=[${tgt.map(n=>n.toFixed(1))}] dist=${dist.toFixed(1)}`);
+  
+  let newPos, newUp = [...up];
+  
+  if (angle === 'side') {
+    newPos = [tgt[0]-dz, tgt[1]+dy, tgt[2]+dx];
+  } else if (angle === 'back') {
+    newPos = [tgt[0]-dx, tgt[1]+dy, tgt[2]-dz];
+  } else if (angle === 'top') {
+    newPos = [tgt[0], tgt[1]+dist, tgt[2]];
+    const xzLen = Math.sqrt(dx*dx + dz*dz) || 1;
+    newUp = [dx/xzLen, 0, dz/xzLen];
+  }
+  
+  addLog(`Rotate ${angle}: newPos=[${newPos.map(n=>n.toFixed(1))}]`);
+  
+  if (cam.setState) {
+    cam.setState({ position: newPos, up: newUp, target: tgt });
+  }
+  await new Promise(r => setTimeout(r, 100));
+  await new Promise(r => requestAnimationFrame(() => {}));
+}
+
+window.capture = async function(angle) {
+  status.textContent = `Capturing ${angle}...`;
+  addLog(`--- Capturing ${angle} ---`);
+  await rotateCamera(angle);
+  
+  const dataUri = await viewer.plugin.helpers?.viewportScreenshot?.getImageDataUri({
+    width: 800, height: 600, transparency: false, axes: true
+  });
+  
+  if (dataUri) {
+    addLog(`Screenshot OK: ${dataUri.length} chars`);
+    const wrap = document.createElement('div');
+    wrap.className = 'shot-wrap';
+    const img = document.createElement('img');
+    img.src = dataUri;
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = angle;
+    wrap.appendChild(img);
+    wrap.appendChild(label);
+    shots.appendChild(wrap);
+  } else {
+    addLog('Screenshot FAILED');
+  }
+  status.textContent = 'Ready';
+};
+
+window.captureAll = async function() {
+  shots.innerHTML = '';
+  for (const a of ['front','side','top','back']) {
+    await window.capture(a);
+  }
+  addLog('=== All done ===');
+};
+
+// Initialize viewer
+viewer = new Viewer(document.getElementById('viewer'), {
+  layoutShowControls: false,
+  viewportShowExpand: false,
+  viewportShowControls: true,
+  viewportShowAnimation: false,
+  backgroundColor: { r: 255, g: 255, b: 255 }
+});
+addLog('Viewer created. Click Load to start.');
+</script>
+</body>
+</html>
