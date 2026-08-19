@@ -1672,35 +1672,83 @@ async function applyRecipeVisualization(
           const chain1 = params?.chain1 as string | undefined;
           const chain2 = params?.chain2 as string | undefined;
           if (chain1 && chain2 && Array.isArray(interactions) && interactions.length > 0) {
-            // R126: Focus on the interaction interface — collect all interacting
-            // residues and focus the camera on their center, with enough radius
-            // to show the full interface.
+            // R127: Focus on ALL interacting residues, not just one.
+            // Strategy: Select all interacting residues in Molstar, then use
+            // the selection boundary (center + radius) to focus the camera.
+            // This centers the entire interaction interface in the view.
+
+            // Collect unique (chain, resno) pairs
             const residueSet = new Set<string>();
+            const residueList: Array<{ chain: string; resno: number }> = [];
             for (const c of interactions.slice(0, 20)) {
               const ch1 = c.chain1 as string;
               const rn1 = c.resno1 as number;
               const ch2 = c.chain2 as string;
               const rn2 = c.resno2 as number;
-              if (ch1 && rn1) residueSet.add(`${ch1}:${rn1}`);
-              if (ch2 && rn2) residueSet.add(`${ch2}:${rn2}`);
+              if (ch1 && rn1) {
+                const key = `${ch1}:${rn1}`;
+                if (!residueSet.has(key)) {
+                  residueSet.add(key);
+                  residueList.push({ chain: ch1, resno: rn1 });
+                }
+              }
+              if (ch2 && rn2) {
+                const key = `${ch2}:${rn2}`;
+                if (!residueSet.has(key)) {
+                  residueSet.add(key);
+                  residueList.push({ chain: ch2, resno: rn2 });
+                }
+              }
             }
-            // Focus on the first interacting residue pair with large radius
-            // to encompass the full interface region
-            const firstInt = interactions[0];
-            const focusChain = (firstInt.chain1 || chain1) as string;
-            const focusResno = (firstInt.resno1 || 1) as number;
-            const loci = await lociFromResidue(viewer, { chain: focusChain, resno: focusResno });
-            if (loci) {
-              // Use a large minRadius to show surrounding residues too
-              plugin.managers.camera.focusLoci(loci, { minRadius: 30 });
-              await new Promise(r => setTimeout(r, 200));
+
+            if (residueList.length > 0) {
+              // Clear current selection
+              try {
+                plugin.managers.structure.selection.clear();
+              } catch { /* ignore */ }
+
+              // Select each interacting residue
+              for (const { chain, resno } of residueList) {
+                try {
+                  const loci = await lociFromResidue(viewer, { chain, resno });
+                  if (loci && !isLociEmpty(loci)) {
+                    plugin.managers.structure.selection.add(loci);
+                  }
+                } catch { /* skip individual failures */ }
+              }
+
+              // Wait for selection to settle
+              await new Promise(r => setTimeout(r, 100));
+
+              // Focus on the selection boundary (center + radius of ALL selected residues)
+              const boundary = plugin.managers.structure.selection.getBoundary();
+              if (boundary?.sphere) {
+                plugin.managers.camera.focusSphere({
+                  center: boundary.sphere.center,
+                  radius: (boundary.sphere.radius ?? 20) + 5, // +5 for padding
+                });
+                await new Promise(r => setTimeout(r, 200));
+              } else {
+                // Fallback: focus on first residue with large radius
+                const first = residueList[0];
+                const loci = await lociFromResidue(viewer, { chain: first.chain, resno: first.resno });
+                if (loci) {
+                  plugin.managers.camera.focusLoci(loci, { minRadius: 25 });
+                  await new Promise(r => setTimeout(r, 200));
+                }
+              }
+
+              // Clear selection after focusing (don't leave residues highlighted)
+              try {
+                plugin.managers.structure.selection.clear();
+              } catch { /* ignore */ }
             }
           } else if (chain1 && chain2) {
             // No interaction data — just reset to show full structure
             plugin.managers.camera.reset();
             await new Promise(r => setTimeout(r, 100));
           }
-        }, "focus_interface");
+        }, "focus_all_interface_residues");
         // Round 91/94: Add ball-and-stick for interaction residues to make
         // side chains visible in the screenshot. Use the interactions data
         // directly to find which residues to show.
