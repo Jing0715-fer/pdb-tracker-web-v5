@@ -1668,14 +1668,39 @@ async function applyRecipeVisualization(
         // pushes the rest of the structure off-screen. Instead, reset the
         // camera to show the full structure, then apply the camera angle.
         await safe(async () => {
+          const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           const chain1 = params?.chain1 as string | undefined;
           const chain2 = params?.chain2 as string | undefined;
-          if (chain1 && chain2) {
-            // Reset camera to show full structure
+          if (chain1 && chain2 && Array.isArray(interactions) && interactions.length > 0) {
+            // R126: Focus on the interaction interface — collect all interacting
+            // residues and focus the camera on their center, with enough radius
+            // to show the full interface.
+            const residueSet = new Set<string>();
+            for (const c of interactions.slice(0, 20)) {
+              const ch1 = c.chain1 as string;
+              const rn1 = c.resno1 as number;
+              const ch2 = c.chain2 as string;
+              const rn2 = c.resno2 as number;
+              if (ch1 && rn1) residueSet.add(`${ch1}:${rn1}`);
+              if (ch2 && rn2) residueSet.add(`${ch2}:${rn2}`);
+            }
+            // Focus on the first interacting residue pair with large radius
+            // to encompass the full interface region
+            const firstInt = interactions[0];
+            const focusChain = (firstInt.chain1 || chain1) as string;
+            const focusResno = (firstInt.resno1 || 1) as number;
+            const loci = await lociFromResidue(viewer, { chain: focusChain, resno: focusResno });
+            if (loci) {
+              // Use a large minRadius to show surrounding residues too
+              plugin.managers.camera.focusLoci(loci, { minRadius: 30 });
+              await new Promise(r => setTimeout(r, 200));
+            }
+          } else if (chain1 && chain2) {
+            // No interaction data — just reset to show full structure
             plugin.managers.camera.reset();
             await new Promise(r => setTimeout(r, 100));
           }
-        }, "reset_camera_for_interactions");
+        }, "focus_interface");
         // Round 91/94: Add ball-and-stick for interaction residues to make
         // side chains visible in the screenshot. Use the interactions data
         // directly to find which residues to show.

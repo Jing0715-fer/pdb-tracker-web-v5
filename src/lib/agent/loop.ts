@@ -353,10 +353,41 @@ export class AgentLoop {
       // the full data is needed for the UI to render images.
       // Use a larger limit (2MB) for these, normal limit (8000) for others.
       const isScreenshot = r.name === 'capture_multi_angle' || r.name === 'capture_snapshot' || r.name === 'recapture_screenshot';
-      const maxLen = isScreenshot ? 2_000_000 : 8000;
+      const maxLen = isScreenshot ? 2_000_000 : 3000; // R126: Reduced from 8000 to prevent context overflow
+      // R126: For pdb_analyze, strip the raw interaction list to keep only summary
+      let resultToSend = r.result;
+      if (r.name === 'pdb_analyze' && r.ok && resultToSend) {
+        try {
+          const parsed = typeof resultToSend === 'string' ? JSON.parse(resultToSend) : resultToSend;
+          const analysisData = parsed?.analysisResult?.data?.data || parsed?.analysisResult?.data || parsed?.data;
+          if (analysisData) {
+            // Keep only summary fields, not the full interaction list
+            const summary: Record<string, unknown> = {};
+            for (const key of ['total', 'hbonds', 'salt_bridges', 'hydrophobic', 'chain1', 'chain2', 'ligand', 'recipe']) {
+              if (analysisData[key] !== undefined) summary[key] = analysisData[key];
+            }
+            // Include only top 5 interactions (not all 17+)
+            if (Array.isArray(analysisData.interactions)) {
+              summary.interactions = analysisData.interactions.slice(0, 5).map((i: any) => ({
+                type: i.type, chain1: i.chain1, resno1: i.resno1, resname1: i.resname1,
+                chain2: i.chain2, resno2: i.resno2, resname2: i.resname2,
+                distance_A: i.distance_A,
+              }));
+              summary.total_interactions = analysisData.interactions.length;
+            }
+            // Replace the full data with the summary
+            if (parsed?.analysisResult?.data?.data) {
+              parsed.analysisResult.data.data = summary;
+            } else if (parsed?.analysisResult?.data) {
+              parsed.analysisResult.data = summary;
+            }
+            resultToSend = parsed;
+          }
+        } catch { /* keep original if parsing fails */ }
+      }
       const content: ContentBlock[] = r.ok
-        ? [{ type: 'text', text: JSON.stringify(r.result ?? {}).slice(0, maxLen) }]
-        : [{ type: 'text', text: r.error || 'Tool execution failed' }];
+        ? [{ type: 'text', text: JSON.stringify(resultToSend ?? {}).slice(0, maxLen) }]
+        : [{ type: 'text', text: (r.error || 'Tool execution failed').slice(0, 500) }]; // R126: Truncate error too
       const toolResultBlock: ToolResultBlock = {
         type: 'tool-result',
         callId: r.callId,

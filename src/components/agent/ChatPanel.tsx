@@ -351,9 +351,9 @@ export function AgentChatPanel() {
 
       {/* Error banner */}
       {session.error && (
-        <div className="mx-3 mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+        <div className="mx-3 mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300 max-w-full overflow-hidden">
           <div className="flex items-start justify-between gap-2">
-            <span className="break-words">{session.error}</span>
+            <span className="break-all line-clamp-4 flex-1 min-w-0">{session.error}</span>
             <button onClick={session.clearError} className="shrink-0 text-red-500 hover:text-red-700">
               <X className="h-3.5 w-3.5" />
             </button>
