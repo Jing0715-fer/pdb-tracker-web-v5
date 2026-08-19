@@ -299,18 +299,23 @@ export class AgentLoop {
       .map((b) => b.text)
       .join('');
 
+    // R137 (code-review): Simplified — max-tokens propagates, otherwise completed.
     const stepEnd: StepEndReason =
       finish.kind === 'max-tokens'
         ? { kind: 'max-tokens' }
-        : toolCalls.length === 0
-          ? { kind: 'completed' }
-          : { kind: 'completed' };
+        : { kind: 'completed' };
 
-    this.session.append('step/end', { turn: this.turn, step: this.step });
+    this.session.append('step/end', { turn: this.turn, step: this.step, reason: stepEnd });
 
     if (toolCalls.length === 0) {
       // No tool calls — turn is complete.
-      const turnEnd: TurnEndReason = { kind: 'completed' };
+      // R137 (code-review): Preserve the max-tokens reason instead of
+      // always reporting 'completed'. When the model hit maxTokens without
+      // emitting a finish_reason of 'stop', the turn was truncated and the
+      // user deserves to see that in the turn-end reason.
+      const turnEnd: TurnEndReason = finish.kind === 'max-tokens'
+        ? { kind: 'max-tokens' }
+        : { kind: 'completed' };
       this.session.append('turn/end', { turn: this.turn, reason: turnEnd });
       this.setStatusIdle();
       return {

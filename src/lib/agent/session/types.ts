@@ -61,7 +61,7 @@ export interface SessionEventMap {
   'turn/start': { turn: number };
   'turn/end': { turn: number; reason: TurnEndReason };
   'step/start': { turn: number; step: number };
-  'step/end': { turn: number; step: number };
+  'step/end': { turn: number; step: number; reason?: StepEndReason };
   'user/message': UserMessage;
   'assistant/chunk': { turn: number; step: number; chunk: StreamChunk };
   'assistant/message': {

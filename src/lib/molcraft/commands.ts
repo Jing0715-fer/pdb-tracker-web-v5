@@ -414,7 +414,7 @@ export async function executeCommand(
         if (!theme) {
           return {
             ok: false,
-            detail: `Unknown color theme: "${cmd.theme}". Valid: chain-id, element-symbol, residue-name, sequence-id, hydrophobicity, uniform, polymer-index, occupancy, model-index, structure-index, entity-id`,
+            detail: `Unknown color theme: "${cmd.theme}". Valid: chain-id, element-symbol, residue-name, sequence-id, hydrophobicity, uniform, polymer-index, occupancy, model-index, structure-index, entity-id, uncertainty (bfactor), partial-charge, secondary-structure, molecule-type, formal-charge, residue-charge`,
           };
         }
         try {
@@ -769,7 +769,22 @@ export async function executeCommand(
         await new Promise((r) => setTimeout(r, 150));
 
         // Round 74: Add residue labels to the 3D view before capturing
+        // R137 (code-review): Capture the measurement count BEFORE adding any
+        // labels so the cleanup later only removes the labels we add here —
+        // NOT user-added measurements. Previously `beforeMeasCount` was never
+        // assigned, so the cleanup fell through to `meas.clear()` which wiped
+        // every measurement in the scene (distances, angles, labels, etc.).
+        let beforeMeasCount: number | undefined;
         if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
+          try {
+            const meas = plugin.managers.structure.measurement as any;
+            const items = meas?.state?.items;
+            beforeMeasCount = Array.isArray(items)
+              ? items.length
+              : (typeof items === 'object' && items ? Object.keys(items).length : 0);
+          } catch {
+            beforeMeasCount = undefined;
+          }
           for (const lbl of cmd.labels) {
             try {
               if (lbl.chain !== undefined && lbl.resno !== undefined) {
@@ -1432,9 +1447,45 @@ async function lociFromResidue(
   };
 
   try {
-    // Clear any existing selection, then use the viewer's high-level API to
-    // select everything matching the expression. The viewer handles building
-    // the loci internally; we then read it back from the selection manager.
+    // R137 (code-review): Previously this function called
+    // `plugin.managers.structure.selection.clear()` + `structureInteractivity`
+    // to SET the selection, then read it back. That destroyed the user's
+    // current selection on EVERY call — and this function is invoked in
+    // loops (e.g. 30× when drawing interaction lines), so the user's
+    // selection was wiped repeatedly.
+    //
+    // The non-destructive path is `getLociFromExpression(expr, data)` which
+    // resolves a MolScript expression to a Loci WITHOUT touching the
+    // selection manager. We use it as the primary path and only fall back
+    // to the select-then-read pattern if it is unavailable.
+    const getLociFromExpression = plugin.managers.structure.selection.getLociFromExpression as
+      | ((expr: unknown, data: unknown) => unknown) | undefined;
+    if (typeof getLociFromExpression === 'function') {
+      const loci = getLociFromExpression(expr, data);
+      if (loci && !isLociEmpty(loci)) {
+        return loci;
+      }
+      // Empty loci — fall through to fallback below
+    }
+
+    // Fallback: select-then-read-back (destructive, but only used when
+    // getLociFromExpression is not available in the prebuilt bundle).
+    // Save the current selection so we can restore it after reading.
+    const hadSelection = (() => {
+      try {
+        const entries = plugin.managers.structure.selection.entries as
+          | Map<unknown, { _selection?: { elements?: unknown[] }; selection?: { elements?: unknown[] } }>
+          | undefined;
+        if (!entries || typeof entries.forEach !== 'function') return false;
+        let any = false;
+        entries.forEach((val) => {
+          const sel = val?._selection || val?.selection;
+          if (sel?.elements && sel.elements.length > 0) any = true;
+        });
+        return any;
+      } catch { return false; }
+    })();
+
     plugin.managers.structure.selection.clear();
     viewer.structureInteractivity({ expression: expr, action: ["select"] });
     // The selection update may be synchronous or via a microtask. Wait a tick
@@ -1465,6 +1516,11 @@ async function lociFromResidue(
     const loci = plugin.managers.structure.selection.getLoci(data);
     if (loci && !isLociEmpty(loci)) {
       return loci;
+    }
+    // R137: If we cleared a user selection but couldn't find a loci, we've
+    // already lost it — nothing more to do. Log so it's visible in dev.
+    if (hadSelection) {
+      console.warn('[lociFromResidue] Cleared a user selection but found no matching loci');
     }
     return null;
   } catch (err) {
@@ -2254,11 +2310,16 @@ function hexToNumber(hex: string): number {
  * Map LLM-friendly color theme aliases to Molstar's actual built-in color theme
  * names. Returns `null` if the theme is not recognized.
  *
- * Molstar's valid built-in color themes (must match `ColorTheme.BuiltIn`):
+ * Molstar's valid built-in color themes (verified against
+ * node_modules/molstar/lib/mol-theme/color/):
  *   uniform, chain-id, entity-id, entity-source, model-index, structure-index,
- *   residue-name, element-symbol, sequence-id, hydrophobicity, occupancy,
- *   uncertainty, polymer-index, operator-hkl, cross-link, trajectory, volume,
- *   particle, ...
+ *   residue-name, element-symbol, element-index, sequence-id, hydrophobicity,
+ *   occupancy, uncertainty, polymer-id, polymer-index, operator-hkl,
+ *   operator-name, partial-charge, formal-charge, residue-charge,
+ *   secondary-structure, molecule-type, carbohydrate-symbol, cartoon,
+ *   illustrative, shape-group, trajectory-index, unit-index, volume-value,
+ *   volume-segment, volume-instance, external-structure, external-volume,
+ *   atom-id
  *
  * Common LLM mistakes we accept as aliases:
  *   "chain"        → "chain-id"
@@ -2270,8 +2331,20 @@ function hexToNumber(hex: string): number {
  *   "model"        → "model-index"
  *   "structure"    → "structure-index"
  *   "polymer"      → "polymer-index"
+ *   "bfactor"      → "uncertainty"  (B-factor coloring uses the uncertainty theme)
+ *   "b-factor"     → "uncertainty"
+ *   "secondary"    → "secondary-structure"
+ *   "ss"           → "secondary-structure"
+ *   "charge"       → "partial-charge"
+ *   "partial"      → "partial-charge"
+ *   "formal"       → "formal-charge"
  *
- * Passing an unrecognized theme (e.g. raw "chain") into
+ * R137 (code-review): Previously `bfactor` mapped to itself (invalid — Molstar
+ * has no "bfactor" theme; B-factor is rendered via the `uncertainty` color
+ * theme). `partial-charge` and `secondary-structure` were missing from the
+ * CANONICAL set, so `applyColorTheme` silently dropped them (no-op), which
+ * broke the electrostatic/apbs, secondary_structure, and ramachandran recipe
+ * visualizations. Passing an unrecognized theme into
  * `updateRepresentationsTheme` breaks the representation and the structure
  * visually disappears, so we explicitly validate here.
  */
@@ -2279,16 +2352,21 @@ function normalizeColorTheme(theme: string | undefined): string | null {
   if (!theme || typeof theme !== "string") return null;
   const t = theme.trim().toLowerCase().replace(/[\s_-]+/g, "-");
 
-  // Direct canonical match.
+  // Direct canonical match — the complete list of Molstar built-in color themes.
   const CANONICAL = new Set([
     "uniform", "chain-id", "entity-id", "entity-source", "model-index",
-    "structure-index", "residue-name", "element-symbol", "sequence-id",
-    "hydrophobicity", "occupancy", "uncertainty", "polymer-index",
-    "operator-hkl", "cross-link", "trajectory", "volume", "particle",
+    "structure-index", "residue-name", "element-symbol", "element-index",
+    "sequence-id", "hydrophobicity", "occupancy", "uncertainty",
+    "polymer-id", "polymer-index", "operator-hkl", "operator-name",
+    "partial-charge", "formal-charge", "residue-charge",
+    "secondary-structure", "molecule-type", "carbohydrate-symbol",
+    "cartoon", "illustrative", "shape-group", "trajectory-index",
+    "unit-index", "volume-value", "volume-segment", "volume-instance",
+    "external-structure", "external-volume", "atom-id",
   ]);
   if (CANONICAL.has(t)) return t;
 
-  // Alias map.
+  // Alias map — LLM-friendly names → canonical Molstar theme names.
   const ALIASES: Record<string, string> = {
     "chain": "chain-id",
     "chainid": "chain-id",
@@ -2300,7 +2378,6 @@ function normalizeColorTheme(theme: string | undefined): string | null {
     "byelement": "element-symbol",
     "colorbyelement": "element-symbol",
     "residue": "residue-name",
-    "residue-name": "residue-name",
     "by-residue": "residue-name",
     "byresidue": "residue-name",
     "amino-acid": "residue-name",
@@ -2311,14 +2388,29 @@ function normalizeColorTheme(theme: string | undefined): string | null {
     "seq": "sequence-id",
     "seqid": "sequence-id",
     "hydrophobic": "hydrophobicity",
-    "hydrophobicity": "hydrophobicity",
     "by-hydrophobicity": "hydrophobicity",
     "entity": "entity-id",
     "model": "model-index",
     "structure": "structure-index",
     "polymer": "polymer-index",
-    "bfactor": "bfactor",
-    "b-factor": "bfactor",
+    // R137: bfactor → uncertainty (NOT a self-map — "bfactor" is invalid)
+    "bfactor": "uncertainty",
+    "b-factor": "uncertainty",
+    "bfact": "uncertainty",
+    "temperature": "uncertainty",
+    // R137: secondary-structure aliases
+    "secondary": "secondary-structure",
+    "ss": "secondary-structure",
+    "secstruc": "secondary-structure",
+    "helix-sheet": "secondary-structure",
+    // R137: charge aliases
+    "charge": "partial-charge",
+    "partial": "partial-charge",
+    "electrostatic": "partial-charge",
+    "formal": "formal-charge",
+    "residue-charge-name": "residue-charge",
+    "molecule": "molecule-type",
+    "mol-type": "molecule-type",
     "occupancy": "occupancy",
     "uncertainty": "uncertainty",
   };
