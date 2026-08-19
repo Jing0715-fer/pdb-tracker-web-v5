@@ -1659,7 +1659,9 @@ async function applyRecipeVisualization(
       case "all_interactions":
       case "hbonds":
       case "salt_bridges":
-      case "hydrophobic_contacts": {
+      case "hydrophobic_contacts":
+      case "interface_residues":
+      case "oligomer_analysis": {
         // R122: Do NOT focus on a single residue — it zooms in too much and
         // pushes the rest of the structure off-screen. Instead, reset the
         // camera to show the full structure, then apply the camera angle.
@@ -1667,6 +1669,29 @@ async function applyRecipeVisualization(
           const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           const chain1 = params?.chain1 as string | undefined;
           const chain2 = params?.chain2 as string | undefined;
+          // R132: Normalize interaction data — interface_residues recipe uses
+          // a different format (chain1_interface_residues / chain2_interface_residues)
+          // Convert to the same format as all_interactions (interactions[])
+          if (!Array.isArray(interactions) || interactions.length === 0) {
+            const c1Res = params ? (params as any).chain1_interface_residues as Array<Record<string, unknown>> : undefined;
+            const c2Res = params ? (params as any).chain2_interface_residues as Array<Record<string, unknown>> : undefined;
+            if (Array.isArray(c1Res) && Array.isArray(c2Res)) {
+              interactions = [];
+              for (const r of c1Res) {
+                if (r.contacts && Array.isArray(r.contacts)) {
+                  for (const c of r.contacts) {
+                    interactions.push({
+                      chain1: chain1, resno1: r.resno, resname1: r.name,
+                      chain2: c.to_chain, resno2: c.to_res, resname2: c.to_name,
+                      atom1: c.atom, atom2: undefined,
+                    });
+                  }
+                }
+              }
+              console.log(`[viz] Converted interface_residues data: ${interactions.length} interactions`);
+            }
+          }
+
           if (chain1 && chain2 && Array.isArray(interactions) && interactions.length > 0) {
             // R131: Focus on ALL interacting residues using the approach
             // proven in the 3Dmol camera-test.html:
@@ -1754,7 +1779,18 @@ async function applyRecipeVisualization(
         // side chains visible in the screenshot. Use the interactions data
         // directly to find which residues to show.
         await safe(async () => {
-          const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
+          let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
+          // R132: Normalize interface_residues data format
+          if (!Array.isArray(interactions) || interactions.length === 0) {
+            const c1Res = params ? (params as any).chain1_interface_residues as Array<Record<string, unknown>> : undefined;
+            const c2Res = params ? (params as any).chain2_interface_residues as Array<Record<string, unknown>> : undefined;
+            if (Array.isArray(c1Res) && Array.isArray(c2Res)) {
+              interactions = [];
+              for (const r of [...c1Res, ...c2Res]) {
+                interactions.push({ chain1: r.resno ? chain1 : chain2, resno1: r.resno, chain2: chain2, resno2: r.resno });
+              }
+            }
+          }
           if (!Array.isArray(interactions) || interactions.length === 0) return;
           const data = getFirstStructureData(plugin);
           if (!data) return;
@@ -1803,7 +1839,8 @@ async function applyRecipeVisualization(
         // using measurement.addDistance. This creates visible dashed lines
         // for H-bonds, salt bridges, and hydrophobic contacts.
         await safe(async () => {
-          const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
+          let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
+          // R132: Use normalized interactions (already converted above)
           if (!Array.isArray(interactions) || interactions.length === 0) return;
           // Draw lines for the top 15 interactions (to avoid cluttering)
           for (const c of interactions.slice(0, 15)) {
