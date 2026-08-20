@@ -9,8 +9,9 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight, Crosshair } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAppStore } from '@/lib/molcraft/store';
 import type { ConversationNode } from './use-agent-session';
 
 const CARD_META: Record<
@@ -322,12 +323,13 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
 // R113.4: Carousel with VLM commentary, quality badges, best highlight
 function ScreenshotResult({ name, screenshots, result }: {
   name: string;
-  screenshots: Array<{ dataUri: string; angle?: string; label?: string }>;
+  screenshots: Array<{ dataUri: string; angle?: string; label?: string; cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } }>;
   result: unknown;
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showRaw, setShowRaw] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  const [restoringView, setRestoringView] = useState(false);
 
   // R113.3: Extract VLM result from the tool result
   // R140: Also check vlmPending for explicit capture_multi_angle calls
@@ -515,6 +517,38 @@ function ScreenshotResult({ name, screenshots, result }: {
           <span className="font-medium">问题: </span>
           {issues[currentIdx]}
         </div>
+      )}
+
+      {/* R144: Restore camera view button — restores the view that was active
+          when this screenshot was captured, so the user can explore that angle
+          interactively in the 3D viewer. */}
+      {current?.cameraState && (
+        <button
+          onClick={async () => {
+            const viewer = useAppStore.getState().viewer;
+            if (!viewer?.plugin || !current.cameraState) return;
+            setRestoringView(true);
+            try {
+              const { restoreCameraViewState } = await import('@/lib/molcraft/commands/camera');
+              restoreCameraViewState(viewer.plugin, current.cameraState);
+              console.log(`[R144] Restored camera view for angle "${current.angle}"`);
+            } catch (err) {
+              console.warn('[R144] Failed to restore camera view:', err);
+            } finally {
+              setTimeout(() => setRestoringView(false), 500);
+            }
+          }}
+          disabled={restoringView}
+          className="mt-1.5 flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-claude-accent/10 border border-claude-accent/30 text-claude-accent hover:bg-claude-accent/20 transition-colors disabled:opacity-50"
+          title="恢复此截图对应的相机视角到3D查看器"
+        >
+          {restoringView ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Crosshair className="h-3 w-3" />
+          )}
+          恢复视角
+        </button>
       )}
 
       {/* Thumbnail strip */}

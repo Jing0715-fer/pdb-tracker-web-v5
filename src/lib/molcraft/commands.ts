@@ -60,6 +60,7 @@ import {
   saveCameraState,
   restoreCameraState,
   restoreCameraStateKeep,
+  getCurrentCameraState,
   applyCameraAngle,
 } from "./commands/camera";
 import { showInteractionsAround, clearInteractions } from "./commands/interactions";
@@ -734,6 +735,7 @@ export async function executeCommand(
           dataUri: string;
           angle: string;
           label: string;
+          cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
         }> = [];
 
         // R130: Save camera state before capture loop, restore after
@@ -764,6 +766,9 @@ export async function executeCommand(
                 transparency: false,
                 axes: true,
               });
+            // R144: Capture the camera state AFTER rotation, BEFORE quality check.
+            // This is the view the user will restore when they click "恢复视角".
+            const cameraState = getCurrentCameraState(plugin);
             if (dataUri) {
               // Round 90: Check if the screenshot is all-black (or nearly so).
               // If the structure hasn't rendered yet, the canvas will be
@@ -791,6 +796,7 @@ export async function executeCommand(
                       dataUri: retryDataUri,
                       angle,
                       label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                      cameraState: cameraState ?? undefined,
                     });
                   } else {
                     // Retry also failed — use the original (with a warning)
@@ -799,6 +805,7 @@ export async function executeCommand(
                       dataUri,
                       angle,
                       label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                      cameraState: cameraState ?? undefined,
                     });
                   }
                 } else {
@@ -807,6 +814,7 @@ export async function executeCommand(
                     dataUri,
                     angle,
                     label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                    cameraState: cameraState ?? undefined,
                   });
                 }
               } else {
@@ -815,6 +823,7 @@ export async function executeCommand(
                   dataUri,
                   angle,
                   label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                  cameraState: cameraState ?? undefined,
                 });
               }
             }

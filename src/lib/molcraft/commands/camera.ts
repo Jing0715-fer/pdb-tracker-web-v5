@@ -12,6 +12,13 @@ import type { MolstarPlugin } from "../types";
 // position, capture, then restore the saved view.
 let savedCameraState: { position: number[]; target: number[]; up: number[] } | null = null;
 
+/** R144: Camera state type — the full view parameters needed to restore a view. */
+export interface CameraViewState {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+}
+
 export function saveCameraState(plugin: MolstarPlugin): void {
   try {
     const canvas3d = plugin.canvas3d as any;
@@ -53,11 +60,69 @@ function restoreCameraStateImpl(plugin: MolstarPlugin, keep: boolean): void {
         target: savedCameraState.target as [number, number, number],
         up: savedCameraState.up as [number, number, number],
       });
+      // R144: Request a redraw so the orbit controls sync with the new camera
+      // state. Without this, the trackball controls may keep their internal
+      // stale state and the user can't freely rotate after a capture.
+      if (typeof canvas3d.requestDraw === 'function') {
+        canvas3d.requestDraw();
+      }
     }
     if (!keep) {
       savedCameraState = null;
     }
   } catch (err) { console.warn('[restoreCameraState] failed to restore camera state:', err); }
+}
+
+/**
+ * R144: Get the current camera view state.
+ * Used to save per-screenshot camera states so the user can restore
+ * a specific screenshot's view later.
+ */
+export function getCurrentCameraState(plugin: MolstarPlugin): CameraViewState | null {
+  try {
+    const canvas3d = plugin.canvas3d as any;
+    const cam = canvas3d?.camera;
+    if (!cam) return null;
+    const getArr = (v: any): [number, number, number] => {
+      if (v?.toArray) {
+        const arr = v.toArray();
+        return [arr[0] ?? 0, arr[1] ?? 0, arr[2] ?? 0];
+      }
+      if (Array.isArray(v)) return [v[0] ?? 0, v[1] ?? 0, v[2] ?? 0];
+      return [0, 0, 0];
+    };
+    return {
+      position: getArr(cam.position),
+      target: getArr(cam.target),
+      up: getArr(cam.up),
+    };
+  } catch (err) {
+    console.warn('[getCurrentCameraState] failed:', err);
+    return null;
+  }
+}
+
+/**
+ * R144: Restore a specific camera view state.
+ * Used by the "恢复视角" button in the screenshot carousel to restore
+ * the view that was active when a specific screenshot was captured.
+ */
+export function restoreCameraViewState(plugin: MolstarPlugin, state: CameraViewState): void {
+  try {
+    const canvas3d = plugin.canvas3d as any;
+    const cam = canvas3d?.camera;
+    if (cam?.setState) {
+      cam.setState({
+        position: state.position,
+        target: state.target,
+        up: state.up,
+      });
+      // R144: Request a redraw so the orbit controls sync with the new camera state
+      if (typeof canvas3d.requestDraw === 'function') {
+        canvas3d.requestDraw();
+      }
+    }
+  } catch (err) { console.warn('[restoreCameraViewState] failed:', err); }
 }
 
 /**

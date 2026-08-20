@@ -587,36 +587,40 @@ function UserMessageNode({ seq, text, onResend, onFork }: { seq: number; text: s
   }
 
   return (
-    <div className="group flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-300">
+    <div className="group flex flex-col items-end animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="flex items-start gap-2 max-w-[85%]">
         <div className="relative rounded-2xl rounded-tr-sm bg-claude-accent text-white px-3 py-2 text-sm">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-          {/* R121: Action bar — always visible with subtle opacity, full on hover */}
-          <div className="absolute -bottom-2.5 left-1 flex items-center gap-1 opacity-40 group-hover:opacity-100 transition-opacity">
-            {onFork && (
-              <button
-                onClick={() => onFork(seq)}
-                className="flex items-center justify-center h-6 w-6 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent hover:bg-claude-accent/10 hover:text-claude-accent text-claude-text-muted transition-colors"
-                title="从此处分叉对话"
-              >
-                <GitFork className="h-3.5 w-3.5" />
-              </button>
-            )}
-            {onResend && (
-              <button
-                onClick={() => setEditing(true)}
-                className="flex items-center justify-center h-6 w-6 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent hover:bg-claude-accent/10 hover:text-claude-accent text-claude-text-muted transition-colors"
-                title="编辑并重发"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
         </div>
         <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-accent text-white">
           <User className="h-3.5 w-3.5" />
         </div>
       </div>
+      {/* R144: Action bar — always visible inline below the message (not floating/absolute).
+          Previously used opacity-40 group-hover:opacity-100 + absolute -bottom-2.5
+          which was hard to see and could overlap other messages. */}
+      {(onFork || onResend) && (
+        <div className="flex items-center gap-1 mt-1 mr-8">
+          {onFork && (
+            <button
+              onClick={() => onFork(seq)}
+              className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors"
+              title="从此处分叉对话"
+            >
+              <GitFork className="h-3 w-3" />
+            </button>
+          )}
+          {onResend && (
+            <button
+              onClick={() => setEditing(true)}
+              className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors"
+              title="编辑并重发"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -634,12 +638,12 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
     }
   };
   return (
-    <div className="group flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+    <div className="group flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="flex items-start gap-2 max-w-[90%]">
         <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-claude-bg-elevated border border-claude-border text-claude-accent">
           <Bot className="h-3.5 w-3.5" />
         </div>
-        <div className="relative rounded-2xl rounded-tl-sm bg-claude-bg-elevated border border-claude-border px-3 py-2 text-sm text-claude-text">
+        <div className="rounded-2xl rounded-tl-sm bg-claude-bg-elevated border border-claude-border px-3 py-2 text-sm text-claude-text">
           {text ? (
             <div className="prose-sm max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
@@ -653,60 +657,63 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
               <div className="mt-1 whitespace-pre-wrap opacity-80">{reasoning}</div>
             </details>
           )}
-          {/* R121: Action bar — always visible with subtle opacity, full on hover */}
-          {text && (
-            <div className="absolute -bottom-2.5 right-2 flex items-center gap-1 opacity-40 group-hover:opacity-100 transition-opacity">
-              {onFeedback && (
-                <>
-                  <button
-                    onClick={() => onFeedback('up')}
-                    disabled={driving}
-                    className={cn(
-                      'flex items-center justify-center h-6 w-6 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
-                      feedback === 'up'
-                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-600'
-                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-600',
-                    )}
-                    title="有帮助"
-                  >
-                    <ThumbsUp className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => onFeedback('down')}
-                    disabled={driving}
-                    className={cn(
-                      'flex items-center justify-center h-6 w-6 rounded-full border shadow-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
-                      feedback === 'down'
-                        ? 'bg-red-500/20 border-red-500/50 text-red-600'
-                        : 'bg-claude-bg-surface border-claude-border text-claude-text-muted hover:border-red-500 hover:bg-red-500/10 hover:text-red-600',
-                    )}
-                    title="无帮助"
-                  >
-                    <ThumbsDown className="h-3.5 w-3.5" />
-                  </button>
-                </>
-              )}
-              {onRegenerate && (
-                <button
-                  onClick={onRegenerate}
-                  disabled={driving}
-                  className="flex items-center justify-center h-6 w-6 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent hover:bg-claude-accent/10 hover:text-claude-accent text-claude-text-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="重新生成"
-                >
-                  <RotateCw className="h-3.5 w-3.5" />
-                </button>
-              )}
-              <button
-                onClick={handleCopy}
-                className="flex items-center justify-center h-5 w-5 rounded-full bg-claude-bg-surface border border-claude-border shadow-sm hover:border-claude-accent/50 hover:text-claude-accent text-claude-text-muted"
-                title="复制消息"
-              >
-                {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-              </button>
-            </div>
-          )}
         </div>
       </div>
+      {/* R144: Action bar — always visible inline below the message (not floating/absolute).
+          Previously used opacity-40 group-hover:opacity-100 + absolute -bottom-2.5
+          which was hard to see and could overlap other messages. */}
+      {text && (onFeedback || onRegenerate) && (
+        <div className="flex items-center gap-0.5 mt-1 ml-8">
+          {onFeedback && (
+            <>
+              <button
+                onClick={() => onFeedback('up')}
+                disabled={driving}
+                className={cn(
+                  'flex items-center justify-center h-5 w-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                  feedback === 'up'
+                    ? 'text-emerald-600 bg-emerald-500/10'
+                    : 'text-claude-text-muted hover:text-emerald-600 hover:bg-emerald-500/10',
+                )}
+                title="有帮助"
+              >
+                <ThumbsUp className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => onFeedback('down')}
+                disabled={driving}
+                className={cn(
+                  'flex items-center justify-center h-5 w-5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                  feedback === 'down'
+                    ? 'text-red-600 bg-red-500/10'
+                    : 'text-claude-text-muted hover:text-red-600 hover:bg-red-500/10',
+                )}
+                title="无帮助"
+              >
+                <ThumbsDown className="h-3 w-3" />
+              </button>
+              <div className="w-px h-3 bg-claude-border mx-1" />
+            </>
+          )}
+          {onRegenerate && (
+            <button
+              onClick={onRegenerate}
+              disabled={driving}
+              className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="重新生成"
+            >
+              <RotateCw className="h-3 w-3" />
+            </button>
+          )}
+          <button
+            onClick={handleCopy}
+            className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors"
+            title="复制消息"
+          >
+            {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
