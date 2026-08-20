@@ -2769,3 +2769,82 @@ Followup (low-priority):
   R142, harmless.
 - Consider adding a unit test for `vlm-capture-loop.ts` (currently no
   test file; the loop is exercised only at runtime via use-agent-session).
+
+---
+Task ID: round-143-code-review-bugfixes-commit
+Agent: general-purpose subagent
+Task: Commit R143 code review bug fixes.
+
+Work Log:
+- Read tail of worklog.md (last ~70 lines) for R142 context — the
+  VLM-controlled capture loop landed in 3a5a4b7f and exposed 3 latent
+  bugs in the screenshot/structure-analysis pipeline, which R143 now
+  fixes.
+- Ran eslint on all 6 files named in the task (the 4 changed ones plus
+  `use-agent-session.ts` and `ToolCallCard.tsx` for verification):
+    NODE_OPTIONS="--max-old-space-size=3072" npx eslint \
+      src/lib/molcraft/commands.ts \
+      src/lib/molcraft/commands/camera.ts \
+      src/lib/molcraft/commands/recipe-viz.ts \
+      src/lib/molcraft/vlm-capture-loop.ts \
+      src/components/agent/use-agent-session.ts \
+      src/components/agent/ToolCallCard.tsx
+  Result: 0 errors / 1 warning (the pre-existing, harmless
+  `Unused eslint-disable directive` at ToolCallCard.tsx:159 carried over
+  from R141/R142 — unrelated to R143).
+- Ran unit tests:
+    `bun test src/lib/molcraft/commands/`
+  Result: 106 pass / 0 fail / 132 expect() calls across 2 files
+  (`loci.test.ts`, `color-theme.test.ts`) in 421ms.
+- Inspected `git status` — 4 expected source files modified
+  (`commands.ts`, `commands/camera.ts`, `commands/recipe-viz.ts`,
+  `vlm-capture-loop.ts`); `db/custom.db` also dirty but intentionally
+  left out of the commit.
+- Staged the 4 source files and committed with the full multi-line
+  message provided in the task brief (3 bugs + QA/E2E summary).
+  Commit hash: 97a60ff3f68c3315e9ec7f8a51f7df5a4827b654
+  Diff stat: 4 files changed, +56 / -15.
+- Pushed to origin:
+    `3a5a4b7..97a60ff  main -> main`
+
+3 bugs fixed by R143 (per commit message + code in tree):
+- Bug #1 (CRITICAL): Camera rotations accumulated across angles.
+  In `capture_multi_angle`, `applyCameraAngle` called
+  `camera.rotate(...)` (relative), so the `side` angle applied its
+  rotation on top of the `front` angle, and `top` rotated from the
+  already-tilted side position — yielding a tilted side view instead of
+  true top-down. Fix: call the new `restoreCameraStateKeep()` before
+  each angle so each rotation is absolute. New helper
+  `restoreCameraStateKeep` restores the saved camera state without
+  clearing it, so it can be reused for every angle in the loop.
+- Bug #2 (HIGH): VLM hints never consumed by
+  `applyRecipeVisualization`. `applyVlmHints` (R142) wrote
+  `_focusRadiusMultiplier` and `_vlmFocusHint` onto the vizParams
+  object, but `recipe-viz.ts` never read them — dead code, so VLM
+  recaptureHints like "zoom in on the binding pocket" had no effect on
+  the actual focus sphere. Fix: `recipe-viz.ts` now reads
+  `_focusRadiusMultiplier` and multiplies the focusSphere radius by it
+  (e.g. 1.5× for zoom out, 0.7× for zoom in).
+- Bug #3 (MEDIUM): `computeInterfaceAngles` was a stub. The R142
+  implementation computed the interface normal but then returned the
+  default front/side/top triad anyway. Fix: kept the default-angle
+  return (still a TODO for full interface-aligned projection), but
+  added proper documentation explaining why the R143 orthogonal fix
+  (absolute rotations via `restoreCameraStateKeep`) makes the default
+  angles sufficient for now — the camera always sees the structure
+  orthogonally per angle regardless of interface orientation.
+
+Stage Summary:
+- Lint: PASS (0 errors, 1 pre-existing warning at ToolCallCard.tsx:159,
+  unchanged from R141/R142).
+- Tests: PASS (106/106, 0 fail, 132 expect() calls, 2 files, 421ms).
+- Git: COMMITTED + PUSHED. 97a60ff3f68c3315e9ec7f8a51f7df5a4827b654
+  on origin/main (3a5a4b7..97a60ff).
+- Files changed (4): src/lib/molcraft/commands.ts,
+  src/lib/molcraft/commands/camera.ts,
+  src/lib/molcraft/commands/recipe-viz.ts,
+  src/lib/molcraft/vlm-capture-loop.ts. +56 / -15.
+- QA/E2E (per task brief, verified upstream of this commit): lint 0
+  errors, 106 tests pass, dev server HTTP 200, agent-browser page
+  renders correctly, analysis API returns 17 interactions for 4HHB
+  A-B chains, agent session creates and returns tool calls correctly.
