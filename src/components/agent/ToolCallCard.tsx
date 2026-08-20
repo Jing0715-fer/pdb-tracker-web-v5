@@ -295,17 +295,22 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
 }
 
 /** Extract screenshot data URIs from tool results. */
-function extractScreenshots(name: string, result: unknown): Array<{ dataUri: string; angle?: string; label?: string }> {
+function extractScreenshots(name: string, result: unknown): Array<{ dataUri: string; angle?: string; label?: string; cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } }> {
   if (!result || typeof result !== 'object') return [];
   const r = result as Record<string, unknown>;
   // capture_snapshot: { ok: true, data: { dataUri, label, angle } }
   if (name === 'capture_snapshot' && r.data) {
     const data = r.data as Record<string, unknown>;
     if (data.dataUri) {
-      return [{ dataUri: String(data.dataUri), angle: String(data.angle || ''), label: String(data.label || '') }];
+      return [{
+        dataUri: String(data.dataUri),
+        angle: String(data.angle || ''),
+        label: String(data.label || ''),
+        cameraState: data.cameraState as { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } | undefined,
+      }];
     }
   }
-  // capture_multi_angle: { ok: true, data: { screenshots: [{ dataUri, angle, label }] } }
+  // capture_multi_angle: { ok: true, data: { screenshots: [{ dataUri, angle, label, cameraState }] } }
   if (name === 'capture_multi_angle' && r.data) {
     const data = r.data as Record<string, unknown>;
     if (Array.isArray(data.screenshots)) {
@@ -313,6 +318,7 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
         dataUri: String(s.dataUri || ''),
         angle: String(s.angle || ''),
         label: String(s.label || ''),
+        cameraState: s.cameraState as { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } | undefined,
       })).filter((s) => s.dataUri);
     }
   }

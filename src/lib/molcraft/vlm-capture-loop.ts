@@ -23,7 +23,6 @@
  *   5. Repeat up to MAX_ITERATIONS (default 2)
  */
 
-import type { MolstarViewer } from './types';
 import type { VlmResult, ScreenshotData } from './vlm-client';
 import { selectBestWithRetry, needsRecapture } from './vlm-client';
 

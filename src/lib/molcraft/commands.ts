@@ -858,7 +858,7 @@ export async function executeCommand(
                 // Molstar's measurement manager supports removeLast
                 if (typeof meas.removeLast === 'function') {
                   for (let i = 0; i < added; i++) {
-                    try { meas.removeLast(); } catch { break; }
+                    try { meas.removeLast(); } catch (err) { console.warn('[capture_multi_angle] removeLast failed:', err); break; }
                   }
                 } else {
                   // Fallback: clear all if removeLast not available
