@@ -3008,3 +3008,52 @@ Stage Summary:
 - Interface-aware angles now functional (was dead code before)
 - The interface_tilted angle (45°) provides a new 3/4 view that should
   give better screenshots of the interaction interface
+
+---
+Task ID: round-147-camera-root-cause-fix
+Agent: main
+Task: Fix side/top screenshots identical + camera locked after screenshots.
+
+ROOT CAUSE:
+  Molstar's Camera.setState(snapshot, durationMs?) triggers an ANIMATED
+  TRANSITION by default. When durationMs is omitted, the camera doesn't
+  move instantly — it animates over ~250ms. During this animation:
+    1. restoreCameraStateKeep() calls setState() → camera starts animating
+    2. applyCameraAngle() calls camera.rotate() → rotates from the
+       IN-FLIGHT position, not the restored position
+    3. Result: side and top screenshots look the same (both rotated from
+       a mid-transition position)
+    4. The orbit controls also get out of sync → camera appears 'locked'
+
+FIX:
+  Replace ALL setState() calls with DIRECT property setters:
+    cam.position[0] = x  (instead of cam.setState({position: ...}))
+    cam.target[0] = x
+    cam.up[0] = x
+    cam.update()  ← syncs view/projection matrices immediately
+
+  This gives INSTANT, ABSOLUTE camera positioning with no animation.
+
+  Also completely rewrote applyCameraAngle() — no longer uses
+  camera.rotate() (which also had transition issues). Instead:
+    1. Reads current position/target/up
+    2. Computes ABSOLUTE new position for the requested angle
+    3. Sets properties directly + update()
+
+  Angle calculations:
+    - side: 90° Y rotation → newPos = [tgt.x - dz, tgt.y + dy, tgt.z + dx]
+    - top: 90° X rotation → camera above target, looking down
+    - back: 180° Y rotation → negate X/Z
+    - interface_tilted: 45° Y rotation
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Dev server: HTTP 200
+- Agent-browser: page renders correctly
+- Git: commit 082cca9 pushed to origin/main
+
+Stage Summary:
+- side/top screenshots will now be truly different (absolute positioning)
+- Camera will NOT be locked after screenshots (no transition to desync)
+- 恢复视角 button will also work correctly (instant restoration)
