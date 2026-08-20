@@ -66,6 +66,15 @@ export async function applyRecipeVisualization(
       }
     }
 
+    // R143: Read VLM hints from the capture loop (Plan D integration).
+    // These are set by applyVlmHints() in vlm-capture-loop.ts and control
+    // camera zoom/focus for re-capture iterations.
+    const vlmZoomMultiplier = (params as any)?._focusRadiusMultiplier as number | undefined;
+    const vlmFocusHint = (params as any)?._vlmFocusHint as string | undefined;
+    if (vlmZoomMultiplier || vlmFocusHint) {
+      console.log(`[viz:${recipe}] VLM hints: zoomMultiplier=${vlmZoomMultiplier ?? 'none'}, focusHint=${vlmFocusHint ?? 'none'}`);
+    }
+
     // Helper to apply a representation preset (cartoon, surface, etc.)
     // R89: Only apply if the current representation is different —
     // re-applying the same preset can cause a brief structure removal.
@@ -214,8 +223,10 @@ export async function applyRecipeVisualization(
               const boundary = plugin.managers.structure.selection.getBoundary();
               if (boundary?.sphere) {
                 const center = boundary.sphere.center;
-                const radius = (boundary.sphere.radius ?? 20) + 5;
-                console.log(`[viz:focus] Center: (${center.x?.toFixed(1)}, ${center.y?.toFixed(1)}, ${center.z?.toFixed(1)}), Radius: ${radius.toFixed(1)} Å`);
+                // R143: Apply VLM zoom multiplier if set (Plan D integration)
+                const baseRadius = (boundary.sphere.radius ?? 20) + 5;
+                const radius = vlmZoomMultiplier ? baseRadius * vlmZoomMultiplier : baseRadius;
+                console.log(`[viz:focus] Center: (${center.x?.toFixed(1)}, ${center.y?.toFixed(1)}, ${center.z?.toFixed(1)}), Radius: ${radius.toFixed(1)} Å${vlmZoomMultiplier ? ` (VLM zoom: ${vlmZoomMultiplier}x)` : ''}`);
                 plugin.managers.camera.focusSphere({
                   center: center,
                   radius: radius,

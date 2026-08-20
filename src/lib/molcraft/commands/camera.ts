@@ -31,6 +31,18 @@ export function saveCameraState(plugin: MolstarPlugin): void {
 }
 
 export function restoreCameraState(plugin: MolstarPlugin): void {
+  restoreCameraStateImpl(plugin, false);
+}
+
+/**
+ * R143: Restore camera state WITHOUT clearing it, so it can be called
+ * multiple times in a loop (e.g., before each angle in capture_multi_angle).
+ */
+export function restoreCameraStateKeep(plugin: MolstarPlugin): void {
+  restoreCameraStateImpl(plugin, true);
+}
+
+function restoreCameraStateImpl(plugin: MolstarPlugin, keep: boolean): void {
   if (!savedCameraState) return;
   try {
     const canvas3d = plugin.canvas3d as any;
@@ -42,7 +54,9 @@ export function restoreCameraState(plugin: MolstarPlugin): void {
         up: savedCameraState.up as [number, number, number],
       });
     }
-    savedCameraState = null;
+    if (!keep) {
+      savedCameraState = null;
+    }
   } catch (err) { console.warn('[restoreCameraState] failed to restore camera state:', err); }
 }
 

@@ -59,6 +59,7 @@ import {
 import {
   saveCameraState,
   restoreCameraState,
+  restoreCameraStateKeep,
   applyCameraAngle,
 } from "./commands/camera";
 import { showInteractionsAround, clearInteractions } from "./commands/interactions";
@@ -736,9 +737,20 @@ export async function executeCommand(
         }> = [];
 
         // R130: Save camera state before capture loop, restore after
+        // R143 (code-review fix): Save AFTER applyRecipeVisualization so the
+        // saved state is the focused-interface view. Then RESTORE before each
+        // angle so rotations don't accumulate (side→top was rotating from
+        // the side position, not from front, causing overlapping screenshots).
         saveCameraState(plugin);
         for (const angle of angles) {
           try {
+            // R143: Restore to saved state before EACH angle so rotations
+            // are absolute (from the focused view), not cumulative.
+            // This fixes the bug where "top" was a tilted side view instead
+            // of a true top-down view.
+            if (angle !== 'front') {
+              restoreCameraStateKeep(plugin);
+            }
             // R130: applyCameraAngle rotates from current position (no reset)
             await applyCameraAngle(plugin, angle);
             // R130: Wait for render to settle (500ms total in applyCameraAngle)

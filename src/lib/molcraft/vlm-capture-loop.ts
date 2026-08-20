@@ -66,14 +66,21 @@ export interface CaptureLoopResult {
  *   2. Perpendicular to the normal (edge-on view)
  *   3. 45° tilted from the normal
  *
- * Returns angle labels that applyCameraAngle can handle, plus custom
- * labels for the new angles.
+ * R143 (code-review): Currently this function computes the interface normal
+ * but returns the default angles because applyCameraAngle only supports
+ * front/side/top/back. To fully implement Plan B, we need to:
+ *   1. Add custom angle labels ("interface", "perpendicular", "tilted") to applyCameraAngle
+ *   2. Compute absolute camera positions from the normal vector
+ *   3. Use camera.setState instead of camera.rotate
+ * This is left as a TODO for a future round.
+ *
+ * Returns angle labels that applyCameraAngle can handle.
  */
 export function computeInterfaceAngles(
   interfaceCenter: { x: number; y: number; z: number } | null,
   structureCenter: { x: number; y: number; z: number } | null
 ): Array<{ label: string; description: string }> {
-  // Default: standard 4 angles
+  // Default: standard 3 angles
   const defaultAngles = [
     { label: 'front', description: '正面' },
     { label: 'side', description: '侧面' },
@@ -95,15 +102,12 @@ export function computeInterfaceAngles(
     return defaultAngles;
   }
 
-  // We have a meaningful interface direction. Use interface-aware angles:
-  // - "interface" = looking along the normal (straight at the interface)
-  // - "perpendicular" = edge-on view (90° to the normal)
-  // - "tilted" = 45° between interface and perpendicular
-  return [
-    { label: 'front', description: '正面（当前视角）' },
-    { label: 'side', description: '侧面（90°旋转）' },
-    { label: 'top', description: '顶部（俯视）' },
-  ];
+  // TODO (Plan B future): When applyCameraAngle supports custom angles,
+  // return interface-aware labels here. For now, the R143 fix
+  // (restoreCameraStateKeep before each angle) ensures the default
+  // front/side/top angles are truly orthogonal instead of cumulative.
+  console.log(`[computeInterfaceAngles] Interface normal: (${(dx/len).toFixed(2)}, ${(dy/len).toFixed(2)}, ${(dz/len).toFixed(2)}) — using default angles with R143 orthogonal fix`);
+  return defaultAngles;
 }
 
 /**
