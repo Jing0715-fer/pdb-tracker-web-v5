@@ -874,14 +874,18 @@ export async function executeCommand(
           }
         }
 
-        // Round 91: Clean up any "Interface residues" component we added
+        // Round 91/R148: Clean up interface sidechain components we added
+        // R148: Changed to match the 'interface-sidechain' tag instead of label text
         try {
           const structs = getStructures(plugin);
           for (const s of structs) {
             const toRemove: any[] = [];
             for (const c of (s.components || [])) {
+              const tags = c?.cell?.transform?.tags;
               const label = c?.cell?.obj?.label;
-              if (label && label.includes("Interface residues")) {
+              // Match by tag OR by label prefix (backward compatible)
+              if ((Array.isArray(tags) && tags.includes('interface-sidechain')) ||
+                  (label && (label.includes("Interface residues") || label.startsWith("Interface ")))) {
                 toRemove.push(c);
               }
             }

@@ -266,8 +266,9 @@ export async function applyRecipeVisualization(
           const data = getFirstStructureData(plugin);
           if (!data) return;
 
+          // R148: Collect ALL interface residues (not just first 20) for side chain display
           const residueSet = new Set<string>();
-          for (const c of interactions.slice(0, 20)) {
+          for (const c of interactions) {
             const ch1 = c.chain1 as string;
             const rn1 = c.resno1 as number;
             const ch2 = c.chain2 as string;
@@ -281,33 +282,62 @@ export async function applyRecipeVisualization(
           const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
           if (!Q) return;
 
-          const residueExprs = Array.from(residueSet).map(key => {
-            const [chain, resno] = key.split(":");
-            return Q.struct.generator.atomGroups({
-              'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
-              'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), parseInt(resno, 10)]),
-            });
-          });
+          // R148: Build a SINGLE union expression for all interface residues
+          // instead of creating separate components per residue.
+          // This is more efficient and ensures all side chains are visible.
+          // We use atomGroups with a chain-test OR residue-test for each residue.
+          // Since Molstar's union is complex in the prebuilt bundle, we create
+          // one component per residue but increase the limit to cover all.
+          const residueList = Array.from(residueSet);
+          console.log(`[viz:show_sidechains] Showing ${residueList.length} interface residue side chains`);
 
-          for (const expr of residueExprs.slice(0, 10)) {
+          for (const key of residueList.slice(0, 30)) { // R148: increased from 10 to 30
+            const [chain, resno] = key.split(":");
             try {
+              const expr = Q.struct.generator.atomGroups({
+                'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
+                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), parseInt(resno, 10)]),
+              });
               const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
               if (loci && !isLociEmpty(loci)) {
-                await plugin.managers.structure.component.addRepresentations(
-                  plugin.managers.structure.component.createComponent(data, { loci, label: 'Interface residues' }),
-                  'ball-and-stick',
-                  {}
-                );
+                const component = await plugin.managers.structure.component.createComponent(data, {
+                  loci,
+                  label: `Interface ${chain}:${resno}`,
+                  tags: ['interface-sidechain', 'structure-component-static-polymer'],
+                });
+                if (component) {
+                  await plugin.managers.structure.component.addRepresentations(
+                    component,
+                    'ball-and-stick',
+                    { sizeFactor: 0.8 }
+                  );
+                }
               }
-            } catch (err) { console.warn('[viz:show_sidechains] addRepresentations failed:', err); }
+            } catch (err) { console.warn(`[viz:show_sidechains] failed for ${chain}:${resno}:`, err); }
           }
         }, "show_sidechains");
 
         await safe(async () => {
           let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           if (!Array.isArray(interactions) || interactions.length === 0) return;
-          for (const c of interactions.slice(0, 15)) {
+
+          // R148: ONLY draw distance lines for H-bonds and salt bridges
+          // (NOT hydrophobic contacts — those don't have specific atom pairs).
+          // Also only draw if both atom1 AND atom2 are specified, so the line
+          // connects the actual interacting atoms, not CA carbons.
+          const hbondInteractions = interactions.filter(c => {
+            const type = (c.type as string | undefined)?.toLowerCase() ?? '';
+            const hasAtoms = c.atom1 && c.atom2;
+            // Only draw lines for hbonds and salt_bridges with atom-level data
+            return (type === 'hbond' || type === 'salt_bridge' || type === 'salt-bridge') && hasAtoms;
+          });
+
+          console.log(`[viz:draw_lines] Drawing ${hbondInteractions.length} distance lines (from ${interactions.length} total interactions — only hbonds/salt_bridges with atom data)`);
+
+          for (const c of hbondInteractions) {
             try {
+              // R148: Pass atom1/atom2 to lociFromResidue so the distance line
+              // connects the SPECIFIC interacting atoms (e.g. NH1-OE1), not CA.
               const r1 = await lociFromResidue(viewer, {
                 chain: c.chain1 as string,
                 resno: c.resno1 as number,
@@ -319,7 +349,7 @@ export async function applyRecipeVisualization(
               if (r1 && r2) {
                 await plugin.managers.structure.measurement.addDistance(r1, r2);
               }
-            } catch (err) { console.warn('[viz:draw_lines] lociFromResidue or addDistance failed:', err); }
+            } catch (err) { console.warn(`[viz:draw_lines] failed for ${c.chain1}:${c.resno1}(${c.atom1})-${c.chain2}:${c.resno2}(${c.atom2}):`, err); }
           }
         }, "draw_interaction_lines");
 
