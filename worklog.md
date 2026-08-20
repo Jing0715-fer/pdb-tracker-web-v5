@@ -2848,3 +2848,63 @@ Stage Summary:
   errors, 106 tests pass, dev server HTTP 200, agent-browser page
   renders correctly, analysis API returns 17 interactions for 4HHB
   A-B chains, agent session creates and returns tool calls correctly.
+
+---
+Task ID: round-144-camera-unlock-ui-fix-commit
+Agent: general-purpose (sub agent)
+Task: Commit R144 camera unlock + conversation button UI fixes.
+
+Work Log:
+- Read tail of worklog.md (R143 context at 97a60ff) for background on
+  the camera lock / view restore issue and the prior conversation-button
+  UI layout.
+- Verified staged files: src/lib/molcraft/commands.ts,
+  src/lib/molcraft/commands/camera.ts,
+  src/components/agent/ToolCallCard.tsx,
+  src/components/agent/ChatPanel.tsx (all M, no untracked).
+- Lint (eslint, 4 files, NODE_OPTIONS=--max-old-space-size=3072):
+  0 errors, 1 pre-existing warning at ToolCallCard.tsx:160 (unused
+  eslint-disable directive for react-hooks/exhaustive-deps — same
+  warning carried forward from R141/R142/R143, not introduced here).
+- Unit tests (bun test src/lib/molcraft/commands/): 106 pass, 0 fail,
+  132 expect() calls, 2 files, 390ms. No regressions.
+- Git commit (4 files, +190 / -75): staged and committed as
+  174af7f577213fd6c9f33dabba4769bbcd881d82 on main
+  (97a60ff..174af7f), then pushed to origin/main successfully.
+
+Stage Summary:
+- Two major changes in this commit:
+  1. Camera unlock + per-screenshot view restore
+     (src/lib/molcraft/commands.ts +9, commands/camera.ts +65):
+       - restoreCameraState now calls canvas3d.requestDraw() after
+         restoring position/target/up, which syncs the orbit controls'
+         internal state with the new camera transform — fixes the
+         "camera locked after screenshots" bug where the user could
+         not orbit after a screenshot carousel ran.
+       - New getCurrentCameraState() captures {position, target, up}
+         at any point; called inside the screenshot capture path so
+         each screenshot remembers the exact view it was taken from.
+       - New restoreCameraViewState(state) restores a saved view on
+         demand; wired to a new '恢复视角' button in the ToolCallCard
+         screenshot carousel so the user can jump back to any of the
+         captured perspectives.
+  2. Conversation button UI redesign (ChatPanel.tsx +80 / -73):
+       - User messages: edit + fork buttons moved out of the floating
+         absolute overlay (opacity-40 group-hover:opacity-100,
+         absolute -bottom-2.5) into an always-visible inline action
+         bar rendered below the message bubble.
+       - Assistant messages: thumbs up / thumbs down / regenerate /
+         copy moved the same way — inline, always visible, below the
+         message bubble.
+       - Icon size reduced from h-3.5 w-3.5 to h-3 w-3 for tighter
+         visual hierarchy. Net effect: no more overlapping buttons
+         on adjacent messages, no more hover-gated discoverability,
+         cleaner read.
+- Lint: PASS (0 errors, 1 pre-existing warning at ToolCallCard.tsx:160).
+- Tests: PASS (106/106, 0 fail, 132 expect() calls, 2 files, 390ms).
+- Git: COMMITTED + PUSHED. 174af7f577213fd6c9f33dabba4769bbcd881d82
+  on origin/main (97a60ff..174af7f).
+- Files changed (4): src/lib/molcraft/commands.ts (+9),
+  src/lib/molcraft/commands/camera.ts (+65),
+  src/components/agent/ToolCallCard.tsx (+36 / -2),
+  src/components/agent/ChatPanel.tsx (+80 / -73). +190 / -75 total.
