@@ -8,8 +8,8 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationNode } from './use-agent-session';
 
@@ -313,9 +313,13 @@ function ScreenshotResult({ name, screenshots, result }: {
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [showRaw, setShowRaw] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
 
   // R113.3: Extract VLM result from the tool result
+  // R140: Also check vlmPending for explicit capture_multi_angle calls
   const vlmResult = (result as any)?.vlmResult || (result as any)?.autoCapture?.vlmResult;
+  const vlmPending = (result as any)?.vlmPending || (result as any)?.autoCapture?.vlmPending;
+  const vlmError = (result as any)?.vlmError || (result as any)?.autoCapture?.vlmError;
   const quality = vlmResult?.quality as string | undefined;
   const issues = vlmResult?.issues as string[] | undefined;
   const comments = vlmResult?.comments as string[] | undefined;
@@ -350,12 +354,21 @@ function ScreenshotResult({ name, screenshots, result }: {
       </div>
 
       {/* Main carousel image */}
-      <div className="relative rounded-lg border border-claude-border overflow-hidden bg-black">
+      <div className="relative rounded-lg border border-claude-border overflow-hidden bg-black group">
         <img
           src={current.dataUri}
           alt={current.label || current.angle || `screenshot ${currentIdx + 1}`}
-          className="w-full h-auto block max-h-64 object-contain"
+          className="w-full h-auto block max-h-64 object-contain cursor-zoom-in"
+          onClick={() => setZoomed(true)}
         />
+
+        {/* R140: Zoom hint overlay (appears on hover) */}
+        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+          <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/70 text-white text-[9px]">
+            <ZoomIn className="h-3 w-3" />
+            <span>点击放大</span>
+          </div>
+        </div>
 
         {/* Best image badge */}
         {bestIndex === currentIdx && (
@@ -397,6 +410,82 @@ function ScreenshotResult({ name, screenshots, result }: {
           </>
         )}
       </div>
+
+      {/* R140: Fullscreen zoom modal */}
+      {zoomed && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setZoomed(false)}
+        >
+          {/* Close button */}
+          <button
+            onClick={() => setZoomed(false)}
+            className="absolute top-4 right-4 h-10 w-10 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
+          >
+            <XClose className="h-5 w-5" />
+          </button>
+
+          {/* Navigation arrows in fullscreen */}
+          {screenshots.length > 1 && (
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); setCurrentIdx((currentIdx - 1 + screenshots.length) % screenshots.length); }}
+                className="absolute left-4 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setCurrentIdx((currentIdx + 1) % screenshots.length); }}
+                className="absolute right-4 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            </>
+          )}
+
+          {/* Full-size image */}
+          <img
+            src={current.dataUri}
+            alt={current.label || current.angle || `screenshot ${currentIdx + 1}`}
+            className="max-w-[95vw] max-h-[90vh] object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+
+          {/* Info bar */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-white/10 text-white text-xs flex items-center gap-3">
+            <span>{current.angle || current.label || `screenshot ${currentIdx + 1}`}</span>
+            <span className="opacity-60">·</span>
+            <span>{currentIdx + 1} / {screenshots.length}</span>
+            {bestIndex === currentIdx && (
+              <>
+                <span className="opacity-60">·</span>
+                <span className="text-yellow-300">★ 最佳</span>
+              </>
+            )}
+            {scores && currentIdx < scores.length && (
+              <>
+                <span className="opacity-60">·</span>
+                <span className="font-mono">{scores[currentIdx]}/10</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* R140: VLM pending state for explicit capture_multi_angle */}
+      {vlmPending && !vlmResult && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-claude-text-muted">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span>VLM 分析中...</span>
+        </div>
+      )}
+      {/* R140: VLM error state */}
+      {vlmError && !vlmResult && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-amber-600">
+          <AlertCircle className="h-3 w-3" />
+          <span>VLM 失败: {vlmError}</span>
+        </div>
+      )}
 
       {/* VLM commentary */}
       {comments && currentIdx < comments.length && comments[currentIdx] && (

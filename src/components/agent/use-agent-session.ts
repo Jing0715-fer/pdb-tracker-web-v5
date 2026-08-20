@@ -108,6 +108,129 @@ function blocksToText(blocks: ContentBlock[]): string {
     .join('');
 }
 
+// R140: Three-letter to one-letter amino acid code mapping.
+// Used for screenshot labels so the VLM can quickly verify residues.
+const THREE_TO_ONE: Record<string, string> = {
+  ALA: 'A', ARG: 'R', ASN: 'N', ASP: 'D', CYS: 'C',
+  GLN: 'Q', GLU: 'E', GLY: 'G', HIS: 'H', ILE: 'I',
+  LEU: 'L', LYS: 'K', MET: 'M', PHE: 'F', PRO: 'P',
+  SER: 'S', THR: 'T', TRP: 'W', TYR: 'Y', VAL: 'V',
+  // Non-standard / common ligands
+  HOH: 'W', MSE: 'M', SEC: 'U', PYL: 'O',
+};
+
+/** Convert a 3-letter residue name to 1-letter code. Falls back to the first letter. */
+function toOneLetter(resname: string | undefined): string {
+  if (!resname) return '?';
+  const upper = resname.toUpperCase();
+  return THREE_TO_ONE[upper] ?? resname[0]!.toUpperCase();
+}
+
+/**
+ * R140: Extract interface residue labels from analysis data.
+ *
+ * Returns an array of { chain, resno, text } where text is "X123" format
+ * (one-letter amino acid code + residue number), e.g. "R31" for ARG31.
+ *
+ * This handles multiple recipe data formats:
+ *   - all_interactions: { interactions: [{ chain1, resno1, resname1, chain2, resno2, resname2 }] }
+ *   - hbonds: { hbonds: [{ donor_chain, donor_resno, donor_resname, acceptor_chain, ... }] }
+ *   - salt_bridges: { salt_bridges: [{ pos_chain, pos_resno, pos_resname, neg_chain, ... }] }
+ *   - interface_residues: { chain1_interface_residues: [{ resno, name, contacts: [...] }], ... }
+ *
+ * Deduplicates by (chain, resno) and limits to 20 labels to avoid clutter.
+ */
+function extractResidueLabels(
+  recipe: string,
+  analysisData: Record<string, unknown>
+): Array<{ chain: string; resno: number; text: string }> {
+  const labels: Array<{ chain: string; resno: number; text: string }> = [];
+  const seen = new Set<string>();
+
+  // Helper to add a label (with dedup)
+  const add = (chain: string | undefined, resno: number | undefined, resname: string | undefined) => {
+    if (!chain || resno === undefined || resno === null) return;
+    const key = `${chain}:${resno}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    labels.push({
+      chain,
+      resno,
+      text: `${toOneLetter(resname)}${resno}`,
+    });
+  };
+
+  // The actual data may be nested under .data (from runRecipe)
+  const data = (analysisData as any).data ?? analysisData;
+
+  // all_interactions format
+  const interactions = data.interactions as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(interactions)) {
+    for (const c of interactions.slice(0, 20)) {
+      add(c.chain1 as string, c.resno1 as number, c.resname1 as string);
+      add(c.chain2 as string, c.resno2 as number, c.resname2 as string);
+    }
+  }
+
+  // hbonds format
+  const hbonds = data.hbonds as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(hbonds)) {
+    for (const h of hbonds.slice(0, 15)) {
+      add(h.donor_chain as string, h.donor_resno as number, h.donor_resname as string);
+      add(h.acceptor_chain as string, h.acceptor_resno as number, h.acceptor_resname as string);
+    }
+  }
+
+  // salt_bridges format
+  const saltBridges = data.salt_bridges as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(saltBridges)) {
+    for (const s of saltBridges.slice(0, 15)) {
+      add(s.pos_chain as string, s.pos_resno as number, s.pos_resname as string);
+      add(s.neg_chain as string, s.neg_resno as number, s.neg_resname as string);
+    }
+  }
+
+  // hydrophobic_contacts format
+  const hydrophobic = data.hydrophobic_contacts as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(hydrophobic)) {
+    for (const h of hydrophobic.slice(0, 15)) {
+      add(h.chain1 as string, h.resno1 as number, h.resname1 as string);
+      add(h.chain2 as string, h.resno2 as number, h.resname2 as string);
+    }
+  }
+
+  // interface_residues format (chain1_interface_residues / chain2_interface_residues)
+  const chain1 = data.chain1 as string | undefined;
+  const chain2 = data.chain2 as string | undefined;
+  const c1Res = data.chain1_interface_residues as Array<Record<string, unknown>> | undefined;
+  const c2Res = data.chain2_interface_residues as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(c1Res)) {
+    for (const r of c1Res.slice(0, 10)) {
+      add(chain1, r.resno as number, r.name as string);
+    }
+  }
+  if (Array.isArray(c2Res)) {
+    for (const r of c2Res.slice(0, 10)) {
+      add(chain2, r.resno as number, r.name as string);
+    }
+  }
+
+  // binding_pocket / druggability format
+  const pocketResidues = data.residues as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(pocketResidues)) {
+    for (const r of pocketResidues.slice(0, 10)) {
+      add(r.chain as string, r.resno as number, r.resname as string);
+    }
+  }
+
+  // Limit total labels to 20 to avoid cluttering the screenshot
+  const result = labels.slice(0, 20);
+  if (result.length > 0) {
+    console.log(`[R140] Extracted ${result.length} residue labels for ${recipe}: ${result.map(l => l.text).join(', ')}`);
+  }
+  return result;
+}
+
 /** Project the session event log into UI conversation nodes. */
 function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecution>): ConversationNode[] {
   const nodes: ConversationNode[] = [];
@@ -569,6 +692,44 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           durationMs, // R113.7: Store timing for UI display
         });
 
+        // R140: For explicit capture_multi_angle calls, also run VLM analysis
+        // (non-blocking). Previously only the auto-capture path after pdb_analyze
+        // ran VLM, so explicit capture_multi_angle had no commentary. Now both
+        // paths get VLM analysis for consistency.
+        if (call.name === 'capture_multi_angle' && result.ok) {
+          const recipeName = String(args.recipe || 'unknown');
+          const screenshots = (result as any).data?.screenshots;
+          if (screenshots && Array.isArray(screenshots) && screenshots.length > 0) {
+            void (async () => {
+              const vlmStartTime = Date.now();
+              try {
+                const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
+                const analysisSummary = JSON.stringify(args.vizParams || {}).slice(0, 2000);
+                console.log(`[agent] Starting VLM for explicit capture_multi_angle (${screenshots.length} screenshots, recipe: ${recipeName})`);
+                const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                const vlmDuration = Date.now() - vlmStartTime;
+                if (vlmResult) {
+                  (result as any).vlmResult = vlmResult;
+                  (result as any).vlmDurationMs = vlmDuration;
+                  console.log(`[agent] VLM completed for explicit capture: ${vlmDuration}ms quality=${vlmResult.quality} bestIndex=${vlmResult.bestIndex}`);
+                }
+              } catch (vlmErr) {
+                console.warn('[agent] VLM failed for explicit capture (non-blocking):', vlmErr);
+                (result as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
+              }
+              // Update execution result + trigger UI re-render
+              const exec = executionsRef.current.get(call.callId);
+              if (exec) {
+                (exec.result as any).vlmResult = (result as any).vlmResult;
+                (exec.result as any).vlmDurationMs = (result as any).vlmDurationMs;
+                (exec.result as any).vlmError = (result as any).vlmError;
+                setEvents((prev) => [...prev]);
+              }
+            })();
+            (result as any).vlmPending = true;
+          }
+        }
+
         // R115.1: Non-blocking auto-capture + VLM — fire and forget, update later
         if (call.name === 'pdb_analyze' && result.ok) {
           const recipeName = String(args.recipe || '');
@@ -587,11 +748,17 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
             void (async () => {
               const captureStartTime = Date.now(); // R116.2: Track auto-capture timing
               try {
+                // R140: Extract interface residue labels from the analysis data
+                // so they appear on the screenshot as "R31" (single-letter + resno).
+                // This helps the VLM verify the screenshot matches the analysis.
+                const residueLabels = extractResidueLabels(recipeName, analysisData);
                 const captureResult = await executeCommand(v, {
                   type: 'capture_multi_angle',
                   recipe: recipeName,
                   angles: ['front', 'side', 'top'],
                   vizParams: analysisData,
+                  labels: residueLabels,
+                  labelFontSize: 0.8,
                 } as never);
                 const captureDuration = Date.now() - captureStartTime; // R116.2
                 if (captureResult.ok && (captureResult as any).data?.screenshots) {

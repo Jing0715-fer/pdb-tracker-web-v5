@@ -41,6 +41,31 @@ export async function applyRecipeVisualization(
       }
     };
 
+    // R140: Normalize the vizParams data structure.
+    //
+    // The auto-capture path passes `analysisData = result.analysisResult.data`
+    // which has the shape: { recipe, ok, pdbId, format, data: { chain1, chain2, interactions, ... } }
+    //
+    // But applyRecipeVisualization expects params.chain1, params.interactions, etc.
+    // at the TOP LEVEL. Without this normalization, the interaction data is
+    // nested under params.data and never read, so the camera doesn't focus on
+    // the interface and side chains aren't shown.
+    //
+    // This step unwraps the nested .data so all the recipe cases can access
+    // chain1/chain2/interactions directly from `params`.
+    if (params && typeof params === 'object') {
+      const innerData = (params as any).data;
+      if (innerData && typeof innerData === 'object') {
+        // Merge inner data keys to the top level (without overwriting existing top-level keys)
+        for (const key of Object.keys(innerData)) {
+          if ((params as any)[key] === undefined) {
+            (params as any)[key] = innerData[key];
+          }
+        }
+        console.log(`[viz:${recipe}] Normalized nested data — keys: ${Object.keys(params).join(', ')}`);
+      }
+    }
+
     // Helper to apply a representation preset (cartoon, surface, etc.)
     // R89: Only apply if the current representation is different —
     // re-applying the same preset can cause a brief structure removal.
