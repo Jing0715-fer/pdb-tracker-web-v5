@@ -2960,3 +2960,51 @@ Stage Summary:
   (R144 feature) was non-functional — now fixed
 - Added comprehensive unit test coverage for the VLM capture loop module
 - Total test count: 126 (was 106, added 20 for vlm-capture-loop)
+
+---
+Task ID: round-146-vlm-timeout-progress-angles
+Agent: main
+Task: Fix VLM analysis stuck issue, add progress feedback, implement interface-aware angles.
+
+Work Log:
+- Investigated VLM 'stuck on analyzing' bug
+- Found root cause: selectBestWithRetry has NO timeout — if VLM API hangs,
+  the UI shows 'VLM 分析中...' forever
+- Found that computeInterfaceAngles was NEVER CALLED by runVlmControlledCaptureLoop
+  (Plan B was dead code)
+
+Fixes:
+1. VLM timeout: Added 45s timeout via Promise.race in runVlmControlledCaptureLoop
+   - If VLM doesn't respond in 45s, returns null and loop exits gracefully
+   - Screenshots already captured are still returned to the UI
+
+2. Progress feedback: Added onProgress callback to CaptureLoopOptions
+   - Reports: iteration, maxIterations, phase (capturing/vlm-analyzing/done/error),
+     screenshotsCount, quality
+   - use-agent-session.ts passes progress to UI via autoCaptureProgress
+   - ToolCallCard shows detailed status: '截图中（第 1/2 轮）...' or
+     'VLM 分析中（第 1/2 轮，3 张截图）...'
+
+3. Interface-aware angles (Plan B fully implemented):
+   - computeInterfaceAngles now returns custom labels when normal is computable:
+     'interface_front', 'interface_side', 'interface_tilted'
+   - applyCameraAngle supports these new labels:
+     - interface_front = no rotation
+     - interface_side = 90° Y rotation
+     - interface_tilted = 45° Y rotation (NEW — 3/4 view)
+   - Updated unit test to expect interface-aware labels
+
+Verification:
+- Lint: 0 errors (1 pre-existing warning)
+- Unit tests: 126 pass, 0 fail (3 files)
+- Dev server: HTTP 200
+- Agent-browser: page renders correctly
+- Git: commit 7838e1c pushed to origin/main
+
+Stage Summary:
+- VLM stuck issue FIXED — 45s timeout prevents infinite hang
+- Progress UI shows exactly what's happening (capturing vs VLM analyzing,
+  which iteration, how many screenshots)
+- Interface-aware angles now functional (was dead code before)
+- The interface_tilted angle (45°) provides a new 3/4 view that should
+  give better screenshots of the interaction interface
