@@ -54,19 +54,51 @@ function restoreCameraStateImpl(plugin: MolstarPlugin, keep: boolean): void {
   try {
     const canvas3d = plugin.canvas3d as any;
     const cam = canvas3d?.camera;
-    if (cam?.setState) {
+    if (!cam) return;
+
+    // R147: Use DIRECT property setters instead of setState().
+    //
+    // setState() triggers a camera TRANSITION (animation) which doesn't
+    // complete instantly. When we then call camera.rotate() for the next
+    // angle, it rotates from the IN-FLIGHT transition position, not from
+    // the restored position — causing side/top screenshots to look the same.
+    //
+    // Direct setters (cam.position = ..., cam.target = ..., cam.up = ...)
+    // update the camera IMMEDIATELY without animation. We then call
+    // cam.update() to sync the view/projection matrices.
+    if (cam.position && cam.target && cam.up) {
+      const pos = savedCameraState.position;
+      const tgt = savedCameraState.target;
+      const up = savedCameraState.up;
+      // Use the setter (cam.position = v triggers the setter which calls
+      // Vec3.copy internally)
+      cam.position[0] = pos[0];
+      cam.position[1] = pos[1];
+      cam.position[2] = pos[2];
+      cam.target[0] = tgt[0];
+      cam.target[1] = tgt[1];
+      cam.target[2] = tgt[2];
+      cam.up[0] = up[0];
+      cam.up[1] = up[1];
+      cam.up[2] = up[2];
+      // Update view/projection matrices
+      if (typeof cam.update === 'function') {
+        cam.update();
+      }
+    } else if (cam.setState) {
+      // Fallback: setState with durationMs=0 for instant (no animation)
       cam.setState({
         position: savedCameraState.position as [number, number, number],
         target: savedCameraState.target as [number, number, number],
         up: savedCameraState.up as [number, number, number],
-      });
-      // R144: Request a redraw so the orbit controls sync with the new camera
-      // state. Without this, the trackball controls may keep their internal
-      // stale state and the user can't freely rotate after a capture.
-      if (typeof canvas3d.requestDraw === 'function') {
-        canvas3d.requestDraw();
-      }
+      }, 0); // 0ms = instant, no transition
     }
+
+    // Request a redraw so the orbit controls sync with the new camera state
+    if (typeof canvas3d.requestDraw === 'function') {
+      canvas3d.requestDraw();
+    }
+
     if (!keep) {
       savedCameraState = null;
     }
@@ -106,21 +138,40 @@ export function getCurrentCameraState(plugin: MolstarPlugin): CameraViewState | 
  * R144: Restore a specific camera view state.
  * Used by the "恢复视角" button in the screenshot carousel to restore
  * the view that was active when a specific screenshot was captured.
+ *
+ * R147: Uses direct property setters + update() instead of setState()
+ * to avoid transition animation and ensure instant view restoration.
  */
 export function restoreCameraViewState(plugin: MolstarPlugin, state: CameraViewState): void {
   try {
     const canvas3d = plugin.canvas3d as any;
     const cam = canvas3d?.camera;
-    if (cam?.setState) {
+    if (!cam) return;
+
+    // R147: Direct property setters for instant restoration
+    if (cam.position && cam.target && cam.up) {
+      cam.position[0] = state.position[0];
+      cam.position[1] = state.position[1];
+      cam.position[2] = state.position[2];
+      cam.target[0] = state.target[0];
+      cam.target[1] = state.target[1];
+      cam.target[2] = state.target[2];
+      cam.up[0] = state.up[0];
+      cam.up[1] = state.up[1];
+      cam.up[2] = state.up[2];
+      if (typeof cam.update === 'function') {
+        cam.update();
+      }
+    } else if (cam.setState) {
       cam.setState({
         position: state.position,
         target: state.target,
         up: state.up,
-      });
-      // R144: Request a redraw so the orbit controls sync with the new camera state
-      if (typeof canvas3d.requestDraw === 'function') {
-        canvas3d.requestDraw();
-      }
+      }, 0); // 0ms = instant
+    }
+
+    if (typeof canvas3d.requestDraw === 'function') {
+      canvas3d.requestDraw();
     }
   } catch (err) { console.warn('[restoreCameraViewState] failed:', err); }
 }
@@ -155,65 +206,84 @@ export async function applyCameraAngle(
 
   const canvas3d = plugin.canvas3d as any;
   if (!canvas3d?.camera) return;
+  const cam = canvas3d.camera;
 
   try {
-    // R130: Use camera.rotate — rotates around target, keeps structure centered
-    if (typeof canvas3d.camera.rotate === 'function') {
-      if (angle === "side" || angle === "interface_side") {
-        canvas3d.camera.rotate([0, 1, 0], Math.PI / 2);  // 90° around Y
-      } else if (angle === "back") {
-        canvas3d.camera.rotate([0, 1, 0], Math.PI);       // 180° around Y
-      } else if (angle === "top") {
-        canvas3d.camera.rotate([1, 0, 0], -Math.PI / 2);  // 90° around X
-      } else if (angle === "interface_tilted") {
-        canvas3d.camera.rotate([0, 1, 0], Math.PI / 4);   // 45° around Y (R146)
-      }
-      await new Promise(r => setTimeout(r, 300));
-      await new Promise(r => setTimeout(r, 200));
-      return;
-    }
-
-    // Fallback: manual setState rotation
-    const getArr = (v: any) => {
+    // R147: Use DIRECT property setters instead of camera.rotate().
+    //
+    // camera.rotate() triggers an animation/transition and may not complete
+    // before the screenshot is taken. It also interacts with the orbit
+    // controls' internal state in unpredictable ways.
+    //
+    // Instead, we:
+    //   1. Read the current camera position/target/up
+    //   2. Compute the NEW position/up for the requested angle
+    //   3. Set them directly via property setters
+    //   4. Call cam.update() to sync matrices
+    //
+    // This gives us ABSOLUTE camera positioning with no animation,
+    // ensuring each screenshot is taken from a distinct, correct angle.
+    const getArr = (v: any): number[] => {
       if (v?.toArray) return v.toArray();
       if (Array.isArray(v)) return v;
       return [0, 0, 0];
     };
-    const pos = getArr(canvas3d.camera.position);
-    const tgt = getArr(canvas3d.camera.target);
-    const up = getArr(canvas3d.camera.up);
 
+    const pos = getArr(cam.position);
+    const tgt = getArr(cam.target);
+    const up = getArr(cam.up);
+
+    // Direction from target to camera position
     const dx = pos[0] - tgt[0];
     const dy = pos[1] - tgt[1];
     const dz = pos[2] - tgt[2];
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
     let newPos: [number, number, number];
-    let newUp: [number, number, number] = [up[0], up[1], up[2]];
+    let newUp: [number, number, number] = [up[0] ?? 0, up[1] ?? 0, up[2] ?? 0];
 
     if (angle === "side" || angle === "interface_side") {
-      newPos = [tgt[0] - dz, pos[1], tgt[2] + dx];
+      // 90° rotation around Y axis: swap X and Z components
+      // Camera moves from (dx, dy, dz) to (-dz, dy, dx) relative to target
+      newPos = [tgt[0] - dz, tgt[1] + dy, tgt[2] + dx];
     } else if (angle === "back") {
-      newPos = [tgt[0] - dx, pos[1], tgt[2] - dz];
+      // 180° rotation around Y axis: negate X and Z
+      newPos = [tgt[0] - dx, tgt[1] + dy, tgt[2] - dz];
     } else if (angle === "interface_tilted") {
-      // R146: 45° rotation — interpolate between front and side
+      // R146: 45° rotation around Y axis
       const cos45 = Math.cos(Math.PI / 4);
       const sin45 = Math.sin(Math.PI / 4);
       newPos = [
-        tgt[0] - dz * sin45 + dx * (1 - cos45),
-        pos[1],
-        tgt[2] + dx * sin45 + dz * (1 - cos45),
+        tgt[0] - dz * sin45 + dx * cos45,
+        tgt[1] + dy,
+        tgt[2] + dx * sin45 + dz * cos45,
       ];
     } else { // top
-      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      // 90° rotation around X axis: camera looks down from above
       newPos = [tgt[0], tgt[1] + dist, tgt[2]];
+      // Up vector points from camera toward the original front direction
       const xzLen = Math.sqrt(dx*dx + dz*dz) || 1;
-      newUp = [dx / xzLen, 0, dz / xzLen];
+      newUp = [-dx / xzLen, 0, -dz / xzLen];
     }
 
-    if (canvas3d.camera.setState) {
-      canvas3d.camera.setState({ position: newPos, up: newUp, target: tgt });
+    // R147: Set properties directly (no animation)
+    if (cam.position && cam.target && cam.up && typeof cam.update === 'function') {
+      cam.position[0] = newPos[0];
+      cam.position[1] = newPos[1];
+      cam.position[2] = newPos[2];
+      cam.target[0] = tgt[0];
+      cam.target[1] = tgt[1];
+      cam.target[2] = tgt[2];
+      cam.up[0] = newUp[0];
+      cam.up[1] = newUp[1];
+      cam.up[2] = newUp[2];
+      cam.update();
+    } else if (cam.setState) {
+      // Fallback: setState with durationMs=0 for instant
+      cam.setState({ position: newPos, up: newUp, target: tgt }, 0);
     }
 
+    // Wait for render to settle
     await new Promise(r => setTimeout(r, 300));
     await new Promise(r => setTimeout(r, 200));
   } catch (err) { console.warn('[applyCameraAngle] failed:', err); }
