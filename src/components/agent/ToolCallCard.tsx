@@ -234,11 +234,14 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
       if (autoScreenshots.length > 0) {
         const captureMs = r.autoCapture.captureDurationMs;
         const vlmMs = r.autoCapture.vlmDurationMs;
+        const vlmIterations = r.autoCapture.vlmIterations;
+        const vlmAcceptable = r.autoCapture.vlmAcceptable;
         return (
           <div className="text-xs">
             {/* R116.2: Show timing for auto-capture + VLM */}
-            {(captureMs != null || vlmMs != null) && (
-              <div className="flex items-center gap-2 text-[9px] text-claude-text-muted mb-1">
+            {/* R142: Show VLM iteration count + acceptable status */}
+            {(captureMs != null || vlmMs != null || vlmIterations != null) && (
+              <div className="flex items-center gap-2 text-[9px] text-claude-text-muted mb-1 flex-wrap">
                 {captureMs != null && (
                   <span className="flex items-center gap-0.5">
                     <Timer className="h-2.5 w-2.5" />
@@ -250,6 +253,17 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
                     <Timer className="h-2.5 w-2.5" />
                     VLM {vlmMs < 1000 ? `${vlmMs}ms` : `${(vlmMs / 1000).toFixed(1)}s`}
                     {vlmMs < 1000 && <span className="text-emerald-500">(缓存)</span>}
+                  </span>
+                )}
+                {vlmIterations != null && vlmIterations > 1 && (
+                  <span className="flex items-center gap-0.5 text-claude-accent">
+                    <RotateCcw className="h-2.5 w-2.5" />
+                    {vlmIterations}轮迭代
+                  </span>
+                )}
+                {vlmAcceptable != null && (
+                  <span className={`px-1 py-0.5 rounded-full text-[8px] ${vlmAcceptable ? 'bg-emerald-500/20 text-emerald-600' : 'bg-amber-500/20 text-amber-600'}`}>
+                    {vlmAcceptable ? '✓ 质量 acceptable' : '⚠ 需改进'}
                   </span>
                 )}
               </div>

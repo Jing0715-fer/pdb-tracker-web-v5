@@ -749,44 +749,65 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
               const captureStartTime = Date.now(); // R116.2: Track auto-capture timing
               try {
                 // R140: Extract interface residue labels from the analysis data
-                // so they appear on the screenshot as "R31" (single-letter + resno).
-                // This helps the VLM verify the screenshot matches the analysis.
                 const residueLabels = extractResidueLabels(recipeName, analysisData);
-                const captureResult = await executeCommand(v, {
-                  type: 'capture_multi_angle',
-                  recipe: recipeName,
-                  angles: ['front', 'side', 'top'],
-                  vizParams: analysisData,
-                  labels: residueLabels,
-                  labelFontSize: 0.8,
-                } as never);
-                const captureDuration = Date.now() - captureStartTime; // R116.2
-                if (captureResult.ok && (captureResult as any).data?.screenshots) {
-                  const screenshots = (captureResult as any).data.screenshots;
-                  (captureResult as any).captureDurationMs = captureDuration; // R116.2
-                  // R122: Run VLM on ALL captures (including single screenshots)
-                  // Previously skipped single screenshots, but we need VLM
-                  // commentary for quality assessment even with 1 screenshot
-                  const vlmStartTime = Date.now();
-                  try {
-                    const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
-                    const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
-                    console.log(`[agent] Starting VLM analysis for ${screenshots.length} screenshots (recipe: ${recipeName})`);
-                    const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
-                    const vlmDuration = Date.now() - vlmStartTime;
-                    if (vlmResult) {
-                      (captureResult as any).vlmResult = vlmResult;
-                      (captureResult as any).vlmDurationMs = vlmDuration;
-                      console.log(`[agent] VLM completed: ${vlmDuration}ms (cache: ${vlmDuration < 1000 ? 'HIT' : 'MISS'}) quality=${vlmResult.quality} bestIndex=${vlmResult.bestIndex}`);
-                    } else {
-                      console.warn('[agent] VLM returned null — no result');
-                      (captureResult as any).vlmError = 'VLM analysis returned no result';
-                    }
-                  } catch (vlmErr) {
-                    console.warn('[agent] VLM failed (non-blocking):', vlmErr);
-                    (captureResult as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
+
+                // R142: Use VLM-controlled capture loop (Plan A+B+C+D)
+                // Instead of a single capture → VLM → done, this runs an
+                // iterative loop: capture → VLM → adjust → re-capture bad
+                // angles → VLM → done (up to 2 iterations).
+                const { runVlmControlledCaptureLoop } = await import('@/lib/molcraft/vlm-capture-loop');
+                const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
+
+                // Helper: execute capture_multi_angle and return screenshots
+                const executeCapture = async (angles: string[], vizParams: Record<string, unknown>) => {
+                  const capResult = await executeCommand(v, {
+                    type: 'capture_multi_angle',
+                    recipe: recipeName,
+                    angles: angles as never,
+                    vizParams: vizParams as never,
+                    labels: residueLabels,
+                    labelFontSize: 0.8,
+                  } as never);
+                  if (capResult.ok && (capResult as any).data?.screenshots) {
+                    return {
+                      screenshots: (capResult as any).data.screenshots,
+                      ok: true,
+                    };
                   }
-                  // R115.1: Update execution result + trigger UI re-render
+                  return { screenshots: [], ok: false };
+                };
+
+                const loopResult = await runVlmControlledCaptureLoop(
+                  executeCapture,
+                  recipeName,
+                  analysisSummary,
+                  analysisData,
+                  { maxIterations: 2, angles: ['front', 'side', 'top'] }
+                );
+
+                const captureDuration = Date.now() - captureStartTime;
+
+                if (loopResult.screenshots.length > 0) {
+                  const captureResult = {
+                    ok: true,
+                    detail: `Captured ${loopResult.screenshots.length} angles for ${recipeName} (${loopResult.iterations} iterations)`,
+                    data: {
+                      recipe: recipeName,
+                      label: recipeName,
+                      screenshots: loopResult.screenshots,
+                    },
+                    captureDurationMs: captureDuration,
+                    vlmResult: loopResult.vlm,
+                    vlmDurationMs: captureDuration,
+                    vlmIterations: loopResult.iterations,
+                    vlmAcceptable: loopResult.acceptable,
+                  } as any;
+
+                  if (loopResult.vlm) {
+                    console.log(`[agent] VLM loop completed: ${loopResult.iterations} iterations, quality=${loopResult.vlm.quality}, acceptable=${loopResult.acceptable}`);
+                  }
+
+                  // Update execution result + trigger UI re-render
                   const exec = executionsRef.current.get(call.callId);
                   if (exec) {
                     (exec.result as any).autoCapture = captureResult;
