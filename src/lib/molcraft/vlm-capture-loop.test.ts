@@ -261,13 +261,13 @@ describe('computeInterfaceAngles', () => {
     expect(result.map(a => a.label)).toEqual(['front', 'side', 'top']);
   });
 
-  test('returns default angles even when normal is computable (R143 TODO)', () => {
-    // R143: computeInterfaceAngles computes the normal but returns default
-    // angles because applyCameraAngle only supports front/side/top/back
+  test('returns interface-aware angles when normal is computable (R146)', () => {
+    // R146: computeInterfaceAngles now returns interface-aware labels
+    // when the interface normal can be computed
     const interfaceCenter = { x: 10, y: 0, z: 0 };
     const structureCenter = { x: 0, y: 0, z: 0 };
     const result = computeInterfaceAngles(interfaceCenter, structureCenter);
     expect(result).toHaveLength(3);
-    expect(result.map(a => a.label)).toEqual(['front', 'side', 'top']);
+    expect(result.map(a => a.label)).toEqual(['interface_front', 'interface_side', 'interface_tilted']);
   });
 });

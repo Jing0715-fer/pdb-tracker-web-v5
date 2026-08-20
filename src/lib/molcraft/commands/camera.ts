@@ -133,12 +133,21 @@ export function restoreCameraViewState(plugin: MolstarPlugin, state: CameraViewS
  * - For front: capture current view as-is (no rotation)
  * - For other angles: rotate from current position
  * - Double render + delay for WebGL buffer to populate
+ *
+ * R146: Added support for interface-aware angles:
+ * - "interface_front" = 0° (current view, same as front)
+ * - "interface_side" = 90° rotation around the Y axis (same as side)
+ * - "interface_tilted" = 45° rotation around the Y axis (halfway between)
+ * These are mapped to the existing rotate() calls because the R143 fix
+ * (restoreCameraStateKeep before each angle) already ensures orthogonal
+ * rotations from the focused interface view.
  */
 export async function applyCameraAngle(
   plugin: MolstarPlugin,
-  angle: "front" | "side" | "top" | "back"
+  angle: "front" | "side" | "top" | "back" | "interface_front" | "interface_side" | "interface_tilted"
 ): Promise<void> {
-  if (angle === "front") {
+  // R146: Map interface-aware angles to canonical rotations
+  if (angle === "front" || angle === "interface_front") {
     // Front = current view, no rotation needed
     await new Promise(r => setTimeout(r, 100));
     return;
@@ -150,12 +159,14 @@ export async function applyCameraAngle(
   try {
     // R130: Use camera.rotate — rotates around target, keeps structure centered
     if (typeof canvas3d.camera.rotate === 'function') {
-      if (angle === "side") {
+      if (angle === "side" || angle === "interface_side") {
         canvas3d.camera.rotate([0, 1, 0], Math.PI / 2);  // 90° around Y
       } else if (angle === "back") {
         canvas3d.camera.rotate([0, 1, 0], Math.PI);       // 180° around Y
       } else if (angle === "top") {
         canvas3d.camera.rotate([1, 0, 0], -Math.PI / 2);  // 90° around X
+      } else if (angle === "interface_tilted") {
+        canvas3d.camera.rotate([0, 1, 0], Math.PI / 4);   // 45° around Y (R146)
       }
       await new Promise(r => setTimeout(r, 300));
       await new Promise(r => setTimeout(r, 200));
@@ -179,10 +190,19 @@ export async function applyCameraAngle(
     let newPos: [number, number, number];
     let newUp: [number, number, number] = [up[0], up[1], up[2]];
 
-    if (angle === "side") {
+    if (angle === "side" || angle === "interface_side") {
       newPos = [tgt[0] - dz, pos[1], tgt[2] + dx];
     } else if (angle === "back") {
       newPos = [tgt[0] - dx, pos[1], tgt[2] - dz];
+    } else if (angle === "interface_tilted") {
+      // R146: 45° rotation — interpolate between front and side
+      const cos45 = Math.cos(Math.PI / 4);
+      const sin45 = Math.sin(Math.PI / 4);
+      newPos = [
+        tgt[0] - dz * sin45 + dx * (1 - cos45),
+        pos[1],
+        tgt[2] + dx * sin45 + dz * (1 - cos45),
+      ];
     } else { // top
       const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
       newPos = [tgt[0], tgt[1] + dist, tgt[2]];

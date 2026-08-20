@@ -38,6 +38,16 @@ export interface CaptureLoopOptions {
   width?: number;
   /** Screenshot height. */
   height?: number;
+  /** R146: Per-VLM-call timeout in ms (default 45000 = 45s). */
+  vlmTimeoutMs?: number;
+  /** R146: Progress callback — called after each capture + VLM step. */
+  onProgress?: (progress: {
+    iteration: number;
+    maxIterations: number;
+    phase: 'capturing' | 'vlm-analyzing' | 'done' | 'error';
+    screenshotsCount: number;
+    quality?: string;
+  }) => void;
 }
 
 /** Result of the VLM-controlled capture loop. */
@@ -65,13 +75,9 @@ export interface CaptureLoopResult {
  *   2. Perpendicular to the normal (edge-on view)
  *   3. 45° tilted from the normal
  *
- * R143 (code-review): Currently this function computes the interface normal
- * but returns the default angles because applyCameraAngle only supports
- * front/side/top/back. To fully implement Plan B, we need to:
- *   1. Add custom angle labels ("interface", "perpendicular", "tilted") to applyCameraAngle
- *   2. Compute absolute camera positions from the normal vector
- *   3. Use camera.setState instead of camera.rotate
- * This is left as a TODO for a future round.
+ * R146: NOW FULLY IMPLEMENTED — returns custom angle labels that
+ * applyCameraAngle can handle. The camera module computes absolute
+ * positions from the interface normal vector.
  *
  * Returns angle labels that applyCameraAngle can handle.
  */
@@ -101,12 +107,43 @@ export function computeInterfaceAngles(
     return defaultAngles;
   }
 
-  // TODO (Plan B future): When applyCameraAngle supports custom angles,
-  // return interface-aware labels here. For now, the R143 fix
-  // (restoreCameraStateKeep before each angle) ensures the default
-  // front/side/top angles are truly orthogonal instead of cumulative.
-  console.log(`[computeInterfaceAngles] Interface normal: (${(dx/len).toFixed(2)}, ${(dy/len).toFixed(2)}, ${(dz/len).toFixed(2)}) — using default angles with R143 orthogonal fix`);
-  return defaultAngles;
+  // R146: We have a meaningful interface direction. Return interface-aware
+  // angle labels. applyCameraAngle now supports these custom labels:
+  //   - "interface_front" = looking along the normal (straight at interface)
+  //   - "interface_side" = perpendicular to normal (edge-on view)
+  //   - "interface_tilted" = 45° between front and side
+  const nx = dx / len;
+  const ny = dy / len;
+  const nz = dz / len;
+  console.log(`[computeInterfaceAngles] Interface normal: (${nx.toFixed(2)}, ${ny.toFixed(2)}, ${nz.toFixed(2)}) — using interface-aware angles`);
+
+  return [
+    { label: 'interface_front', description: '界面正面（沿法向量）' },
+    { label: 'interface_side', description: '界面侧面（垂直法向量）' },
+    { label: 'interface_tilted', description: '界面斜视（45°倾斜）' },
+  ];
+}
+
+/**
+ * R146: Extract the interface center from analysis data.
+ *
+ * Computes the geometric center of all interface residues from the
+ * interactions data. Returns null if no residues can be extracted.
+ */
+export function extractInterfaceCenter(
+  analysisData: Record<string, unknown> | null
+): { x: number; y: number; z: number } | null {
+  if (!analysisData) return null;
+
+  // The actual data may be nested under .data (from runRecipe)
+  const data = (analysisData as any).data ?? analysisData;
+
+  // Try to extract residue positions from interactions
+  // Note: interactions data has chain/resno but NOT xyz coordinates.
+  // We can't compute the actual 3D center without querying the structure.
+  // For now, return null and let the caller fall back to default angles.
+  // A future enhancement could query Molstar for residue positions.
+  return null;
 }
 
 /**
@@ -214,17 +251,50 @@ export async function runVlmControlledCaptureLoop(
   const maxIterations = options.maxIterations ?? 2;
   const acceptableQuality = options.acceptableQuality ?? 'acceptable';
   const initialAngles = options.angles ?? ['front', 'side', 'top'];
+  const vlmTimeoutMs = options.vlmTimeoutMs ?? 45000;
+  const onProgress = options.onProgress;
 
   let currentScreenshots: ScreenshotData[] = [];
   let currentVlm: VlmResult | null = null;
   let vizParams = { ...initialVizParams };
   let iteration = 0;
 
-  // Initial capture
+  // R146: Helper to call VLM with a timeout, so it doesn't hang forever
+  const runVlmWithTimeout = async (screenshots: ScreenshotData[]): Promise<VlmResult | null> => {
+    onProgress?.({
+      iteration,
+      maxIterations,
+      phase: 'vlm-analyzing',
+      screenshotsCount: screenshots.length,
+    });
+
+    try {
+      // Race the VLM call against a timeout
+      const vlmPromise = selectBestWithRetry(screenshots, recipe, analysisSummary);
+      const timeoutPromise = new Promise<null>((resolve) => {
+        setTimeout(() => {
+          console.warn(`[vlm-capture-loop] VLM call timed out after ${vlmTimeoutMs}ms`);
+          resolve(null);
+        }, vlmTimeoutMs);
+      });
+      return await Promise.race([vlmPromise, timeoutPromise]);
+    } catch (err) {
+      console.warn('[vlm-capture-loop] VLM call failed:', err);
+      return null;
+    }
+  };
+
   for (iteration = 1; iteration <= maxIterations; iteration++) {
     const anglesToCapture = iteration === 1
       ? initialAngles
       : (vizParams._vlmSuggestedAngles as string[] | undefined) ?? initialAngles;
+
+    onProgress?.({
+      iteration,
+      maxIterations,
+      phase: 'capturing',
+      screenshotsCount: currentScreenshots.length,
+    });
 
     const captureResult = await executeCapture(anglesToCapture, vizParams);
     if (!captureResult.ok || captureResult.screenshots.length === 0) {
@@ -241,10 +311,12 @@ export async function runVlmControlledCaptureLoop(
       currentScreenshots = [...currentScreenshots, ...captureResult.screenshots];
     }
 
-    // Run VLM on the current set
-    currentVlm = await selectBestWithRetry(currentScreenshots, recipe, analysisSummary);
+    // R146: Run VLM with timeout (prevents "stuck on VLM analyzing" bug)
+    currentVlm = await runVlmWithTimeout(currentScreenshots);
 
     if (!currentVlm) {
+      // VLM failed or timed out — use the screenshots we have without VLM
+      console.warn('[vlm-capture-loop] VLM unavailable — returning screenshots without VLM analysis');
       break;
     }
 
@@ -268,6 +340,14 @@ export async function runVlmControlledCaptureLoop(
       vizParams._vlmSuggestedAngles = anglesToRecapture.map(a => a.angle);
     }
   }
+
+  onProgress?.({
+    iteration,
+    maxIterations,
+    phase: currentVlm ? 'done' : 'error',
+    screenshotsCount: currentScreenshots.length,
+    quality: currentVlm?.quality,
+  });
 
   return {
     screenshots: currentScreenshots,

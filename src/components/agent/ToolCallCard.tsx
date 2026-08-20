@@ -208,11 +208,22 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
   const r = result as any;
   if (name === 'pdb_analyze' && r) {
     if (r.autoCapturePending && !r.autoCapture) {
+      // R146: Show detailed progress from the VLM capture loop
+      const progress = r.autoCaptureProgress;
+      const phaseText = progress?.phase === 'capturing'
+        ? `截图中（第 ${progress.iteration}/${progress.maxIterations} 轮）...`
+        : progress?.phase === 'vlm-analyzing'
+        ? `VLM 分析中（第 ${progress.iteration}/${progress.maxIterations} 轮，${progress.screenshotsCount} 张截图）...`
+        : progress?.phase === 'done'
+        ? `完成（${progress.iterations ?? progress.iteration} 轮）`
+        : progress?.phase === 'error'
+        ? '出错'
+        : '正在自动截图 + VLM 分析...';
       return (
         <div className="text-xs">
           <div className="flex items-center gap-1.5 text-[10px] text-claude-text-muted">
             <Loader2 className="h-3 w-3 animate-spin" />
-            <span>正在自动截图 + VLM 分析...</span>
+            <span>{phaseText}</span>
           </div>
           <ResultText name={name} result={result} />
         </div>

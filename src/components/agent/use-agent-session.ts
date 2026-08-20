@@ -782,7 +782,19 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   recipeName,
                   analysisSummary,
                   analysisData,
-                  { maxIterations: 2, angles: ['front', 'side', 'top'] }
+                  {
+                    maxIterations: 2,
+                    angles: ['front', 'side', 'top'],
+                    vlmTimeoutMs: 45000, // R146: 45s timeout per VLM call
+                    onProgress: (progress) => {
+                      // R146: Update UI with progress so user sees what's happening
+                      const exec = executionsRef.current.get(call.callId);
+                      if (exec) {
+                        (exec.result as any).autoCaptureProgress = progress;
+                        setEvents((prev) => [...prev]);
+                      }
+                    },
+                  }
                 );
 
                 const captureDuration = Date.now() - captureStartTime;
