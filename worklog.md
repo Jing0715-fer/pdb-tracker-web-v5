@@ -2908,3 +2908,55 @@ Stage Summary:
   src/lib/molcraft/commands/camera.ts (+65),
   src/components/agent/ToolCallCard.tsx (+36 / -2),
   src/components/agent/ChatPanel.tsx (+80 / -73). +190 / -75 total.
+
+---
+Task ID: round-145-git-history-check-code-review
+Agent: main
+Task: Check remote git history for lost commits, then comprehensive code review of R137-R144 changes.
+
+Work Log:
+- Checked git reflog and git fsck for unreachable commits
+- Found 1 unpushed commit (worklog entry) — pushed to remote
+- Found 10 unreachable commits — all are git stash WIP/index snapshots (not real code)
+- No lost code commits; local and remote are now in sync
+- Reviewed camera.ts, vlm-capture-loop.ts, recipe-viz.ts, ToolCallCard.tsx, commands.ts
+- Found 3 bugs in the R142-R144 code
+
+Bugs Found & Fixed:
+
+Bug #1 (CRITICAL): cameraState not propagated to UI
+  - commands.ts correctly saves per-screenshot cameraState (R144)
+  - But extractScreenshots() in ToolCallCard.tsx only extracted {dataUri, angle, label}
+    and DISCARDED the cameraState field
+  - Result: the '恢复视角' button was always hidden because current.cameraState
+    was always undefined — the feature appeared broken
+  - Fix: extractScreenshots now extracts and returns cameraState in both
+    capture_snapshot and capture_multi_angle paths
+
+Bug #2 (LOW): Unused import in vlm-capture-loop.ts
+  - MolstarViewer was imported but never used (leftover from initial design)
+  - Fix: removed the unused import
+
+Bug #3 (LOW): Silent catch in measurement cleanup
+  - commands.ts line 861: try { meas.removeLast(); } catch { break; }
+  - Fix: now logs warning with console.warn('[capture_multi_angle] removeLast failed:', err)
+
+Added: 20 unit tests for vlm-capture-loop.ts
+  - selectAnglesToRecapture: 7 tests (threshold, scores, issues, edge cases)
+  - applyVlmHints: 8 tests (zoom, focus, angles, immutability, combined)
+  - computeInterfaceAngles: 6 tests (null centers, identical, close, computable)
+
+Verification:
+- Lint: 0 errors (1 pre-existing warning)
+- Unit tests: 126 pass, 0 fail (3 files)
+- Dev server: HTTP 200
+- Agent-browser: page renders correctly
+- Git: commit 2fd7263 pushed to origin/main
+
+Stage Summary:
+- Git history: no lost commits, all work preserved
+- Code review: 3 bugs found and fixed
+- The critical cameraState propagation bug means the '恢复视角' button
+  (R144 feature) was non-functional — now fixed
+- Added comprehensive unit test coverage for the VLM capture loop module
+- Total test count: 126 (was 106, added 20 for vlm-capture-loop)
