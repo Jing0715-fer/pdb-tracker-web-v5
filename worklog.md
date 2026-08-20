@@ -3104,3 +3104,57 @@ Stage Summary:
 - Side chains: all interface residues shown as ball-and-stick (up to 30)
 - Distance lines: connect specific atoms (NH1-OE1), not CA carbons
 - Labels: consistent across all chain pairs (A-B, C-D, etc.)
+
+---
+Task ID: round-149-comprehensive-code-review-e2e
+Agent: main
+Task: Comprehensive code review + QA testing + E2E testing of screenshot/analysis pipeline.
+
+Code Review Findings:
+1. Data flow verified correct:
+   - analysisData = result.analysisResult.data = { recipe, ok, pdbId, format, data: { chain1, chain2, interactions } }
+   - extractResidueLabels unwraps .data → reads interactions[] → correct labels
+   - applyRecipeVisualization unwraps .data → reads chain1/chain2/interactions → correct focus
+   - VLM hints (_focusRadiusMultiplier) properly read and applied
+
+2. Camera angle math verified correct (R147):
+   - side: 90° Y rotation → newPos = [tgt.x - dz, tgt.y + dy, tgt.z + dx] ✓
+   - top: 90° X rotation → camera above target, up points to front ✓
+   - back: 180° Y rotation → negate X/Z ✓
+   - interface_tilted: 45° Y rotation ✓
+
+3. Interaction lines (R148):
+   - Only draws hbond/salt_bridge with atom1+atom2 (not hydrophobic) ✓
+   - For 4HHB A-B: 4 lines (correct, was 17 before)
+   - Distance connects specific atoms (NH1-OE1), not CA-CA ✓
+
+4. Side chains (R148):
+   - Shows up to 30 interface residues as ball-and-stick ✓
+   - Each tagged with 'interface-sidechain' for cleanup ✓
+
+5. VLM capture loop (R146):
+   - 45s timeout prevents infinite hang ✓
+   - Progress callback updates UI with phase/iteration ✓
+   - Cache key uses screenshot fingerprint → no stale cache on recapture ✓
+
+6. Camera restore (R147):
+   - Direct property setters (no setState animation) ✓
+   - restoreCameraStateKeep before each angle → absolute rotations ✓
+   - requestDraw() syncs orbit controls → no camera lock ✓
+
+QA/E2E Test Results:
+- Lint: 0 errors (1 pre-existing warning)
+- Unit tests: 126 pass, 0 fail
+- Dev server: HTTP 200, no errors in log
+- Agent-browser: page renders correctly
+- Analysis API: returns correct 4HHB A-B data (17 interactions, 4 hbonds)
+  - hbonds with atom data: 4/4 (ARG31 NH1→GLN127 OE1, ARG30 NH1→HIS122 ND1, etc.)
+- Agent session: creates session, returns pdb_load tool call
+- No runtime errors in dev.log
+
+Stage Summary:
+- All code paths verified correct
+- Data structures match between API → extractResidueLabels → applyRecipeVisualization
+- Camera math verified for all angles
+- R148 fixes (only hbond lines, atom-level distances, side chains) confirmed by data
+- No bugs found in this review round — the R146-R148 fixes are solid
