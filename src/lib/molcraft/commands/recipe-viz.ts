@@ -254,6 +254,52 @@ export async function applyRecipeVisualization(
         }, "focus_interface");
 
         await safe(async () => {
+          // R152: Hide water molecules (HOH) so they don't clutter the
+          // interaction view. We find all components with water and hide them,
+          // or create a water component and hide it if none exists.
+          const structs = getStructures(plugin);
+          if (structs.length === 0) return;
+          const sr = structs[0];
+          const data = sr?.cell?.obj?.data;
+          if (!data) return;
+
+          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+          if (!Q) return;
+
+          // Build expression for water (label_comp_id = HOH)
+          const waterExpr = Q.struct.generator.atomGroups({
+            'residue-test': Q.core.rel.eq([
+              Q.struct.atomProperty.macromolecular.label_comp_id(),
+              'HOH'
+            ])
+          });
+
+          try {
+            // Check if a water component already exists
+            const existingWater = (sr.components ?? []).find((c: any) => {
+              const tags = c?.cell?.transform?.tags;
+              return Array.isArray(tags) && tags.includes('water-hide');
+            });
+
+            if (existingWater) {
+              // Already hidden (or shown) — just hide it
+              plugin.managers.structure.hierarchy.toggleVisibility([existingWater], 'hide');
+            } else {
+              // Create a water component and hide it
+              const waterComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
+                sr.cell, waterExpr, 'Water', { tags: ['water-hide'] }
+              );
+              if (waterComponent) {
+                plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
+                console.log('[viz:hide_waters] Hidden water molecules');
+              }
+            }
+          } catch (err) {
+            console.warn('[viz:hide_waters] failed:', err);
+          }
+        }, "hide_waters");
+
+        await safe(async () => {
           let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           if (!Array.isArray(interactions) || interactions.length === 0) {
             const c1Res = params ? (params as any).chain1_interface_residues as Array<Record<string, unknown>> : undefined;
@@ -266,10 +312,14 @@ export async function applyRecipeVisualization(
             }
           }
           if (!Array.isArray(interactions) || interactions.length === 0) return;
-          const data = getFirstStructureData(plugin);
+
+          const structs = getStructures(plugin);
+          if (structs.length === 0) return;
+          const sr = structs[0];
+          const data = sr?.cell?.obj?.data;
           if (!data) return;
 
-          // R151: Collect ALL interface residues for side chain display
+          // R152: Collect ALL interface residues for side chain display
           const residueSet = new Set<string>();
           for (const c of interactions) {
             const ch1 = c.chain1 as string;
@@ -288,10 +338,10 @@ export async function applyRecipeVisualization(
           const residueList = Array.from(residueSet);
           console.log(`[viz:show_sidechains] Showing ${residueList.length} interface residue side chains`);
 
-          // R151: Use tryCreateComponentFromExpression for each residue, which is
-          // the documented Molstar API for creating components from expressions.
-          // Then use the component manager to add ball-and-stick representation.
-          const builder = plugin.builders.structure;
+          // R152: Use the CORRECT API — tryCreateComponentFromExpression takes
+          // (cell, expr, tag) NOT (data, expr, label, options).
+          // Then use builders.structure.representation.addRepresentation
+          // (not managers.structure.component.addRepresentations).
           for (const key of residueList.slice(0, 30)) {
             const [chain, resnoStr] = key.split(":");
             const resno = parseInt(resnoStr, 10);
@@ -300,20 +350,16 @@ export async function applyRecipeVisualization(
                 'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
                 'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno]),
               });
-              // R151: Use tryCreateComponentFromExpression (the standard API)
-              const component = await builder.tryCreateComponentFromExpression(
-                data,
-                expr,
-                `Interface ${chain}:${resno}`,
-                { tags: ['interface-sidechain'] }
+              const tag = `sidechain-${chain}${resno}`;
+              const component = await plugin.builders.structure.tryCreateComponentFromExpression(
+                sr.cell, expr, tag, { tags: ['interface-sidechain'] }
               );
               if (component) {
-                // R151: Use the plugin's representation builder to add ball-and-stick
-                await plugin.managers.structure.component.addRepresentations(
-                  component,
-                  'ball-and-stick',
-                  { sizeFactor: 0.8, quality: 'medium' }
-                );
+                await plugin.builders.structure.representation.addRepresentation(component, {
+                  type: "ball-and-stick",
+                  typeParams: { sizeFactor: 0.8 },
+                  colorTheme: { name: "element-symbol", params: {} },
+                });
               }
             } catch (err) { console.warn(`[viz:show_sidechains] failed for ${chain}:${resno}:`, err); }
           }
@@ -324,34 +370,25 @@ export async function applyRecipeVisualization(
           if (!Array.isArray(interactions) || interactions.length === 0) return;
 
           // R148: ONLY draw distance lines for H-bonds and salt bridges
-          // (NOT hydrophobic contacts — those don't have specific atom pairs).
-          // Also only draw if both atom1 AND atom2 are specified, so the line
-          // connects the actual interacting atoms, not CA carbons.
           const hbondInteractions = interactions.filter(c => {
             const type = (c.type as string | undefined)?.toLowerCase() ?? '';
             const hasAtoms = c.atom1 && c.atom2;
-            // Only draw lines for hbonds and salt_bridges with atom-level data
             return (type === 'hbond' || type === 'salt_bridge' || type === 'salt-bridge') && hasAtoms;
           });
 
-          console.log(`[viz:draw_lines] Drawing ${hbondInteractions.length} distance lines (from ${interactions.length} total interactions — only hbonds/salt_bridges with atom data)`);
+          console.log(`[viz:draw_lines] Drawing ${hbondInteractions.length} distance lines`);
 
-          const data = getFirstStructureData(plugin);
+          const structs = getStructures(plugin);
+          if (structs.length === 0) return;
+          const sr = structs[0];
+          const data = sr?.cell?.obj?.data;
           if (!data) return;
           const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
           if (!Q) return;
 
           for (const c of hbondInteractions) {
             try {
-              // R151: Use direct MolScript expression to get ATOM-LEVEL loci
-              // (not residue-level). lociFromResidue groups by residueKey which
-              // returns the whole residue, so addDistance calculates the distance
-              // between residue boundary spheres, not specific atoms.
-              //
-              // Instead, we build an expression that selects ONLY the specific
-              // atom (e.g. NH1 of ARG31 on chain A) and use getLociFromExpression
-              // to get an atom-level loci. This ensures the distance line connects
-              // the exact interacting atoms.
+              // R152: Use atom-level MolScript expressions with getLociFromExpression
               const chain1 = c.chain1 as string;
               const resno1 = c.resno1 as number;
               const atom1 = c.atom1 as string;
@@ -375,11 +412,11 @@ export async function applyRecipeVisualization(
 
               if (loci1 && loci2 && !isLociEmpty(loci1) && !isLociEmpty(loci2)) {
                 await plugin.managers.structure.measurement.addDistance(loci1, loci2);
-                console.log(`[viz:draw_lines] Added distance: ${chain1}:${resno1}(${atom1}) — ${chain2}:${resno2}(${atom2})`);
+                console.log(`[viz:draw_lines] Added: ${chain1}:${resno1}(${atom1}) — ${chain2}:${resno2}(${atom2})`);
               } else {
-                console.warn(`[viz:draw_lines] Could not find atoms: ${chain1}:${resno1}(${atom1}) or ${chain2}:${resno2}(${atom2})`);
+                console.warn(`[viz:draw_lines] Atoms not found: ${chain1}:${resno1}(${atom1}) or ${chain2}:${resno2}(${atom2})`);
               }
-            } catch (err) { console.warn(`[viz:draw_lines] failed for ${c.chain1}:${c.resno1}(${c.atom1})-${c.chain2}:${c.resno2}(${c.atom2}):`, err); }
+            } catch (err) { console.warn(`[viz:draw_lines] failed:`, err); }
           }
         }, "draw_interaction_lines");
 

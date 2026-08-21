@@ -784,7 +784,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   analysisData,
                   {
                     maxIterations: 2,
-                    angles: ['front', 'side', 'top'],
+                    angles: ['front', 'side', 'top', 'back'], // R152: added back for less occlusion
                     vlmTimeoutMs: 45000, // R146: 45s timeout per VLM call
                     onProgress: (progress) => {
                       // R146: Update UI with progress so user sees what's happening
