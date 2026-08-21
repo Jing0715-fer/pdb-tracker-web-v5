@@ -3246,3 +3246,45 @@ Stage Summary:
 - Side chains: ball-and-stick via tryCreateComponentFromExpression
 - No blank screenshots: re-capture iterations skip visualization
 - Wider focus: +15Å padding, default 25Å radius
+
+---
+Task ID: round-152-sidechains-waters-back-angle
+Agent: main
+Task: Fix side chains not showing, hide waters, add back angle.
+
+Bugs Found & Fixed:
+
+Bug #1: Side chains not showing (wrong API)
+  - Was using plugin.managers.structure.component.addRepresentations (doesn't exist)
+  - Was passing (data, expr, label, options) to tryCreateComponentFromExpression
+    (wrong signature — it takes (cell, expr, tag, options))
+  - Fix: Use the CORRECT API from measure.ts:
+    1. plugin.builders.structure.tryCreateComponentFromExpression(sr.cell, expr, tag, {tags})
+    2. plugin.builders.structure.representation.addRepresentation(component, {
+         type: 'ball-and-stick',
+         typeParams: { sizeFactor: 0.8 },
+         colorTheme: { name: 'element-symbol' }
+       })
+
+Bug #2: Water molecules cluttering the view
+  - Fix: Added hide_waters step before show_sidechains:
+    1. Build MolScript expression for label_comp_id = HOH
+    2. tryCreateComponentFromExpression → water component
+    3. toggleVisibility([waterComponent], 'hide')
+
+Bug #3: Angle occlusion (too few angles)
+  - Was only front/side/top (3 angles) — front and back look the same
+  - Fix: Added 'back' angle (180° Y rotation) for 4 total angles
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Dev server: HTTP 200
+- Agent-browser: page renders correctly
+- Git: commit 96b119c pushed to origin/main
+
+Stage Summary:
+- Side chains: now use correct builders.structure API → will display
+- Waters: hidden via HOH component + toggleVisibility
+- H-bond lines: atom-level expressions (from R151) → correct distances
+- Angles: 4 total (front/side/top/back) → less occlusion
