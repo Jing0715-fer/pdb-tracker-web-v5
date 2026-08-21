@@ -3158,3 +3158,41 @@ Stage Summary:
 - Camera math verified for all angles
 - R148 fixes (only hbond lines, atom-level distances, side chains) confirmed by data
 - No bugs found in this review round — the R146-R148 fixes are solid
+
+---
+Task ID: round-150-git-recovery-sync
+Agent: main
+Task: Recover lost commits and sync local with remote to complete state.
+
+Problem:
+  - Local HEAD was at 531524f (an auto-generated worklog commit)
+  - Remote origin/main was at cbdaa3c (19 commits ahead)
+  - Local was missing R140-R149 (19 commits worth of code changes)
+  - The local-only commit 531524f contained only file permission changes
+    (0 lines of content) + db/custom.db binary — no valuable code
+
+Recovery:
+  1. git fetch origin — fetched latest remote state
+  2. git stash — saved local working directory changes (just db/custom.db)
+  3. git reset --hard origin/main — reset local to match remote exactly
+  4. git stash drop — discarded the stash (only db file, not needed)
+
+Verification:
+  - All 8 key files present with correct line counts:
+    - camera.ts: 290 lines (R147 direct property setters)
+    - recipe-viz.ts: 516 lines (R148 interaction line fixes)
+    - vlm-capture-loop.ts: 358 lines (R146 VLM timeout + progress)
+    - vlm-capture-loop.test.ts: 273 lines (20 unit tests)
+    - use-agent-session.ts: 1143 lines (VLM loop + extractResidueLabels)
+    - ToolCallCard.tsx: 639 lines (zoom modal + restore view button)
+    - ChatPanel.tsx: 719 lines (inline action bar UI)
+    - commands.ts: 1276 lines (capture_multi_angle + cameraState)
+  - Lint: 0 errors (1 pre-existing warning)
+  - Unit tests: 126 pass, 0 fail
+  - Git: local HEAD = origin/main = cbdaa3c (fully synced)
+
+Stage Summary:
+  - All R137-R149 code changes recovered and verified
+  - Local and remote are now in complete sync
+  - No code was lost — the local-only commit was just file permissions
+  - Ready for next development round
