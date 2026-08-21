@@ -3196,3 +3196,53 @@ Stage Summary:
   - Local and remote are now in complete sync
   - No code was lost — the local-only commit was just file permissions
   - Ready for next development round
+
+---
+Task ID: round-151-atom-lines-sidechains-blank-focus
+Agent: main
+Task: Fix H-bond line atoms, side chain display, blank screenshots, focus distance.
+
+Bugs Found & Fixed:
+
+Bug #1: H-bond distance lines connect wrong residues
+  - lociFromResidue uses "group-by": residueKey() → returns whole-residue loci
+  - addDistance(r1, r2) calculates distance between residue BOUNDARY SPHERES
+    (picks any atom in each residue), not the specific interacting atoms
+  - Fix: In draw_interaction_lines, build MolScript expression with
+    'atom-test' (label_atom_id = atom1/atom2) and use
+    getLociFromExpression to get ATOM-LEVEL loci.
+  - Now addDistance connects NH1→OE1, not CA→CA or random atom pairs.
+
+Bug #2: Side chains not shown as ball-and-stick
+  - createComponent + addRepresentations may not work in prebuilt bundle
+  - Fix: Use tryCreateComponentFromExpression (the documented Molstar API)
+    + addRepresentations with { sizeFactor: 0.8, quality: 'medium' }
+
+Bug #3: Blank screenshots in middle of capture (structure disappears)
+  - VLM loop calls capture_multi_angle 2+ times (iteration 1 + recapture)
+  - Each call re-runs applyRecipeVisualization → creates duplicate side
+    chain components + re-focuses camera → structure disappears during
+    the re-focus animation → blank screenshots
+  - Fix: Skip applyRecipeVisualization on re-capture iterations (detected
+    by checking _vlmSuggestedAngles or _focusRadiusMultiplier in vizParams)
+  - Only the FIRST capture applies visualization; recaptures just rotate
+    the camera from the already-focused view.
+
+Bug #4: Focus too close, interface not centered
+  - baseRadius = (boundary.sphere.radius ?? 20) + 5
+  - Fix: Increased to (boundary.sphere.radius ?? 25) + 15
+  - This pulls the camera back ~10Å more, giving a wider view with
+    more context around the interface
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Dev server: HTTP 200
+- Agent-browser: page renders correctly
+- Git: commit 549d4fa pushed to origin/main
+
+Stage Summary:
+- Distance lines: connect exact atoms (NH1-OE1 etc.) with correct distances
+- Side chains: ball-and-stick via tryCreateComponentFromExpression
+- No blank screenshots: re-capture iterations skip visualization
+- Wider focus: +15Å padding, default 25Å radius
