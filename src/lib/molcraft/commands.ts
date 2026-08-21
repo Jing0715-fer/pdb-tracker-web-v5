@@ -676,10 +676,22 @@ export async function executeCommand(
 
         // Round 62: Apply recipe-specific visualization before capturing
         const vizParams = cmd.vizParams as Record<string, unknown> | undefined;
-        await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
-        // Round 78: Reduced from 300ms to 150ms — visualization renders fast
-        // for camera focus operations; 150ms is enough for Molstar to settle
-        await new Promise((r) => setTimeout(r, 150));
+        // R151: Skip applyRecipeVisualization on re-capture iterations (iteration > 1).
+        // The VLM capture loop calls capture_multi_angle multiple times — the first
+        // call applies the visualization (focus, side chains, color), and subsequent
+        // calls only need to re-capture from different angles. Re-applying the
+        // visualization causes duplicate components + camera re-focus, which makes
+        // the structure disappear temporarily (blank screenshots).
+        const isRecapture = vizParams?._vlmSuggestedAngles !== undefined ||
+                            vizParams?._focusRadiusMultiplier !== undefined;
+        if (!isRecapture) {
+          await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
+          // Round 78: Reduced from 300ms to 150ms — visualization renders fast
+          // for camera focus operations; 150ms is enough for Molstar to settle
+          await new Promise((r) => setTimeout(r, 150));
+        } else {
+          console.log('[capture_multi_angle] Re-capture iteration — skipping applyRecipeVisualization');
+        }
 
         // Round 74: Add residue labels to the 3D view before capturing
         // R137 (code-review): Capture the measurement count BEFORE adding any

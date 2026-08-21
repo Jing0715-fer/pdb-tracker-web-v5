@@ -224,7 +224,10 @@ export async function applyRecipeVisualization(
               if (boundary?.sphere) {
                 const center = boundary.sphere.center;
                 // R143: Apply VLM zoom multiplier if set (Plan D integration)
-                const baseRadius = (boundary.sphere.radius ?? 20) + 5;
+                // R151: Increased padding from +5 to +15 for a wider view,
+                // and default radius from 20 to 25. This pulls the camera
+                // back so the interface is centered with more context.
+                const baseRadius = (boundary.sphere.radius ?? 25) + 15;
                 const radius = vlmZoomMultiplier ? baseRadius * vlmZoomMultiplier : baseRadius;
                 console.log(`[viz:focus] Center: (${center.x?.toFixed(1)}, ${center.y?.toFixed(1)}, ${center.z?.toFixed(1)}), Radius: ${radius.toFixed(1)} Å${vlmZoomMultiplier ? ` (VLM zoom: ${vlmZoomMultiplier}x)` : ''}`);
                 plugin.managers.camera.focusSphere({
@@ -266,7 +269,7 @@ export async function applyRecipeVisualization(
           const data = getFirstStructureData(plugin);
           if (!data) return;
 
-          // R148: Collect ALL interface residues (not just first 20) for side chain display
+          // R151: Collect ALL interface residues for side chain display
           const residueSet = new Set<string>();
           for (const c of interactions) {
             const ch1 = c.chain1 as string;
@@ -282,36 +285,35 @@ export async function applyRecipeVisualization(
           const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
           if (!Q) return;
 
-          // R148: Build a SINGLE union expression for all interface residues
-          // instead of creating separate components per residue.
-          // This is more efficient and ensures all side chains are visible.
-          // We use atomGroups with a chain-test OR residue-test for each residue.
-          // Since Molstar's union is complex in the prebuilt bundle, we create
-          // one component per residue but increase the limit to cover all.
           const residueList = Array.from(residueSet);
           console.log(`[viz:show_sidechains] Showing ${residueList.length} interface residue side chains`);
 
-          for (const key of residueList.slice(0, 30)) { // R148: increased from 10 to 30
-            const [chain, resno] = key.split(":");
+          // R151: Use tryCreateComponentFromExpression for each residue, which is
+          // the documented Molstar API for creating components from expressions.
+          // Then use the component manager to add ball-and-stick representation.
+          const builder = plugin.builders.structure;
+          for (const key of residueList.slice(0, 30)) {
+            const [chain, resnoStr] = key.split(":");
+            const resno = parseInt(resnoStr, 10);
             try {
               const expr = Q.struct.generator.atomGroups({
                 'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
-                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), parseInt(resno, 10)]),
+                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno]),
               });
-              const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
-              if (loci && !isLociEmpty(loci)) {
-                const component = await plugin.managers.structure.component.createComponent(data, {
-                  loci,
-                  label: `Interface ${chain}:${resno}`,
-                  tags: ['interface-sidechain', 'structure-component-static-polymer'],
-                });
-                if (component) {
-                  await plugin.managers.structure.component.addRepresentations(
-                    component,
-                    'ball-and-stick',
-                    { sizeFactor: 0.8 }
-                  );
-                }
+              // R151: Use tryCreateComponentFromExpression (the standard API)
+              const component = await builder.tryCreateComponentFromExpression(
+                data,
+                expr,
+                `Interface ${chain}:${resno}`,
+                { tags: ['interface-sidechain'] }
+              );
+              if (component) {
+                // R151: Use the plugin's representation builder to add ball-and-stick
+                await plugin.managers.structure.component.addRepresentations(
+                  component,
+                  'ball-and-stick',
+                  { sizeFactor: 0.8, quality: 'medium' }
+                );
               }
             } catch (err) { console.warn(`[viz:show_sidechains] failed for ${chain}:${resno}:`, err); }
           }
@@ -334,20 +336,48 @@ export async function applyRecipeVisualization(
 
           console.log(`[viz:draw_lines] Drawing ${hbondInteractions.length} distance lines (from ${interactions.length} total interactions — only hbonds/salt_bridges with atom data)`);
 
+          const data = getFirstStructureData(plugin);
+          if (!data) return;
+          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+          if (!Q) return;
+
           for (const c of hbondInteractions) {
             try {
-              // R148: Pass atom1/atom2 to lociFromResidue so the distance line
-              // connects the SPECIFIC interacting atoms (e.g. NH1-OE1), not CA.
-              const r1 = await lociFromResidue(viewer, {
-                chain: c.chain1 as string,
-                resno: c.resno1 as number,
-              }, c.atom1 as string | undefined);
-              const r2 = await lociFromResidue(viewer, {
-                chain: c.chain2 as string,
-                resno: c.resno2 as number,
-              }, c.atom2 as string | undefined);
-              if (r1 && r2) {
-                await plugin.managers.structure.measurement.addDistance(r1, r2);
+              // R151: Use direct MolScript expression to get ATOM-LEVEL loci
+              // (not residue-level). lociFromResidue groups by residueKey which
+              // returns the whole residue, so addDistance calculates the distance
+              // between residue boundary spheres, not specific atoms.
+              //
+              // Instead, we build an expression that selects ONLY the specific
+              // atom (e.g. NH1 of ARG31 on chain A) and use getLociFromExpression
+              // to get an atom-level loci. This ensures the distance line connects
+              // the exact interacting atoms.
+              const chain1 = c.chain1 as string;
+              const resno1 = c.resno1 as number;
+              const atom1 = c.atom1 as string;
+              const chain2 = c.chain2 as string;
+              const resno2 = c.resno2 as number;
+              const atom2 = c.atom2 as string;
+
+              const expr1 = Q.struct.generator.atomGroups({
+                'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain1]),
+                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno1]),
+                'atom-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_atom_id(), atom1]),
+              });
+              const expr2 = Q.struct.generator.atomGroups({
+                'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain2]),
+                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno2]),
+                'atom-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_atom_id(), atom2]),
+              });
+
+              const loci1 = await plugin.managers.structure.selection.getLociFromExpression(expr1, data);
+              const loci2 = await plugin.managers.structure.selection.getLociFromExpression(expr2, data);
+
+              if (loci1 && loci2 && !isLociEmpty(loci1) && !isLociEmpty(loci2)) {
+                await plugin.managers.structure.measurement.addDistance(loci1, loci2);
+                console.log(`[viz:draw_lines] Added distance: ${chain1}:${resno1}(${atom1}) — ${chain2}:${resno2}(${atom2})`);
+              } else {
+                console.warn(`[viz:draw_lines] Could not find atoms: ${chain1}:${resno1}(${atom1}) or ${chain2}:${resno2}(${atom2})`);
               }
             } catch (err) { console.warn(`[viz:draw_lines] failed for ${c.chain1}:${c.resno1}(${c.atom1})-${c.chain2}:${c.resno2}(${c.atom2}):`, err); }
           }
