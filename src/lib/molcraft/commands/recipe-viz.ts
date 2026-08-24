@@ -23,6 +23,86 @@ import { lociFromResidue } from "./loci";
 import { normalizeColorTheme } from "./color-theme";
 import { nextFrame } from "./screenshot-utils";
 
+/**
+ * R154: Build a StructureElement.Loci for a specific residue (and optionally atom)
+ * by directly traversing structure units — NOT using MolScript builder (which is
+ * not available in the prebuilt bundle).
+ *
+ * This mirrors the approach in measure.ts showResidueSidechain: iterate all
+ * atomic units, find elements matching the residue spec, build a loci.
+ *
+ * Returns { loci, expr } where loci is the StructureElement.Loci and expr is
+ * the Expression (via SE.Loci.toExpression) for use with tryCreateComponentFromExpression.
+ */
+function buildResidueLoci(
+  plugin: MolstarPlugin,
+  refs: Array<{ chain: string; resno: number; atomName?: string }>
+): { loci: unknown; expr: unknown } | null {
+  const bundle = (window as any).molstar;
+  const SE = bundle?.lib?.structure?.StructureElement;
+  const SP = bundle?.lib?.structure?.StructureProperties;
+  if (!SE || !SP) {
+    console.warn("[buildResidueLoci] StructureElement/Properties not available");
+    return null;
+  }
+
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  if (!structs.length) return null;
+  const sr = structs[0];
+  const data = sr?.cell?.obj?.data;
+  if (!data) return null;
+
+  // Build a set of residue keys for fast lookup
+  const refSet = new Set<string>();
+  const atomMap = new Map<string, string | undefined>(); // key -> atomName
+  for (const ref of refs) {
+    const key = `${ref.chain}:${ref.resno}`;
+    refSet.add(key);
+    if (ref.atomName) {
+      atomMap.set(key, ref.atomName);
+    }
+  }
+
+  // Find ALL elements matching any of the residue specs
+  const elementsByUnit = new Map<unknown, number[]>();
+  for (const unit of data.units) {
+    if (unit.kind !== 0) continue; // atomic only
+    const indices: number[] = [];
+    for (let i = 0; i < unit.elements.length; i++) {
+      const loc = SE.Location.create(data, unit, i);
+      const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+      const resno = SP.residue.auth_seq_id(loc);
+      const key = `${chainId}:${resno}`;
+      if (!refSet.has(key)) continue;
+
+      // If atomName is specified, filter by atom name
+      const atomName = atomMap.get(key);
+      if (atomName) {
+        const atomId = SP.atom.label_atom_id(loc);
+        if (atomId !== atomName) continue;
+      }
+
+      indices.push(i);
+    }
+    if (indices.length > 0) {
+      elementsByUnit.set(unit, indices);
+    }
+  }
+
+  if (elementsByUnit.size === 0) return null;
+
+  // Build the elements array for the loci
+  const elements: Array<{ unit: unknown; indices: number[] }> = [];
+  elementsByUnit.forEach((indices, unit) => {
+    elements.push({ unit, indices });
+  });
+
+  // Create a StructureElement.Loci and convert to expression
+  const loci = new SE.Loci(data, elements);
+  const expr = SE.Loci.toExpression(loci);
+  return { loci, expr };
+}
+
 export async function applyRecipeVisualization(
   viewer: MolstarViewer,
   recipe: string,
@@ -180,7 +260,9 @@ export async function applyRecipeVisualization(
           if (removedCount > 0) console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
         }, "cleanup_previous");
 
-        // R153: Hide water AND ligand (non-polymer) molecules
+        // R154: Hide water AND ligand (non-polymer) molecules
+        // Uses StructureElement/StructureProperties (available in prebuilt bundle)
+        // instead of MolScript builder Q (which is NOT in the bundle).
         await safe(async () => {
           const structs = getStructures(plugin);
           if (structs.length === 0) return;
@@ -188,39 +270,71 @@ export async function applyRecipeVisualization(
           const data = sr?.cell?.obj?.data;
           if (!data) return;
 
-          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-          if (!Q) return;
+          const bundle = (window as any).molstar;
+          const SE = bundle?.lib?.structure?.StructureElement;
+          const SP = bundle?.lib?.structure?.StructureProperties;
+          if (!SE || !SP) {
+            console.warn('[viz:hide_non_polymer] StructureElement/Properties not available');
+            return;
+          }
 
-          // Hide water (HOH)
-          const waterExpr = Q.struct.generator.atomGroups({
-            'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_comp_id(), 'HOH'])
-          });
-          try {
-            const waterComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
-              sr.cell, waterExpr, 'Water', { tags: ['water-hide'] }
-            );
-            if (waterComponent) {
-              plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
-              console.log('[viz:hide_waters] Hidden water molecules');
-            }
-          } catch (err) { console.warn('[viz:hide_waters] failed:', err); }
+          // Find water and ligand atoms by traversing units
+          const waterElements: Array<{ unit: unknown; indices: number[] }> = [];
+          const ligandElements: Array<{ unit: unknown; indices: number[] }> = [];
+          const waterByUnit = new Map<unknown, number[]>();
+          const ligandByUnit = new Map<unknown, number[]>();
 
-          // Hide ligands (non-polymer entities, excluding water which is already hidden)
-          const ligandExpr = Q.struct.generator.atomGroups({
-            'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.entityType(), 'non-polymer']),
-            'residue-test': Q.core.logic.not([
-              Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_comp_id(), 'HOH'])
-            ])
-          });
-          try {
-            const ligandComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
-              sr.cell, ligandExpr, 'Ligand', { tags: ['ligand-hide'] }
-            );
-            if (ligandComponent) {
-              plugin.managers.structure.hierarchy.toggleVisibility([ligandComponent], 'hide');
-              console.log('[viz:hide_ligands] Hidden ligand molecules');
+          for (const unit of data.units) {
+            if (unit.kind !== 0) continue; // atomic only
+            for (let i = 0; i < unit.elements.length; i++) {
+              const loc = SE.Location.create(data, unit, i);
+              const entityType = SP.entity.type(loc);
+              const compId = SP.residue.label_comp_id(loc);
+
+              if (compId === 'HOH') {
+                let arr = waterByUnit.get(unit);
+                if (!arr) { arr = []; waterByUnit.set(unit, arr); }
+                arr.push(i);
+              } else if (entityType === 'non-polymer') {
+                let arr = ligandByUnit.get(unit);
+                if (!arr) { arr = []; ligandByUnit.set(unit, arr); }
+                arr.push(i);
+              }
             }
-          } catch (err) { console.warn('[viz:hide_ligands] failed:', err); }
+          }
+
+          waterByUnit.forEach((indices, unit) => waterElements.push({ unit, indices }));
+          ligandByUnit.forEach((indices, unit) => ligandElements.push({ unit, indices }));
+
+          // Create water component and hide it
+          if (waterElements.length > 0) {
+            try {
+              const waterLoci = new SE.Loci(data, waterElements);
+              const waterExpr = SE.Loci.toExpression(waterLoci);
+              const waterComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
+                sr.cell, waterExpr, 'Water', { tags: ['water-hide'] }
+              );
+              if (waterComponent) {
+                plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
+                console.log(`[viz:hide_waters] Hidden ${waterElements.length} water units`);
+              }
+            } catch (err) { console.warn('[viz:hide_waters] failed:', err); }
+          }
+
+          // Create ligand component and hide it
+          if (ligandElements.length > 0) {
+            try {
+              const ligandLoci = new SE.Loci(data, ligandElements);
+              const ligandExpr = SE.Loci.toExpression(ligandLoci);
+              const ligandComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
+                sr.cell, ligandExpr, 'Ligand', { tags: ['ligand-hide'] }
+              );
+              if (ligandComponent) {
+                plugin.managers.structure.hierarchy.toggleVisibility([ligandComponent], 'hide');
+                console.log(`[viz:hide_ligands] Hidden ${ligandElements.length} ligand units`);
+              }
+            } catch (err) { console.warn('[viz:hide_ligands] failed:', err); }
+          }
         }, "hide_non_polymer");
 
         await safe(async () => {
@@ -354,36 +468,37 @@ export async function applyRecipeVisualization(
 
           if (residueSet.size === 0) return;
 
-          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-          if (!Q) return;
-
           const residueList = Array.from(residueSet);
           console.log(`[viz:show_sidechains] Showing ${residueList.length} interface residue side chains`);
 
-          // R152: Use the CORRECT API — tryCreateComponentFromExpression takes
-          // (cell, expr, tag) NOT (data, expr, label, options).
-          // Then use builders.structure.representation.addRepresentation
-          // (not managers.structure.component.addRepresentations).
-          for (const key of residueList.slice(0, 30)) {
+          // R154: Use buildResidueLoci (StructureElement-based, NOT MolScript Q)
+          // to build loci for ALL interface residues at once, then create a
+          // single component with ball-and-stick representation.
+          const refs = residueList.slice(0, 30).map(key => {
             const [chain, resnoStr] = key.split(":");
-            const resno = parseInt(resnoStr, 10);
-            try {
-              const expr = Q.struct.generator.atomGroups({
-                'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain]),
-                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno]),
+            return { chain, resno: parseInt(resnoStr, 10) };
+          });
+
+          const result = buildResidueLoci(plugin, refs);
+          if (result) {
+            const structs = getStructures(plugin);
+            const sr = structs[0];
+            const tag = `interface-sidechains-${Date.now()}`;
+            const component = await plugin.builders.structure.tryCreateComponentFromExpression(
+              sr.cell, result.expr, tag, { tags: ['interface-sidechain'] }
+            );
+            if (component) {
+              await plugin.builders.structure.representation.addRepresentation(component, {
+                type: "ball-and-stick",
+                typeParams: { sizeFactor: 0.8 },
+                colorTheme: { name: "element-symbol", params: {} },
               });
-              const tag = `sidechain-${chain}${resno}`;
-              const component = await plugin.builders.structure.tryCreateComponentFromExpression(
-                sr.cell, expr, tag, { tags: ['interface-sidechain'] }
-              );
-              if (component) {
-                await plugin.builders.structure.representation.addRepresentation(component, {
-                  type: "ball-and-stick",
-                  typeParams: { sizeFactor: 0.8 },
-                  colorTheme: { name: "element-symbol", params: {} },
-                });
-              }
-            } catch (err) { console.warn(`[viz:show_sidechains] failed for ${chain}:${resno}:`, err); }
+              console.log(`[viz:show_sidechains] Created ball-and-stick component for ${refs.length} residues`);
+            } else {
+              console.warn('[viz:show_sidechains] tryCreateComponentFromExpression returned undefined');
+            }
+          } else {
+            console.warn('[viz:show_sidechains] buildResidueLoci returned null — no matching residues found');
           }
         }, "show_sidechains");
 
@@ -400,17 +515,9 @@ export async function applyRecipeVisualization(
 
           console.log(`[viz:draw_lines] Drawing ${hbondInteractions.length} distance lines`);
 
-          const structs = getStructures(plugin);
-          if (structs.length === 0) return;
-          const sr = structs[0];
-          const data = sr?.cell?.obj?.data;
-          if (!data) return;
-          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-          if (!Q) return;
-
+          // R154: Use buildResidueLoci for atom-level loci (NOT MolScript Q)
           for (const c of hbondInteractions) {
             try {
-              // R152: Use atom-level MolScript expressions with getLociFromExpression
               const chain1 = c.chain1 as string;
               const resno1 = c.resno1 as number;
               const atom1 = c.atom1 as string;
@@ -418,22 +525,12 @@ export async function applyRecipeVisualization(
               const resno2 = c.resno2 as number;
               const atom2 = c.atom2 as string;
 
-              const expr1 = Q.struct.generator.atomGroups({
-                'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain1]),
-                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno1]),
-                'atom-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_atom_id(), atom1]),
-              });
-              const expr2 = Q.struct.generator.atomGroups({
-                'chain-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_asym_id(), chain2]),
-                'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.auth_seq_id(), resno2]),
-                'atom-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_atom_id(), atom2]),
-              });
+              // Build atom-level loci for each interacting atom
+              const result1 = buildResidueLoci(plugin, [{ chain: chain1, resno: resno1, atomName: atom1 }]);
+              const result2 = buildResidueLoci(plugin, [{ chain: chain2, resno: resno2, atomName: atom2 }]);
 
-              const loci1 = await plugin.managers.structure.selection.getLociFromExpression(expr1, data);
-              const loci2 = await plugin.managers.structure.selection.getLociFromExpression(expr2, data);
-
-              if (loci1 && loci2 && !isLociEmpty(loci1) && !isLociEmpty(loci2)) {
-                await plugin.managers.structure.measurement.addDistance(loci1, loci2);
+              if (result1 && result2) {
+                await plugin.managers.structure.measurement.addDistance(result1.loci, result2.loci);
                 console.log(`[viz:draw_lines] Added: ${chain1}:${resno1}(${atom1}) — ${chain2}:${resno2}(${atom2})`);
               } else {
                 console.warn(`[viz:draw_lines] Atoms not found: ${chain1}:${resno1}(${atom1}) or ${chain2}:${resno2}(${atom2})`);
