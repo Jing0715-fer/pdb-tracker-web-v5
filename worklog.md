@@ -3288,3 +3288,43 @@ Stage Summary:
 - Waters: hidden via HOH component + toggleVisibility
 - H-bond lines: atom-level expressions (from R151) → correct distances
 - Angles: 4 total (front/side/top/back) → less occlusion
+
+---
+Task ID: round-153-setstate-cleanup-hide-ligands
+Agent: main
+Task: Fix camera angles identical, label accumulation, ligand/water visibility, side chains.
+
+Bugs Found & Fixed:
+
+Bug #1: All screenshot angles look the same
+  ROOT CAUSE: R147's direct array mutation (cam.position[0] = x) modifies
+  the Vec3 array but does NOT call stateChanged.next(), so orbit controls
+  and the render loop never sync with the new camera state.
+  
+  FIX: Use cam.setState(snapshot, 0) — the Molstar-sanctioned instant API:
+    - transition.apply(snapshot, 0) → transition.finish() → instant state copy
+    - stateChanged.next(snapshot) → notifies ALL listeners (orbit controls, render)
+  
+  Applied to: restoreCameraStateImpl, restoreCameraViewState, applyCameraAngle
+
+Bug #2: Previous labels/lines not cleared
+  FIX: Added cleanup_previous step at start of all_interactions:
+    1. plugin.managers.structure.measurement.clear() — all distance lines + labels
+    2. Remove components tagged interface-sidechain/water-hide/ligand-hide
+
+Bug #3: Ligands not hidden (only water was hidden in R152)
+  FIX: hide_non_polymer step now hides BOTH water AND ligands:
+    1. Water: label_comp_id = HOH → tagged water-hide
+    2. Ligands: entityType = non-polymer AND NOT HOH → tagged ligand-hide
+
+Bug #4: Side chains (R152 fix verified correct)
+  - tryCreateComponentFromExpression(sr.cell, expr, tag, {tags}) ✓
+  - representation.addRepresentation(component, {type: 'ball-and-stick'}) ✓
+  - Now works because cleanup_previous removes old components first
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Dev server: HTTP 200
+- Agent-browser: page renders
+- Git: commit d375827 pushed to origin/main
