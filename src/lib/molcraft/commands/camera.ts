@@ -56,42 +56,24 @@ function restoreCameraStateImpl(plugin: MolstarPlugin, keep: boolean): void {
     const cam = canvas3d?.camera;
     if (!cam) return;
 
-    // R147: Use DIRECT property setters instead of setState().
+    // R153: Use setState with durationMs=0 for instant restoration.
     //
-    // setState() triggers a camera TRANSITION (animation) which doesn't
-    // complete instantly. When we then call camera.rotate() for the next
-    // angle, it rotates from the IN-FLIGHT transition position, not from
-    // the restored position — causing side/top screenshots to look the same.
+    // The R147 approach (direct array mutation cam.position[0] = x) modifies
+    // the internal state array but does NOT trigger stateChanged.next(),
+    // so orbit controls and other listeners don't sync.
     //
-    // Direct setters (cam.position = ..., cam.target = ..., cam.up = ...)
-    // update the camera IMMEDIATELY without animation. We then call
-    // cam.update() to sync the view/projection matrices.
-    if (cam.position && cam.target && cam.up) {
-      const pos = savedCameraState.position;
-      const tgt = savedCameraState.target;
-      const up = savedCameraState.up;
-      // Use the setter (cam.position = v triggers the setter which calls
-      // Vec3.copy internally)
-      cam.position[0] = pos[0];
-      cam.position[1] = pos[1];
-      cam.position[2] = pos[2];
-      cam.target[0] = tgt[0];
-      cam.target[1] = tgt[1];
-      cam.target[2] = tgt[2];
-      cam.up[0] = up[0];
-      cam.up[1] = up[1];
-      cam.up[2] = up[2];
-      // Update view/projection matrices
-      if (typeof cam.update === 'function') {
-        cam.update();
-      }
-    } else if (cam.setState) {
-      // Fallback: setState with durationMs=0 for instant (no animation)
+    // setState(snapshot, 0) calls transition.apply(snapshot, 0) which:
+    //   1. Copies snapshot to camera.state (via Camera.copySnapshot)
+    //   2. Calls transition.finish() for instant apply (no animation)
+    //   3. Calls stateChanged.next(snapshot) to notify all listeners
+    //
+    // This is the Molstar-sanctioned way to instantly set camera state.
+    if (typeof cam.setState === 'function') {
       cam.setState({
         position: savedCameraState.position as [number, number, number],
         target: savedCameraState.target as [number, number, number],
         up: savedCameraState.up as [number, number, number],
-      }, 0); // 0ms = instant, no transition
+      }, 0); // 0ms = instant, no transition animation
     }
 
     // Request a redraw so the orbit controls sync with the new camera state
@@ -148,21 +130,8 @@ export function restoreCameraViewState(plugin: MolstarPlugin, state: CameraViewS
     const cam = canvas3d?.camera;
     if (!cam) return;
 
-    // R147: Direct property setters for instant restoration
-    if (cam.position && cam.target && cam.up) {
-      cam.position[0] = state.position[0];
-      cam.position[1] = state.position[1];
-      cam.position[2] = state.position[2];
-      cam.target[0] = state.target[0];
-      cam.target[1] = state.target[1];
-      cam.target[2] = state.target[2];
-      cam.up[0] = state.up[0];
-      cam.up[1] = state.up[1];
-      cam.up[2] = state.up[2];
-      if (typeof cam.update === 'function') {
-        cam.update();
-      }
-    } else if (cam.setState) {
+    // R153: Use setState with durationMs=0 for instant restoration
+    if (typeof cam.setState === 'function') {
       cam.setState({
         position: state.position,
         target: state.target,
@@ -266,20 +235,10 @@ export async function applyCameraAngle(
       newUp = [-dx / xzLen, 0, -dz / xzLen];
     }
 
-    // R147: Set properties directly (no animation)
-    if (cam.position && cam.target && cam.up && typeof cam.update === 'function') {
-      cam.position[0] = newPos[0];
-      cam.position[1] = newPos[1];
-      cam.position[2] = newPos[2];
-      cam.target[0] = tgt[0];
-      cam.target[1] = tgt[1];
-      cam.target[2] = tgt[2];
-      cam.up[0] = newUp[0];
-      cam.up[1] = newUp[1];
-      cam.up[2] = newUp[2];
-      cam.update();
-    } else if (cam.setState) {
-      // Fallback: setState with durationMs=0 for instant
+    // R153: Use setState with durationMs=0 for instant camera positioning.
+    // This properly notifies all listeners (orbit controls, render loop)
+    // via stateChanged.next(), unlike direct array mutation.
+    if (typeof cam.setState === 'function') {
       cam.setState({ position: newPos, up: newUp, target: tgt }, 0);
     }
 

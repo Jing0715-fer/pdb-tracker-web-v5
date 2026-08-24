@@ -155,6 +155,74 @@ export async function applyRecipeVisualization(
       case "hydrophobic_contacts":
       case "interface_residues":
       case "oligomer_analysis": {
+        // R153: Clean up previous visualization artifacts before applying new one.
+        // This prevents label/line/sidechain accumulation across multiple analyses.
+        await safe(async () => {
+          // Clear all measurements (distance lines, labels)
+          try { plugin.managers.structure.measurement.clear(); } catch (err) { console.warn('[viz:cleanup] measurement.clear failed:', err); }
+          // Remove previous interface sidechain components
+          const structs = getStructures(plugin);
+          let removedCount = 0;
+          for (const s of structs) {
+            const toRemove: any[] = [];
+            for (const c of (s.components ?? [])) {
+              const tags = c?.cell?.transform?.tags;
+              const label = c?.cell?.obj?.label;
+              if ((Array.isArray(tags) && (tags.includes('interface-sidechain') || tags.includes('water-hide') || tags.includes('ligand-hide'))) ||
+                  (label && (label.includes("Interface ") || label === "Water" || label === "Ligand"))) {
+                toRemove.push(c);
+              }
+            }
+            for (const c of toRemove) {
+              try { plugin.managers.structure.component.remove(c); removedCount++; } catch (err) { console.warn('[viz:cleanup] remove failed:', err); }
+            }
+          }
+          if (removedCount > 0) console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
+        }, "cleanup_previous");
+
+        // R153: Hide water AND ligand (non-polymer) molecules
+        await safe(async () => {
+          const structs = getStructures(plugin);
+          if (structs.length === 0) return;
+          const sr = structs[0];
+          const data = sr?.cell?.obj?.data;
+          if (!data) return;
+
+          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
+          if (!Q) return;
+
+          // Hide water (HOH)
+          const waterExpr = Q.struct.generator.atomGroups({
+            'residue-test': Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_comp_id(), 'HOH'])
+          });
+          try {
+            const waterComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
+              sr.cell, waterExpr, 'Water', { tags: ['water-hide'] }
+            );
+            if (waterComponent) {
+              plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
+              console.log('[viz:hide_waters] Hidden water molecules');
+            }
+          } catch (err) { console.warn('[viz:hide_waters] failed:', err); }
+
+          // Hide ligands (non-polymer entities, excluding water which is already hidden)
+          const ligandExpr = Q.struct.generator.atomGroups({
+            'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.entityType(), 'non-polymer']),
+            'residue-test': Q.core.logic.not([
+              Q.core.rel.eq([Q.struct.atomProperty.macromolecular.label_comp_id(), 'HOH'])
+            ])
+          });
+          try {
+            const ligandComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
+              sr.cell, ligandExpr, 'Ligand', { tags: ['ligand-hide'] }
+            );
+            if (ligandComponent) {
+              plugin.managers.structure.hierarchy.toggleVisibility([ligandComponent], 'hide');
+              console.log('[viz:hide_ligands] Hidden ligand molecules');
+            }
+          } catch (err) { console.warn('[viz:hide_ligands] failed:', err); }
+        }, "hide_non_polymer");
+
         await safe(async () => {
           let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           const chain1 = params?.chain1 as string | undefined;
@@ -252,52 +320,6 @@ export async function applyRecipeVisualization(
             await new Promise(r => setTimeout(r, 100));
           }
         }, "focus_interface");
-
-        await safe(async () => {
-          // R152: Hide water molecules (HOH) so they don't clutter the
-          // interaction view. We find all components with water and hide them,
-          // or create a water component and hide it if none exists.
-          const structs = getStructures(plugin);
-          if (structs.length === 0) return;
-          const sr = structs[0];
-          const data = sr?.cell?.obj?.data;
-          if (!data) return;
-
-          const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-          if (!Q) return;
-
-          // Build expression for water (label_comp_id = HOH)
-          const waterExpr = Q.struct.generator.atomGroups({
-            'residue-test': Q.core.rel.eq([
-              Q.struct.atomProperty.macromolecular.label_comp_id(),
-              'HOH'
-            ])
-          });
-
-          try {
-            // Check if a water component already exists
-            const existingWater = (sr.components ?? []).find((c: any) => {
-              const tags = c?.cell?.transform?.tags;
-              return Array.isArray(tags) && tags.includes('water-hide');
-            });
-
-            if (existingWater) {
-              // Already hidden (or shown) — just hide it
-              plugin.managers.structure.hierarchy.toggleVisibility([existingWater], 'hide');
-            } else {
-              // Create a water component and hide it
-              const waterComponent = await plugin.builders.structure.tryCreateComponentFromExpression(
-                sr.cell, waterExpr, 'Water', { tags: ['water-hide'] }
-              );
-              if (waterComponent) {
-                plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
-                console.log('[viz:hide_waters] Hidden water molecules');
-              }
-            }
-          } catch (err) {
-            console.warn('[viz:hide_waters] failed:', err);
-          }
-        }, "hide_waters");
 
         await safe(async () => {
           let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
