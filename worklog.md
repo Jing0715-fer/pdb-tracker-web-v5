@@ -3411,3 +3411,40 @@ Verification:
 - Lint: 0 errors
 - Unit tests: 126 pass, 0 fail
 - Git: commit 6c3d910 pushed to origin/main
+
+---
+Task ID: round-156-static-components-render-wait-labels
+Agent: main
+Task: Fix ball size, water/ligand hiding, blank screenshots, label sizing.
+
+Bugs Fixed:
+
+Bug #1: Ball-and-stick too big
+  - sizeFactor: 0.3 (was 0.5), bondScale: 0.25 (was 0.4)
+  - ignoreHydrogens: true for cleaner view
+
+Bug #2: Water/ligand still not hidden (ROOT CAUSE FOUND)
+  - buildResidueLoci approach was unreliable — SE.Loci construction
+    and SE.Loci.toExpression may produce expressions that don't match
+  - Fix: Use tryCreateComponentStatic('water') and ('ligand')
+  - This uses Molstar's internal Queries.internal.water() and
+    StructureSelectionQueries.ligandPlusConnected — the official,
+    tested selection queries used by Molstar's own UI
+  - Verified in molstar source: helpers/structure-component.js line 62-79
+
+Bug #3: Blank screenshots
+  - setState(snapshot, 0) updates camera state instantly but the render
+    pipeline hasn't flushed — screenshot captures before render completes
+  - Fix: Added explicit canvas3d.requestDraw() after setState
+  - Increased wait from 500ms to 800ms (500+300) for render to settle
+
+Bug #4: Label sizes vary by distance
+  - Molstar text is world-space (perspective scaling) — no built-in
+    screen-space option exists in the Text geometry params
+  - Mitigation: Added sizeFactor: 0.6 for consistent world-space size
+  - Added background (black, 70% opacity), tether line, backgroundMargin
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Git: commit 7b7e0f8 pushed to origin/main
