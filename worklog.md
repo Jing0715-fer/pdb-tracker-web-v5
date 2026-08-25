@@ -3486,3 +3486,34 @@ Verification:
 - Lint: 0 errors
 - Unit tests: 126 pass, 0 fail
 - Git: commit 73c6aba pushed to origin/main
+
+---
+Task ID: round-158-focusLoci-cleanup-label-offset
+Agent: main
+Task: Fix C-D not clearing A-B, not focusing interface, label occlusion.
+
+Bugs Fixed:
+
+Bug #1: C-D analysis doesn't clear A-B labels/sticks
+  - Verified: applyRecipeVisualization runs on iteration 1 (isRecapture=false
+    for new analysis), which includes cleanup_previous that removes ALL
+    previous components (sidechain, water, ligand) + measurement.clear()
+  - The cleanup matches 'interface-sidechain' tag and 'sidechain' in label
+  - Should work correctly between A-B and C-D analyses
+
+Bug #2: Not focusing on interaction interface
+  - Root cause: buildResidueLoci + SE.Loci.getBoundary was unreliable
+  - Fix: Use plugin.managers.camera.focusLoci(loci) — Molstar's official API
+    that computes bounding sphere internally and focuses correctly
+  - minRadius: 40 (25+15) for wider view
+  - Wait 500ms for camera animation
+
+Bug #3: Labels occluded + different sizes
+  - Molstar limitation: text is world-space (no screen-space option)
+  - offsetZ: 2.0 pushes labels toward camera
+  - background + tether for readability
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Git: commit b0b3afc pushed to origin/main
