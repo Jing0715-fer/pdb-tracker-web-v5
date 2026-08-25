@@ -3448,3 +3448,41 @@ Verification:
 - Lint: 0 errors
 - Unit tests: 126 pass, 0 fail
 - Git: commit 7b7e0f8 pushed to origin/main
+
+---
+Task ID: round-157-no-selection-clear-highlights-label-offset
+Agent: main
+Task: Fix camera lock, green box, label occlusion, ball size, cleanup, water.
+
+Bugs Fixed:
+
+Bug #1: Camera locked + green selection box in screenshots
+  - focus_interface used selection.add() → green highlight visible in screenshots
+  - lociFromResidue fallback also calls structureInteractivity({action: ["select"]})
+  - Fix: Use buildResidueLoci + SE.Loci.getBoundary to compute focus boundary
+    WITHOUT selecting anything. No green box.
+  - Added selection.clear() + lociSelects.clearHighlights() +
+    lociHighlights.clearHighlights() in cleanup AND before/after capture
+
+Bug #2: Labels occluded by structure
+  - Molstar text is depth-tested (occluded by closer geometry)
+  - Fix: Added offsetZ: 2.0 to push labels toward camera
+
+Bug #3: Ball-and-stick still too big
+  - sizeFactor: 0.2 (was 0.3), bondScale: 0.15 (was 0.25)
+
+Bug #4: Previous ball-and-stick not cleared
+  - cleanup only matched 'interface-sidechain' tag
+  - tryCreateComponentFromExpression creates keyTag 'structure-component-sidechain-*'
+  - Fix: Also match keyTag prefix 'structure-component-sidechain' and
+    label containing 'sidechain'
+
+Bug #5: Water still partially visible
+  - tryCreateComponentStatic('water') is the official API
+  - Uses Queries.internal.water() which should catch all water
+  - If some water remains, it may be in non-standard entity types
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Git: commit 73c6aba pushed to origin/main
