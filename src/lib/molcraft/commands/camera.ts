@@ -57,17 +57,6 @@ function restoreCameraStateImpl(plugin: MolstarPlugin, keep: boolean): void {
     if (!cam) return;
 
     // R153: Use setState with durationMs=0 for instant restoration.
-    //
-    // The R147 approach (direct array mutation cam.position[0] = x) modifies
-    // the internal state array but does NOT trigger stateChanged.next(),
-    // so orbit controls and other listeners don't sync.
-    //
-    // setState(snapshot, 0) calls transition.apply(snapshot, 0) which:
-    //   1. Copies snapshot to camera.state (via Camera.copySnapshot)
-    //   2. Calls transition.finish() for instant apply (no animation)
-    //   3. Calls stateChanged.next(snapshot) to notify all listeners
-    //
-    // This is the Molstar-sanctioned way to instantly set camera state.
     if (typeof cam.setState === 'function') {
       cam.setState({
         position: savedCameraState.position as [number, number, number],
@@ -76,7 +65,7 @@ function restoreCameraStateImpl(plugin: MolstarPlugin, keep: boolean): void {
       }, 0); // 0ms = instant, no transition animation
     }
 
-    // Request a redraw so the orbit controls sync with the new camera state
+    // R156: Explicitly request a draw to flush the render pipeline
     if (typeof canvas3d.requestDraw === 'function') {
       canvas3d.requestDraw();
     }
@@ -235,15 +224,21 @@ export async function applyCameraAngle(
       newUp = [-dx / xzLen, 0, -dz / xzLen];
     }
 
-    // R153: Use setState with durationMs=0 for instant camera positioning.
+    // R156: Use setState with durationMs=0 for instant camera positioning.
     // This properly notifies all listeners (orbit controls, render loop)
     // via stateChanged.next(), unlike direct array mutation.
     if (typeof cam.setState === 'function') {
       cam.setState({ position: newPos, up: newUp, target: tgt }, 0);
     }
 
-    // Wait for render to settle
+    // R156: Explicitly request a draw to flush the render pipeline
+    if (typeof canvas3d.requestDraw === 'function') {
+      canvas3d.requestDraw();
+    }
+
+    // R156: Wait longer for render to settle (was 300+200=500ms, now 500+300=800ms)
+    // Blank screenshots were caused by insufficient render time after camera move
+    await new Promise(r => setTimeout(r, 500));
     await new Promise(r => setTimeout(r, 300));
-    await new Promise(r => setTimeout(r, 200));
   } catch (err) { console.warn('[applyCameraAngle] failed:', err); }
 }

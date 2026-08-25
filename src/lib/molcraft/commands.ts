@@ -733,16 +733,23 @@ export async function executeCommand(
 
                   // Round 75: Use larger font size for better screenshot readability
                   // R155: Use labelParams for proper API + chain-specific colors
+                  // R156: Add sizeFactor for consistent text size, background for readability
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     customText: lbl.text ?? "",
                     labelParams: {
                       customText: lbl.text ?? "",
                       textColor: labelColor,
                       textSize: cmd.labelFontSize ?? 1.0,
+                      sizeFactor: 0.6,         // R156: world-space text size
                       borderWidth: 0.15,
                       borderColor: 0x000000,
+                      background: true,        // R156: enable background
                       backgroundColor: 0x000000,
-                      backgroundOpacity: 0.6,
+                      backgroundOpacity: 0.7,
+                      backgroundMargin: 0.2,
+                      tether: true,            // R156: tether line to atom
+                      tetherLength: 0.5,
+                      tetherBaseWidth: 0.1,
                     },
                   } as any);
                 }

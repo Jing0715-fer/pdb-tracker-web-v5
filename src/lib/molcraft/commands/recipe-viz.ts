@@ -260,75 +260,37 @@ export async function applyRecipeVisualization(
           if (removedCount > 0) console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
         }, "cleanup_previous");
 
-        // R155: Hide water AND ligand (non-polymer) molecules
-        // R155 fix: entity.type returns "water" for water (not "non-polymer"),
-        // so we check for BOTH "water" AND "non-polymer" entity types.
-        // Also check compId === 'HOH' as a fallback.
+        // R156: Hide water AND ligand using tryCreateComponentStatic
+        // R155 used buildResidueLoci which was unreliable — the loci/expression
+        // might not match correctly. tryCreateComponentStatic uses Molstar's
+        // internal Queries.internal.water() and StructureSelectionQueries.ligand
+        // which are the official, tested ways to select water/ligand.
         await safe(async () => {
           const structs = getStructures(plugin);
           if (structs.length === 0) return;
           const sr = structs[0];
-          const data = sr?.cell?.obj?.data;
-          if (!data) return;
 
-          const bundle = (window as any).molstar;
-          const SE = bundle?.lib?.structure?.StructureElement;
-          const SP = bundle?.lib?.structure?.StructureProperties;
-          if (!SE || !SP) {
-            console.warn('[viz:hide_non_polymer] StructureElement/Properties not available');
-            return;
-          }
-
-          // Find water and ligand atoms by traversing units
-          const waterByUnit = new Map<unknown, number[]>();
-          const ligandByUnit = new Map<unknown, number[]>();
-
-          for (const unit of data.units) {
-            if (unit.kind !== 0) continue; // atomic only
-            for (let i = 0; i < unit.elements.length; i++) {
-              const loc = SE.Location.create(data, unit, i);
-              const entityType = SP.entity.type(loc);
-              const compId = SP.residue.label_comp_id(loc);
-
-              // R155: Water can be entity.type === "water" OR compId === 'HOH'
-              const isWater = entityType === 'water' || compId === 'HOH';
-              // R155: Ligands are non-polymer entities (but NOT water)
-              const isLigand = (entityType === 'non-polymer' || entityType === 'macrolide' || entityType === 'branched') && !isWater;
-
-              if (isWater) {
-                let arr = waterByUnit.get(unit);
-                if (!arr) { arr = []; waterByUnit.set(unit, arr); }
-                arr.push(i);
-              } else if (isLigand) {
-                let arr = ligandByUnit.get(unit);
-                if (!arr) { arr = []; ligandByUnit.set(unit, arr); }
-                arr.push(i);
-              }
+          // Hide water using static component type 'water'
+          try {
+            const waterComponent = await plugin.builders.structure.tryCreateComponentStatic(
+              sr.cell, 'water', { label: 'Water', tags: ['water-hide'] }
+            );
+            if (waterComponent) {
+              plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
+              console.log('[viz:hide] Hidden water (static)');
             }
-          }
+          } catch (err) { console.warn('[viz:hide] water failed:', err); }
 
-          // Helper to create component from elements and hide it
-          const hideComponent = async (elements: Map<unknown, number[]>, tag: string, label: string) => {
-            if (elements.size === 0) return;
-            const elemArray: Array<{ unit: unknown; indices: number[] }> = [];
-            elements.forEach((indices, unit) => elemArray.push({ unit, indices }));
-            try {
-              const loci = new SE.Loci(data, elemArray);
-              const expr = SE.Loci.toExpression(loci);
-              const component = await plugin.builders.structure.tryCreateComponentFromExpression(
-                sr.cell, expr, label, { tags: [tag] }
-              );
-              if (component) {
-                plugin.managers.structure.hierarchy.toggleVisibility([component], 'hide');
-                console.log(`[viz:hide] Hidden ${label}: ${elemArray.length} units`);
-              } else {
-                console.warn(`[viz:hide] ${label}: tryCreateComponentFromExpression returned undefined`);
-              }
-            } catch (err) { console.warn(`[viz:hide] ${label} failed:`, err); }
-          };
-
-          await hideComponent(waterByUnit, 'water-hide', 'Water');
-          await hideComponent(ligandByUnit, 'ligand-hide', 'Ligand');
+          // Hide ligand using static component type 'ligand'
+          try {
+            const ligandComponent = await plugin.builders.structure.tryCreateComponentStatic(
+              sr.cell, 'ligand', { label: 'Ligand', tags: ['ligand-hide'] }
+            );
+            if (ligandComponent) {
+              plugin.managers.structure.hierarchy.toggleVisibility([ligandComponent], 'hide');
+              console.log('[viz:hide] Hidden ligand (static)');
+            }
+          } catch (err) { console.warn('[viz:hide] ligand failed:', err); }
         }, "hide_non_polymer");
 
         await safe(async () => {
@@ -482,18 +444,16 @@ export async function applyRecipeVisualization(
               sr.cell, result.expr, tag, { tags: ['interface-sidechain'] }
             );
             if (component) {
-              // R155: Use smaller sizeFactor (0.5) and ensure both ball AND stick
-              // are visible. The 'ball-and-stick' type shows atoms as spheres
-              // and bonds as sticks. sizeFactor controls sphere size.
+              // R156: Much smaller ball-and-stick params for clean side chain display
               await plugin.builders.structure.representation.addRepresentation(component, {
                 type: "ball-and-stick",
                 typeParams: {
-                  sizeFactor: 0.5,       // R155: smaller balls (was 0.8)
-                  bondScale: 0.4,        // R155: thinner bonds
-                  bondSpacing: 0.1,
+                  sizeFactor: 0.3,       // R156: even smaller balls (was 0.5)
+                  bondScale: 0.25,       // R156: thinner bonds (was 0.4)
+                  bondSpacing: 0.08,
                   aromaticBonds: true,
                   multipleBonds: true,
-                  ignoreHydrogens: false,
+                  ignoreHydrogens: true,  // R156: hide H for cleaner view
                 },
                 colorTheme: { name: "element-symbol", params: {} },
               });
