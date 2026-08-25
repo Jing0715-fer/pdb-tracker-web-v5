@@ -34,7 +34,7 @@ import { nextFrame } from "./screenshot-utils";
  * Returns { loci, expr } where loci is the StructureElement.Loci and expr is
  * the Expression (via SE.Loci.toExpression) for use with tryCreateComponentFromExpression.
  */
-function buildResidueLoci(
+export function buildResidueLoci(
   plugin: MolstarPlugin,
   refs: Array<{ chain: string; resno: number; atomName?: string }>
 ): { loci: unknown; expr: unknown } | null {

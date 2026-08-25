@@ -711,13 +711,37 @@ export async function executeCommand(
             console.warn('[capture_multi_angle] beforeMeasCount read failed:', err);
             beforeMeasCount = undefined;
           }
+          // R160: Use buildResidueLoci for labels to avoid selection side effects.
+          // lociFromResidue's fallback path calls selection.clear() + structureInteractivity
+          // which creates the green selection box visible in screenshots.
+          // buildResidueLoci uses StructureElement directly (no selection).
+          const { buildResidueLoci } = await import('./commands/recipe-viz');
+          const labelRefs = cmd.labels
+            .filter(lbl => lbl.chain !== undefined && lbl.resno !== undefined)
+            .map(lbl => ({ chain: lbl.chain!, resno: lbl.resno! }));
+          const labelLociResult = buildResidueLoci(plugin, labelRefs);
+
           for (const lbl of cmd.labels) {
             try {
               if (lbl.chain !== undefined && lbl.resno !== undefined) {
-                const loci = await lociFromResidue(viewer, {
-                  chain: lbl.chain,
-                  resno: lbl.resno,
-                });
+                // R160: Try to get loci from the pre-built batch loci first
+                let loci: unknown = null;
+                if (labelLociResult) {
+                  // Extract this residue's loci from the batch result
+                  // We can't easily extract individual loci from a batch, so
+                  // we fall back to buildResidueLoci for this single residue
+                  const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
+                  if (singleResult) {
+                    loci = singleResult.loci;
+                  }
+                }
+                // Fallback to lociFromResidue if buildResidueLoci failed
+                if (!loci) {
+                  loci = await lociFromResidue(viewer, {
+                    chain: lbl.chain,
+                    resno: lbl.resno,
+                  });
+                }
                 if (loci) {
                   // R155: Use chain-specific colors for labels
                   // Chain A → red, B → blue, C → green, D → orange, etc.
@@ -780,6 +804,13 @@ export async function executeCommand(
           label: string;
           cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
         }> = [];
+
+        // R160: Clear selection and highlights BEFORE capturing (not after)
+        // This ensures no green selection box appears in any screenshot
+        try { plugin.managers.structure.selection.clear(); } catch (err) { /* best-effort */ }
+        try { plugin.managers.interactivity.lociSelects.clearHighlights(); } catch (err) { /* best-effort */ }
+        try { plugin.managers.interactivity.lociHighlights.clearHighlights(); } catch (err) { /* best-effort */ }
+        await new Promise(r => setTimeout(r, 100)); // R160: wait for highlight clear to render
 
         // R130: Save camera state before capture loop, restore after
         // R143 (code-review fix): Save AFTER applyRecipeVisualization so the

@@ -692,44 +692,45 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           durationMs, // R113.7: Store timing for UI display
         });
 
-        // R159: For explicit capture_multi_angle calls, DON'T run VLM separately.
+        // R160: For explicit capture_multi_angle calls, DON'T run VLM separately.
         // The auto-capture path after pdb_analyze already runs the VLM loop.
         // Running VLM again for explicit calls creates duplicate screenshots
-        // and confusing UI. Only run VLM if this is NOT an auto-capture
-        // (i.e. the user explicitly asked for a screenshot without analysis).
-        // We detect this by checking if vizParams contains analysis data.
-        const isStandaloneCapture = !args.vizParams || Object.keys(args.vizParams as object).length === 0;
-        if (call.name === 'capture_multi_angle' && result.ok && isStandaloneCapture) {
-          const recipeName = String(args.recipe || 'unknown');
-          const screenshots = (result as any).data?.screenshots;
-          if (screenshots && Array.isArray(screenshots) && screenshots.length > 0) {
-            void (async () => {
-              const vlmStartTime = Date.now();
-              try {
-                const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
-                const analysisSummary = JSON.stringify(args.vizParams || {}).slice(0, 2000);
-                console.log(`[agent] Starting VLM for explicit capture_multi_angle (${screenshots.length} screenshots, recipe: ${recipeName})`);
-                const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
-                const vlmDuration = Date.now() - vlmStartTime;
-                if (vlmResult) {
-                  (result as any).vlmResult = vlmResult;
-                  (result as any).vlmDurationMs = vlmDuration;
-                  console.log(`[agent] VLM completed for explicit capture: ${vlmDuration}ms quality=${vlmResult.quality} bestIndex=${vlmResult.bestIndex}`);
+        // and confusing UI. Skip VLM entirely for explicit capture_multi_angle
+        // when it has vizParams (meaning it was auto-triggered by pdb_analyze).
+        // Only run VLM for truly standalone captures (no vizParams at all).
+        if (call.name === 'capture_multi_angle' && result.ok) {
+          const hasVizParams = args.vizParams && Object.keys(args.vizParams as object).length > 0;
+          if (!hasVizParams) {
+            const recipeName = String(args.recipe || 'unknown');
+            const screenshots = (result as any).data?.screenshots;
+            if (screenshots && Array.isArray(screenshots) && screenshots.length > 0) {
+              void (async () => {
+                const vlmStartTime = Date.now();
+                try {
+                  const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
+                  const analysisSummary = JSON.stringify(args.vizParams || {}).slice(0, 2000);
+                  console.log(`[agent] Starting VLM for explicit capture_multi_angle (${screenshots.length} screenshots, recipe: ${recipeName})`);
+                  const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
+                  const vlmDuration = Date.now() - vlmStartTime;
+                  if (vlmResult) {
+                    (result as any).vlmResult = vlmResult;
+                    (result as any).vlmDurationMs = vlmDuration;
+                    console.log(`[agent] VLM completed for explicit capture: ${vlmDuration}ms quality=${vlmResult.quality} bestIndex=${vlmResult.bestIndex}`);
+                  }
+                } catch (vlmErr) {
+                  console.warn('[agent] VLM failed for explicit capture (non-blocking):', vlmErr);
+                  (result as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
                 }
-              } catch (vlmErr) {
-                console.warn('[agent] VLM failed for explicit capture (non-blocking):', vlmErr);
-                (result as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
-              }
-              // Update execution result + trigger UI re-render
-              const exec = executionsRef.current.get(call.callId);
-              if (exec) {
-                (exec.result as any).vlmResult = (result as any).vlmResult;
-                (exec.result as any).vlmDurationMs = (result as any).vlmDurationMs;
-                (exec.result as any).vlmError = (result as any).vlmError;
-                setEvents((prev) => [...prev]);
-              }
-            })();
-            (result as any).vlmPending = true;
+                const exec = executionsRef.current.get(call.callId);
+                if (exec) {
+                  (exec.result as any).vlmResult = (result as any).vlmResult;
+                  (exec.result as any).vlmDurationMs = (result as any).vlmDurationMs;
+                  (exec.result as any).vlmError = (result as any).vlmError;
+                  setEvents((prev) => [...prev]);
+                }
+              })();
+              (result as any).vlmPending = true;
+            }
           }
         }
 
