@@ -362,59 +362,24 @@ export async function applyRecipeVisualization(
             console.log(`[viz:focus] ${residueList.length} interface residues for ${chain1}-${chain2}`);
 
             if (residueList.length > 0) {
-              // R157: Use buildResidueLoci to compute boundary WITHOUT selecting
-              // (selection.add creates the green highlight box that shows in screenshots)
+              // R158: Use buildResidueLoci to get loci, then focusLoci (official API)
+              // This avoids selection.add() (green box) and getBoundary issues.
               const focusRefs = residueList.map(r => ({ chain: r.chain, resno: r.resno }));
               const focusResult = buildResidueLoci(plugin, focusRefs);
 
-              if (focusResult) {
-                // Compute boundary from the loci directly
-                const bundle = (window as any).molstar;
-                const SE = bundle?.lib?.structure?.StructureElement;
-                const loci = focusResult.loci as any;
-                // Get boundary sphere from the loci
-                let center: { x: number; y: number; z: number };
-                let radius: number;
-
-                // Try to get boundary from the loci
-                try {
-                  const boundary = SE?.Loci?.getBoundary ? SE.Loci.getBoundary(loci) : null;
-                  if (boundary?.sphere) {
-                    center = boundary.sphere.center;
-                    radius = (boundary.sphere.radius ?? 25) + 15;
-                  } else {
-                    // Fallback: use the first structure's boundary
-                    const structs = getStructures(plugin);
-                    const structData = structs[0]?.cell?.obj?.data;
-                    const structBoundary = (structData as any)?.boundary;
-                    if (structBoundary?.sphere) {
-                      center = structBoundary.sphere.center;
-                      radius = (structBoundary.sphere.radius ?? 25) + 15;
-                    } else {
-                      throw new Error('No boundary available');
-                    }
-                  }
-                } catch {
-                  // Fallback: focus on whole structure
-                  const structs = getStructures(plugin);
-                  const structData = structs[0]?.cell?.obj?.data;
-                  const structBoundary = (structData as any)?.boundary;
-                  center = structBoundary?.sphere?.center ?? { x: 0, y: 0, z: 0 };
-                  radius = (structBoundary?.sphere?.radius ?? 25) + 15;
-                }
-
-                // R143: Apply VLM zoom multiplier if set
-                const finalRadius = vlmZoomMultiplier ? radius * vlmZoomMultiplier : radius;
-                console.log(`[viz:focus] Center: (${center.x?.toFixed(1)}, ${center.y?.toFixed(1)}, ${center.z?.toFixed(1)}), Radius: ${finalRadius.toFixed(1)} Å`);
-                plugin.managers.camera.focusSphere({
-                  center: center,
-                  radius: finalRadius,
-                });
-                await new Promise(r => setTimeout(r, 300));
+              if (focusResult && focusResult.loci) {
+                // R158: Use focusLoci — Molstar's official API for focusing a loci.
+                // It computes the bounding sphere internally and animates the camera.
+                // R151: Use minRadius for wider view + VLM zoom multiplier
+                const baseMinRadius = 25 + 15; // R151: wider view
+                const minRadius = vlmZoomMultiplier ? baseMinRadius * vlmZoomMultiplier : baseMinRadius;
+                plugin.managers.camera.focusLoci(focusResult.loci, { minRadius });
+                console.log(`[viz:focus] focusLoci called with minRadius=${minRadius}`);
+                await new Promise(r => setTimeout(r, 500)); // R158: wait for camera animation
               } else {
-                // Fallback: reset camera
+                console.warn('[viz:focus] buildResidueLoci returned null, falling back to camera.reset');
                 plugin.managers.camera.reset();
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 200));
               }
             }
           } else if (chain1 && chain2) {
