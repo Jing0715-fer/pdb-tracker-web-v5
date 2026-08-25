@@ -719,11 +719,31 @@ export async function executeCommand(
                   resno: lbl.resno,
                 });
                 if (loci) {
+                  // R155: Use chain-specific colors for labels
+                  // Chain A → red, B → blue, C → green, D → orange, etc.
+                  const chainColors: Record<string, number> = {
+                    'A': 0xe74c3c, // red
+                    'B': 0x3498db, // blue
+                    'C': 0x2ecc71, // green
+                    'D': 0xe67e22, // orange
+                    'E': 0x9b59b6, // purple
+                    'F': 0x1abc9c, // teal
+                  };
+                  const labelColor = chainColors[lbl.chain] ?? 0xffffff; // white default
+
                   // Round 75: Use larger font size for better screenshot readability
+                  // R155: Use labelParams for proper API + chain-specific colors
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     customText: lbl.text ?? "",
-                    // Round 75/82: Font size configurable via labelFontSize param
-                    textSize: cmd.labelFontSize ?? 1.0,
+                    labelParams: {
+                      customText: lbl.text ?? "",
+                      textColor: labelColor,
+                      textSize: cmd.labelFontSize ?? 1.0,
+                      borderWidth: 0.15,
+                      borderColor: 0x000000,
+                      backgroundColor: 0x000000,
+                      backgroundOpacity: 0.6,
+                    },
                   } as any);
                 }
               }
