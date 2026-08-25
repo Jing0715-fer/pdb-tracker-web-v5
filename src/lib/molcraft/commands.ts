@@ -734,20 +734,24 @@ export async function executeCommand(
                   // Round 75: Use larger font size for better screenshot readability
                   // R155: Use labelParams for proper API + chain-specific colors
                   // R156: Add sizeFactor for consistent text size, background for readability
+                  // R157: Add offsetZ to float labels above structure (prevent occlusion)
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     customText: lbl.text ?? "",
                     labelParams: {
                       customText: lbl.text ?? "",
                       textColor: labelColor,
                       textSize: cmd.labelFontSize ?? 1.0,
-                      sizeFactor: 0.6,         // R156: world-space text size
+                      sizeFactor: 0.6,
+                      offsetX: 0,
+                      offsetY: 0,
+                      offsetZ: 2.0,          // R157: push label toward camera to avoid occlusion
                       borderWidth: 0.15,
                       borderColor: 0x000000,
-                      background: true,        // R156: enable background
+                      background: true,
                       backgroundColor: 0x000000,
                       backgroundOpacity: 0.7,
                       backgroundMargin: 0.2,
-                      tether: true,            // R156: tether line to atom
+                      tether: true,
                       tetherLength: 0.5,
                       tetherBaseWidth: 0.1,
                     },
@@ -936,8 +940,12 @@ export async function executeCommand(
 
         // R119: No background restore needed — we didn't change it (see above).
 
+        // R157: Clear selection and highlights (removes green selection box from screenshots)
+        try { plugin.managers.structure.selection.clear(); } catch (err) { console.warn('[capture_multi_angle] selection.clear failed:', err); }
+        try { plugin.managers.interactivity.lociSelects.clearHighlights(); } catch (err) { /* best-effort */ }
+        try { plugin.managers.interactivity.lociHighlights.clearHighlights(); } catch (err) { /* best-effort */ }
+
         // R130: Restore saved camera state so structure stays visible
-        // (instead of camera.reset() which could push structure off-screen)
         restoreCameraState(plugin);
         await new Promise(r => setTimeout(r, 200));
         await nextFrame();

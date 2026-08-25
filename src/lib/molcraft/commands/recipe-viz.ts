@@ -235,12 +235,16 @@ export async function applyRecipeVisualization(
       case "hydrophobic_contacts":
       case "interface_residues":
       case "oligomer_analysis": {
-        // R153: Clean up previous visualization artifacts before applying new one.
-        // This prevents label/line/sidechain accumulation across multiple analyses.
+        // R157: Clean up ALL previous visualization artifacts before applying new one.
+        // This prevents label/line/sidechain/water/ligand accumulation across analyses.
         await safe(async () => {
           // Clear all measurements (distance lines, labels)
           try { plugin.managers.structure.measurement.clear(); } catch (err) { console.warn('[viz:cleanup] measurement.clear failed:', err); }
-          // Remove previous interface sidechain components
+          // R157: Clear selection and highlights (removes green selection box)
+          try { plugin.managers.structure.selection.clear(); } catch (err) { console.warn('[viz:cleanup] selection.clear failed:', err); }
+          try { plugin.managers.interactivity.lociSelects.clearHighlights(); } catch (err) { /* best-effort */ }
+          try { plugin.managers.interactivity.lociHighlights.clearHighlights(); } catch (err) { /* best-effort */ }
+          // Remove previous components (sidechains, water, ligand, and ANY ball-and-stick)
           const structs = getStructures(plugin);
           let removedCount = 0;
           for (const s of structs) {
@@ -248,8 +252,21 @@ export async function applyRecipeVisualization(
             for (const c of (s.components ?? [])) {
               const tags = c?.cell?.transform?.tags;
               const label = c?.cell?.obj?.label;
-              if ((Array.isArray(tags) && (tags.includes('interface-sidechain') || tags.includes('water-hide') || tags.includes('ligand-hide'))) ||
-                  (label && (label.includes("Interface ") || label === "Water" || label === "Ligand"))) {
+              // R157: Also remove components with 'structure-component-sidechain' tag
+              // (the keyTag format from tryCreateComponent)
+              const hasTag = Array.isArray(tags) && (
+                tags.includes('interface-sidechain') ||
+                tags.includes('water-hide') ||
+                tags.includes('ligand-hide') ||
+                tags.some((t: string) => t.startsWith('structure-component-sidechain'))
+              );
+              const hasLabel = label && (
+                label.includes("Interface ") ||
+                label.includes("sidechain") ||
+                label === "Water" ||
+                label === "Ligand"
+              );
+              if (hasTag || hasLabel) {
                 toRemove.push(c);
               }
             }
@@ -345,45 +362,60 @@ export async function applyRecipeVisualization(
             console.log(`[viz:focus] ${residueList.length} interface residues for ${chain1}-${chain2}`);
 
             if (residueList.length > 0) {
-              try { plugin.managers.structure.selection.clear(); } catch (err) { console.warn('[viz:focus] selection.clear failed:', err); }
+              // R157: Use buildResidueLoci to compute boundary WITHOUT selecting
+              // (selection.add creates the green highlight box that shows in screenshots)
+              const focusRefs = residueList.map(r => ({ chain: r.chain, resno: r.resno }));
+              const focusResult = buildResidueLoci(plugin, focusRefs);
 
-              for (const { chain, resno } of residueList) {
+              if (focusResult) {
+                // Compute boundary from the loci directly
+                const bundle = (window as any).molstar;
+                const SE = bundle?.lib?.structure?.StructureElement;
+                const loci = focusResult.loci as any;
+                // Get boundary sphere from the loci
+                let center: { x: number; y: number; z: number };
+                let radius: number;
+
+                // Try to get boundary from the loci
                 try {
-                  const loci = await lociFromResidue(viewer, { chain, resno });
-                  if (loci && !isLociEmpty(loci)) {
-                    plugin.managers.structure.selection.add(loci);
+                  const boundary = SE?.Loci?.getBoundary ? SE.Loci.getBoundary(loci) : null;
+                  if (boundary?.sphere) {
+                    center = boundary.sphere.center;
+                    radius = (boundary.sphere.radius ?? 25) + 15;
+                  } else {
+                    // Fallback: use the first structure's boundary
+                    const structs = getStructures(plugin);
+                    const structData = structs[0]?.cell?.obj?.data;
+                    const structBoundary = (structData as any)?.boundary;
+                    if (structBoundary?.sphere) {
+                      center = structBoundary.sphere.center;
+                      radius = (structBoundary.sphere.radius ?? 25) + 15;
+                    } else {
+                      throw new Error('No boundary available');
+                    }
                   }
-                } catch (err) { console.warn(`[viz:focus] lociFromResidue failed for ${chain}:${resno}:`, err); }
-              }
+                } catch {
+                  // Fallback: focus on whole structure
+                  const structs = getStructures(plugin);
+                  const structData = structs[0]?.cell?.obj?.data;
+                  const structBoundary = (structData as any)?.boundary;
+                  center = structBoundary?.sphere?.center ?? { x: 0, y: 0, z: 0 };
+                  radius = (structBoundary?.sphere?.radius ?? 25) + 15;
+                }
 
-              await new Promise(r => setTimeout(r, 150));
-
-              const boundary = plugin.managers.structure.selection.getBoundary();
-              if (boundary?.sphere) {
-                const center = boundary.sphere.center;
-                // R143: Apply VLM zoom multiplier if set (Plan D integration)
-                // R151: Increased padding from +5 to +15 for a wider view,
-                // and default radius from 20 to 25. This pulls the camera
-                // back so the interface is centered with more context.
-                const baseRadius = (boundary.sphere.radius ?? 25) + 15;
-                const radius = vlmZoomMultiplier ? baseRadius * vlmZoomMultiplier : baseRadius;
-                console.log(`[viz:focus] Center: (${center.x?.toFixed(1)}, ${center.y?.toFixed(1)}, ${center.z?.toFixed(1)}), Radius: ${radius.toFixed(1)} Å${vlmZoomMultiplier ? ` (VLM zoom: ${vlmZoomMultiplier}x)` : ''}`);
+                // R143: Apply VLM zoom multiplier if set
+                const finalRadius = vlmZoomMultiplier ? radius * vlmZoomMultiplier : radius;
+                console.log(`[viz:focus] Center: (${center.x?.toFixed(1)}, ${center.y?.toFixed(1)}, ${center.z?.toFixed(1)}), Radius: ${finalRadius.toFixed(1)} Å`);
                 plugin.managers.camera.focusSphere({
                   center: center,
-                  radius: radius,
+                  radius: finalRadius,
                 });
                 await new Promise(r => setTimeout(r, 300));
               } else {
-                console.warn('[viz:focus] No boundary, using fallback focus');
-                const first = residueList[0];
-                const loci = await lociFromResidue(viewer, { chain: first.chain, resno: first.resno });
-                if (loci) {
-                  plugin.managers.camera.focusLoci(loci, { minRadius: 25 });
-                  await new Promise(r => setTimeout(r, 300));
-                }
+                // Fallback: reset camera
+                plugin.managers.camera.reset();
+                await new Promise(r => setTimeout(r, 100));
               }
-
-              try { plugin.managers.structure.selection.clear(); } catch (err) { console.warn('[viz:focus] post-focus selection.clear failed:', err); }
             }
           } else if (chain1 && chain2) {
             plugin.managers.camera.reset();
@@ -444,16 +476,16 @@ export async function applyRecipeVisualization(
               sr.cell, result.expr, tag, { tags: ['interface-sidechain'] }
             );
             if (component) {
-              // R156: Much smaller ball-and-stick params for clean side chain display
+              // R157: Even smaller ball-and-stick for clean side chain display
               await plugin.builders.structure.representation.addRepresentation(component, {
                 type: "ball-and-stick",
                 typeParams: {
-                  sizeFactor: 0.3,       // R156: even smaller balls (was 0.5)
-                  bondScale: 0.25,       // R156: thinner bonds (was 0.4)
-                  bondSpacing: 0.08,
+                  sizeFactor: 0.2,       // R157: much smaller balls (was 0.3)
+                  bondScale: 0.15,       // R157: much thinner bonds (was 0.25)
+                  bondSpacing: 0.05,
                   aromaticBonds: true,
                   multipleBonds: true,
-                  ignoreHydrogens: true,  // R156: hide H for cleaner view
+                  ignoreHydrogens: true,
                 },
                 colorTheme: { name: "element-symbol", params: {} },
               });
