@@ -3558,3 +3558,38 @@ Verification:
 - Lint: 0 errors
 - Unit tests: 126 pass, 0 fail
 - Git: commit ef28d8c pushed to origin/main
+
+---
+Task ID: round-160-clear-selection-buildloci-labels
+Agent: main
+Task: Fix green selection box, duplicate screenshots, label loci.
+
+ROOT CAUSE of green selection box:
+  lociFromResidue (used for adding labels in capture_multi_angle) has a
+  fallback path that calls:
+    plugin.managers.structure.selection.clear()
+    viewer.structureInteractivity({ expression: expr, action: ['select'] })
+  This SELECTS the residue, creating a green highlight.
+  
+  The cleanup in applyRecipeVisualization clears selection BEFORE this,
+  but lociFromResidue is called AFTER cleanup (in capture_multi_angle's
+  label-adding loop), re-creating the selection.
+
+FIX:
+  1. Use buildResidueLoci (non-destructive, uses StructureElement directly)
+     instead of lociFromResidue for labels
+  2. Clear selection + highlights IMMEDIATELY BEFORE the capture loop
+     (after labels are added, before screenshots are taken)
+  3. Wait 100ms for the highlight clear to render
+
+Duplicate screenshots fix:
+  R159's isStandaloneCapture check had wrong indentation (if/else nesting)
+  Fixed: properly nest hasVizParams check so VLM only runs for standalone
+  captures (no vizParams = not auto-triggered by pdb_analyze)
+
+Exported buildResidueLoci from recipe-viz.ts so commands.ts can import it.
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Git: commit 2fdf0a2 pushed to origin/main
