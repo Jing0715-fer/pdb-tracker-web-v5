@@ -692,11 +692,14 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           durationMs, // R113.7: Store timing for UI display
         });
 
-        // R140: For explicit capture_multi_angle calls, also run VLM analysis
-        // (non-blocking). Previously only the auto-capture path after pdb_analyze
-        // ran VLM, so explicit capture_multi_angle had no commentary. Now both
-        // paths get VLM analysis for consistency.
-        if (call.name === 'capture_multi_angle' && result.ok) {
+        // R159: For explicit capture_multi_angle calls, DON'T run VLM separately.
+        // The auto-capture path after pdb_analyze already runs the VLM loop.
+        // Running VLM again for explicit calls creates duplicate screenshots
+        // and confusing UI. Only run VLM if this is NOT an auto-capture
+        // (i.e. the user explicitly asked for a screenshot without analysis).
+        // We detect this by checking if vizParams contains analysis data.
+        const isStandaloneCapture = !args.vizParams || Object.keys(args.vizParams as object).length === 0;
+        if (call.name === 'capture_multi_angle' && result.ok && isStandaloneCapture) {
           const recipeName = String(args.recipe || 'unknown');
           const screenshots = (result as any).data?.screenshots;
           if (screenshots && Array.isArray(screenshots) && screenshots.length > 0) {

@@ -235,7 +235,7 @@ export async function applyRecipeVisualization(
       case "hydrophobic_contacts":
       case "interface_residues":
       case "oligomer_analysis": {
-        // R157: Clean up ALL previous visualization artifacts before applying new one.
+          // R157: Clean up ALL previous visualization artifacts before applying new one.
         // This prevents label/line/sidechain/water/ligand accumulation across analyses.
         await safe(async () => {
           // Clear all measurements (distance lines, labels)
@@ -252,13 +252,17 @@ export async function applyRecipeVisualization(
             for (const c of (s.components ?? [])) {
               const tags = c?.cell?.transform?.tags;
               const label = c?.cell?.obj?.label;
-              // R157: Also remove components with 'structure-component-sidechain' tag
-              // (the keyTag format from tryCreateComponent)
+              // R159: Remove ALL components that have our tags OR are named Water/Ligand
+              // Also remove components with keyTag prefix 'structure-component-'
+              // that are sidechain/water/ligand related
               const hasTag = Array.isArray(tags) && (
                 tags.includes('interface-sidechain') ||
                 tags.includes('water-hide') ||
                 tags.includes('ligand-hide') ||
-                tags.some((t: string) => t.startsWith('structure-component-sidechain'))
+                tags.some((t: string) => t.startsWith('structure-component-sidechain') ||
+                         t.startsWith('structure-component-Water') ||
+                         t.startsWith('structure-component-Ligand') ||
+                         t.startsWith('structure-component-interface-sidechains'))
               );
               const hasLabel = label && (
                 label.includes("Interface ") ||
@@ -274,7 +278,7 @@ export async function applyRecipeVisualization(
               try { plugin.managers.structure.component.remove(c); removedCount++; } catch (err) { console.warn('[viz:cleanup] remove failed:', err); }
             }
           }
-          if (removedCount > 0) console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
+          console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
         }, "cleanup_previous");
 
         // R156: Hide water AND ligand using tryCreateComponentStatic
@@ -338,7 +342,7 @@ export async function applyRecipeVisualization(
           if (chain1 && chain2 && Array.isArray(interactions) && interactions.length > 0) {
             const residueSet = new Set<string>();
             const residueList: Array<{ chain: string; resno: number }> = [];
-            for (const c of interactions.slice(0, 20)) {
+            for (const c of interactions) {
               const ch1 = c.chain1 as string;
               const rn1 = c.resno1 as number;
               const ch2 = c.chain2 as string;
