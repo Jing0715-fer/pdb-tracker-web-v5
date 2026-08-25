@@ -3380,3 +3380,34 @@ Stage Summary:
 - Distance lines WILL NOW connect correct atoms (atom-level loci)
 - Water AND ligands WILL NOW be hidden (traverse units, not MolScript)
 - This was the root cause of ALL previous side chain/hide/line failures
+
+---
+Task ID: round-155-ball-size-water-entity-labels
+Agent: main
+Task: Fix ball-and-stick size, water/ligand hiding, chain-colored labels.
+
+Bugs Fixed:
+
+Bug #1: Side chains displayed as balls (too big)
+  - sizeFactor was 0.8 (balls too large, sticks not visible)
+  - Fix: sizeFactor: 0.5, bondScale: 0.4, aromaticBonds: true,
+    multipleBonds: true
+
+Bug #2: Water and ligands not hidden
+  - Molstar entity.type returns 'water' for water (NOT 'non-polymer')
+  - R154 code checked compId === 'HOH' which missed some waters
+  - Also missed 'macrolide' and 'branched' entity types for ligands
+  - Fix: isWater = entityType === 'water' || compId === 'HOH'
+    isLigand = (entityType === 'non-polymer' || 'macrolide' || 'branched') && !isWater
+
+Bug #3: Labels not chain-colored, style not aesthetic
+  - Was passing textColor/textSize directly (wrong API — addLabel expects labelParams)
+  - Fix: Use labelParams with chain-specific colors:
+    A→red(0xe74c3c), B→blue(0x3498db), C→green(0x2ecc71), D→orange(0xe67e22)
+  - Added borderWidth: 0.15, borderColor: black, backgroundColor: black,
+    backgroundOpacity: 0.6 for readable labels
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Git: commit 6c3d910 pushed to origin/main
