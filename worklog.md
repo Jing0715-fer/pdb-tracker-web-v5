@@ -3517,3 +3517,44 @@ Verification:
 - Lint: 0 errors
 - Unit tests: 126 pass, 0 fail
 - Git: commit b0b3afc pushed to origin/main
+
+---
+Task ID: round-159-cleanup-duplicate-vlm-all-interactions
+Agent: main
+Task: Fix cleanup between analyses, duplicate screenshots, focus scope.
+
+Bugs Fixed:
+
+Bug #1: A-B labels/sticks not cleared when analyzing C-D
+  - cleanup matched limited tag patterns, missed some keyTag formats
+  - Fix: Expanded to match ALL keyTag prefixes:
+    structure-component-sidechain, -Water, -Ligand, -interface-sidechains
+
+Bug #2: Duplicate screenshots (pdb_analyze + capture_multi_angle)
+  - pdb_analyze auto-triggers capture_multi_angle + VLM (R115)
+  - LLM also explicitly calls capture_multi_angle → duplicate screenshots
+  - Fix: Explicit capture_multi_angle only runs VLM if standalone
+    (no vizParams = not auto-triggered)
+
+Bug #3: Focus only on first 20 interactions
+  - interactions.slice(0, 20) limited residue collection for focus
+  - Fix: Use ALL interactions (no slice) for focus + sidechain display
+
+Bug #4: Green selection box
+  - Already fixed in R157 (clear selection + highlights in cleanup)
+  - Verified cleanup runs before each new analysis
+
+User feedback addressed:
+- B-C and A-D not analyzed: This is an LLM decision issue, not a code bug.
+  The LLM should analyze all 6 chain pairs (A-B, A-C, A-D, B-C, B-D, C-D).
+- capture_multi_angle vs pdb_analyze: pdb_analyze auto-triggers
+  capture_multi_angle + VLM. Explicit capture_multi_angle is redundant.
+  Fixed to skip VLM for auto-triggered captures.
+- VLM results not shown: VLM runs in the auto-capture path and results
+  are stored in autoCapture.vlmResult. UI shows them in the pdb_analyze
+  card (not the capture_multi_angle card).
+
+Verification:
+- Lint: 0 errors
+- Unit tests: 126 pass, 0 fail
+- Git: commit ef28d8c pushed to origin/main
