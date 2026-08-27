@@ -29,12 +29,16 @@
  * regardless of which viewer is mounted.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '@/lib/molcraft/store';
 import { clearAllMeasurements } from '@/lib/molcraft/commands/measurement-utils';
 import {
+  setAgentLabelsVisible,
+  countAgentLabels,
+} from '@/lib/molcraft/commands/label-lifecycle';
+import {
   Ruler, Triangle, Sigma, Tag, X, Copy, Download, Undo2, FileText,
-  MousePointerClick, ChevronDown, ChevronRight, Trash2,
+  ChevronDown, ChevronRight, Trash2, Eye, EyeOff,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
@@ -59,6 +63,49 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
   const addReport = useAppStore((s) => s.addReport);
 
   const [showList, setShowList] = useState(false);
+
+  // ── R173: residue-label show/hide toggle ────────────────────────────
+  // Every agent/analysis label is tagged `agent-label` at creation. The
+  // toggle flips isHidden on those state cells (Molstar's own eye-icon
+  // mechanism) WITHOUT deleting them, so the user can freely switch labels
+  // on/off while rotating the structure ("label 要增加一个显示和隐藏的选项，
+  // 可自由选择"). The count polls the state tree so the enabled state stays
+  // truthful no matter how labels were added (analysis auto-capture,
+  // show_analysis_labels, LLM label_residue, click-to-label).
+  const agentLabelsVisible = useAppStore((s) => s.agentLabelsVisible);
+  const setLabelsVisible = useAppStore((s) => s.setAgentLabelsVisible);
+  const agentLabelCount = useAppStore((s) => s.agentLabelCount);
+  const setAgentLabelCount = useAppStore((s) => s.setAgentLabelCount);
+
+  useEffect(() => {
+    if (!viewer?.plugin) return;
+    const plugin = viewer.plugin;
+    const sync = () => {
+      const n = countAgentLabels(plugin);
+      if (useAppStore.getState().agentLabelCount !== n) {
+        setAgentLabelCount(n);
+      }
+    };
+    sync();
+    const id = window.setInterval(sync, 2000);
+    return () => window.clearInterval(id);
+  }, [viewer?.plugin, setAgentLabelCount]);
+
+  const handleToggleLabels = useCallback(() => {
+    const plugin = viewer?.plugin;
+    if (!plugin) return;
+    const next = !agentLabelsVisible;
+    const affected = setAgentLabelsVisible(plugin, next);
+    setLabelsVisible(next);
+    toast(
+      affected === 0
+        ? '当前没有可切换的残基标签'
+        : next
+          ? `已显示 ${affected} 个残基标签`
+          : `已隐藏 ${affected} 个残基标签`,
+      'info',
+    );
+  }, [viewer, agentLabelsVisible, setLabelsVisible, toast]);
 
   // ── Actions ────────────────────────────────────────────────────────────
   const handleClearAll = useCallback(() => {
@@ -203,6 +250,37 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
             );
           })}
         </div>
+
+        {/* R173: residue-label show/hide toggle — flips isHidden on every
+            state cell tagged `agent-label` (analysis labels AND
+            click-to-label). Disabled when no labels exist. */}
+        <div className="h-4 w-px bg-claude-border/60 dark:bg-[#3d3832]/60 mx-0.5" aria-hidden="true" />
+        <button
+          onClick={handleToggleLabels}
+          disabled={!viewer || agentLabelCount === 0}
+          title={
+            agentLabelCount === 0
+              ? '暂无残基标签（运行分析或点击原子添加标签后可用）'
+              : agentLabelsVisible
+                ? `隐藏 ${agentLabelCount} 个残基标签`
+                : `显示 ${agentLabelCount} 个残基标签`
+          }
+          aria-label={agentLabelsVisible ? 'Hide residue labels' : 'Show residue labels'}
+          aria-pressed={agentLabelsVisible}
+          className={`flex items-center gap-1 h-7 px-2 rounded-md text-[10px] font-medium transition-all whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+            agentLabelsVisible
+              ? 'bg-claude-accent-light/60 text-claude-accent border border-claude-accent/30'
+              : 'text-claude-text-muted hover:text-claude-text hover:bg-claude-accent-light/30'
+          }`}
+        >
+          {agentLabelsVisible ? <Eye className="h-3 w-3 shrink-0" /> : <EyeOff className="h-3 w-3 shrink-0" />}
+          <span>Labels</span>
+          {agentLabelCount > 0 && (
+            <span className="font-mono text-[9px] leading-none bg-claude-accent-light/60 rounded px-1 py-0.5">
+              {agentLabelCount}
+            </span>
+          )}
+        </button>
 
         {/* Picking progress (inline, only when actively picking) */}
         {measureMode !== 'off' && (

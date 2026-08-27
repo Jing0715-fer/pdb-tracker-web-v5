@@ -617,6 +617,9 @@ async function init() {
     await capture('r171');
   };
   document.getElementById('btnClear').onclick = clearAll;
+
+  // Expose handles for scripted camera-rotation QA (agent-browser).
+  window.__qa = { get viewer() { return viewer; }, get plugin() { return plugin; } };
 }
 init().catch(e => { statusEl.textContent = 'init failed: ' + e.message; log('init error: ' + e.message); });
 </script>

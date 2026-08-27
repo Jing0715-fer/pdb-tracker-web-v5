@@ -4549,3 +4549,34 @@ Stage Summary:
 - 3 个安全漏洞闭环：任意文件清零（db-config）、路径穿越写文件（eval-report）、审批门绕过（tool-results name 伪造）。
 - 2 个会话损毁 bug 闭环：regenerate 悬空 tool 消息（永久 400）、import FK 竞态（静默丢事件）。
 - tsc 基线 138→123；lint 零新增；44 文件改动待推送。
+
+---
+Task ID: R173
+Agent: main (label rotation + show/hide toggle)
+
+Task: 用户报告"label 好像还是会偏移，是转角度的时候label没有重新定位？另外label要增加一个显示和隐藏的选项，可自由选择" — 诊断标签旋转偏移根因 + 实现标签显示/隐藏开关。
+
+Work Log:
+- 环境对齐：本地 sandbox 是过期快照（9dd1e18，含已废弃的 label-lifecycle.ts 分叉实现，不在远程历史）——git reset --hard origin/main（远程领先 454 commits，R167→R172 全部工作已在远程）。
+- 诊断（浏览器实测 + bundle 源码级分析，label-qa.html + 4HHB 真实数据）：
+  1. R170/R171 的浮动锚定标签（tether + offsetZ=12 + 8 向 attachment）在 front/side/top 三个相机角度全部正确跟随残基（VLM 逐图验证：tether 终点在结构上、无标签漂浮、正确重锚定）——capture 管线的标签本身没有旋转偏移 bug。
+  2. 真正的根因（用户感知"label 偏移/转角度没重新定位"的来源）：三处 addLabel 调用点用 bundle 默认放置——label_residue（LLM 工具）、capture_snapshot 标签、点击原子打标签（use-atom-picking）——默认 attachment=middle-center、无 tether、offsetZ=0：文本渲染在残基包围球中心、被 cartoon 深度遮挡一半；旋转时被遮挡的字形部位随视角变化 → 视觉上就是"标签偏移/没有重新定位"。且这些标签无清理、永久残留。
+  3. 附带 bug：use-atom-picking 与 capture_snapshot 的 addLabel 传 flat {customText}——bundle 的 addLabel 只展开 labelParams/visualParams，flat 参数被静默丢弃（渲染的是 Molstar 默认 loci 文本而非请求文本）。
+- 修复实现（新文件 label-lifecycle.ts + 5 个调用点改造 + 客户端接线 + UI）：
+  1. 新模块 src/lib/molcraft/commands/label-lifecycle.ts：AGENT_LABEL_TAG='agent-label'；findRefsByTag（遍历 state.cells 匹配 transform.tags）；setAgentLabelsVisible（state.updateCellState(ref,{isHidden})——Molstar 眼睛图标的同一机制，bundle 实证可用）；countAgentLabels；removeAgentLabels（build().delete().commit()）；agentLabelOptions 工厂（R170 浮动放置：offsetX/Y=0 + offsetZ=12 + tether + 半透明黑底 + 8 向 attachment 轮转防重叠 + reprTags 打标）。
+  2. 五个 addLabel 调用点全部统一：label_residue（commands.ts）、capture_snapshot 标签（commands.ts）、capture_multi_angle 残基标签（commands.ts +reprTags）、recipe-viz pair 标签（+reprTags）、use-atom-picking 点击打标签（同时修复 flat 参数 bug）。
+  3. 新命令 show_analysis_labels（command-schema.ts + commands.ts）：removeAgentLabels 替换旧标签 → 逐残基 buildResidueLoci/lociFromResidue 解析 → 链色匹配（getChainColorMap）→ 浮动放置打标添加 → requestDraw 兜底。
+  4. 客户端接线（use-agent-session.ts）：pairwise 分支记住 top pair 标签（pi===0）、循环+VLM 结束后调用 show_analysis_labels 持久化；通用分支（runVlmControlledCaptureLoop 后）同样持久化 residueLabels；均带 abort 检查 + 非阻塞 try/catch。
+  5. UI 开关（measure-toolbar.tsx + store.ts）：Labels 眼睛按钮（Eye/EyeOff 图标 + 实时计数徽章，2s 轮询 countAgentLabels 仅变化时写 store）；aria-pressed/title 完整；无标签时禁用；toast 反馈受影响数量。store 新增 agentLabelsVisible/agentLabelCount。
+  6. recipe-viz cleanup_previous 增加 removeAgentLabels——新分析开始时替换上一轮持久化标签（保证截图只含本次标签 + 单一事实来源）。
+- 验证：
+  1. bundle 机制实证（label-qa harness + agent-browser + VLM）：addLabel 传 reprTags 后 transform 确实带 agent-label tag（state 树遍历找到 1 ref）；updateCellState isHidden=true/false 真实隐藏/显示标签（VLM 对比两张截图：隐藏图无标签、显示图有标签）✓。
+  2. 旋转跟随实证：R171 combo 标准管线标签在 90° 旋转后仍正确锚定（VLM：tether 终点在结构上）✓。
+  3. 真实应用：4HHB 加载后 MeasureToolbar 出现 Labels 按钮（初始禁用=正确）；点击打标签的原子拾取在 sandbox 中因每次鼠标交互触发重渲染导致 dev server OOM 而无法完成（环境限制，机制已由 harness 验证覆盖）。
+  4. lint：改动文件/目录 scoped eslint 0 error 0 warning（全仓 lint 在 4GB sandbox 被 SIGKILL——已知环境问题）；tsc 全项目 124 errors 与 stash 基线逐数一致（零新增）。
+- 已知限制：完整 agent pairwise E2E（LLM→分析→截图→标签持久化→toggle 点击）因 dev server ~2-3 分钟 OOM 周期无法在 sandbox 稳定跑完；核心机制（tag/hide/show/旋转跟随/按钮渲染）已分别实证。
+
+Stage Summary:
+- 用户两项需求闭环：①"标签偏移"根因定位为默认放置标签（无 tether/offsetZ→深度遮挡半埋）而非锚定数学错误——三处调用点统一改用 R170 浮动放置 + 修复 flat 参数文本丢失 bug；②"显示/隐藏开关"落地——所有 agent 标签打 agent-label tag，MeasureToolbar Labels 眼睛按钮用 updateCellState isHidden 原地切换（不删除），分析结束后标签经 show_analysis_labels 持久化，新分析自动替换。
+- 新增 label-lifecycle.ts（tag 查找/显隐/计数/删除/放置工厂）；show_analysis_labels 命令；客户端两处持久化接线；store+toolbar UI；recipe-viz 清理替换语义。
+- 改动 8 文件 +1 新文件，+238/-10；lint/tsc 零新增；bundle API（reprTags/updateCellState）浏览器实证有效。

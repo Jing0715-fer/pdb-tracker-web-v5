@@ -174,6 +174,15 @@ interface AppState {
   removeMeasurement: (id: string) => void;
   clearMeasurements: () => void;
 
+  // R173: agent residue-label visibility toggle (analysis labels, LLM
+  // label_residue, click-to-label — every label tagged `agent-label`).
+  agentLabelsVisible: boolean;
+  setAgentLabelsVisible: (v: boolean) => void;
+  /** Live count of tagged agent labels in the Molstar state tree (poll-synced
+   *  by the MeasureToolbar so the toggle's enabled state stays truthful). */
+  agentLabelCount: number;
+  setAgentLabelCount: (n: number) => void;
+
   /** Interaction overlay lines — drawn by the MeasureOverlay canvas.
    *  Used by click-to-measure distance/angle and by interaction charts
    *  to draw dashed distance lines between two atoms in 3D space,
@@ -647,6 +656,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   measureMode: "off",
   setMeasureMode: (m) => set({ measureMode: m, measureProgress: { picked: 0, needed: m === "distance" ? 2 : m === "angle" ? 3 : m === "dihedral" ? 4 : m === "label" ? 1 : 0 }, pickedAtoms: [] }),
+  // R173: agent label toggle state (see interface docs above).
+  agentLabelsVisible: true,
+  setAgentLabelsVisible: (v) => set({ agentLabelsVisible: v }),
+  agentLabelCount: 0,
+  setAgentLabelCount: (n) => set({ agentLabelCount: n }),
   measureProgress: { picked: 0, needed: 0 },
   setMeasureProgress: (p) => set({ measureProgress: p }),
   pickedAtoms: [],

@@ -31,6 +31,7 @@ import {
 } from "./measurement-utils";
 import { applyCartoonTransparency, clearVizTransparency } from "./cartoon-transparency";
 import { getLociCenter, getLabelSizeRatios } from "./label-sizing";
+import { AGENT_LABEL_TAG, removeAgentLabels } from "./label-lifecycle";
 
 /**
  * R167 (MOL-M4): measurement cells added by the interactions-family viz
@@ -741,6 +742,15 @@ export async function applyRecipeVisualization(
             console.log(`[viz:cleanup] Removed ${removed} leaked measurement cells from a previous analysis`);
             vizAddedMeasurementRefs = [];
           }
+          // R173: remove the previous analysis's PERSISTED agent labels (tag
+          // `agent-label`) — they were deliberately kept after the last
+          // capture so the user could rotate/toggle them; a NEW analysis
+          // replaces them with its own. This runs BEFORE this capture's
+          // labels are added, so the new screenshots only show new labels.
+          const removedLabels = await removeAgentLabels(plugin);
+          if (removedLabels > 0) {
+            console.log(`[viz:cleanup] Removed ${removedLabels} persisted agent label(s) from the previous analysis`);
+          }
           // R170: also restore chains left hidden by a previous interrupted
           // run (cleanupCapture is the normal restore path).
           await restoreHiddenChains(plugin);
@@ -1171,6 +1181,8 @@ export async function applyRecipeVisualization(
                   attachment: (drawn % 2 === 0) ? 'top-center' : 'bottom-center',
                   tether: true, tetherLength: 0.9, tetherBaseWidth: 0.16,
                 },
+                // R173: agent tag — covered by the toolbar show/hide toggle.
+                reprTags: [AGENT_LABEL_TAG],
               } as any);
               drawn++;
             } catch (err) { console.warn('[viz:pair_labels] one pair failed:', err); }

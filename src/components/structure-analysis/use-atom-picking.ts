@@ -30,6 +30,7 @@ import {
   type AtomInfo,
 } from "@/lib/molcraft/measure";
 import { setPendingAtoms } from "@/components/molcraft-molstar/measure-overlay";
+import { agentLabelOptions, countAgentLabels } from "@/lib/molcraft/commands/label-lifecycle";
 
 const DIST_COLOR = "#f59e0b"; // amber-500 — matches Molcraft distance lines
 const ANGLE_COLOR = "#8b5cf6"; // violet-500 — matches Molcraft angle lines
@@ -279,9 +280,17 @@ export function useAtomPicking() {
       } else if (measureMode === "label" && atoms.length >= 1) {
         const a0 = atoms[0];
         // Use Molstar's native label (drawn in 3D, no per-item overlay line).
+        // R173: the bundle's addLabel only reads labelParams/visualParams — the
+        // old flat { customText } was silently DROPPED (default loci text
+        // rendered instead), and the default placement (middle-center, no
+        // tether, offsetZ 0) rendered the text half-buried in the cartoon,
+        // which read as "label 偏移" while rotating. Floating placement + the
+        // agent tag (toolbar show/hide toggle) fixes both.
         try {
           if (typeof mm.addLabel === "function") {
-            mm.addLabel(a0.loci, { customText: fmtLabel(a0) });
+            mm.addLabel(a0.loci, {
+              ...agentLabelOptions({ text: fmtLabel(a0), slot: countAgentLabels(plugin) }),
+            } as any);
           }
         } catch { /* ignore */ }
         addMeasurement({

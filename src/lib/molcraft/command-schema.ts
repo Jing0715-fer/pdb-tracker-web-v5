@@ -56,6 +56,19 @@ export type LlmCommand =
       d: ResidueRef;
     }
   | { type: "label_residue"; target: ResidueRef; text?: string }
+  // R173: persist the analysis residue labels in the live viewer after the
+  // capture pipeline cleaned them up — the user can then rotate freely and
+  // toggle them with the toolbar's Labels button.
+  | {
+      type: "show_analysis_labels";
+      labels?: Array<{
+        text: string;
+        chain?: string;
+        resno?: number;
+        compId?: string;
+      }>;
+      labelFontSize?: number;
+    }
   | {
       type: "show_interactions";
       target?: ResidueRef | "selection" | "ligand";

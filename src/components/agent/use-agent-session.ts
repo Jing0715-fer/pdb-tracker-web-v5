@@ -1042,6 +1042,12 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   const topPairs = (significant.length > 0 ? significant : pairs.filter(p => p.in_contact !== false)).slice(0, 2);
 
                   const allScreenshots: CaptureScreenshot[] = [];
+                  // R173: remember the TOP pair's residue labels so they can be
+                  // re-added (persisted) after the capture loop finishes — the
+                  // capture pipeline removes its labels in cleanup, but the
+                  // user asked to keep an annotated view they can rotate and
+                  // toggle freely ("label 要增加一个显示和隐藏的选项").
+                  let topPairLabels: typeof residueLabels | null = null;
                   for (let pi = 0; pi < topPairs.length; pi++) {
                     // MOL2-05 (R172): honor the session-change abort signal
                     // BETWEEN per-pair captures — previously only the VLM call
@@ -1058,6 +1064,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                     // extractResidueLabels picks THIS pair's residues
                     const pairScopedData = { ...analysisData, chain1: pair.chain1, chain2: pair.chain2, interactions: pair.interactions };
                     const pairLabels = extractResidueLabels(recipeName, pairScopedData);
+                    if (pi === 0) topPairLabels = pairLabels;
                     // top pair gets 3 angles; second pair gets 2 (keeps the
                     // total screenshot count bounded for the VLM call)
                     const pairAngles = pi === 0 ? ['front', 'side', 'top'] : ['front', 'side'];
@@ -1151,6 +1158,23 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   }
 
                   const captureDuration = Date.now() - captureStartTime;
+                  // R173: persist the TOP pair's residue labels in the live
+                  // viewer (tagged agent-label → toolbar Labels toggle).
+                  // The capture cleanup already restored the user's chains /
+                  // camera — the labels float at their residues with tethers,
+                  // so rotating keeps them anchored and the Labels button
+                  // can hide/show them freely.
+                  if (!localController.signal.aborted && v && topPairLabels && topPairLabels.length > 0) {
+                    try {
+                      await executeCommand(v, {
+                        type: 'show_analysis_labels',
+                        labels: topPairLabels,
+                        labelFontSize: 0.5,
+                      } as never);
+                    } catch (labelErr) {
+                      console.warn('[agent] persisting pairwise labels failed (non-blocking):', labelErr);
+                    }
+                  }
                   // FE-03 (R172): clear autoCapturePending on EVERY terminal
                   // path of the pairwise branch — success, empty capture, and
                   // error — so the "正在自动截图 + VLM 分析..." spinner can
@@ -1234,6 +1258,22 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 );
 
                 const captureDuration = Date.now() - captureStartTime;
+
+                // R173: persist the analysis residue labels in the live
+                // viewer (same rationale as the pairwise branch above — the
+                // user keeps an annotated view, toggleable via the toolbar's
+                // Labels button, that stays anchored while rotating).
+                if (!localController.signal.aborted && v && residueLabels && residueLabels.length > 0) {
+                  try {
+                    await executeCommand(v, {
+                      type: 'show_analysis_labels',
+                      labels: residueLabels,
+                      labelFontSize: 0.5,
+                    } as never);
+                  } catch (labelErr) {
+                    console.warn('[agent] persisting analysis labels failed (non-blocking):', labelErr);
+                  }
+                }
 
                 if (loopResult.screenshots.length > 0) {
                   // UI-012: typed summary (was an `as any` literal).

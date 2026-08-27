@@ -46,7 +46,7 @@ import {
   removeMeasurementCells,
   clearAllMeasurements,
 } from "./commands/measurement-utils";
-import { restoreHiddenChains, restoreHiddenNonPolymer, __resetVizMeasurementRefs } from "./commands/recipe-viz";
+import { restoreHiddenChains, restoreHiddenNonPolymer, __resetVizMeasurementRefs, buildResidueLoci } from "./commands/recipe-viz";
 import { getChainColorMap, getChainLabelColor } from "./commands/chain-colors";
 import { getLociCenter, getLabelSizeRatios } from "./commands/label-sizing";
 import { clearVizTransparency } from "./commands/cartoon-transparency";
@@ -78,6 +78,12 @@ import {
 } from "./commands/camera";
 import { showInteractionsAround, clearInteractions } from "./commands/interactions";
 import { setTrackballAnimate } from "./commands/animation";
+import {
+  agentLabelOptions,
+  countAgentLabels,
+  removeAgentLabels,
+  AGENT_LABEL_TAG,
+} from "./commands/label-lifecycle";
 import { applyRecipeVisualization } from "./commands/recipe-viz";
 import { alignStructures } from "./commands/alignment";
 import {
@@ -558,13 +564,59 @@ export async function executeCommand(
       case "label_residue": {
         const loci = await lociFromResidue(viewer, cmd.target);
         if (!loci) return { ok: false, detail: "Residue not found" };
-        // R167 (MOL-M5): the prebuilt bundle's addLabel only reads
-        // labelParams/visualParams — a flat {customText} was silently dropped
-        // (tool reported ok but the default loci text rendered instead).
+        // R173: LLM-added labels used the bundle's DEFAULT placement
+        // (middle-center, NO tether, offsetZ 0) — the text rendered AT the
+        // residue center, depth-tested against the cartoon, half-buried.
+        // As the camera rotated, different glyph parts got occluded, which
+        // reads as "label 偏移 / 没有重新定位". Use the R170 floating
+        // placement (tether + offsetZ + background) + the agent tag so the
+        // toolbar show/hide toggle covers these labels too.
+        const slot = countAgentLabels(plugin);
         await plugin.managers.structure.measurement.addLabel(loci, {
-          labelParams: { customText: cmd.text ?? "" },
+          ...agentLabelOptions({ text: cmd.text ?? "", slot }),
         } as any);
         return { ok: true, detail: "Label added" };
+      }
+
+      // R173: re-add (and persist) the analysis residue labels after a
+      // capture pipeline has cleaned them up — called by the agent-session
+      // auto-capture flow when it finishes, so the user keeps an annotated
+      // view they can freely rotate and toggle from the toolbar.
+      case "show_analysis_labels": {
+        const labels = cmd.labels ?? [];
+        if (labels.length === 0) return { ok: false, detail: "No labels provided" };
+        // Replace any previous agent labels (this is the single source of
+        // truth for what the post-analysis view shows).
+        await removeAgentLabels(plugin);
+        const chainColorMap = getChainColorMap(plugin);
+        let added = 0;
+        let slot = 0;
+        for (const lbl of labels) {
+          try {
+            if (lbl.chain === undefined || lbl.resno === undefined) continue;
+            let loci: unknown = null;
+            const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
+            if (singleResult) loci = singleResult.loci;
+            if (!loci) loci = await lociFromResidue(viewer, { chain: lbl.chain, resno: lbl.resno });
+            if (!loci) continue;
+            const color = getChainLabelColor(plugin, lbl.chain, chainColorMap);
+            await plugin.managers.structure.measurement.addLabel(loci, {
+              ...agentLabelOptions({ text: lbl.text ?? "", color, slot: slot++, fontSize: cmd.labelFontSize ?? 0.55 }),
+            } as any);
+            added++;
+          } catch (err) {
+            console.warn(`[show_analysis_labels] label "${lbl.text}" failed:`, err);
+          }
+        }
+        // R173: force a redraw so the freshly persisted labels render
+        // immediately (the animation loop covers this in normal browsers;
+        // the explicit draw makes throttled/background tabs reliable too).
+        try {
+          plugin.canvas3d?.requestDraw?.();
+        } catch {
+          /* ignore */
+        }
+        return { ok: added > 0, detail: `Persisted ${added}/${labels.length} residue labels (toggle with the Labels toolbar button)` };
       }
 
       case "clear_measurements":
@@ -714,6 +766,7 @@ export async function executeCommand(
         }
         // Step 2: add text labels at residue positions
         if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
+          let slot = countAgentLabels(plugin);
           for (const lbl of cmd.labels) {
             try {
               if (lbl.chain !== undefined && lbl.resno !== undefined) {
@@ -722,9 +775,11 @@ export async function executeCommand(
                   resno: lbl.resno,
                 });
                 if (loci) {
-                  // R167 (MOL-M5): labelParams wrapper — see label_residue.
+                  // R173: floating placement + agent tag (see label_residue —
+                  // the old flat/default placement rendered half-buried,
+                  // depth-occluded text that looked detached while rotating).
                   await plugin.managers.structure.measurement.addLabel(loci, {
-                    labelParams: { customText: lbl.text ?? "" },
+                    ...agentLabelOptions({ text: lbl.text ?? "", slot: slot++ }),
                   } as any);
                 }
               }
@@ -1446,6 +1501,10 @@ async function executeMultiAngleCapture(
                     tetherLength,               // R170: ring-spread, PD max 5
                     tetherBaseWidth: 0.25,
                   },
+                  // R173: tag the transform so the toolbar show/hide toggle
+                  // and the next analysis's label replacement can find these
+                  // cells by tag (the bundle's addLabel forwards reprTags).
+                  reprTags: [AGENT_LABEL_TAG],
                 } as any);
               } catch (err) {
                 console.warn(
