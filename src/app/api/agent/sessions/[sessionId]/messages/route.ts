@@ -52,6 +52,20 @@ export async function POST(
     return NextResponse.json({ error: 'content is required' }, { status: 400 });
   }
 
+  // AG2-10: server-side payload cap — content was previously unbounded, so
+  // a single request could balloon the SQLite rows, the in-memory event
+  // log, and the LLM context (the client's own limits only guard the UI
+  // path).
+  const MAX_MESSAGE_CHARS = 50_000;
+  if (content.length > MAX_MESSAGE_CHARS) {
+    return NextResponse.json(
+      {
+        error: `content is too long (${content.length} chars); the maximum is ${MAX_MESSAGE_CHARS} characters`,
+      },
+      { status: 400 },
+    );
+  }
+
   // Queue the user follow-up.
   loop.followup(content);
 

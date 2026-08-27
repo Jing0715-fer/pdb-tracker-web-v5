@@ -46,7 +46,7 @@ import {
   removeMeasurementCells,
   clearAllMeasurements,
 } from "./commands/measurement-utils";
-import { restoreHiddenChains } from "./commands/recipe-viz";
+import { restoreHiddenChains, restoreHiddenNonPolymer, __resetVizMeasurementRefs } from "./commands/recipe-viz";
 import { getChainColorMap, getChainLabelColor } from "./commands/chain-colors";
 import { getLociCenter, getLabelSizeRatios } from "./commands/label-sizing";
 import { clearVizTransparency } from "./commands/cartoon-transparency";
@@ -141,6 +141,15 @@ export function __drainCaptureQueue(): void {
     __resetCameraState();
   } catch (err) {
     console.warn('[__drainCaptureQueue] could not reset camera state:', err);
+  }
+  // MOL2-08: also reset the recipe-viz measurement-ref tracking — the
+  // tracked refs belonged to the removed structure's state tree and
+  // would otherwise be re-counted as "leaked" cells by the next
+  // session's cleanup_previous (inflated leak logs).
+  try {
+    __resetVizMeasurementRefs();
+  } catch (err) {
+    console.warn('[__drainCaptureQueue] could not reset viz measurement refs:', err);
   }
   console.log('[__drainCaptureQueue] capture chain drained + camera state reset');
 }
@@ -570,7 +579,11 @@ export async function executeCommand(
         const targetLoci = await resolveInteractionsTarget(viewer, cmd.target);
         if (!targetLoci)
           return { ok: false, detail: "Could not resolve interactions target" };
-        await showInteractionsAround(plugin, targetLoci, radius);
+        // MOL2-04: showInteractionsAround now returns whether the neighborhood
+        // component was actually created — the old ok:true "Showing neighborhood
+        // within X Å" was reported even though the MolScript `within` query is
+        // unavailable on the prebuilt bundle and NOTHING was ever created.
+        const neighborhoodCreated = await showInteractionsAround(plugin, targetLoci, radius);
         // The prebuilt Molstar bundle does NOT export the ComputeContacts /
         // InteractionsShape transforms, so we cannot draw a true interaction
         // network overlay. Instead we (a) focus the camera on the target so
@@ -589,6 +602,12 @@ export async function executeCommand(
           }
         } catch (err) {
           console.warn('[show_interactions] focus best-effort failed:', err);
+        }
+        if (!neighborhoodCreated) {
+          return {
+            ok: false,
+            detail: `Could not create the ${radius} Å neighborhood view (no atoms found near the target, or the spatial lookup is unavailable) — use the Analysis charts for contact lists`,
+          };
         }
         return {
           ok: true,
@@ -1198,6 +1217,13 @@ async function executeMultiAngleCapture(
           // ref snapshot shape is unexpected.
           await clearAllMeasurements(plugin);
         }
+        // MOL2-08: the viz-added measurement refs (draw_interaction_lines /
+        // draw_pair_labels in recipe-viz) are part of the delta just removed
+        // (or of the cleared measurement group) — reset the tracking list so
+        // the NEXT analysis's cleanup_previous doesn't re-count the dead
+        // refs as "leaked" cells. Only done when this step succeeded: on a
+        // thrown error the tracking stays intact as the leak safety net.
+        __resetVizMeasurementRefs();
       }
     } catch (err) {
       console.warn("[capture_multi_angle] label cleanup failed:", err);
@@ -1235,6 +1261,12 @@ async function executeMultiAngleCapture(
     // (applied by the interactions-family recipe viz). The user's live view
     // must not stay semi-transparent after the analysis finishes.
     try { await clearVizTransparency(plugin); } catch (err) { console.warn('[capture_multi_angle] transparency restore failed:', err); }
+
+    // Step 2d — MOL2-01: restore the water/ligand components hidden by the
+    // recipe-viz hide_non_polymer step (un-hide the preset's own components,
+    // remove the stand-ins we created). Without this, one interactions-family
+    // analysis permanently removed ligands (HEM!) from the live view.
+    try { await restoreHiddenNonPolymer(plugin); } catch (err) { console.warn('[capture_multi_angle] non-polymer visibility restore failed:', err); }
 
     // R119: No background restore needed — we didn't change it (see above).
 

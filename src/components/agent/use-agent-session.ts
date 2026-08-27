@@ -427,10 +427,20 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
       }
       case 'tool/result': {
         const data = ev.data as { message: { content: ContentBlock[]; source: { kind: string; callId?: string } }; error?: { message: string } };
-        // Update the matching tool-call node by walking back to the FIRST
-        // tool-call node from the end. UI-015: build a REPLACEMENT node
-        // object instead of mutating the found node in place — keeps the
-        // projection immutable.
+        // Update the matching tool-call node by walking back through the
+        // tool-call nodes. UI-015: build a REPLACEMENT node object instead
+        // of mutating the found node in place — keeps the projection
+        // immutable.
+        //
+        // FE-01 (R172): the old loop unconditionally `break`-ed at the FIRST
+        // tool-call node from the end, whether the callId matched or not.
+        // With parallel tool calls the event order is callA, callB, resultA,
+        // resultB — processing resultA found callB first, the callId didn't
+        // match, and resultA was silently dropped. Live runs self-healed via
+        // the executionsRef re-projection, but replayed sessions (reload /
+        // history switch / fork — executionsRef empty) left every card except
+        // the last of a parallel batch spinning "pending" forever. Now we
+        // only stop when the callId matches and keep walking otherwise.
         for (let i = nodes.length - 1; i >= 0; i--) {
           const n = nodes[i]!;
           if (n.kind !== 'tool-call') continue;
@@ -481,8 +491,10 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
               result,
               durationMs,
             };
+            break; // matched this call's node — stop walking
           }
-          break; // first tool-call node from the end — matched or not
+          // Not this call's node — keep walking to find the right one
+          // (parallel tool calls interleave call/call/result/result).
         }
         break;
       }
@@ -943,6 +955,11 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   annotated.vlmResult = src.vlmResult;
                   annotated.vlmDurationMs = src.vlmDurationMs;
                   annotated.vlmError = src.vlmError;
+                  // FE-03 (R172): clear the pending flag on terminal paths —
+                  // it was previously never reset, so a failed VLM call left
+                  // the "VLM 分析中..." spinner spinning forever and
+                  // permanently shadowed the error branch.
+                  annotated.vlmPending = false;
                   setEvents((prev) => [...prev]);
                 }
               })();
@@ -1026,6 +1043,15 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 
                   const allScreenshots: CaptureScreenshot[] = [];
                   for (let pi = 0; pi < topPairs.length; pi++) {
+                    // MOL2-05 (R172): honor the session-change abort signal
+                    // BETWEEN per-pair captures — previously only the VLM call
+                    // was covered, so switching sessions mid-run kept firing
+                    // multi-second captures against a viewer whose structures
+                    // had just been removed.
+                    if (localController.signal.aborted) {
+                      console.log('[agent] pairwise capture aborted (session changed) — stopping after', allScreenshots.length, 'screenshots');
+                      break;
+                    }
                     const pair = topPairs[pi]!;
                     const pairTag = `${pair.chain1}-${pair.chain2}`;
                     // per-pair labels: surface this pair as top-level fields so
@@ -1053,7 +1079,16 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                       type: 'capture_multi_angle',
                       recipe: recipeName,
                       angles: pairAngles as never,
-                      vizParams: { ...analysisData, _pairIndex: pi } as never,
+                      // MOL2-07 (R172): pass the selected pair's chains
+                      // explicitly so recipe-viz resolves THIS pair by chain
+                      // identity instead of re-deriving the pool with a
+                      // slightly different fallback rule (client fallback =
+                      // in-contact-only unsorted; server fallback = ALL pairs
+                      // incl. non-contact) — the two pools could disagree when
+                      // no pair reached the significance threshold, focusing
+                      // the capture on a different interface than the one the
+                      // carousel/VLM report claimed.
+                      vizParams: { ...analysisData, _pairIndex: pi, _pairChains: [pair.chain1, pair.chain2] } as never,
                       labels: pairLabels,
                       labelFontSize: 0.5,
                     } as never);
@@ -1100,7 +1135,10 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                     }
                     try {
                       const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
-                      vlmResult = await selectBestWithRetry(allScreenshots, recipeName, analysisSummary);
+                      // MOL2-05 (R172): forward the abort signal so a session
+                      // switch also cancels the in-flight VLM call (previously
+                      // only the 90s fetch timeout bounded it).
+                      vlmResult = await selectBestWithRetry(allScreenshots, recipeName, analysisSummary, localController.signal);
                       if (!vlmResult) {
                         // R163: VLM unavailable — mark the result explicitly so
                         // the chat UI can flag "未经视觉验证"
@@ -1113,6 +1151,17 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   }
 
                   const captureDuration = Date.now() - captureStartTime;
+                  // FE-03 (R172): clear autoCapturePending on EVERY terminal
+                  // path of the pairwise branch — success, empty capture, and
+                  // error — so the "正在自动截图 + VLM 分析..." spinner can
+                  // never outlive the capture cycle.
+                  const finishPairwise = (patch: Partial<AnnotatedCaptureResult>) => {
+                    const exec = executionsRef.current.get(call.callId);
+                    if (exec?.result != null) {
+                      Object.assign(exec.result as AnnotatedCaptureResult, patch, { autoCapturePending: false });
+                      setEvents((prev) => [...prev]);
+                    }
+                  };
                   if (allScreenshots.length > 0) {
                     // UI-012: typed summary (was an `as any` literal).
                     const captureResult: AutoCaptureSummary = {
@@ -1127,11 +1176,12 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                       vlmError,
                       pairwisePairs: topPairs.map(p => ({ chain1: p.chain1, chain2: p.chain2, total: p.total })),
                     };
-                    const exec = executionsRef.current.get(call.callId);
-                    if (exec?.result != null) {
-                      (exec.result as AnnotatedCaptureResult).autoCapture = captureResult;
-                      setEvents((prev) => [...prev]);
-                    }
+                    finishPairwise({ autoCapture: captureResult });
+                  } else {
+                    // No screenshots captured (viewer empty / captures failed /
+                    // aborted early) — surface it via the error branch instead
+                    // of leaving the pending spinner up forever.
+                    finishPairwise({ autoCaptureError: localController.signal.aborted ? '会话已切换，截图中止' : '未捕获到截图' });
                   }
                   return; // skip the single-pair loop below
                 }
@@ -1210,9 +1260,12 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   }
 
                   // Update execution result + trigger UI re-render
+                  // FE-03 (R172): clear autoCapturePending alongside the
+                  // result so the spinner state can't outlive the capture.
                   const exec = executionsRef.current.get(call.callId);
                   if (exec?.result != null) {
                     (exec.result as AnnotatedCaptureResult).autoCapture = captureResult;
+                    (exec.result as AnnotatedCaptureResult).autoCapturePending = false;
                     setEvents((prev) => [...prev]);
                   }
                 }
@@ -1222,6 +1275,10 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 const exec = executionsRef.current.get(call.callId);
                 if (exec?.result != null) {
                   (exec.result as AnnotatedCaptureResult).autoCaptureError = captureErr instanceof Error ? captureErr.message : String(captureErr);
+                  // FE-03 (R172): clear the pending flag on the error path
+                  // too — it was dead code while the spinner condition kept
+                  // matching autoCapturePending && !autoCapture.
+                  (exec.result as AnnotatedCaptureResult).autoCapturePending = false;
                   setEvents((prev) => [...prev]);
                 }
               }

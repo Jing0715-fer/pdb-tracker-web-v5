@@ -63,15 +63,20 @@ export async function GET(
 
   try {
     // Fetch all annotation data in parallel
+    // API-10: 10s timeouts on all external fetches (merged with the
+    // existing next:{revalidate} cache config).
     const [bindingSitesRes, mutationsRes, secondaryStructureRes] = await Promise.all([
       fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/binding_sites/${lowerId}`, {
         next: { revalidate: 3600 },
+        signal: AbortSignal.timeout(10_000),
       }).catch(() => null),
       fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/mutated_residues/${lowerId}`, {
         next: { revalidate: 3600 },
+        signal: AbortSignal.timeout(10_000),
       }).catch(() => null),
       fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/secondary_structure/${lowerId}`, {
         next: { revalidate: 3600 },
+        signal: AbortSignal.timeout(10_000),
       }).catch(() => null),
     ]);
 
@@ -248,6 +253,7 @@ export async function GET(
         {
           headers: { 'Accept': 'application/json' },
           next: { revalidate: 3600 },
+          signal: AbortSignal.timeout(10_000),
         }
       );
 
@@ -267,6 +273,7 @@ export async function GET(
                 {
                   headers: { 'Accept': 'application/json' },
                   next: { revalidate: 3600 },
+                  signal: AbortSignal.timeout(10_000),
                 }
               );
               if (npRes.ok) {
@@ -308,6 +315,7 @@ export async function GET(
             {
               headers: { 'Accept': 'application/json' },
               next: { revalidate: 3600 },
+              signal: AbortSignal.timeout(10_000),
             }
           ).then(res => res.ok ? res.json() : null).catch(() => null);
         });

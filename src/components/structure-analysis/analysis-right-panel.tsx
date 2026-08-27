@@ -99,6 +99,14 @@ type RightTab = "results" | "chat" | "reports" | "entities" | "history";
 
 export function AnalysisRightPanel({ structureInfo }: { structureInfo?: StructureInfo | null }) {
   const [tab, setTab] = useState<RightTab>("reports");
+  // FE-02 (R172): once the user has opened the Chat tab, keep the panel
+  // MOUNTED for the rest of the analysis session (CSS-hidden when inactive).
+  // Unmounting it on every tab peek destroyed the live agent session, and
+  // the re-mount POSTed /api/agent/sessions to create a brand-new empty
+  // one — mid-conversation context vanished and the server accumulated
+  // orphan sessions. Lazily mounting (vs always mounting) preserves the
+  // original "no session until the user opens Chat" behavior.
+  const [chatMounted, setChatMounted] = useState(false);
   const activeAnalysisChart = useAppStore((s) => s.activeAnalysisChart);
   const setActiveAnalysisChart = useAppStore((s) => s.setActiveAnalysisChart);
   const saveSession = useAppStore((s) => s.saveSession);
@@ -178,7 +186,10 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
         </button>
         <button
           className={`sa-tab-btn ${tab === "chat" ? "sa-tab-active" : ""}`}
-          onClick={() => setTab("chat")}
+          onClick={() => {
+            setChatMounted(true); // FE-02: first open mounts; later switches keep it mounted
+            setTab("chat");
+          }}
         >
           <MessageSquare className="h-3 w-3" />
           Chat
@@ -245,13 +256,13 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
           )
         )}
         {tab === "reports" && <ReportsTab />}
-        {tab === "chat" && (
-          <div className="flex flex-col h-full min-h-0">
-            <div className="flex-1 min-h-0">
-              <AgentChatPanel />
-            </div>
+        {/* FE-02 (R172): lazily-mounted, then kept mounted (CSS-hidden)
+            while other tabs are active — see chatMounted above. */}
+        <div className={tab === "chat" ? "flex flex-col h-full min-h-0" : "hidden"}>
+          <div className="flex-1 min-h-0">
+            {chatMounted && <AgentChatPanel />}
           </div>
-        )}
+        </div>
         {tab === "entities" && <EntitiesTab structureInfo={structureInfo} />}
         {tab === "history" && <HistoryTab />}
       </div>

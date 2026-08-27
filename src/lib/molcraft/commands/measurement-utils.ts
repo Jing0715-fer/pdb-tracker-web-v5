@@ -111,9 +111,16 @@ export async function removeMeasurementCells(
     if (typeof builder?.delete !== "function" || typeof builder.commit !== "function") {
       return 0;
     }
+    // MOL2-08: `builder.delete(ref)` is a SILENT no-op for refs that no
+    // longer exist in the state tree — only count refs that are still
+    // present so the "removed N leaked measurement cells" logs reflect
+    // reality (previously every already-dead ref inflated the count and
+    // masked real leak detection).
+    const cells = (data as unknown as { cells?: { has?: (ref: string) => boolean } }).cells;
     let removed = 0;
     for (const ref of refs) {
       try {
+        if (cells && typeof cells.has === "function" && !cells.has(ref)) continue;
         builder.delete(ref);
         removed++;
       } catch {

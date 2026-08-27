@@ -2,11 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 
+export const runtime = 'nodejs';
+// API-04: 500 PMIDs = 10 esummary batches × (fetch + 400ms delay) — well under
+// this even with retries on slow NCBI responses.
+export const maxDuration = 120;
+
 // NCBI E-utilities rate limit: max 3 req/s without API key.
 // We batch PMIDs and add delays to stay safe.
 const NCBI_ESUMMARY = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi';
 const BATCH_SIZE = 50; // esummary supports up to 200, but we keep it conservative
 const DELAY_MS = 400; // delay between batches to respect rate limits
+/** API-04: cap the number of PMIDs processed per request. */
+const MAX_PUBMED_IDS = 500;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -67,11 +74,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No valid PubMed IDs provided' }, { status: 400 });
     }
 
+    // API-04: cap the number of PMIDs processed per request. Truncate (not
+    // reject) to stay non-breaking; the response notes the truncation.
+    const requestedCount = validIds.length;
+    const truncated = requestedCount > MAX_PUBMED_IDS;
+    const processedIds = truncated ? validIds.slice(0, MAX_PUBMED_IDS) : validIds;
+
     // Step 1: Check which IDs are already cached
     const cachedArticles = await db.$queryRaw<any[]>`
       SELECT "pubmedId", title, authors, abstract, journal
       FROM "PubMedArticle"
-      WHERE "pubmedId" IN (${Prisma.join(validIds)})
+      WHERE "pubmedId" IN (${Prisma.join(processedIds)})
     `;
 
     const cachedMap = new Map<string, PubmedArticle>();
@@ -85,7 +98,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const uncachedIds = validIds.filter((id) => !cachedMap.has(id));
+    const uncachedIds = processedIds.filter((id) => !cachedMap.has(id));
     const results: PubmedArticle[] = [...cachedMap.values()];
 
     // Step 2: Fetch uncached IDs from NCBI in batches
@@ -104,6 +117,10 @@ export async function POST(request: NextRequest) {
             headers: {
               'User-Agent': 'PDBStructureTracker/1.0 (contact@pdbtracker.app)',
             },
+            // API-04: hard timeout — a hung NCBI connection previously
+            // blocked this route indefinitely (src/lib/pubmed.ts already
+            // used AbortSignal.timeout on its own fetches).
+            signal: AbortSignal.timeout(30_000),
           });
 
           if (!response.ok) {
@@ -157,7 +174,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      total: validIds.length,
+      total: processedIds.length,
+      requested: requestedCount,
+      truncated,
       cached: cachedMap.size,
       fetched: results.length - cachedMap.size,
       articles: results,

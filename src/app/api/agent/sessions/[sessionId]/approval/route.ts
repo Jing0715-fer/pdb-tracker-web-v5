@@ -46,13 +46,18 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid decision' }, { status: 400 });
   }
 
+  // AG2-11: pass the sessionId so the resolution is scoped to THIS
+  // session — resolveApproval previously scanned all in-memory sessions
+  // for the callId, letting one session's route decide approvals (and
+  // append approval/decided events) in another session.
   const resolved = manager.resolveApproval(
+    sessionId,
     body.callId as CallId,
     body.decision as (typeof validDecisions)[number],
   );
   if (!resolved) {
     return NextResponse.json(
-      { error: 'No pending approval for that callId' },
+      { error: 'No pending approval for that callId in this session' },
       { status: 404 },
     );
   }

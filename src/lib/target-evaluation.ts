@@ -23,6 +23,7 @@
 import { db } from './db';
 import { safeJsonParse } from './utils';
 import { llmComplete, LlmConfig } from './llm';
+import { evalReportsDir, sanitizeReportFilenamePart } from './eval-report-paths';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,8 +52,9 @@ export interface EvaluationRunOptions {
    *  second stage of the same atomic task. Set to false to skip it and
    *  just do data-collection + scoring. */
   generateReport?: boolean;
-  /** When true (default), write the LLM report to:
-   *  /Users/lijing/Documents/my_note/LLM-Wiki/wiki/evaluations/{uid}_{name}_结构可行性评估.md */
+  /** When true (default), write the LLM report to the evaluation-reports
+   *  dir (see src/lib/eval-report-paths.ts — env override or
+   *  <writableRoot>/db/evaluation-reports). */
   saveReportFile?: boolean;
   /** Optional: coarse progress callback. */
   onStage?: (stage: string, detail?: string) => void;
@@ -826,7 +828,7 @@ export async function runTargetEvaluation(opts: EvaluationRunOptions): Promise<E
 export interface ReportRunOptions {
   uniprot: string;
   llm?: LlmConfig;
-  /** Also save to /Users/lijing/Documents/my_note/LLM-Wiki/wiki/evaluations/ */
+  /** Also save to the evaluation-reports dir (see evalReportsDir()). */
   saveToFile?: boolean;
 }
 
@@ -840,10 +842,23 @@ export interface ReportRunResult {
   error?: string;
 }
 
-const REPORT_DIR = '/Users/lijing/Documents/my_note/LLM-Wiki/wiki/evaluations';
+const REPORT_DIR = evalReportsDir();
 
 export async function generateEvaluationReport(opts: ReportRunOptions): Promise<ReportRunResult> {
   const uniprot = opts.uniprot.trim().toUpperCase();
+  // API-03: same strict format check as runTargetEvaluation. The
+  // report/run route validates at entry too, but this is the write path —
+  // uniprot ends up in a report filename, so defense in depth applies.
+  if (!/^[A-Z][A-Z0-9]{5}$/.test(uniprot)) {
+    return {
+      ok: false,
+      uniprot,
+      savedToFile: false,
+      content: '',
+      meta: { provider: 'none', model: 'none', durationMs: 0 },
+      error: 'Invalid UniProt ID format (expected 6-char alphanum like P00533)',
+    };
+  }
   const rows = await db.$queryRawUnsafe<any[]>(`SELECT * FROM Evaluation WHERE uniprotId = ?`, uniprot);
   if (!rows || rows.length === 0) {
     return {
@@ -993,7 +1008,9 @@ sources: []
   const content = r.ok && r.text ? r.text : fallback;
 
   const title = `Evaluation Report — ${uniprot} ${eval_.proteinName}`;
-  const filename = `${uniprot}_${(eval_.proteinName || 'protein').replace(/[\\/:*?"<>|\s]/g, '_')}_结构可行性评估.md`;
+  // API-03: sanitize the ENTIRE filename — previously only proteinName was
+  // scrubbed and uniprot (unvalidated on this path) went in raw.
+  const filename = `${sanitizeReportFilenamePart(uniprot)}_${sanitizeReportFilenamePart(eval_.proteinName || 'protein')}_结构可行性评估.md`;
 
   // Update Evaluation.report (the parent record).
   await db.$executeRawUnsafe(`UPDATE Evaluation SET report = ? WHERE uniprotId = ?`, content, uniprot);

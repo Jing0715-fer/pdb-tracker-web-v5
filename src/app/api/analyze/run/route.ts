@@ -138,6 +138,26 @@ export async function POST(req: NextRequest) {
     if (normalizedRecipe !== body.recipe) {
       console.warn(`[analyze/run] Normalized recipe "${body.recipe}" → "${normalizedRecipe}"`);
     }
+
+    // MOL2-06: body size cap for uploaded structure content. App Router route
+    // handlers have NO default request-body limit, so an unbounded
+    // `fileContent`/`fileContent2` was fully materialized in memory and then
+    // written to /tmp (the UI upload path is capped at 10MB — this guards the
+    // direct API path). 20M chars ≈ 20MB, larger than any realistic
+    // PDB/mmCIF entry.
+    const MAX_FILE_CONTENT_CHARS = 20_000_000;
+    for (const field of ["fileContent", "fileContent2"] as const) {
+      const v = body[field];
+      if (typeof v === "string" && v.length > MAX_FILE_CONTENT_CHARS) {
+        return NextResponse.json(
+          {
+            error: `\`${field}\` is too large (${v.length} chars > ${MAX_FILE_CONTENT_CHARS} ≈ 20MB). Pass a \`pdbId\` instead or upload a smaller file.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const recipe = getRecipe(normalizedRecipe);
     if (!recipe) {
       return NextResponse.json(

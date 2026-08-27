@@ -1399,12 +1399,14 @@ export function resolveLlmConfig(overrides?: LlmConfig): LlmConfig & { resolvedP
 export async function generateText(
   systemPrompt: string,
   userPrompt: string,
-  opts: { maxChars?: number; llm?: LlmConfig } = {},
+  opts: { maxChars?: number; llm?: LlmConfig; signal?: AbortSignal } = {},
 ): Promise<LlmResult> {
   const t0 = Date.now();
   const maxChars = opts.maxChars ?? 4000;
   const cfg = resolveLlmConfig(opts.llm);
-  const r = await callAnyLlm(userPrompt, { ...cfg, system: cfg.system || systemPrompt });
+  // API-05: forward caller cancellation (e.g. request.signal on client
+  // disconnect) so the underlying CLI child / SDK call is aborted.
+  const r = await callAnyLlm(userPrompt, { ...cfg, system: cfg.system || systemPrompt, signal: opts.signal });
   if (r.ok) {
     const content = (r.content || '').slice(0, maxChars);
     return {
@@ -1443,12 +1445,15 @@ export async function generatePaperDigest(title: string, pmid: string): Promise<
 
 async function callAnyLlm(
   prompt: string,
-  cfg: LlmConfig & { resolvedProvider: string; system: string },
+  cfg: LlmConfig & { resolvedProvider: string; system: string; signal?: AbortSignal },
 ): Promise<LlmResult> {
   const probes = await probeAll();
   const order = decideProviderOrder(cfg.resolvedProvider, cfg.model);
   const errors: string[] = [];
   for (const item of order) {
+    // API-05: caller cancelled (client disconnect) — stop walking the
+    // fallback chain; the whole call is dead.
+    if (cfg.signal?.aborted) break;
     const id = item.id;
     const via = item.via;
     if (id.startsWith('cli:')) {
@@ -1473,8 +1478,8 @@ async function callAnyLlm(
           : prompt;
         // Round 54: Pass sessionId to runCli so CLI agents can reuse sessions
         const text = via === 'wsl'
-          ? await runCliInWsl(adapter, probe.bin, fullPrompt, cfg.model, cfg.sessionId)
-          : await runCli(adapter, probe.bin, fullPrompt, cfg.model, cfg.sessionId);
+          ? await runCliInWsl(adapter, probe.bin, fullPrompt, cfg.model, cfg.sessionId, cfg.signal)
+          : await runCli(adapter, probe.bin, fullPrompt, cfg.model, cfg.sessionId, cfg.signal);
         return {
           ok: true,
           content: text,
@@ -1503,7 +1508,7 @@ async function callAnyLlm(
       if (!process.env.ANTHROPIC_API_KEY) { errors.push('anthropic: ANTHROPIC_API_KEY not set'); continue; }
       try {
         const t0 = Date.now();
-        const text = await callAnthropic(prompt, cfg.system, cfg.model);
+        const text = await callAnthropic(prompt, cfg.system, cfg.model, cfg.signal);
         return {
           ok: true,
           content: text,
@@ -1522,7 +1527,7 @@ async function callAnyLlm(
       if (!process.env.OPENAI_API_KEY) { errors.push('openai: OPENAI_API_KEY not set'); continue; }
       try {
         const t0 = Date.now();
-        const text = await callOpenai(prompt, cfg.system, cfg.model);
+        const text = await callOpenai(prompt, cfg.system, cfg.model, cfg.signal);
         return {
           ok: true,
           content: text,
@@ -1541,7 +1546,7 @@ async function callAnyLlm(
     if (id === 'zai') {
       try {
         const t0 = Date.now();
-        const text = await callZai(prompt, cfg.system, cfg.model);
+        const text = await callZai(prompt, cfg.system, cfg.model, cfg.signal);
         return {
           ok: true,
           content: text,
@@ -1610,7 +1615,7 @@ function computeCliTimeoutMs(adapter: CliAdapter, prompt: string): number {
   return Math.max(base, heuristic);
 }
 
-function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string | undefined, sessionId?: string): Promise<string> {
+function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string | undefined, sessionId?: string, signal?: AbortSignal): Promise<string> {
   // Round 56: Resolve the logical sessionId to an effective sid.
   // If SESSION_REGISTRY has a captured CLI session ID for this (logicalSid,
   // adapter.id) pair, pass `resume:<capturedId>` so the adapter switches to
@@ -1658,16 +1663,29 @@ function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string 
       reject(new Error(`${adapter.id} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
+    // API-05: caller cancellation (client disconnect) kills the child
+    // process instead of letting it run to completion for a dead client.
+    const onAbort = () => {
+      try { child.kill(); } catch {}
+      clearTimeout(killTimer);
+      cleanup();
+      reject(new Error(`${adapter.id} aborted (caller cancelled)`));
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
     child.stdout.on('data', (b) => { stdout += b.toString(); });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
 
     child.on('error', (err) => {
       clearTimeout(killTimer);
+      if (signal) signal.removeEventListener('abort', onAbort);
       cleanup();
       reject(new Error(`${adapter.id} spawn error: ${err?.message}`));
     });
     child.on('close', (code) => {
       clearTimeout(killTimer);
+      if (signal) signal.removeEventListener('abort', onAbort);
       // Prefer the file contents if we asked for an outputFile and it
       // was actually written. Fall back to stdout/stderr parsing.
       let cleaned = '';
@@ -1727,7 +1745,7 @@ function runCli(adapter: CliAdapter, bin: string, prompt: string, model: string 
   });
 }
 
-function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model: string | undefined, sessionId?: string): Promise<string> {
+function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model: string | undefined, sessionId?: string, signal?: AbortSignal): Promise<string> {
   // Round 56: Resolve the logical sessionId to an effective sid (same logic
   // as runCli — check SESSION_REGISTRY for a captured CLI session ID).
   const effectiveSid = adapter.parseSessionId
@@ -1751,11 +1769,20 @@ function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model:
       try { child.kill(); } catch {}
       reject(new Error(`${adapter.id} WSL timed out after ${totalTimeout}ms`));
     }, totalTimeout);
+    // API-05: caller cancellation kills the WSL child too.
+    const onAbort = () => {
+      try { child.kill(); } catch {}
+      clearTimeout(killTimer);
+      reject(new Error(`${adapter.id} WSL aborted (caller cancelled)`));
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout.on('data', (b) => { stdout += b.toString(); });
     child.stderr.on('data', (b) => { stderr += b.toString(); });
-    child.on('error', (err) => { clearTimeout(killTimer); reject(new Error(`${adapter.id} WSL spawn error: ${err?.message}`)); });
+    child.on('error', (err) => { clearTimeout(killTimer); if (signal) signal.removeEventListener('abort', onAbort); reject(new Error(`${adapter.id} WSL spawn error: ${err?.message}`)); });
     child.on('close', (code) => {
       clearTimeout(killTimer);
+      if (signal) signal.removeEventListener('abort', onAbort);
       const raw = (stdout + (stderr ? '\n' + stderr : '')).trim();
       const cleaned = adapter.stripBanner ? adapter.stripBanner(raw) : raw.trim();
       // Round 56: Capture the CLI session ID from the first call's output.
@@ -1779,34 +1806,106 @@ function runCliInWsl(adapter: CliAdapter, wslBin: string, prompt: string, model:
 
 // ─── SDK providers ────────────────────────────────────────────────────────────
 
-async function callAnthropic(prompt: string, system?: string, model?: string): Promise<string> {
+/**
+ * API-06: hard timeout for a single SDK LLM request. The VLM route got 55s
+ * per attempt in R165 (VLM-005) and the agent adapters got 120s in R168
+ * (AGENT-M6) — the run-center SDK branch (callAnthropic/callOpenai/callZai)
+ * previously had NO bound at all, so a hung provider connection blocked the
+ * provider fallback chain indefinitely.
+ */
+const SDK_CALL_TIMEOUT_MS = 90_000;
+
+/**
+ * API-06: combine a caller-provided abort signal with the hard SDK-call
+ * timeout into one signal + dispose pair. Prefers AbortSignal.any (Node 20+)
+ * semantics via manual listener wiring — same pattern as the VLM route's
+ * combineAbortSignals (R165/VLM-005) and src/lib/agent/llm/signal-utils.ts
+ * (R168/AGENT-M6), inlined here so src/lib/llm.ts stays decoupled from the
+ * agent subsystem.
+ */
+function withSdkTimeout(callerSignal: AbortSignal | undefined): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(
+      typeof DOMException === 'function'
+        ? new DOMException(`LLM SDK call timed out after ${SDK_CALL_TIMEOUT_MS}ms`, 'TimeoutError')
+        : new Error(`LLM SDK call timed out after ${SDK_CALL_TIMEOUT_MS}ms`)
+    );
+  }, SDK_CALL_TIMEOUT_MS);
+  const onCallerAbort = () => controller.abort(callerSignal?.reason);
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      controller.abort(callerSignal.reason);
+    } else {
+      callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort);
+    },
+  };
+}
+
+/**
+ * API-06: rejects with the signal's reason when it aborts, never resolves.
+ * Used to race unsignallable calls (the z-ai SDK's create() takes no
+ * AbortSignal — its internal fetch is unsignalled) against the timeout.
+ */
+function abortGuard(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new Error('aborted'));
+      return;
+    }
+    signal.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')), { once: true });
+  });
+}
+
+async function callAnthropic(prompt: string, system?: string, model?: string, signal?: AbortSignal): Promise<string> {
   const Anthropic = (await import('@anthropic-ai/sdk')).default;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
   const client = new Anthropic({ apiKey });
-  const resp = await client.messages.create({
-    model: model || 'claude-3-5-sonnet-latest',
-    max_tokens: 4096,
-    system: system || 'You are a helpful assistant.',
-    messages: [{ role: 'user', content: prompt }],
-  });
-  const block = resp.content?.[0];
-  return (block && block.type === 'text' ? block.text : '') || '';
+  // API-06: 90s hard timeout + caller cancellation — the Anthropic SDK
+  // forwards the signal and cancels the in-flight HTTP request.
+  const t = withSdkTimeout(signal);
+  try {
+    const resp = await client.messages.create({
+      model: model || 'claude-3-5-sonnet-latest',
+      max_tokens: 4096,
+      system: system || 'You are a helpful assistant.',
+      messages: [{ role: 'user', content: prompt }],
+    }, { signal: t.signal });
+    const block = resp.content?.[0];
+    return (block && block.type === 'text' ? block.text : '') || '';
+  } finally {
+    t.dispose();
+  }
 }
 
-async function callOpenai(prompt: string, system?: string, model?: string): Promise<string> {
+async function callOpenai(prompt: string, system?: string, model?: string, signal?: AbortSignal): Promise<string> {
   const OpenAI = (await import('openai')).default;
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY not set');
   const client = new OpenAI({ apiKey });
-  const resp = await client.chat.completions.create({
-    model: model || 'gpt-4o-mini',
-    messages: [
-      ...(system ? [{ role: 'system' as const, content: system }] : []),
-      { role: 'user' as const, content: prompt },
-    ],
-  });
-  return resp.choices?.[0]?.message?.content || '';
+  // API-06: 90s hard timeout + caller cancellation — the OpenAI SDK
+  // forwards the signal and cancels the in-flight HTTP request.
+  const t = withSdkTimeout(signal);
+  try {
+    const resp = await client.chat.completions.create({
+      model: model || 'gpt-4o-mini',
+      messages: [
+        ...(system ? [{ role: 'system' as const, content: system }] : []),
+        { role: 'user' as const, content: prompt },
+      ],
+    }, { signal: t.signal });
+    return resp.choices?.[0]?.message?.content || '';
+  } finally {
+    t.dispose();
+  }
 }
 
 /**
@@ -1817,7 +1916,7 @@ async function callOpenai(prompt: string, system?: string, model?: string): Prom
  * GLM models. No API key configuration needed — the SDK handles auth
  * internally. Intended for temporary LLM testing.
  */
-async function callZai(prompt: string, system?: string, model?: string): Promise<string> {
+async function callZai(prompt: string, system?: string, model?: string, signal?: AbortSignal): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   // Round 31: Reduced from 5 retries (10s+20s+40s+80s+160s = 310s total) to 2 retries
@@ -1829,13 +1928,27 @@ async function callZai(prompt: string, system?: string, model?: string): Promise
   const BASE_DELAY = 5_000; // 5s initial backoff for 429 errors
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const resp = await zai.chat.completions.create({
-        model: model || 'glm-4.6',
-        messages: [
-          ...(system ? [{ role: 'system' as const, content: system }] : []),
-          { role: 'user' as const, content: prompt }],
-        thinking: { type: 'disabled' as const },
-      });
+      // API-06: 90s hard timeout per attempt + caller cancellation. The z-ai
+      // SDK's create() takes no AbortSignal (its internal fetch is
+      // unsignalled), so the call is raced against the combined timeout —
+      // the underlying HTTP request may still finish in the background, but
+      // a hung call can no longer block the provider fallback chain.
+      const t = withSdkTimeout(signal);
+      let resp: any;
+      try {
+        resp = await Promise.race([
+          zai.chat.completions.create({
+            model: model || 'glm-4.6',
+            messages: [
+              ...(system ? [{ role: 'system' as const, content: system }] : []),
+              { role: 'user' as const, content: prompt }],
+            thinking: { type: 'disabled' as const },
+          }),
+          abortGuard(t.signal),
+        ]);
+      } finally {
+        t.dispose();
+      }
       return resp.choices?.[0]?.message?.content || '';
     } catch (err: any) {
       const is429 = err?.message?.includes('429') || err?.message?.includes('Too many');

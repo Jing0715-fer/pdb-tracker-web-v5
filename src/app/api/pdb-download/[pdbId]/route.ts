@@ -7,6 +7,15 @@ export async function GET(
   const { pdbId } = await params;
   const id = pdbId.toUpperCase();
 
+  // API-10: same 4-char format guard as pdb-image — prevents crafted IDs
+  // from reaching the RCSB download URL.
+  if (!/^[A-Za-z0-9]{4}$/.test(id)) {
+    return NextResponse.json(
+      { error: 'Invalid PDB ID format' },
+      { status: 400 }
+    );
+  }
+
   try {
     const url = `https://files.rcsb.org/download/${id}.cif`;
     const response = await fetch(url, {

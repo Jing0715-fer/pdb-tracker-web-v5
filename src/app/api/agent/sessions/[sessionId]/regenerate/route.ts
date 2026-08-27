@@ -45,6 +45,18 @@ export async function POST(
     return NextResponse.json({ error: 'Session not found' }, { status: 404 });
   }
 
+  // AG2-02: run the orphaned tool-call recovery BEFORE computing the
+  // replace range. If the client dropped mid-turn, drive()'s entry-point
+  // recovery would otherwise append synthesized tool/result events with
+  // seqs GREATER than the replaceEnd computed from the pre-recovery tail —
+  // those events escape the replace range while their parent assistant
+  // tool_calls message is dropped, leaving dangling tool messages on the
+  // surface and permanently breaking every subsequent LLM call
+  // (wire-format 400). Recovery is idempotent (drive() re-runs it as a
+  // no-op) and only appends tool/result + turn/end events, so the last
+  // user/message seq computed below is unaffected.
+  loop.recoverOrphans();
+
   // Find the last user/message event seq.
   const events = manager.getEvents(sessionId);
   let lastUserSeq = -1;

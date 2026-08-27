@@ -143,8 +143,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ pdb
     let primaryStatus: number | null = null;
 
     // Primary: interacting_residues API
+    // API-10: 10s timeouts on all three external fetches (merged with the
+    // existing next:{revalidate} cache config).
     try {
-      const res = await fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/interacting_residues/${upperId}`, { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 } });
+      const res = await fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/interacting_residues/${upperId}`, { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 }, signal: AbortSignal.timeout(10_000) });
       primaryStatus = res.status;
       if (res.ok) {
         const data = await res.json();
@@ -157,7 +159,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ pdb
     // Fallback 1: ligand_monomers
     if (contacts.length === 0) {
       try {
-        const ligRes = await fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/ligand_monomers/${upperId}`, { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 } });
+        const ligRes = await fetch(`https://www.ebi.ac.uk/pdbe/api/pdb/entry/ligand_monomers/${upperId}`, { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 }, signal: AbortSignal.timeout(10_000) });
         if (ligRes.ok) {
           const ligData = await ligRes.json();
           const ligEntry = ligData[upperId.toLowerCase()] ?? ligData[upperId] ?? null;
@@ -169,7 +171,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ pdb
     // Fallback 2: residue-interactions graph
     if (contacts.length === 0) {
       try {
-        const graphRes = await fetch(`https://www.ebi.ac.uk/pdbe/graph-api/molecules/${upperId}/residue-interactions`, { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 } });
+        const graphRes = await fetch(`https://www.ebi.ac.uk/pdbe/graph-api/molecules/${upperId}/residue-interactions`, { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 }, signal: AbortSignal.timeout(10_000) });
         if (graphRes.ok) {
           const graphData = await graphRes.json();
           const graphEntry = graphData[upperId.toLowerCase()] ?? graphData[upperId] ?? graphData;

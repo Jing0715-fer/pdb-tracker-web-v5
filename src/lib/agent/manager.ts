@@ -36,7 +36,14 @@ import { maybeGenerateTitle } from './session-title';
 export interface CreateSessionOptions {
   id?: string;
   title?: string;
-  agent?: Omit<AgentOptions, never>;
+  /**
+   * AG2-06: partial AgentOptions — the sessions API route validates the
+   * client's body.agent with the shared settings validator before passing
+   * it here. Fields omitted fall back to the manager defaults (previously
+   * a partial agent object REPLACED the defaults wholesale, leaving
+   * provider/model undefined).
+   */
+  agent?: Partial<AgentOptions>;
 }
 
 /** Pending approval awaiting a client decision. */
@@ -46,6 +53,12 @@ interface PendingApproval {
   signal: AbortSignal;
   /** R169 (AGENT-L5): the 5-min auto-cancel timer — cleared on normal resolution. */
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * AG2-13: full teardown — clears the timer AND detaches the abort
+   * listener from the loop controller's long-lived signal. Called on every
+   * settlement path (normal resolution, abort, timeout).
+   */
+  dispose: () => void;
 }
 
 const AGENT_SYSTEM_PROMPT_SECTIONS = [
@@ -94,6 +107,12 @@ export class AgentManager {
   private readonly eventLog = new Map<string, SessionEvent[]>();
   /** Per-session drive serialization: prevents concurrent drive() calls from corrupting loop state. */
   private readonly driveLocks = new Map<string, Promise<unknown>>();
+  /**
+   * AG2-08: per-session in-flight resume promise — concurrent cold-start
+   * requests share one resume instead of racing to build duplicate
+   * Session/AgentLoop pairs (see resumeSession).
+   */
+  private readonly resumingIds = new Map<string, Promise<{ sessionId: string; session: Session } | null>>();
   // R168 (AGENT-M1): idle-eviction bookkeeping. loops/sessions/eventLog were
   // only cleared by explicit deleteSession — every created/resumed session
   // was pinned forever (and events retain full multi-MB screenshot dataUris
@@ -101,7 +120,9 @@ export class AgentManager {
   // now evicted from MEMORY (DB rows survive; resumeSession restores on
   // demand via ensureSession).
   private readonly lastActivity = new Map<string, number>();
-  private readonly evictTimer: ReturnType<typeof setInterval> | null = null;
+  // Assigned lazily in startEvictor() (called from the constructor), so it
+  // cannot be `readonly` while keeping the lazy-init guard.
+  private evictTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly IDLE_EVICT_MS = 30 * 60 * 1000;
   private static readonly EVICT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -173,21 +194,38 @@ export class AgentManager {
     approval.setResolver(async (req) => {
       return await new Promise<ApprovalOutcome>((resolve, reject) => {
         // Auto-reject if the client never responds within 5 minutes.
-        const timeout = setTimeout(() => {
+        // AG2-13: teardown mirrors the AGENT-M8 pattern — previously ONLY
+        // the abort and timeout paths cleaned up after themselves; a NORMAL
+        // resolution (via resolveApproval) cleared the timer (AGENT-L5) but
+        // left the {once:true} abort listener attached to the loop
+        // controller's long-lived signal — one listener + closure per
+        // approval. dispose() is stored on the PendingApproval so
+        // resolveApproval can tear both down on every path.
+        let settled = false;
+        const settleCancelled = (): void => {
+          if (settled) return;
+          settled = true;
           if (this.approvals.has(req.callId)) {
             this.approvals.delete(req.callId);
             resolve('cancelled');
           }
+        };
+        let onAbort: () => void = () => {};
+        const timer = setTimeout(() => {
+          dispose();
+          settleCancelled();
         }, 5 * 60 * 1000);
-        this.approvals.set(req.callId, { resolve, reject, signal: req.signal, timer: timeout });
         // Also reject if the abort signal fires (session cancelled/deleted).
-        req.signal.addEventListener('abort', () => {
-          clearTimeout(timeout);
-          if (this.approvals.has(req.callId)) {
-            this.approvals.delete(req.callId);
-            resolve('cancelled');
-          }
-        });
+        onAbort = () => {
+          dispose();
+          settleCancelled();
+        };
+        const dispose = (): void => {
+          clearTimeout(timer);
+          req.signal.removeEventListener('abort', onAbort);
+        };
+        this.approvals.set(req.callId, { resolve, reject, signal: req.signal, timer, dispose });
+        req.signal.addEventListener('abort', onAbort, { once: true });
       });
     });
 
@@ -297,10 +335,16 @@ export class AgentManager {
     const defaultModel = defaultProfile
       ? (getProviderConfig(defaultProviderId).defaultModel ?? defaultProfile.defaultModel)
       : 'glm-4.6';
-    const loop = new AgentLoop(this.ctx, session, opts.agent ?? {
-      provider: defaultProviderId,
-      model: defaultModel,
-      maxStepsPerTurn: 10,
+    // AG2-06: merge the (route-validated) partial agent options over the
+    // defaults instead of replacing them — a partial body.agent previously
+    // left provider/model undefined whenever the caller omitted them.
+    // Nullish-aware so explicit undefined fields still fall back.
+    const loop = new AgentLoop(this.ctx, session, {
+      provider: opts.agent?.provider ?? defaultProviderId,
+      model: opts.agent?.model ?? defaultModel,
+      temperature: opts.agent?.temperature,
+      maxTokens: opts.agent?.maxTokens,
+      maxStepsPerTurn: opts.agent?.maxStepsPerTurn ?? 10,
     });
     this.sessions.set(id, session);
     this.loops.set(id, loop);
@@ -402,11 +446,11 @@ export class AgentManager {
   /**
    * Resolve a pending approval (called by the API layer when client decides).
    * R164 (AGENT-001): also append an `approval/decided` session event so
-   * the tool-results route's security gate (tool-results/route.ts:55-76)
-   * can verify the approval happened. Without this event, the gate
-   * rejects the tool result with 403 "Tool requires approval before
-   * results can be submitted" — even though the user already clicked
-   * Allow in the ApprovalPanel.
+   * the tool-results route's security gate (tool-results/route.ts) can
+   * verify the approval happened. Without this event, the gate rejects
+   * the tool result with 403 "Tool requires approval before results can
+   * be submitted" — even though the user already clicked Allow in the
+   * ApprovalPanel.
    *
    * Works for BOTH client-side approval-required tools (export_snapshot,
    * clear_chat — never reach server-side dispatch, so no pending promise
@@ -416,44 +460,45 @@ export class AgentManager {
    * record the decision; for server-side tools, we also resolve the
    * pending promise so the dispatch can continue.
    *
-   * @returns true if either a pending promise was resolved OR the
-   *   approval/decided event was newly appended (i.e. the callId is
-   *   known to require approval). Returns false only if the callId is
-   *   unknown AND no event could be appended.
+   * AG2-11: the resolution is SCOPED to the requested session. The
+   * previous implementation scanned ALL in-memory sessions for the callId,
+   * so session A's /approval route could append approval/decided into —
+   * and resolve pending promises belonging to — session B. Now the callId
+   * must exist as a tool/call in THIS session, otherwise the caller gets
+   * a 404 (no cross-session interference; callIds are per-session tool
+   * calls).
+   *
+   * @returns true if the session has a tool/call with this callId (the
+   *   approval/decided event was appended, and any pending promise for it
+   *   was resolved). Returns false if the session is unknown or the
+   *   callId is not one of its tool calls.
    */
-  resolveApproval(callId: CallId, outcome: ApprovalOutcome): boolean {
+  resolveApproval(sessionId: string, callId: CallId, outcome: Exclude<ApprovalOutcome, 'unavailable'>): boolean {
+    // AG2-11: scope the scan to the REQUESTED session only.
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const hasCall = session.events_.some(
+      (ev) => ev.type === 'tool/call' && (ev.data as { callId: string }).callId === callId,
+    );
+    if (!hasCall) return false;
+
     const pending = this.approvals.get(callId);
     if (pending) {
       this.approvals.delete(callId);
-      // R169 (AGENT-L5): clear the 5-min auto-cancel timer — it previously
-      // stayed scheduled after normal resolution and fired later as a no-op.
-      clearTimeout(pending.timer);
+      // R169 (AGENT-L5) + AG2-13: full teardown — clears the 5-min
+      // auto-cancel timer AND detaches the abort listener (previously the
+      // timer was cleared but the listener leaked; see the resolver).
+      pending.dispose();
       pending.resolve(outcome);
     }
     // R164 (AGENT-001): ALWAYS append the approval/decided event so the
-    // tool-results route's security gate finds it. Look up the session
-    // by scanning the in-memory sessions for one that has this callId
-    // in its tool/call events.
-    let appended = false;
-    for (const [sessionId, session] of this.sessions.entries()) {
-      // Check if this session has a tool/call with this callId.
-      const hasCall = session.events_.some(
-        (ev) => ev.type === 'tool/call' && (ev.data as { callId: string }).callId === callId,
-      );
-      if (hasCall) {
-        session.append('approval/decided', {
-          callId,
-          decision: outcome,
-        });
-        appended = true;
-        console.log(`[agent-manager] R164 (AGENT-001): appended approval/decided { callId: ${callId}, decision: ${outcome} } to session ${sessionId}`);
-        break;
-      }
-    }
-    // Return true if we either resolved a pending promise OR appended
-    // the event. The /approval route uses this to decide whether to
-    // return 404 (unknown callId) or 200 (resolved).
-    return pending !== undefined || appended;
+    // tool-results route's security gate finds it — in THIS session.
+    session.append('approval/decided', {
+      callId,
+      decision: outcome,
+    });
+    console.log(`[agent-manager] R164 (AGENT-001): appended approval/decided { callId: ${callId}, decision: ${outcome} } to session ${sessionId}`);
+    return true;
   }
 
   getEvents(sessionId: string): SessionEvent[] {
@@ -464,6 +509,15 @@ export class AgentManager {
    * Resume a session from persistence. Loads events from the DB, rebuilds
    * the in-memory Session + AgentLoop, and returns the sessionId. If the
    * session is already live in memory, returns it as-is.
+   *
+   * AG2-08: concurrent cold-starts (the SSE route's ensureSession racing
+   * POST /messages' getLoop→resume after an R168-M1 idle eviction) both
+   * passed the `sessions.get` check-then-act and each built its own
+   * Session/AgentLoop — the second `loops.set` orphaned the first loop, so
+   * a followup enqueued on the orphan was never driven (user message
+   * silently lost) and settings POSTs wrote into the orphan session.
+   * An in-flight promise map now de-duplicates concurrent resumes: every
+   * concurrent caller awaits and receives the SAME loop.
    */
   async resumeSession(sessionId: string): Promise<{ sessionId: string; session: Session } | null> {
     // Already live in memory?
@@ -471,6 +525,17 @@ export class AgentManager {
     if (existing) {
       return { sessionId, session: existing };
     }
+    const inFlight = this.resumingIds.get(sessionId);
+    if (inFlight) return inFlight;
+    const resumed = this.doResumeSession(sessionId).finally(() => {
+      this.resumingIds.delete(sessionId);
+    });
+    this.resumingIds.set(sessionId, resumed);
+    return resumed;
+  }
+
+  /** AG2-08: the actual resume work — single-flight via resumeSession(). */
+  private async doResumeSession(sessionId: string): Promise<{ sessionId: string; session: Session } | null> {
     const row = await getSessionRow(sessionId);
     if (!row) return null;
     const events = await loadSessionEvents(sessionId);

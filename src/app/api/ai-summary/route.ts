@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { llmComplete } from '@/lib/llm';
+import { checkLlmRateLimit, getClientKey, rateLimitResponse } from '@/lib/llm-rate-limit';
 
 export async function POST(request: NextRequest) {
+  // API-05: 10 req/min sliding-window rate limit (same pattern as the VLM
+  // route, R165/VLM-006). No auth in this sandbox app — this is the only
+  // guard against a caller draining the LLM quota.
+  const rate = checkLlmRateLimit('ai-summary', getClientKey(request));
+  if (!rate.allowed) {
+    return rateLimitResponse('ai-summary', rate.retryAfterSec);
+  }
+
   try {
     const body = await request.json();
     const { pdbId, title, method, resolution, journal, journalIf, organisms, ligands } = body;

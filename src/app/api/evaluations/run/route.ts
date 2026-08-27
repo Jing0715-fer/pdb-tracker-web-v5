@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server';
 import { sseStream, sleep, type SseEvent } from '@/lib/sse';
 import { generateText } from '@/lib/llm';
 import { buildReportSystemPrompt, buildReportUserPrompt, buildDetailedPdbTable, buildDetailedBlastTable, buildChapterPrompt, buildChapterSystemPrompt, validateChapterContent, normalizeEvalChapterContent, type ReportChapterKey, type StructureAnalysisData } from '@/lib/report-template';
@@ -15,6 +16,15 @@ import { JOURNAL_IF_MAP } from '@/lib/journal-if-map';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** API-01: max targets per batch run — each target fans out to RCSB + BLAST +
+ *  LLM calls, so an unbounded targets[] is an unauthenticated external-API
+ *  storm (the per-target loop near the end of this route iterates them all). */
+const MAX_TARGETS = 20;
+/** API-01: clamp for maxPdb (RCSB detail fetches per target). */
+const MAX_PDB_CAP = 200;
+/** API-01: clamp for maxBlastHits (NCBI BLAST result rows). */
+const MAX_BLAST_HITS_CAP = 100;
 
 /**
  * Backfill PubMedArticle table with metadata for any pubmedIds found in the
@@ -271,13 +281,23 @@ export async function POST(req: Request) {
   // When targets[] is present, use the first target's params for the primary
   // evaluation. Batch mode iterates over all targets after the primary.
   const targets: Array<{ uniprot: string; forceBlast?: boolean; skipBlast?: boolean; maxPdb?: number; maxBlastHits?: number }> = Array.isArray(body.targets) ? body.targets : [];
+  // API-01: cap the batch size before any external API / LLM work starts.
+  if (targets.length > MAX_TARGETS) {
+    return NextResponse.json(
+      { error: `Too many targets: ${targets.length} (max ${MAX_TARGETS}). Split the batch into smaller runs.` },
+      { status: 400 },
+    );
+  }
   const primaryTarget = targets[0] || {};
   const uniprot = (body.uniprot || primaryTarget.uniprot || 'P00533').trim().toUpperCase();
   const forceBlast = !!(body.forceBlast ?? primaryTarget.forceBlast);
   const skipBlast = !!(body.skipBlast ?? primaryTarget.skipBlast);
-  const maxPdb = Number(body.maxPdb ?? primaryTarget.maxPdb ?? 80);
+  // API-01: upper-clamp the request-driven external-API fan-out (same clamp
+  // style as maxLitCount below — clamp, don't reject, for consistency).
+  const maxPdb = Math.max(0, Math.min(MAX_PDB_CAP, Number(body.maxPdb ?? primaryTarget.maxPdb ?? 80)));
   // BLAST homolog cap. Default 50 (NCBI BLAST pdbaa typical sensible max). UI-configurable.
-  const maxBlastHits = Number(body.maxBlastHits ?? primaryTarget.maxBlastHits ?? body.maxBlast ?? 50);
+  // API-01: clamped to MAX_BLAST_HITS_CAP.
+  const maxBlastHits = Math.max(0, Math.min(MAX_BLAST_HITS_CAP, Number(body.maxBlastHits ?? primaryTarget.maxBlastHits ?? body.maxBlast ?? 50)));
   // Literature cap for LLM prompt context (PubMed articles surfaced alongside PDB details).
   // Default 20. UI-configurable. Papers beyond this are filtered by journal IF desc.
   const maxLitCount = Math.max(0, Math.min(200, Number(body.maxLitCount ?? 20)));
@@ -1879,7 +1899,8 @@ ${overlapSummary}${crossLitBlock}
           try {
             const bMeta = await fetchUniprotMeta(bUid);
             const bInfo = bMeta ? { uniprotId: bUid, entryName: bMeta.entryName, proteinName: bMeta.proteinName, geneNames: bMeta.geneNames || '—', organism: bMeta.organism || '—', sequenceLength: bMeta.sequenceLength || 0 } : { uniprotId: bUid, entryName: bUid, proteinName: `Unknown`, geneNames: '—', organism: '—', sequenceLength: 0 };
-            const bMaxPdb = bt.maxPdb || maxPdb;
+            // API-01: per-target maxPdb gets the same 200 cap as the global one.
+            const bMaxPdb = Math.min(bt.maxPdb || maxPdb, MAX_PDB_CAP);
             const bSkipBlast = !!(bt.skipBlast ?? skipBlast);
             const bForceBlast = !!(bt.forceBlast ?? forceBlast);
             const bPdbIds = await fetchPdbIdsForUniprot(bUid, bMaxPdb);

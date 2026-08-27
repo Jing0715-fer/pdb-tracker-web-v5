@@ -19,9 +19,19 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { generateText, resolveLlmConfig, type LlmConfig } from '@/lib/llm';
+import { checkLlmRateLimit, getClientKey, rateLimitResponse } from '@/lib/llm-rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
+
+/** API-05: max analysis results folded into the prompt (each carries up to
+ *  2000 chars of JSON — the count was previously uncapped). */
+const MAX_ANALYSIS_RESULTS = 20;
+/** API-05: cap per history message (m.content was previously uncapped). */
+const MAX_MESSAGE_CHARS = 50_000;
+/** API-05: cap on the total assembled user prompt (~200k chars keeps us well
+ *  under CLI argv limits and bounds token spend). */
+const MAX_PROMPT_CHARS = 200_000;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -101,6 +111,14 @@ User: "Load 6LU7 and analyze the ligand binding pocket"
 Assistant: { "reply": "Loading 6LU7 and analyzing the ligand binding pocket.", "commands": [ {"type":"load_pdb","id":"6LU7"}, {"type":"analyze_run","pdbId":"6LU7","recipe":"hbonds","params":{"chain1":"A","chain2":"A"}}, {"type":"analyze_run","pdbId":"6LU7","recipe":"salt_bridges","params":{"chain1":"A","chain2":"A"}}, {"type":"focus_ligand","compId":"ligand"} ], "continueAfterAnalysis": true }`;
 
 export async function POST(request: NextRequest) {
+  // API-05: 10 req/min sliding-window rate limit (same pattern as the VLM
+  // route, R165/VLM-006). No auth in this sandbox app — this is the only
+  // guard against a caller draining the LLM quota.
+  const rate = checkLlmRateLimit('llm-chat', getClientKey(request));
+  if (!rate.allowed) {
+    return rateLimitResponse('llm-chat', rate.retryAfterSec);
+  }
+
   try {
     const body = (await request.json()) as ChatRequestBody;
     const { messages, context, provider } = body;
@@ -134,10 +152,13 @@ export async function POST(request: NextRequest) {
       sessionId: chatSessionId,
     };
 
-    // Call the LLM via the run-center provider system.
+    // Call the LLM via the run-center provider system. API-05: forward the
+    // request signal so a client disconnect aborts the underlying CLI/SDK
+    // call instead of running it to completion for a dead connection.
     const r = await generateText(SYSTEM_PROMPT, userPrompt, {
       maxChars: 8000,
       llm: cfg,
+      signal: request.signal,
     });
 
     if (!r.ok) {
@@ -245,10 +266,17 @@ function buildUserPrompt(messages: ChatMessage[], context?: ChatContext): string
     parts.push('[Context] No structures currently loaded.');
   }
 
-  // Context: analysis results from previous round (ReAct feedback)
+  // Context: analysis results from previous round (ReAct feedback).
+  // API-05: cap the count (last 20) — analysisResults is client-controlled
+  // and each entry can carry ~2KB of JSON, so an uncapped array could
+  // assemble a multi-MB prompt.
   if (context?.analysisResults && context.analysisResults.length > 0) {
-    parts.push(`[Analysis results from previous commands]`);
-    for (const r of context.analysisResults) {
+    const recentResults = context.analysisResults.slice(-MAX_ANALYSIS_RESULTS);
+    const note = context.analysisResults.length > recentResults.length
+      ? ` (showing last ${recentResults.length} of ${context.analysisResults.length})`
+      : '';
+    parts.push(`[Analysis results from previous commands]${note}`);
+    for (const r of recentResults) {
       const dataStr = r.data ? JSON.stringify(r.data).slice(0, 2000) : '';
       parts.push(
         `  ${r.type}: ${r.ok ? 'OK' : 'FAILED'}${r.detail ? ` — ${r.detail}` : ''}${
@@ -262,12 +290,21 @@ function buildUserPrompt(messages: ChatMessage[], context?: ChatContext): string
   const recent = messages.slice(-10);
   parts.push(`[Conversation history]`);
   for (const m of recent) {
-    parts.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
+    // API-05: cap each message's content — m.content was previously uncapped.
+    const content = (m.content || '').length > MAX_MESSAGE_CHARS
+      ? `${(m.content || '').slice(0, MAX_MESSAGE_CHARS)} …[truncated]`
+      : (m.content || '');
+    parts.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${content}`);
   }
 
   parts.push(
     `\nRespond with JSON per the system prompt. If the user's request requires loading a structure or running an analysis, include the appropriate commands and set continueAfterAnalysis if you need the results.`
   );
 
-  return parts.join('\n');
+  // API-05: final hard cap on the assembled prompt.
+  const prompt = parts.join('\n');
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return `${prompt.slice(0, MAX_PROMPT_CHARS)}\n…[prompt truncated to ${MAX_PROMPT_CHARS} chars to stay within size limits]`;
+  }
+  return prompt;
 }

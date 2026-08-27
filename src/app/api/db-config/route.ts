@@ -28,7 +28,7 @@ import {
 } from '@/lib/db'
 import { db } from '@/lib/db'
 import { ensureSchemaCompat, type SchemaCompatResult } from '@/lib/schema-compat'
-import { dbConfigFile, defaultTestDbPath, writableRoot } from '@/lib/paths'
+import { dbConfigFile, dbDir, defaultTestDbPath, writableRoot } from '@/lib/paths'
 
 const execAsync = promisify(exec)
 const CONFIG_FILE = dbConfigFile()
@@ -149,6 +149,29 @@ async function prepareSchema(
   return { compat, initSchema: initResult, warnings: Array.from(new Set(warnings)) }
 }
 
+/**
+ * API-02: peek at an existing file to decide whether it is safe to truncate.
+ * Returns null when the file doesn't exist or is empty (both safe to create
+ * over); otherwise returns its size and whether it starts with the SQLite
+ * magic header (first 16 bytes).
+ */
+async function readExistingHeader(fsPath: string): Promise<{ size: number; isSqlite: boolean } | null> {
+  try {
+    const fh = await fs.open(fsPath, 'r')
+    try {
+      const { size } = await fh.stat()
+      if (size === 0) return null
+      const header = Buffer.alloc(16)
+      await fh.read(header, 0, 16, 0)
+      return { size, isSqlite: header.toString('latin1').startsWith('SQLite format 3') }
+    } finally {
+      await fh.close()
+    }
+  } catch {
+    return null // doesn't exist (or unreadable) — treat as creatable
+  }
+}
+
 /** Quick row counts on the active DB to surface in the UI. */
 async function sampleCounts(): Promise<Record<string, number>> {
   try {
@@ -252,16 +275,46 @@ export async function POST(request: NextRequest) {
     const normalizedUrl = normalizeDbUrl(rawPath)
     const fsPath = normalizedUrl.replace(/^file:/, '')
 
+    // ── API-02: anchor the path ──────────────────────────────────────────
+    // The POST body's dbPath is fully client-controlled and is used for
+    // fs.mkdir + fs.writeFile(Buffer.alloc(0)) + `bunx prisma db push
+    // --accept-data-loss` — before this check, create:true zeroed ANY
+    // absolute path (arbitrary file truncation primitive). Require the
+    // resolved target to be a `.db` file INSIDE the app's own db/ directory
+    // (writableRoot()/db in dev, userData/db in the packaged app — the same
+    // anchor the default test DB uses).
+    const dbRoot = dbDir()
+    const resolvedFsPath = path.resolve(fsPath)
+    if (
+      !resolvedFsPath.endsWith('.db') ||
+      !(resolvedFsPath === dbRoot || resolvedFsPath.startsWith(dbRoot + path.sep))
+    ) {
+      return NextResponse.json({
+        error: `dbPath must be a .db file inside the app database directory (${dbRoot}). Received: ${fsPath}`,
+        dbDir: dbRoot,
+      }, { status: 400 })
+    }
+
     // If create=true, create a TRULY NEW empty file. If the file already
     // exists (e.g. from a previous run), we overwrite it with an empty file
     // so the user gets a fresh database — this is the expected behavior when
     // they explicitly click "Create new database" in the wizard.
     if (create) {
-      await fs.mkdir(path.dirname(fsPath), { recursive: true })
+      // API-02: refuse to zero out an existing non-empty file that is not a
+      // SQLite database — a mistyped path must not truncate arbitrary user
+      // data (e.g. a document that happens to live under db/).
+      const existing = await readExistingHeader(resolvedFsPath)
+      if (existing && !existing.isSqlite) {
+        return NextResponse.json({
+          error: `Refusing to overwrite ${resolvedFsPath}: file exists, is non-empty (${existing.size} bytes), and is not a SQLite database`,
+          fsPath: resolvedFsPath,
+        }, { status: 400 })
+      }
+      await fs.mkdir(path.dirname(resolvedFsPath), { recursive: true })
       // Overwrite with empty file — prisma db push will create the schema.
       // The user explicitly asked for a NEW database, so any existing data
       // in this file is replaced.
-      await fs.writeFile(fsPath, Buffer.alloc(0))
+      await fs.writeFile(resolvedFsPath, Buffer.alloc(0))
     } else {
       // Switching to an existing path — verify it exists.
       const fileExists = await fs.access(fsPath).then(() => true).catch(() => false)

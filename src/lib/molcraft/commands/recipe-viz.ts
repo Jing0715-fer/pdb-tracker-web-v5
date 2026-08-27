@@ -297,6 +297,93 @@ export async function restoreHiddenChains(plugin: MolstarPlugin): Promise<void> 
   }
 }
 
+// ============================================================================
+// MOL2-01: non-polymer (water/ligand) visibility lifecycle.
+//
+// The default representation preset creates its OWN static water/ligand
+// components (with ball-and-stick representations attached, and labeled
+// "Water"/"Ligand" by the StructureComponent transform itself). The old
+// R156 hide step passed `tags: ['water-hide'/'ligand-hide']` to
+// tryCreateComponentStatic — applyOrUpdateTagged(keyTag) MERGED those tags
+// into the preset's own component, and cleanup_previous then deleted cells
+// BY TAG (and by the "Water"/"Ligand" labels), destroying the preset
+// components entirely. A rebuilt static component carries NO
+// representations, so after one interactions-family analysis the ligands
+// (HEM!) vanished from the live view and could never be re-shown.
+//
+// Now: hide the EXISTING component in place (hierarchy.toggleVisibility +
+// snapshot of its previous isHidden — same pattern as snapshotMeasurementRefs
+// / the viz-chain stand-ins above), and only create a TAG-LESS stand-in when
+// the preset has no such component (tracked by ref for deletion). Restore
+// (restoreHiddenNonPolymer) is the exact mirror image and NEVER deletes
+// preset cells.
+// ============================================================================
+interface HiddenNonPolymerEntry {
+  /** State-tree ref of the component we hid. */
+  ref: string;
+  /** Whether the component was already hidden BEFORE we touched it. */
+  wasHidden: boolean;
+  /** True when WE created the component (stand-in) — deleted on restore. */
+  created: boolean;
+}
+let vizHiddenNonPolymer: HiddenNonPolymerEntry[] = [];
+
+/**
+ * MOL2-01: restore the water/ligand components hidden by the hide_non_polymer
+ * step — un-hide the preset's own components (respecting their pre-analysis
+ * isHidden snapshot) and remove the stand-ins we created. Safe no-op when
+ * nothing was hidden; drains the tracking list either way so stale entries
+ * never accumulate across structures/sessions.
+ */
+export async function restoreHiddenNonPolymer(plugin: MolstarPlugin): Promise<void> {
+  if (vizHiddenNonPolymer.length === 0) return;
+  const tracked = vizHiddenNonPolymer;
+  vizHiddenNonPolymer = [];
+  try {
+    const structs = getStructures(plugin, undefined);
+    for (const s of structs) {
+      const sr = s as any;
+      // Collect FIRST, act AFTER — removing from sr.components while
+      // iterating it would skip entries (array shifts under for...of).
+      const toRemove: any[] = [];
+      const toShow: any[] = [];
+      for (const c of (sr.components ?? [])) {
+        const ref = c?.cell?.transform?.ref;
+        if (!ref) continue;
+        const entry = tracked.find((t) => t.ref === ref);
+        if (!entry) continue;
+        if (entry.created) {
+          // Stand-in we created because the preset had no such component —
+          // remove it so the state tree returns to its pre-analysis shape.
+          toRemove.push(c);
+        } else if (!entry.wasHidden) {
+          // Preset component we hid — bring back its representations.
+          toShow.push(c);
+        }
+      }
+      for (const c of toRemove) {
+        try { (plugin.managers.structure.hierarchy as any).remove([c], true); } catch { /* ignore */ }
+      }
+      if (toShow.length > 0) {
+        plugin.managers.structure.hierarchy.toggleVisibility(toShow, "show");
+      }
+    }
+    await nextFrame();
+  } catch (err) {
+    console.warn("[viz:hide] non-polymer restore failed:", err);
+  }
+}
+
+/**
+ * MOL2-08: clear the viz-added measurement ref tracking. Called by
+ * cleanupCapture after the refs were successfully removed and by
+ * __drainCaptureQueue on structure clear — without this, the next run's
+ * cleanup_previous re-counted already-dead refs as "leaked" cells.
+ */
+export function __resetVizMeasurementRefs(): void {
+  vizAddedMeasurementRefs = [];
+}
+
 /**
  * R164 (MOL-005): deep-clone viz params before use.
  *
@@ -490,8 +577,27 @@ export async function applyRecipeVisualization(
               .filter(p => p.in_contact !== false && (Number(p.total ?? 0) || 0) > 0)
               .sort((a, b) => (Number(b.total ?? 0) || 0) - (Number(a.total ?? 0) || 0));
             const pool = significant.length > 0 ? significant : pairs;
-            const pairIndex = Number((params as any)?._pairIndex ?? 0);
-            const best = pool[Math.min(Math.max(pairIndex, 0), pool.length - 1)]!;
+            // MOL2-07 (R172): prefer resolving the pair by EXPLICIT chain
+            // identity (_pairChains from the client's own pool). The client
+            // fallback pool (in-contact-only, unsorted) and this server pool
+            // (ALL pairs incl. non-contact, sorted) could disagree when no
+            // pair reached the significance threshold — index-based selection
+            // then focused the capture on a DIFFERENT interface than the one
+            // the carousel/VLM report claimed. Chain identity is unambiguous.
+            const requestedChains = (params as any)?._pairChains as [string, string] | undefined;
+            let best: Record<string, unknown> | undefined;
+            let matchedBy = "index";
+            if (Array.isArray(requestedChains) && requestedChains.length === 2
+                && requestedChains[0] != null && requestedChains[1] != null) {
+              best = pairs.find(p =>
+                String(p.chain1) === String(requestedChains[0]) &&
+                String(p.chain2) === String(requestedChains[1]));
+              if (best) matchedBy = "chains";
+            }
+            if (!best) {
+              const pairIndex = Number((params as any)?._pairIndex ?? 0);
+              best = pool[Math.min(Math.max(pairIndex, 0), pool.length - 1)]!;
+            }
             const bestInteractions = best.interactions as Array<Record<string, unknown>> | undefined;
             // R163: always overwrite chain1/chain2/interactions for the
             // selected pair (previously only set when missing, so a stale
@@ -502,8 +608,8 @@ export async function applyRecipeVisualization(
               (params as any).interactions = bestInteractions;
             }
             console.log(
-              `[viz:pairwise] Visualizing pair #${Math.min(Math.max(pairIndex, 0), pool.length - 1)} ` +
-              `${best.chain1}-${best.chain2} (${best.total ?? 0} interactions of ${pairs.length} pairs analyzed, ` +
+              `[viz:pairwise] Visualizing pair ${best.chain1}-${best.chain2} ` +
+              `(matched by ${matchedBy}, ${best.total ?? 0} interactions of ${pairs.length} pairs analyzed, ` +
               `${pool.length} in contact)`
             );
           }
@@ -621,7 +727,7 @@ export async function applyRecipeVisualization(
         }
 
           // R157: Clean up ALL previous visualization artifacts before applying new one.
-        // This prevents label/line/sidechain/water/ligand accumulation across analyses.
+        // This prevents label/line/sidechain accumulation across analyses.
         await safe(async () => {
           // R167 (MOL-M4): remove only measurement cells WE added in a previous
           // analysis (tracked in vizAddedMeasurementRefs) — NOT the user's own
@@ -638,6 +744,13 @@ export async function applyRecipeVisualization(
           // R170: also restore chains left hidden by a previous interrupted
           // run (cleanupCapture is the normal restore path).
           await restoreHiddenChains(plugin);
+          // MOL2-01: restore water/ligand components left hidden by a previous
+          // interrupted run (unhide the preset's own components, remove our
+          // stand-ins). This REPLACES the old tag/label-based DELETION of
+          // water/ligand components below — the preset's own components must
+          // survive analyses, otherwise they can never be re-displayed (a
+          // rebuilt static component has no representations).
+          await restoreHiddenNonPolymer(plugin);
           // R171: remove leaked cartoon transparency layers from a previous
           // interrupted run (cleanupCapture is the normal restore path).
           const clearedT = await clearVizTransparency(plugin);
@@ -645,7 +758,8 @@ export async function applyRecipeVisualization(
           // R161: Clear selection + green boxes (deselectAll is the real API;
           // the old lociSelects.clearHighlights() was a silent no-op).
           clearAllSelectionVisuals(plugin);
-          // Remove previous components (sidechains, water, ligand, and ANY ball-and-stick)
+          // Remove previous components (interface sidechains and other
+          // viz-created stand-ins).
           const structs = getStructures(plugin);
           let removedCount = 0;
           for (const s of structs) {
@@ -653,23 +767,20 @@ export async function applyRecipeVisualization(
             for (const c of (s.components ?? [])) {
               const tags = c?.cell?.transform?.tags;
               const label = c?.cell?.obj?.label;
-              // R159: Remove ALL components that have our tags OR are named Water/Ligand
-              // Also remove components with keyTag prefix 'structure-component-'
-              // that are sidechain/water/ligand related
+              // R159→MOL2-01: remove components that carry OUR viz tags.
+              // Water/ligand components are deliberately NO LONGER matched
+              // here — they belong to the representation preset (the
+              // StructureComponent transform itself labels them "Water"/
+              // "Ligand") and their visibility is managed by
+              // restoreHiddenNonPolymer above, never by deletion.
               const hasTag = Array.isArray(tags) && (
                 tags.includes('interface-sidechain') ||
-                tags.includes('water-hide') ||
-                tags.includes('ligand-hide') ||
                 tags.some((t: string) => t.startsWith('structure-component-sidechain') ||
-                         t.startsWith('structure-component-Water') ||
-                         t.startsWith('structure-component-Ligand') ||
                          t.startsWith('structure-component-interface-sidechains'))
               );
               const hasLabel = label && (
                 label.includes("Interface ") ||
-                label.includes("sidechain") ||
-                label === "Water" ||
-                label === "Ligand"
+                label.includes("sidechain")
               );
               if (hasTag || hasLabel) {
                 toRemove.push(c);
@@ -686,37 +797,60 @@ export async function applyRecipeVisualization(
           console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
         }, "cleanup_previous");
 
-        // R156: Hide water AND ligand using tryCreateComponentStatic
-        // R155 used buildResidueLoci which was unreliable — the loci/expression
-        // might not match correctly. tryCreateComponentStatic uses Molstar's
-        // internal Queries.internal.water() and StructureSelectionQueries.ligand
-        // which are the official, tested ways to select water/ligand.
+        // R156→MOL2-01: Hide water AND ligand for the capture — IN PLACE.
+        //
+        // The old approach passed `{ label, tags: ['water-hide'/'ligand-hide'] }`
+        // to tryCreateComponentStatic: applyOrUpdateTagged(keyTag) then UPDATED
+        // the preset's OWN water/ligand component (merging our tags into it),
+        // and the tag/label-based cleanup_previous DELETED those components
+        // afterwards — after one interactions-family analysis the ligands
+        // (HEM!) vanished from the live view and could never be re-shown
+        // (a rebuilt static component has no representations). Instead:
+        //   - preset component exists → hide it via toggleVisibility and
+        //     snapshot its previous isHidden (restored by
+        //     restoreHiddenNonPolymer from cleanupCapture);
+        //   - no preset component → create a TAG-LESS stand-in (tracked by
+        //     ref, deleted on restore) so the hide still applies.
         await safe(async () => {
           const structs = getStructures(plugin);
           if (structs.length === 0) return;
-          const sr = structs[0];
+          const sr = structs[0] as any;
 
-          // Hide water using static component type 'water'
-          try {
-            const waterComponent = await plugin.builders.structure.tryCreateComponentStatic(
-              sr.cell, 'water', { label: 'Water', tags: ['water-hide'] }
-            );
-            if (waterComponent) {
-              plugin.managers.structure.hierarchy.toggleVisibility([waterComponent], 'hide');
-              console.log('[viz:hide] Hidden water (static)');
-            }
-          } catch (err) { console.warn('[viz:hide] water failed:', err); }
-
-          // Hide ligand using static component type 'ligand'
-          try {
-            const ligandComponent = await plugin.builders.structure.tryCreateComponentStatic(
-              sr.cell, 'ligand', { label: 'Ligand', tags: ['ligand-hide'] }
-            );
-            if (ligandComponent) {
-              plugin.managers.structure.hierarchy.toggleVisibility([ligandComponent], 'hide');
-              console.log('[viz:hide] Hidden ligand (static)');
-            }
-          } catch (err) { console.warn('[viz:hide] ligand failed:', err); }
+          for (const type of ["water", "ligand"] as const) {
+            try {
+              // Same keyTag tryCreateComponentStatic itself uses
+              // (`structure-component-static-${key}`, key = `static-${type}`).
+              const keyTag = `structure-component-static-${type}`;
+              const existing = (sr.components ?? []).find(
+                (c: any) => Array.isArray(c?.cell?.transform?.tags) &&
+                  c.cell.transform.tags.includes(keyTag)
+              );
+              if (existing) {
+                // Hide the preset's own component in place — no state update,
+                // no tag merge; the isHidden snapshot lets the restore bring
+                // back exactly the previous visibility.
+                const wasHidden = !!existing?.cell?.state?.isHidden;
+                vizHiddenNonPolymer.push({ ref: existing.cell.transform.ref, wasHidden, created: false });
+                if (!wasHidden) {
+                  plugin.managers.structure.hierarchy.toggleVisibility([existing], 'hide');
+                }
+                console.log(`[viz:hide] Hidden ${type} (preset static component — restored after capture)`);
+              } else {
+                // No preset component (e.g. polymer-cartoon / atomic-detail
+                // presets don't create one) — create a stand-in. Deliberately
+                // NO custom tags or label: custom tags would merge into a
+                // later preset component via applyOrUpdateTagged and
+                // re-introduce the MOL2-01 deletion path. The stand-in is
+                // tracked by ref and removed by restoreHiddenNonPolymer.
+                const standIn = await (plugin.builders.structure as any).tryCreateComponentStatic(sr.cell, type);
+                if (standIn) {
+                  vizHiddenNonPolymer.push({ ref: standIn.ref as string, wasHidden: false, created: true });
+                  plugin.managers.structure.hierarchy.toggleVisibility([standIn], 'hide');
+                  console.log(`[viz:hide] Hidden ${type} (stand-in component)`);
+                }
+              }
+            } catch (err) { console.warn(`[viz:hide] ${type} failed:`, err); }
+          }
         }, "hide_non_polymer");
 
         // R170: per-pair chain visibility — for multi-chain structures, hide

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import https from 'https';
 
 interface RamaPoint {
   phi: number;
@@ -18,17 +17,22 @@ interface ChainScore {
   total: number;
 }
 
-function fetchJson(url: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { Accept: 'application/json' } }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error(`JSON parse error: ${data.slice(0, 200)}`)); }
-      });
-    }).on('error', reject);
+async function fetchJson(url: string): Promise<any> {
+  // API-10: converted from a raw https.get (which had NO timeout — a hung
+  // EBI connection hung the request forever) to fetch with a 10s timeout,
+  // matching the other external-data routes. The response body is parsed
+  // regardless of status code, exactly like the old https.get did (PDBe
+  // returns JSON error bodies the caller checks for).
+  const res = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(10_000),
   });
+  const data = await res.text();
+  try {
+    return JSON.parse(data);
+  } catch {
+    throw new Error(`JSON parse error: ${data.slice(0, 200)}`);
+  }
 }
 
 export async function GET(

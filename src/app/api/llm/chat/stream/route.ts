@@ -26,9 +26,19 @@
 import { NextRequest } from 'next/server';
 import { generateText, type LlmConfig } from '@/lib/llm';
 import { ensureAgentSkillRegistered } from '@/lib/molcraft/agent-skill-bootstrap';
+import { checkLlmRateLimit, getClientKey, rateLimitResponse } from '@/lib/llm-rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
+
+/** API-05: max analysis results folded into the prompt (each carries up to
+ *  2000 chars of JSON — the count was previously uncapped). */
+const MAX_ANALYSIS_RESULTS = 20;
+/** API-05: cap per history message (m.content was previously uncapped). */
+const MAX_MESSAGE_CHARS = 50_000;
+/** API-05: cap on the total assembled user prompt (~200k chars keeps us well
+ *  under CLI argv limits and bounds token spend). */
+const MAX_PROMPT_CHARS = 200_000;
 
 const SYSTEM_PROMPT = `You are Molcraft AI, a structural biology assistant integrated into a PDB structure analysis web app.
 
@@ -156,6 +166,14 @@ interface ChatRequestBody {
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
 
+  // API-05: 10 req/min sliding-window rate limit (same pattern as the VLM
+  // route, R165/VLM-006). No auth in this sandbox app — this is the only
+  // guard against a caller draining the LLM quota.
+  const rate = checkLlmRateLimit('llm-chat-stream', getClientKey(request));
+  if (!rate.allowed) {
+    return rateLimitResponse('llm-chat-stream', rate.retryAfterSec);
+  }
+
   try {
     // Round 102: auto-register pdb-tracker-agent-skill with Hermes (no-op after first call)
     try {
@@ -179,12 +197,25 @@ export async function POST(request: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
+        // API-05: enqueue throws once the client is gone and the controller
+        // is closed — swallow so disconnect handling stays in one place.
         const send = (data: unknown) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          } catch {
+            /* controller already closed/errored (client disconnected) */
+          }
         };
 
         try {
           send({ type: 'thinking' });
+
+          // API-05: honor client disconnect — if the caller is already gone,
+          // don't spend an LLM call on them.
+          if (request.signal.aborted) {
+            controller.close();
+            return;
+          }
 
           const userPrompt = buildUserPrompt(messages, context);
           // Round 62: Derive a stable session id for cross-turn chat reuse.
@@ -203,9 +234,13 @@ export async function POST(request: NextRequest) {
             sessionId: chatSessionId,
           };
 
+          // API-05: forward the request signal so a client disconnect aborts
+          // the underlying CLI child / SDK call instead of running it to
+          // completion for a dead connection.
           const r = await generateText(SYSTEM_PROMPT, userPrompt, {
             maxChars: 8000,
             llm: cfg,
+            signal: request.signal,
           });
 
           if (!r.ok) {
@@ -262,6 +297,10 @@ export async function POST(request: NextRequest) {
           const tokens = replyText.match(/\S+\s*|\s+/g) || [replyText];
           const CHUNK_SIZE = 3; // words per chunk
           for (let i = 0; i < tokens.length; i += CHUNK_SIZE) {
+            // API-05: cheap per-tick disconnect check — stop the typewriter
+            // as soon as the client is gone instead of streaming into a dead
+            // connection for the full reply length.
+            if (request.signal.aborted) break;
             const chunk = tokens.slice(i, i + CHUNK_SIZE).join('');
             send({ type: 'chunk', text: chunk });
             // Small delay for visual effect (30ms per chunk)
@@ -280,7 +319,7 @@ export async function POST(request: NextRequest) {
         } catch (err: any) {
           send({ type: 'error', error: err?.message || String(err) });
         } finally {
-          controller.close();
+          try { controller.close(); } catch { /* already closed (client disconnected) */ }
         }
       },
     });
@@ -312,9 +351,16 @@ function buildUserPrompt(messages: ChatMessage[], context?: ChatContext): string
   } else {
     parts.push('[Context] No structures currently loaded.');
   }
+  // API-05: cap the count (last 20) — analysisResults is client-controlled
+  // and each entry can carry ~2KB of JSON, so an uncapped array could
+  // assemble a multi-MB prompt.
   if (context?.analysisResults && context.analysisResults.length > 0) {
-    parts.push(`[Analysis results from previous commands]`);
-    for (const r of context.analysisResults) {
+    const recentResults = context.analysisResults.slice(-MAX_ANALYSIS_RESULTS);
+    const note = context.analysisResults.length > recentResults.length
+      ? ` (showing last ${recentResults.length} of ${context.analysisResults.length})`
+      : '';
+    parts.push(`[Analysis results from previous commands]${note}`);
+    for (const r of recentResults) {
       const dataStr = r.data ? JSON.stringify(r.data).slice(0, 2000) : '';
       parts.push(
         `  ${r.type}: ${r.ok ? 'OK' : 'FAILED'}${r.detail ? ` — ${r.detail}` : ''}${
@@ -326,12 +372,21 @@ function buildUserPrompt(messages: ChatMessage[], context?: ChatContext): string
   const recent = messages.slice(-10);
   parts.push(`[Conversation history]`);
   for (const m of recent) {
-    parts.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
+    // API-05: cap each message's content — m.content was previously uncapped.
+    const content = (m.content || '').length > MAX_MESSAGE_CHARS
+      ? `${(m.content || '').slice(0, MAX_MESSAGE_CHARS)} …[truncated]`
+      : (m.content || '');
+    parts.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${content}`);
   }
   parts.push(
     `\nRespond with a SINGLE JSON object per the system prompt. The object MUST have a "reply" field (string) and a "commands" field (array). Do NOT use "summary", "actions", "selectStructure", or "showMessage" — these are not supported. Use "reply" for any text you want to show the user, and "load_pdb" (with "id" field) to load a structure.`
   );
-  return parts.join('\n');
+  // API-05: final hard cap on the assembled prompt.
+  const prompt = parts.join('\n');
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return `${prompt.slice(0, MAX_PROMPT_CHARS)}\n…[prompt truncated to ${MAX_PROMPT_CHARS} chars to stay within size limits]`;
+  }
+  return prompt;
 }
 
 // ============================================================================

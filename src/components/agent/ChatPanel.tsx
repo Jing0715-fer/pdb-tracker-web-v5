@@ -171,10 +171,20 @@ export function AgentChatPanel() {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Import failed: ${res.status}`);
-      const result = (await res.json()) as { sessionId: string };
+      const result = (await res.json()) as { sessionId?: unknown };
+      // FE-07 (R172): shape-check the returned id before loading — a malformed
+      // response previously fell through to loadSession(undefined).
+      if (typeof result.sessionId !== 'string' || !result.sessionId) {
+        throw new Error('服务器返回的会话 ID 无效');
+      }
       await session.loadSession(result.sessionId);
+      useAppStore.getState().toast('会话导入成功', 'success');
     } catch (err) {
       console.error('[import] failed:', err);
+      // FE-07 (R172): surface import failures to the user — bad JSON or a 500
+      // previously gave zero feedback (compare the analysis-panel importer,
+      // which toasts).
+      useAppStore.getState().toast(`导入会话失败：${err instanceof Error ? err.message : String(err)}`, 'error');
     }
     // Reset the input so the same file can be re-imported.
     if (fileInputRef.current) fileInputRef.current.value = '';

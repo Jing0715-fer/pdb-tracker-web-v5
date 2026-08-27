@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
+import { evalReportsDir } from '@/lib/eval-report-paths';
 
-const EVALS_DIR = '/Users/lijing/Documents/my_note/LLM-Wiki/wiki/evaluations';
+// API-13: previously hardcoded /Users/lijing/Documents/my_note/LLM-Wiki/
+// wiki/evaluations — a path that only existed on the original author's
+// machine, so this route 404'd everywhere else. Now resolved via the shared
+// helper (EVAL_REPORTS_DIR env override → <writableRoot>/db/evaluation-reports).
+const EVALS_DIR = evalReportsDir();
 
 // Map batchId -> file mapping
 const BATCH_FILE_MAP: Record<string, string> = {

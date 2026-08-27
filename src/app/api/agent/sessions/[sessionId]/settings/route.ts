@@ -10,8 +10,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAgentManager } from '@/lib/agent/manager';
-import { PROVIDER_CATALOG } from '@/lib/agent/providers';
-import { extractSessionSettings, type SessionSettings } from '@/lib/agent/session/settings';
+import {
+  extractSessionSettings,
+  validateSettingsBody,
+  type SessionSettings,
+} from '@/lib/agent/session/settings';
 import type { SessionEvent } from '@/lib/agent/session/types';
 
 export const runtime = 'nodejs';
@@ -24,55 +27,9 @@ export type { SessionSettings };
 export const extractSettings = (events: SessionEvent[]): SessionSettings =>
   extractSessionSettings(events);
 
-/**
- * R168 (AGENT-M10): validate + clamp a partial settings body before it is
- * merged into the durable `session/settings` event. Previously body fields
- * were merged verbatim — maxStepsPerTurn 0/negative made every turn hit the
- * step guard ("达到最大步数限制" on each request), a string temperature broke
- * every subsequent LLM call, and the corruption was durable.
- * Returns { ok, value } — ok=false carries a user-actionable message.
- */
-function validateSettingsBody(
-  body: Partial<SessionSettings>,
-): { ok: true; value: Partial<SessionSettings> } | { ok: false; error: string } {
-  const out: Partial<SessionSettings> = {};
-  if (body.model !== undefined) {
-    if (typeof body.model !== 'string' || body.model.length === 0 || body.model.length > 100) {
-      return { ok: false, error: 'model must be a non-empty string (≤100 chars)' };
-    }
-    out.model = body.model;
-  }
-  if (body.providerId !== undefined) {
-    if (typeof body.providerId !== 'string' || !PROVIDER_CATALOG.some((p) => p.id === body.providerId)) {
-      return { ok: false, error: `providerId must be one of: ${PROVIDER_CATALOG.map((p) => p.id).join(', ')}` };
-    }
-    out.providerId = body.providerId;
-  }
-  if (body.temperature !== undefined) {
-    const t = body.temperature;
-    if (typeof t !== 'number' || !Number.isFinite(t) || t < 0 || t > 2) {
-      return { ok: false, error: 'temperature must be a finite number between 0 and 2' };
-    }
-    out.temperature = t;
-  }
-  if (body.maxStepsPerTurn !== undefined) {
-    const m = body.maxStepsPerTurn;
-    if (typeof m !== 'number' || !Number.isInteger(m) || m < 1 || m > 50) {
-      return { ok: false, error: 'maxStepsPerTurn must be an integer between 1 and 50' };
-    }
-    out.maxStepsPerTurn = m;
-  }
-  if (body.systemPromptOverride !== undefined) {
-    if (typeof body.systemPromptOverride !== 'string' || body.systemPromptOverride.length > 8000) {
-      return { ok: false, error: 'systemPromptOverride must be a string (≤8000 chars)' };
-    }
-    out.systemPromptOverride = body.systemPromptOverride;
-  }
-  return { ok: true, value: out };
-}
-
-/** Extract the latest settings from a session event log. (Delegates to the shared implementation.) */
-// (See extractSettings re-export above — R169/AGENT-L8.)
+// R168 (AGENT-M10) / AG2-06: validateSettingsBody now lives in the shared
+// session/settings module (single source of truth with the sessions + import
+// routes) — see the import above.
 
 export async function GET(
   _request: NextRequest,

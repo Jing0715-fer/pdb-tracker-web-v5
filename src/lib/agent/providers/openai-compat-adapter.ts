@@ -15,7 +15,7 @@
 
 import type { LlmAdapter, GenerateOptions, StreamChunk, Message, ToolSchema, ContentBlock } from '../llm/types';
 import { newCallId } from '../types';
-import { withTimeoutSignal } from '../llm/signal-utils';
+import { withTimeoutSignal, LLM_REQUEST_TIMEOUT_MS } from '../llm/signal-utils';
 import type { ProviderProfile } from './catalog';
 import { resolveApiKey, resolveBaseURL } from './credentials';
 
@@ -146,47 +146,63 @@ export class OpenAICompatAdapter implements LlmAdapter {
 
     // R168 (AGENT-M6): hard per-attempt timeout — a hung fetch previously
     // blocked the drive indefinitely (see signal-utils.ts).
+    // AG2-07: the timeout used to be disposed in the fetch's `finally`,
+    // BEFORE the response body was read — a server that sent headers and
+    // then stalled its body left `resp.text()` hanging FOREVER (the
+    // disposed timer could no longer abort the fetch signal), wedging the
+    // drive lock and every later request for the session. The signal now
+    // stays armed through ALL body reads (aborting the fetch signal also
+    // rejects in-flight body reads) and dispose() runs in a final finally.
     const timeout = withTimeoutSignal(options.signal);
-    let resp: Response;
+    let json: OpenAIResponse;
     try {
-      resp = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: timeout.signal,
-      });
-    } catch (err) {
-      const msg = timeout.timedOut()
-        ? `LLM request timed out after 120s (provider: ${this.provider}, model: ${options.model})`
-        : `Fetch failed: ${err instanceof Error ? err.message : String(err)}`;
-      yield { type: 'finish', reason: { kind: 'error', error: msg } };
-      return;
-    } finally {
-      timeout.dispose();
-    }
+      let resp: Response;
+      try {
+        resp = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: timeout.signal,
+        });
+      } catch (err) {
+        const msg = timeout.timedOut()
+          ? `LLM request timed out after ${LLM_REQUEST_TIMEOUT_MS / 1000}s (provider: ${this.provider}, model: ${options.model})`
+          : `Fetch failed: ${err instanceof Error ? err.message : String(err)}`;
+        yield { type: 'finish', reason: { kind: 'error', error: msg } };
+        return;
+      }
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => resp.statusText);
-      // Check if response is HTML (not JSON)
-      const isHtml = errText.trimStart().startsWith('<');
-      const errMsg = isHtml
-        ? `${this.profile.displayName} API error ${resp.status}: server returned HTML instead of JSON. This usually means:
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => resp.statusText);
+        // Check if response is HTML (not JSON)
+        const isHtml = errText.trimStart().startsWith('<');
+        const errMsg = isHtml
+          ? `${this.profile.displayName} API error ${resp.status}: server returned HTML instead of JSON. This usually means:
            1. The API key is invalid or missing (check provider settings)
            2. The API endpoint URL is incorrect (current: ${url})
            3. The API service is temporarily unavailable
            Configure the API key in Settings → Providers.`
-        : `${this.profile.displayName} API error ${resp.status}: ${errText.slice(0, 500)}`;
-      yield {
-        type: 'finish',
-        reason: { kind: 'error', error: errMsg },
-      };
-      return;
-    }
+          : `${this.profile.displayName} API error ${resp.status}: ${errText.slice(0, 500)}`;
+        yield {
+          type: 'finish',
+          reason: { kind: 'error', error: errMsg },
+        };
+        return;
+      }
 
-    // Parse JSON safely — handle non-JSON responses (e.g. HTML error pages)
-    let json: OpenAIResponse;
-    try {
-      const raw = await resp.text();
+      // Parse JSON safely — handle non-JSON responses (e.g. HTML error pages)
+      let raw: string;
+      try {
+        raw = await resp.text();
+      } catch (err) {
+        // AG2-07: a timeout abort during the body read lands here — report
+        // it as a timeout, not "invalid JSON".
+        const msg = timeout.timedOut()
+          ? `LLM request timed out after ${LLM_REQUEST_TIMEOUT_MS / 1000}s while reading the response body (provider: ${this.provider}, model: ${options.model})`
+          : `Failed to read response body: ${err instanceof Error ? err.message : String(err)}`;
+        yield { type: 'finish', reason: { kind: 'error', error: msg } };
+        return;
+      }
       // R117: Check if response is HTML (even on 200 — some APIs return HTML errors)
       if (raw.trimStart().startsWith('<')) {
         yield {
@@ -195,13 +211,18 @@ export class OpenAICompatAdapter implements LlmAdapter {
         };
         return;
       }
-      json = JSON.parse(raw) as OpenAIResponse;
-    } catch {
-      yield {
-        type: 'finish',
-        reason: { kind: 'error', error: `${this.profile.displayName} API returned invalid JSON response` },
-      };
-      return;
+      try {
+        json = JSON.parse(raw) as OpenAIResponse;
+      } catch {
+        yield {
+          type: 'finish',
+          reason: { kind: 'error', error: `${this.profile.displayName} API returned invalid JSON response` },
+        };
+        return;
+      }
+    } finally {
+      // AG2-07: dispose only after every body read has settled.
+      timeout.dispose();
     }
     const choice = json.choices?.[0];
     if (!choice) {

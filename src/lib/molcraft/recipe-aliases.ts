@@ -146,18 +146,24 @@ const RECIPE_ALIASES: Record<string, string> = {
  *
  * Handles common LLM aliases like "interface" → "all_interactions",
  * "hbond" → "hbonds", etc. If the recipe name is not a known alias,
- * returns it unchanged (the caller can check against CANONICAL_RECIPES).
+ * returns the NORMALIZED string (lower-cased, spaces/hyphens → underscores)
+ * so that hyphen/space variants of real recipe keys resolve too —
+ * e.g. "cross-pdb-rmsd" → "cross_pdb_rmsd" (MOL2-03: the fallback
+ * previously returned the ORIGINAL string, discarding the normalization
+ * and making "cross-pdb-rmsd"-style variants fail getRecipe/isCanonical
+ * even though their normalized form IS a valid recipe key).
  *
  * @example
  * normalizeRecipeName("interface") // → "all_interactions"
  * normalizeRecipeName("hbond") // → "hbonds"
+ * normalizeRecipeName("cross-pdb-rmsd") // → "cross_pdb_rmsd"
  * normalizeRecipeName("all_interactions") // → "all_interactions"
- * normalizeRecipeName("unknown_recipe") // → "unknown_recipe"
+ * normalizeRecipeName("unknown recipe") // → "unknown_recipe"
  */
 export function normalizeRecipeName(recipe: string): string {
   if (!recipe || typeof recipe !== "string") return recipe;
   const normalized = recipe.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return RECIPE_ALIASES[normalized] || recipe;
+  return RECIPE_ALIASES[normalized] || normalized;
 }
 
 /**

@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAgentManager } from '@/lib/agent/manager';
+import { PROVIDER_CATALOG } from '@/lib/agent/providers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
   const manager = getAgentManager();
+
+  // AG2-06: validate providerId against the catalog BEFORE anything is
+  // persisted. Previously {setDefault:true, providerId:'<arbitrary string>'}
+  // wrote garbage into .hermes/agent-default-provider.json — every NEW
+  // session then resolved a provider with no registered adapter (fatal on
+  // first drive once combined with the AG2-05 path). The config branch had
+  // the same hole: the credentials store is keyed by catalog ids. The UI
+  // only ever sends catalog ids, so this breaks no legitimate flow.
+  if (body.providerId !== undefined && !PROVIDER_CATALOG.some((p) => p.id === body.providerId)) {
+    return NextResponse.json(
+      { error: `providerId must be one of: ${PROVIDER_CATALOG.map((p) => p.id).join(', ')}` },
+      { status: 400 },
+    );
+  }
 
   // Handle "set as default" action
   if (body.setDefault && body.providerId) {

@@ -237,71 +237,17 @@ export class AgentLoop {
     }
 
     // Assemble prompt.
-    const assembly = this.ctx.systemPrompt.assemble({
-      scope: this.session.id,
-      signal: this.controller.signal,
-    });
-    let system = this.ctx.systemPrompt.renderPrompt(assembly);
-    // Override system prompt if the user set one in settings.
-    if (settings.systemPromptOverride?.trim()) {
-      system = settings.systemPromptOverride.trim();
-    }
-    const tools = assembly.tools;
-
-    // Resolve the effective provider + model from settings.
-    // Priority: explicit providerId in settings → model-based lookup → default.
-    const effectiveModel = settings.model ?? this.options.model;
-    const effectiveProvider = settings.providerId ?? this.resolveProvider(effectiveModel);
-    // R169 (AGENT-L1): the R117 provider log fired on EVERY step of EVERY
-    // session. Log only when the resolved provider/model pair CHANGES from
-    // the previous request — the useful signal, without the noise.
-    if (effectiveProvider !== this.lastLoggedProvider || effectiveModel !== this.lastLoggedModel) {
-      console.log(`[agent-loop] Provider: ${effectiveProvider} | Model: ${effectiveModel} | settings.providerId: ${settings.providerId ?? 'none'} | settings.model: ${settings.model ?? 'none'}`);
-      this.lastLoggedProvider = effectiveProvider;
-      this.lastLoggedModel = effectiveModel;
-    }
-
-    // Log request header (initial on first step of the session).
-    const header = {
-      provider: effectiveProvider,
-      model: effectiveModel,
-      system,
-      tools: tools.map((t) => t.name),
-      temperature: settings.temperature ?? this.options.temperature,
-      maxTokens: this.options.maxTokens,
-    };
-    const existingHeader = this.session.getRequestHeader();
-    if (!existingHeader) {
-      this.session.append('request/header', { header, reason: 'initial' });
-    } else if (!headersEqual(existingHeader, header)) {
-      this.session.append('request/header', { header, reason: 'change' });
-    }
-
-    // Build the LLM request.
-    const derivedMessages = this.session.deriveMessages();
-    const request: GenerateOptions = {
-      provider: effectiveProvider,
-      model: effectiveModel,
-      messages: derivedMessages,
-      system,
-      tools,
-      temperature: settings.temperature ?? this.options.temperature,
-      maxTokens: this.options.maxTokens,
-      signal: this.controller.signal,
-    };
-
-    // Stream + accumulate.
-    // R164 (AGENT-005): retry the LLM stream on 429 / transient network
-    // errors with 5s / 15s / 45s backoff (mirroring the VLM route's
-    // schedule). Previously a single 429 from GLM-4.6 killed the whole
-    // turn — the legacy /api/llm/agent/round route had a 2-retry 5s·2^n
-    // backoff, but the new agent path had zero retries.
-    const prepared = this.ctx.llm.prepareCall({
-      provider: effectiveProvider,
-      model: effectiveModel,
-      temperature: settings.temperature ?? this.options.temperature,
-      maxTokens: this.options.maxTokens,
-    });
+    // AG2-05: the assemble → prepareCall segment previously ran OUTSIDE the
+    // try/catch below. A missing adapter makes prepareCall THROW (see
+    // llm/adapter.ts) — the error escaped ALL turn bookkeeping: status
+    // stayed 'running' (the R168 idle eviction never fires for a session
+    // whose loop claims to be mid-drive), the turn stayed open, and the
+    // route 500'd. LlmRuntime.stream itself degrades gracefully to an
+    // error-chunk stream, but prepareCall's throw punched through that.
+    // Everything from prompt assembly through the streaming loop is now
+    // inside the try so turn/end + status reset always happen.
+    let effectiveProvider = this.options.provider;
+    let effectiveModel = this.options.model;
     let assembler = new BlockAssembler();
     let chunkSeqs: number[] = [];
     const LLM_BACKOFF_SCHEDULE_MS = [5_000, 15_000, 45_000];
@@ -316,7 +262,108 @@ export class AgentLoop {
       return /timeout|etimedout|econnreset|econnrefused|socket hang up|network|fetch failed|aborted/i.test(msg);
     };
     try {
+      const assembly = this.ctx.systemPrompt.assemble({
+        scope: this.session.id,
+        signal: this.controller.signal,
+      });
+      let system = this.ctx.systemPrompt.renderPrompt(assembly);
+      // Override system prompt if the user set one in settings.
+      if (settings.systemPromptOverride?.trim()) {
+        system = settings.systemPromptOverride.trim();
+      }
+      const tools = assembly.tools;
+
+      // Resolve the effective provider + model from settings.
+      // Priority: explicit providerId in settings → model-based lookup → default.
+      effectiveModel = settings.model ?? this.options.model;
+      effectiveProvider = settings.providerId ?? this.resolveProvider(effectiveModel);
+      // R169 (AGENT-L1): the R117 provider log fired on EVERY step of EVERY
+      // session. Log only when the resolved provider/model pair CHANGES from
+      // the previous request — the useful signal, without the noise.
+      if (effectiveProvider !== this.lastLoggedProvider || effectiveModel !== this.lastLoggedModel) {
+        console.log(`[agent-loop] Provider: ${effectiveProvider} | Model: ${effectiveModel} | settings.providerId: ${settings.providerId ?? 'none'} | settings.model: ${settings.model ?? 'none'}`);
+        this.lastLoggedProvider = effectiveProvider;
+        this.lastLoggedModel = effectiveModel;
+      }
+
+      // Log request header (initial on first step of the session).
+      const header = {
+        provider: effectiveProvider,
+        model: effectiveModel,
+        system,
+        tools: tools.map((t) => t.name),
+        temperature: settings.temperature ?? this.options.temperature,
+        maxTokens: this.options.maxTokens,
+      };
+      const existingHeader = this.session.getRequestHeader();
+      if (!existingHeader) {
+        this.session.append('request/header', { header, reason: 'initial' });
+      } else if (!headersEqual(existingHeader, header)) {
+        this.session.append('request/header', { header, reason: 'change' });
+      }
+
+      // Build the LLM request.
+      const derivedMessages = this.session.deriveMessages();
+      const request: GenerateOptions = {
+        provider: effectiveProvider,
+        model: effectiveModel,
+        messages: derivedMessages,
+        system,
+        tools,
+        temperature: settings.temperature ?? this.options.temperature,
+        maxTokens: this.options.maxTokens,
+        signal: this.controller.signal,
+      };
+
+      // Stream + accumulate.
+      // R164 (AGENT-005): retry the LLM stream on 429 / transient network
+      // errors with 5s / 15s / 45s backoff (mirroring the VLM route's
+      // schedule). Previously a single 429 from GLM-4.6 killed the whole
+      // turn — the legacy /api/llm/agent/round route had a 2-retry 5s·2^n
+      // backoff, but the new agent path had zero retries.
+      const prepared = this.ctx.llm.prepareCall({
+        provider: effectiveProvider,
+        model: effectiveModel,
+        temperature: settings.temperature ?? this.options.temperature,
+        maxTokens: this.options.maxTokens,
+      });
       let attempt = 0;
+      // AG2-01: shared backoff — used by BOTH failure paths (a thrown error
+      // AND an assembled finish-error chunk, see below). Resets the
+      // assembler + chunkSeqs so the retry's chunks don't concatenate with
+      // the failed attempt's partial chunks (which would produce garbled
+      // assistant/message content). The old chunk events stay in the
+      // durable log for audit but are NOT surface-eligible, so the LLM
+      // never sees them.
+      const retryWithBackoff = (label: string, errorText: string): Promise<void> => {
+        const baseMs = LLM_BACKOFF_SCHEDULE_MS[attempt]!;
+        // R164 (VLM-008 mirror): jitter by 0-500ms so concurrent
+        // sessions retrying in lockstep don't thundering-herd the LLM.
+        const waitMs = baseMs + Math.floor(Math.random() * 500);
+        console.warn(
+          `[agent-loop] LLM stream attempt ${attempt + 1} failed ` +
+          `(${label}) — ` +
+          `retrying in ${(waitMs / 1000).toFixed(1)}s ` +
+          `(${LLM_BACKOFF_SCHEDULE_MS.length - attempt} retries left). error: ${errorText}`,
+        );
+        assembler = new BlockAssembler();
+        chunkSeqs = [];
+        // Interruptible sleep — if abort fires during the wait, exit
+        // immediately instead of waiting the full backoff (the rejection
+        // propagates to the outer catch so turn/end { kind: 'aborted' }
+        // is emitted).
+        return new Promise<void>((resolve, reject) => {
+          const t = setTimeout(() => {
+            this.controller.signal.removeEventListener('abort', onAbort);
+            resolve();
+          }, waitMs);
+          const onAbort = () => {
+            clearTimeout(t);
+            reject(new DOMException('Agent loop aborted during backoff', 'AbortError'));
+          };
+          this.controller.signal.addEventListener('abort', onAbort, { once: true });
+        });
+      };
       while (true) {
         // Check abort BEFORE each attempt — if the user cancelled the
         // session or the controller aborted, stop retrying.
@@ -333,49 +380,41 @@ export class AgentLoop {
             chunkSeqs.push(ev.seq);
             assembler.push(chunk);
           }
-          break; // success — exit retry loop
+          // AG2-01: both adapters report provider failures (429 rate
+          // limit, timeout, network error) as a finish-error CHUNK, not a
+          // thrown error — so the catch below never fired for them and a
+          // single 429 still killed the turn despite the R164 backoff.
+          // After the stream completes, inspect the assembled finish
+          // state and route retryable errors through the SAME backoff
+          // (shared `attempt` counter — no double-counting). Anything
+          // else breaks out and is handled after the loop.
+          const finishNow = assembler.finish;
+          if (finishNow.kind === 'error' && !this.controller.signal.aborted) {
+            const rateLimited = isRateLimitError({ message: finishNow.error });
+            const transient = isTransientError({ message: finishNow.error });
+            if ((rateLimited || transient) && attempt < LLM_BACKOFF_SCHEDULE_MS.length) {
+              await retryWithBackoff(
+                rateLimited ? '429 rate limit' : 'transient error',
+                finishNow.error,
+              );
+              attempt += 1;
+              continue;
+            }
+          }
+          break; // success — or a non-retryable / exhausted error, handled below
         } catch (err) {
           // If the abort signal fired during streaming, don't retry.
           if (this.controller.signal.aborted) throw err;
-          const retryable = isRateLimitError(err) || isTransientError(err);
-          if (!retryable || attempt >= LLM_BACKOFF_SCHEDULE_MS.length) {
+          const rateLimited = isRateLimitError(err);
+          const transient = isTransientError(err);
+          if (!(rateLimited || transient) || attempt >= LLM_BACKOFF_SCHEDULE_MS.length) {
             // Non-retryable or schedule exhausted — rethrow to outer catch.
             throw err;
           }
-          const baseMs = LLM_BACKOFF_SCHEDULE_MS[attempt]!;
-          // R164 (VLM-008 mirror): jitter by 0-500ms so concurrent
-          // sessions retrying in lockstep don't thundering-herd the LLM.
-          const waitMs = baseMs + Math.floor(Math.random() * 500);
-          console.warn(
-            `[agent-loop] LLM stream attempt ${attempt + 1} failed ` +
-            `(${isRateLimitError(err) ? '429 rate limit' : 'transient error'}) — ` +
-            `retrying in ${(waitMs / 1000).toFixed(1)}s ` +
-            `(${LLM_BACKOFF_SCHEDULE_MS.length - attempt} retries left). error: ${err instanceof Error ? err.message : String(err)}`,
+          await retryWithBackoff(
+            rateLimited ? '429 rate limit' : 'transient error',
+            err instanceof Error ? err.message : String(err),
           );
-          // R164: reset the assembler + chunkSeqs so the retry's chunks
-          // don't concatenate with the failed attempt's partial chunks
-          // (which would produce garbled assistant/message content).
-          // The old chunk events stay in the durable log for audit but
-          // are NOT surface-eligible, so the LLM never sees them.
-          assembler = new BlockAssembler();
-          chunkSeqs = [];
-          // Interruptible sleep — if abort fires during the wait, exit
-          // immediately instead of waiting the full backoff.
-          await new Promise<void>((resolve, reject) => {
-            const t = setTimeout(() => {
-              this.controller.signal.removeEventListener('abort', onAbort);
-              resolve();
-            }, waitMs);
-            const onAbort = () => {
-              clearTimeout(t);
-              reject(new DOMException('Agent loop aborted during backoff', 'AbortError'));
-            };
-            this.controller.signal.addEventListener('abort', onAbort, { once: true });
-          }).catch((e) => {
-            // If the abort fired during the sleep, re-throw to the outer
-            // catch block so turn/end { kind: 'aborted' } is emitted.
-            throw e;
-          });
           attempt += 1;
         }
       }
@@ -685,6 +724,24 @@ export class AgentLoop {
   private setStatusIdle(): void {
     this.status = 'idle';
     this.ctx.emit('agent/status', { sessionId: this.session.id, status: 'idle' });
+  }
+
+  /**
+   * AG2-02: public entrypoint to the R164 (AGENT-004) orphaned tool-call
+   * recovery.
+   *
+   * The regenerate route MUST run this BEFORE computing its
+   * surfaceOp.replace range: recovery appends synthesized tool/result
+   * events with seqs beyond the pre-recovery tail, and a replace range
+   * that stops before them leaves dangling tool messages on the surface
+   * after their parent assistant tool_calls message is dropped — a
+   * permanent wire-format 400 for every subsequent LLM call in the
+   * session. Recovery is idempotent (drive() re-runs it as a no-op) and
+   * only appends tool/result + turn/end events, so it never disturbs the
+   * last user/message seq the route computes afterwards.
+   */
+  recoverOrphans(): void {
+    this.recoverOrphanedToolCalls();
   }
 
   /**

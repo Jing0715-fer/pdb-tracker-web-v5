@@ -5,6 +5,15 @@
  * step. The body is a list of { callId, name, ok, result?, error? }. The
  * manager appends tool/result events to the session log and continues the
  * loop.
+ *
+ * Gates (in order):
+ *   - AG2-10: ≤32 results per request; each result ≤4MB serialized.
+ *   - R168 (AGENT-M5) + AG2-04: every callId must match an UNRESOLVED
+ *     tool/call; a callId may appear at most once per request body.
+ *   - AG2-03: the submitted name must match the RECORDED tool/call name;
+ *     approval + screenshot gating key off the recorded name.
+ *   - R164 (AGENT-001): approval-required tools need an approval/decided
+ *     event before their results are accepted.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -56,25 +65,66 @@ export async function POST(
     return NextResponse.json({ error: 'results array is required' }, { status: 400 });
   }
 
+  // AG2-10: server-side payload caps. A single request previously had NO
+  // bound on the number of results or the size of each result payload
+  // (screenshot results bypass truncation entirely by design), so one POST
+  // could balloon the SQLite rows, the in-memory event log, and the LLM
+  // context.
+  const MAX_RESULTS_PER_REQUEST = 32;
+  const MAX_RESULT_JSON_CHARS = 4 * 1024 * 1024; // 4MB serialized
+  if (body.results.length > MAX_RESULTS_PER_REQUEST) {
+    return NextResponse.json(
+      {
+        error: `results: too many items (${body.results.length}); the maximum is ${MAX_RESULTS_PER_REQUEST} per request`,
+      },
+      { status: 400 },
+    );
+  }
+  for (const r of body.results) {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(r.result ?? null);
+    } catch {
+      serialized = String(r.result);
+    }
+    if (serialized.length > MAX_RESULT_JSON_CHARS) {
+      return NextResponse.json(
+        {
+          error: `result for callId "${r.callId}" is too large (${serialized.length} chars serialized; the maximum is ${MAX_RESULT_JSON_CHARS} chars)`,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   // R168 (AGENT-M5): every submitted callId must match an UNRESOLVED
   // tool/call of this session. Previously any callId was accepted — a
   // fabricated or double-submitted result produced tool messages without
   // (or doubled against) their assistant tool_calls blocks, a wire-format
   // violation that breaks the next LLM call (OpenAI/ZAI require every
   // tool_calls message to be followed by exactly one tool message per id).
+  //
+  // AG2-03: build a callId → RECORDED tool name map (from tool/call
+  // events) instead of a bare id set. The approval gate below and the
+  // loop's screenshot/pdb_analyze handling must key off the RECORDED name,
+  // never the client-submitted one — a forged name ('pdb_analyze') could
+  // otherwise bypass the export_snapshot/clear_chat approval gate, and a
+  // forged 'capture_multi_angle' could bypass the 3000-char truncation.
   const events = manager.getEvents(sessionId);
-  const pendingCallIds = new Set<string>();
+  const pendingCalls = new Map<string, string>(); // callId → recorded tool name
   for (const ev of events) {
     if (ev.type === 'tool/call') {
-      const data = ev.data as { callId?: string };
-      if (data.callId) pendingCallIds.add(data.callId);
+      const data = ev.data as { callId?: string; name?: string };
+      if (data.callId) pendingCalls.set(data.callId, data.name ?? '');
     } else if (ev.type === 'tool/result') {
       const callId = (ev.data as { message?: { source?: { callId?: string } } })?.message?.source?.callId;
-      if (callId) pendingCallIds.delete(callId);
+      if (callId) pendingCalls.delete(callId);
     }
   }
+  const recordedNames = new Map<string, string>();
   for (const r of body.results) {
-    if (!pendingCallIds.has(r.callId)) {
+    const recorded = pendingCalls.get(r.callId);
+    if (recorded === undefined) {
       return NextResponse.json(
         {
           error: `callId "${r.callId}" does not match a pending tool call (unknown, already resolved, or duplicated)`,
@@ -82,6 +132,19 @@ export async function POST(
         { status: 409 },
       );
     }
+    if (r.name !== recorded) {
+      return NextResponse.json(
+        {
+          error: `submitted tool name "${String(r.name)}" does not match the recorded tool call name "${recorded}" for callId "${r.callId}"`,
+        },
+        { status: 409 },
+      );
+    }
+    // AG2-04: consume the pending entry IN this loop — a duplicate callId
+    // within the SAME request body fails the lookup above (the wire format
+    // allows exactly one tool message per tool_call_id).
+    pendingCalls.delete(r.callId);
+    recordedNames.set(r.callId, recorded);
   }
 
   // Security gate: verify approval-required tools have a corresponding
@@ -111,11 +174,14 @@ export async function POST(
     }
   }
   for (const r of body.results) {
-    if (requiresApproval(r.name)) {
+    // AG2-03: gate on the RECORDED name (validated above to match the
+    // submitted one) — never trust the client-submitted field.
+    const recordedName = recordedNames.get(r.callId) ?? r.name;
+    if (requiresApproval(recordedName)) {
       if (allowedCallIds.has(r.callId)) continue; // approved → any result OK
       if (rejectedCallIds.has(r.callId) && !r.ok) continue; // rejected → only error results OK
       return NextResponse.json(
-        { error: `Tool "${r.name}" requires approval before results can be submitted (or, for a rejected approval, submit an error result)` },
+        { error: `Tool "${recordedName}" requires approval before results can be submitted (or, for a rejected approval, submit an error result)` },
         { status: 403 },
       );
     }
@@ -126,7 +192,9 @@ export async function POST(
       sessionId,
       body.results.map((r) => ({
         callId: r.callId as CallId,
-        name: r.name,
+        // AG2-03: pass the RECORDED name (not the client's) so the loop's
+        // SCREENSHOT_TOOLS / pdb_analyze handling can't be spoofed either.
+        name: recordedNames.get(r.callId) ?? r.name,
         ok: r.ok,
         result: r.result,
         error: r.error,

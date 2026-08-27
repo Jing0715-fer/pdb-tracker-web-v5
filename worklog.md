@@ -4322,3 +4322,230 @@ Stage Summary:
 - 用户四项要求全部落地：label 与链同色（主题工厂直查，构造即正确）、侧链 stick 元素着色（param 名修复 + 主题更新排除侧链组件双保险）、cartoon 0.4 透明度（官方 transparency transform，侧链保持实心，截图后自动清除）、远处 label 距离补偿放大（textSize×sizeFactor×ratio，clamp 2.6）。
 - 附加修复：measure.ts 3 处同型 addRepresentation 参数 bug（element 主题名不存在 + colorTheme prop 无效）。
 - 关键 API 发现：plugin.representation.structure.themes.colorThemeRegistry 可直查任意内置主题的真实着色——为未来"标签/注记与结构同色"类需求提供了通用方案。
+
+---
+Task ID: 2-d
+Agent: Explore (code review: frontend components)
+Task: 全面代码审查 — 前端组件 + hooks
+
+Work Log:
+- 读取 worklog 尾部（R160-R171 + UI-016~022 修复记录），建立"已修复勿重报"清单（aria-label/审批聚焦/⌘⇧R/截图守卫/urlTransform/10MB 导入上限/SSE 死亡上限/drive abort 等）。
+- 深读核心链路：agent/ChatPanel.tsx（782 行）、agent/use-agent-session.ts（1674 行，逐段）、agent/ToolCallCard.tsx、agent/ApprovalPanel.tsx、SessionHistorySidebar、ToolStatsPopover。
+- 深读分析视图：structure-analysis-view.tsx、analysis-right-panel.tsx（Chat 挂载点）、analysis-left-panel.tsx（Contacts/交互分析段）、use-analysis-keyboard-shortcuts.ts、use-atom-picking.ts、chart-renderer.tsx、viewer-tools-tabs.tsx（抽读关键 effect）。
+- 深读 3D 查看器集成：molcraft-viewer.tsx、use-molstar-loader.ts、measure-overlay.tsx（rAF 绘制循环）、PdbViewerLite.tsx（挂载/加载 effect）。
+- 读布局链：app/page.tsx、app/layout.tsx（含 chunk-retry 内联脚本）、pdb-tracker.tsx（footer 挂载点、mode 切换结构、entries/fetch 系）、enhanced-footer.tsx。
+- 读 hooks/状态层：lib/use-run-stream.ts、lib/use-swr.ts、lib/molcraft/store.ts（selector/addStructure/dispose 路径）；grep 验证 useEntriesSWR 等为死代码、sessionId 无 localStorage 持久化。
+- 交叉验证服务端事件顺序（lib/agent/loop.ts submitToolResults 逐 result 追加 tool/result；assistant message 一次性追加全部 tool/call）以坐实 projectNodes 回放匹配 bug；验证 vlm-capture-loop 的 signal 检查点位置（仅 VLM 调用前，不含 executeCapture）。
+- XSS 复核：report-markdown.tsx（escapeHtml+sanitize）、LiteraturePaperNotes.tsx（先转义再 DOMPurify 白名单）— 安全；dangerouslySetInnerHTML 仅此两处 + layout 内联主题脚本（无用户输入）。
+- 布局复核：page.tsx `h-screen flex flex-col` + main `flex-1 min-h-0` + EnhancedFooter `flex-shrink-0 mt-auto` — footer 恒定贴底，结构合规（无发现）。
+
+Stage Summary:
+- FE-01 (High) use-agent-session.ts:434-486 — projectNodes 的 tool/result 反向匹配循环在"从末尾数第一个 tool-call 节点"处无条件 `break`（注释自认 "matched or not"）。事件序为 callA,callB,resultA,resultB（loop.ts 按调用序追加），处理 resultA 时从尾找到的是 callB → callId 不匹配 → 直接 break，resultA 被丢弃。活体路径靠 executionsRef 在后续重投影自愈，但重放路径（刷新/切回历史会话/fork，executionsRef 为空）永不自愈：多工具步骤中除最后一个 call 外全部卡片永远停在 "pending"（ToolCallCard 100ms 计时器常转），截图结果回放丢失（R139/UI-003 的 JSON 回退分支被 break 短路，永远走不到）。修复：匹配到才 break，否则 continue 继续向前找。
+- FE-02 (High) analysis-right-panel.tsx:248-254 + use-agent-session.ts:551-572 — `{tab === "chat" && <AgentChatPanel />}` 条件渲染使切到 Reports/Results 再切回即卸载重挂 ChatPanel；挂载 effect 每次都 POST /api/agent/sessions 建新会话，且 sessionId 无 localStorage 持久化 → 进行中的对话凭空消失，用户必须去历史侧栏找回旧会话；服务端累积孤儿会话。切 mode（analysis→weekly→analysis）同款问题且连 Molstar 一起重建。建议：面板 keep-alive（display:none 或提升 session 状态到 store/context），或挂载时恢复最近 sessionId。
+- FE-03 (High) use-agent-session.ts:949/1229 + ToolCallCard.tsx:210/616 — `vlmPending`/`autoCapturePending` 置 true 后任何路径都不清 false：VLM/截图失败时 ToolCallCard 永远显示 "VLM 分析中…"/"正在自动截图 + VLM 分析…" 旋转；ToolCallCard.tsx:232 的 autoCaptureError 错误分支被 210 行的 pending 条件永久遮蔽（死代码）；pairwise 分支 allScreenshots.length===0 时同样永久 spinner。修复：结束（成功/失败/零截图）时统一 `pending=false` 或让 210 行条件加 `&& !r.autoCaptureError`。
+- FE-04 (Medium) use-agent-session.ts:800-880 — executeToolCall 不可中止：driveLoop 仅在工具调用前后检查 abort，pdb_load 执行中的 2.5s sleep + RCSB fetch + addStructure 在会话切换 abort 后照常完成 → 新会话的 store/结构列表出现"幽灵结构"（viewer 已被 clearViewerStructures 清空）。应传入 controller.signal 并在 addStructure 前检查。
+- FE-05 (Medium) measure-overlay.tsx:233-424 — 绘制循环无条件 `requestAnimationFrame(draw)` 常驻 60fps，且每帧做 getBoundingClientRect ×2 + document.querySelector('.molstar-viewer')/querySelectorAll('canvas')（强制布局 + DOM 查询），即便 measurements/interactionLines/pending 全空也照跑，与 WebGL 渲染抢主线程。建议：无可绘制内容时跳出循环（数据变化时重启），或订阅 canvas3d camera 事件按需重绘。
+- FE-06 (Medium) use-agent-session.ts:1028-1073（pairwise 逐对 executeCommand 之间）+ vlm-capture-loop.ts:392（迭代 capture 前）— abort 后仍继续对已被清空的 viewer 逐对/逐迭代 capture，浪费 GPU/CPU（结果写入已重置的 executionsRef，不污染新会话 UI，但与 R164 abort 保护的初衷相悖）。
+- FE-07 (Medium) ChatPanel.tsx:156-181 — 会话导入失败仅 console.error，无 toast、无错误横幅（对比 analysis-right-panel.tsx:157 有 toast）；坏 JSON / 服务端 500 时用户毫无反馈。
+- FE-08 (Medium) analysis-left-panel.tsx:1104-1106 — Contacts 分析硬编码 `chain1:"A",chain2:"A"`（hbonds/salt_bridges/hydrophobic）：无 A 链结构静默 0 结果、跨链界面全部漏报；:999-1013 配体探测 effect 无 cancelled 守卫，快速切换结构时旧响应可将过期 ligandCompId 写入新结构并触发错误组合的 fetchContacts。
+- FE-09 (Low) use-run-stream.ts:90-97/199-219 — start() 先 abort 旧流，旧流的 AbortError 分支随后 setState 把新流的 running:true 覆盖成 done+cancelled（无 `abortRef.current === ctrl` 守卫）；Run 面板的 disabled 大部分挡住该路径，属边缘竞态。
+- FE-10 (Low) lib/use-swr.ts — useEntriesSWR/useActivitySWR/useEvaluationsSWR/useLitStatsSWR 全项目零引用（死代码）；且 `revalidateOnMount: false` 一旦被采用会导致无缓存时首次不请求的隐患。
+- FE-11 (Low) SessionHistorySidebar.tsx:151-186 — 列表项 `<button>` 内嵌删除 `<button>`（无效 HTML，onClick 需 stopPropagation 自救；当前 onDelete 未传属死路径）；:56-60 注释写 15s 实际 5s 轮询。
+- FE-12 (Low) ChatPanel.tsx:348-361 + use-agent-session.ts:738-741 — 会话节点列表无虚拟化，每个 SSE 事件触发全量 projectNodes + 全节点重渲染（NodeRenderer/ToolCallCard 无 React.memo），长会话 O(n²) 退化（UI-007 只节流了进度 tick）。
+- FE-13 (Low) use-agent-session.ts:1258-1280 — waitForApproval 的 300ms 轮询 interval 在组件卸载后不清除，最长泄漏 5 分钟并在卸载后 setState。
+- FE-14 (Low) ToolStatsPopover.tsx:33-40（同 SessionHistorySidebar refresh）— fetch 无 AbortController/时序守卫，快速开关时旧响应可能覆盖新响应。
+- 复核通过（无发现）：footer 贴底结构；page 级 ErrorBoundary + SSE sseDead 横幅；molstar-viewer 的 dispose/store 清理守卫与 ResizeObserver 清理；ReactMark 的 safeUrlTransform（R169）覆盖 LLM 内容、ReportMarkdown/PaperNotes 的 HTML 转义+DOMPurify；ApprovalPanel 单次闩锁与 UI-017 聚焦；store 的 selector/addStructure 去重逻辑。
+
+---
+Task ID: 2-c
+Agent: Explore (code review: API routes + data layer)
+Task: 全面代码审查 — API 路由 + 数据层（agent/analyze/vlm/cli/molcraft 除外）
+
+Work Log:
+- 读 worklog.md（Tasks 1–11 / R160–R171 全部上下文）：确认已修范围（VLM 路由限流/超时/载荷上限、analyze/run 参数白名单 + CHILD_ENV + 缓存 GC、agent 会话路由 callId 校验 + settings 校验、UI-022 客户端文件上限），避免重复报告。
+- 盘点范围内 ~70 个 route.ts（按行数排序）+ 数据层/共享库 12 个文件，按优先级审查：外部网络（pubmed-fetch、literature/*、pdb-download、pdb-image、ligand、sequence、contacts、validation、rama、annotations、entities、pdb-weekly/run、evaluations/run）→ 文件 I/O（weekly-report-file、eval-report-file、report/[id]、batch-report、import、share、target-evaluation 报告落盘）→ LLM 调用（llm/chat、llm/chat/stream、llm/icon、llm/providers、llm/refresh、llm/agent/round、ai-analysis、ai-summary、ai-weekly-summary）→ 写操作（comments、annotations、evaluations、db-config、seed-demo）→ 其余只读路由 skim（entries、evaluations 列表、activity、snapshots、stats、skill-runs、health、warmup、docs、citations、literature/stats|papers|reports|daily/*、batches、reports、pubmed_articles、structure-compare、evaluation-report(s)、evaluations/[uniprotId]、evaluations/batch）。
+- 全量读取：db.ts、cache-utils.ts、rcsb.ts、pubmed.ts、llm.ts（1873 行）、fetch-with-abort.ts、request-queue.ts、sse.ts、paths.ts、logger.ts、schema.prisma、db/batch.ts；llm.ts 重点核查 CLI 适配器 spawn（argv 传参无 shell 注入、runCliInWsl POSIX 单引号转义正确）、callZai/Anthropic/Openai 超时、icon 解析、会话注册表磁盘持久化。
+- 交叉验证关键疑点：① git log + rg 确认 /api/llm/agent/round 在 Task 4-1 声称删除后被 Task 8-c git 同步复活，现存文件零活引用（仅注释）但仍是可编译可达的未鉴权 LLM 端点；② 确认 rate limiter 仅存在于 vlm/select-best（R165），其余 LLM 路由无任何限流；③ 确认 llm/chat/stream 全文无 request.signal/abort 处理；④ 确认 target-evaluation.ts:996 文件名中 uniprot 未消毒（仅 proteinName 消毒）且 generateEvaluationReport/evaluations/run 均不做 uniprot 格式校验（runTargetEvaluation :697 有校验但 report/run 路径绕过）+ REPORT_DIR 硬编码 /Users/lijing/...；⑤ 确认 db-config POST create=true 先 fs.writeFile(Buffer.alloc(0)) 再做任何校验；⑥ 确认 evaluations/run targets[]/maxPdb/maxBlastHits 无上限钳制且 1870 行按 targets.length 循环；⑦ 确认 pubmed-fetch 的 NCBI fetch 无 AbortSignal（route 内其他库调用均有）；⑧ 确认 report/[id] parseInt NaN、entries limit=abc NaN、pdb-download 缺 4 字符校验等输入验证不一致。
+- 良好项记录（未报告）：comments/annotations/share/citations 全部参数化 + 白名单/上限（citations pmids 上限 200 + 数字校验）；entries LIKE 转义 + limit 上限 + hasMore；rcsb.ts/pubmed.ts 库层 fetch 均带 AbortSignal.timeout；pdb-image 校验 + 超时 + 多源回退；import/ligand/report 文件路由无遍历（batch-report 用 map 白名单挡住 traversal，但路径本身失效）；sse/logger/request-queue/fetch-with-abort/paths 设计合理；db-list 仅扫描固定目录。
+- 未做任何代码修改（research-only 任务）。
+
+Stage Summary:
+- 共 15 项发现（3 High / 5 Medium-High 或偏高 Medium / 7 Medium-Low），按优先级：
+  - API-01 (High) evaluations/run：targets[] 数量与 maxPdb/maxBlastHits 无上限 → 未鉴权外部 API 风暴（RCSB+BLAST+LLAST+LLM 逐 target 循环，route.ts:273-283/878/1870）；建议 targets≤20、maxPdb≤200、maxBlastHits≤100。
+  - API-02 (High) db-config POST：任意绝对 dbPath + create:true → fs.writeFile(Buffer.alloc(0)) 先截断后校验，等于无鉴权任意文件清零原语 + bunx prisma db push --accept-data-loss（db-config/route.ts:244-264）；同类：seed-demo force=true 全库 deleteMany。建议锚定 dbDir() + .db 后缀白名单。
+  - API-03 (High) target-evaluation.ts:843/996/1014：REPORT_DIR 硬编码 /Users/lijing/... + 报告文件名中 uniprot 未消毒（evaluations/run:275 与 report/run 路由均不校验格式）→ saveToFile=true 时 ..%2F 可越出报告目录写文件；建议两端补 /^[A-Z][A-Z0-9]{5}$/ 校验 + 文件名统一消毒 + REPORT_DIR 走 env/writableRoot。
+  - API-04 (Medium-High) pubmed-fetch：NCBI esummary fetch 无超时（route.ts:103-107）+ pubmedIds 数组无数量上限（仅数字校验）→ 挂起连接无限阻塞 / 超长请求；建议 AbortSignal.timeout + 上限 500 + maxDuration。
+  - API-05 (Medium-High) LLM 路由缺 VLM-006 同款防护：llm/chat、llm/chat/stream、ai-summary、ai-weekly-summary 无限流无载荷上限；buildUserPrompt 的 context.analysisResults 逐条 ×~2KB 无条数上限、message.content 无长度上限 → 可构造数 MB prompt（spawn E2BIG / 巨额 token）；llm/chat/stream 全程不检查 request.signal，客户端断开后 generateText + 30ms 打字机定时器继续跑（stream/route.ts:180-285）。
+  - API-06 (Medium) llm.ts callZai/callAnthropic/callOpenai 无超时（:1782-1851）——VLM 路由有 55s、agent-loop 有 120s（AGENT-M6），唯独 run-center SDK 分支无；建议同样 AbortSignal.timeout(90-120s)。
+  - API-07 (Medium) llm/icon：客户端可传任意绝对 bin 路径 → findBrandIcon 从任意目录向上扫描读 icon/logo 命名文件（任意目录探测 + 限定名文件读取）+ _iconCache 仅按 provider id 键控可被首个调用投毒（llm/icon/route.ts:31-43 + llm.ts:1862-1873）；建议对照 inspectProviders 的 bin 校验 + 缓存键含 bin。
+  - API-08 (Medium) import 路由：file.text() 无大小上限、记录数无上限、逐行 upsert 无批量（route.ts:204-272）→ 大文件 OOM / 小时级写放大；UI-022 只修了客户端会话导入，服务端导入未设防。
+  - API-09 (Medium) 复活的 /api/llm/agent/round：Task 4-1 记录已删除、Task 8-c git 同步静默恢复；零活引用但仍是编译可达的未鉴权无限流 LLM 端点，且携带 AGENT-002 修复前的发散系统提示词——与 MOL-M9 同类"死文件复活 vs worklog"问题；建议 git rm 并在 CI 加存在性断言。
+  - API-10 (Medium) sequence/validation/contacts/annotations/entities 的外部 fetch 仅 next:{revalidate} 无超时，rama 更是裸 https.get 无 timeout——上游挂起则请求无限挂起（对比 pdb-image/rcsb.ts 均有 10-15s 超时）；建议统一补 AbortSignal.timeout。
+  - API-11 (Medium) evaluations 列表：per-batch 循环查询 N+1（route.ts:45-54）+ individualEvals/allEvaluations 两轮重复 SELECT *（含 report/abstracts 全文）→ 数 MB 响应；建议 JOIN+GROUP BY + select 列 + 分页。
+  - API-12 (Low-Medium) 无界全表读：literature/papers（SELECT a.* 无 LIMIT + 全量 pmid IN 列表）、pubmed_articles（整表）、reports（含全文 content）——文献库上万后响应巨大且 IN 占位符可能触顶；建议 LIMIT+分页。
+  - API-13 (Low-Medium) batch-report 硬编码 EVALS_DIR=/Users/lijing/Documents/my_note/LLM-Wiki/wiki/evaluations → 任何其他环境恒 404"file not found on disk"（batch-report/[batchId]/route.ts:5）；建议改 env/writableRoot 或入库（SkillEvaluationReport 模式）。
+  - API-14 (Low) db.ts Proxy 每次 db.* 属性访问都 existsSync+readFileSync+JSON.parse db-config.json——每查询一次同步磁盘读（db.ts:94-108/34-56）；建议加 TTL 缓存或仅在 recreatePrismaClient 时重读。
+  - API-15 (Low) 输入校验/错误形状不一致：report/[id] parseInt NaN→500（:10-12）；entries ?limit=abc→NaN LIMIT→500（:56-57）；pdb-download/[pdbId] 缺 4 字符格式校验（:7-11，与 pdb-image 不一致）；share/db-config/llm-chat/skill-runs-log 等直接回传 err.message（可能含绝对路径）。建议统一错误助手 + 数值参数校验。
+- 良好面：SQL 注入面整体干净（全部 Prisma 参数化 / ? 占位符 + 白名单）；RCSB/PubMed 库层超时齐备；comments/citations/share 的上限+消毒是范围内最佳实践样板。
+
+---
+Task ID: 2-a
+Agent: Explore (code review: agent subsystem)
+Task: 全面代码审查 — agent 子系统（src/lib/agent + src/app/api/agent）
+
+Work Log:
+- Read worklog.md（R160-R171 Stage Summaries，特别是 Task 8-a 的 AGENT-M1~M10/L1~L10 全文、R164-R165 的 AGENT-001~011、R168/R169 修复明细）建立"已修复排除清单"，避免重报。
+- Full Read（非 grep-only）所有 in-scope 文件：manager.ts(660)、loop.ts(843)、inbox.ts、session/{index,surface,types,settings}.ts、persistence.ts、truncate.ts、session-title.ts、prompt.ts、context.ts、types.ts、index.ts、llm/{adapter,assembler,types,zai-adapter,signal-utils}.ts、tools/{registry,types,approval}.ts、pdb-tools.ts、providers/{catalog,credentials,index,openai-compat-adapter}.ts。
+- Full Read 所有 API 路由：sessions(POST/GET)、sessions/import、[sessionId](GET/DELETE)、messages、tool-results、events(SSE)、fork、regenerate、settings、approval、resume、export、feedback、tool-stats、providers(POST/DELETE)、providers/[providerId]/models、providers/test。
+- 关键交叉验证：prisma/schema.prisma（AgentSessionEvent 的 (sessionId,seq) 仅为普通 index 非 unique）；use-agent-session.ts 客户端 mount/SSE/driveLoop/regenerate 守卫与 drivingRef 语义（校准竞态真实性）；SessionSettingsPopover 的 availableProviders 过滤（校准 AG2-05 触发面）；ProvidersPanel 对 /api/agent/providers/test 的调用（确认路由存在，Glob 首查漏报后以 ls 复核）。
+- 逐条 ±30 行上下文复核的结论：① loop.ts:318-381 重试 catch 只捕获"抛出型"错误，而两个适配器把一切 provider 错误（含 429）转成 yield finish-error chunk——AGENT-005 的重试对 provider 错误不可达；② regenerate 路由在 drive() 入口 orphan-recovery 之前计算 replace [start,end]，恢复事件 seq 超出区间 → 悬空 tool 消息留在 surface；③ tool-results 路由用客户端提交的 r.name 做 requiresApproval/SCREENSHOT_TOOLS 判定而非 tool/call 事件里记录的名字；④ 同批 results 内部重复 callId 不去重；⑤ prepareCall/assemble 在 try 块之外；⑥ openai-compat 的 timeout.dispose() 在 resp.text() 之前；⑦ resumeSession 无 in-flight 去重；⑧ import 路由绕过 R168-M10 的 settings 校验；⑨ 会话标题 LLM 调用无超时。
+- 检查过并排除的疑点（避免误报）：events SSE 的 replay→subscribe 为同一同步块（无事件丢失窗口）；Session.append 的 nextSeqFloor 与 SurfaceManager 增量 fold 的边界引用判等正确；Inbox.claim 空领取分支为不可达防御代码；dispatch 的超时竞争/监听器清理已被 R168-M8 正确修复；tool-stats/feedback/export 路由无新问题；providers/test 路由存在且超时/清理完备（manager.testProvider 反成死代码）。
+
+Stage Summary:
+- 14 项新发现（3 High + 7 Medium + 4 Low），均不在 R160-R171 已修复清单内：
+  - AG2-01 (High) loop.ts:326-336+396-400 / zai-adapter.ts:155-163 / openai-compat-adapter.ts:158-184 — R164 AGENT-005 的 429/瞬时错误重试实际不可达：两个适配器把所有 provider 错误 yield 成 finish-error chunk 而非 throw，for-await 正常结束走 break，错误在 396 行直接 return error——单个 429 仍然杀死整个 turn（与 R164 注释宣称的行为相反）。唯一会 throw 的路径是 ZAI.create() 失败。
+  - AG2-02 (High) loop.ts:173+232-237 × regenerate/route.ts:66-90 — 客户端中途掉线后点"重新生成"：regenerate 路由先算 replace [lastUserSeq+1, lastEventSeq]，随后 drive() 入口的 AGENT-004 orphan recovery 追加的合成 tool/result（seq > replaceEnd）不被 replace 覆盖，而其宿主 assistant tool_calls 消息被移除 → surface 悬空 tool 消息 → 后续每次 LLM 调用 wire-format 400，会话永久性损坏。
+  - AG2-03 (High) tool-results/route.ts:100-122 + loop.ts:523 — 安全门用客户端提交的 r.name 判定 requiresApproval 与 SCREENSHOT_TOOLS，不与 tool/call 事件记录的名字核对：伪造 name='pdb_analyze' 可绕过 export_snapshot/clear_chat 审批门（提交成功结果），伪造 name='capture_multi_angle' 可绕过 3000 字符截断向 LLM 注入无界文本。
+  - AG2-04 (Medium) tool-results/route.ts:66-85 + loop.ts:513 — 同一请求体内重复 callId 不去重（pendingCallIds 从事件日志构建、批内不递减）→ 两条 tool/result 同 callId → 下次 LLM 调用违反"每个 tool_call_id 恰一条 tool 消息"约束。
+  - AG2-05 (Medium) loop.ts:240-304 — prepareCall（adapter 未注册时 throw，adapter.ts:63）与 assemble/renderPrompt/deriveMessages 均在 try 之外：适配器缺失（供应商 key 删除后重启 / 默认供应商被污染）→ 未捕获异常 → status 卡 'running'（idle 驱逐永不触发）+ turn 悬开 + 路由 500；LlmRuntime.stream 本有优雅 error-chunk 路径（adapter.ts:74-83）但被 prepareCall 的 throw 击穿。
+  - AG2-06 (Medium) providers/route.ts:31-44 + sessions/route.ts:20-23 + credentials.ts:63-72 — POST /providers 的 setDefault/providerId 无 catalog 校验（持久化垃圾默认供应商→ 所有新会话 provider 无适配器 → 叠加 AG2-05 全局不可用）；POST /sessions 的 body.agent（provider/model/maxStepsPerTurn/temperature）原样透传 AgentOptions，零校验。
+  - AG2-07 (Medium) openai-compat-adapter.ts:149-166 vs 169/189 — timeout.dispose() 在 fetch finally 中执行，resp.text()（169 错误分支 / 189 正常分支）在 dispose 之后运行：服务器发完响应头后 body 停滞 → text() 永久挂起 → drive 永久持有 driveLock，该会话后续全部请求排队挂死（AGENT-M6 的超时只覆盖到响应头）。
+  - AG2-08 (Medium) manager.ts:341-349+468-473 — resumeSession 无 in-flight 去重（check-then-act 竞态）：两个并发冷启动请求（SSE ensureSession + POST messages 的 getLoop→resume，R168-M1 空闲驱逐后常见）各建一套 Session/AgentLoop，后写覆盖前者 → 先到请求可能持有孤儿 loop：followup 进了孤儿 inbox 而 manager.drive 驱动 map 里的新 loop → 用户消息静默丢失（未持久化）；settings POST 写进孤儿 session 时设置静默失效。
+  - AG2-09 (Medium) sessions/import/route.ts:40-61 — 导入重放 ev.data 原样进 session/settings 事件，完全绕过 R168-M10 的 validateSettingsBody：导入 {maxStepsPerTurn:0, temperature:"x"} 即可持久性打挂会话；事件数量/单条大小亦无上限（客户端 UI-022 的 10MB 上限只挡 UI 路径）。
+  - AG2-10 (Medium) messages/route.ts:50-56 + tool-results/route.ts:55-57/124-134 — 服务端零载荷上限：content 无长度上限、results 数组无条数上限、单条 result 无大小上限（截图白名单路径完全免截断）→ SQLite 行 + 内存 eventLog + LLM 上下文均可被单请求撑爆。
+  - AG2-11 (Low) approval/route.ts:49-52 + manager.ts:438-452 — resolveApproval 全局扫描所有内存 session 的 callId，不校验属于当前路由 sessionId：A 会话路由可决议/写日志到 B 会话。
+  - AG2-12 (Low) session-title.ts:52-76 + manager.ts:320 — 标题生成 LLM 调用无超时、无 abort signal、每次重新 ZAI.create()（无缓存）：挂起的 SDK 调用永久滞留（void 掉不 crash 但泄漏）。
+  - AG2-13 (Low) manager.ts:184-190 — 审批 resolver 的 req.signal abort 监听器正常决议后不移除（每次审批在 loop controller 上累积一个监听器 + 闭包）；当前该路径不可达（defense-in-depth），属潜伏泄漏。
+  - AG2-14 (Low) manager.ts:251-288 + providers/[providerId]/models/route.ts:44-46 — manager.testProvider 35 行零调用死代码（providers/test 路由自带独立实现）；models 路由接受 apiKey 查询参数（密钥进 URL/访问日志）。
+- 修复建议已随各条目给出（见最终报告）：核心方向是让适配器 throw 而非 yield 错误 chunk（或在循环内检查 finish.kind==='error' 并纳入重试）、regenerate 前先跑 orphan recovery 再算 replace 区间（或拒绝存在未决 tool/call 时 regenerate）、tool-results 用 tool/call 事件记录的 name 判定审批/截断、批内 callId 去重、resumeSession 加 in-flight promise map、import 复用 validateSettingsBody、统一服务端载荷上限。
+
+---
+Task ID: 2-b
+Agent: Explore (code review: molcraft pipeline)
+Task: 全面代码审查 — molcraft 可视化管线 + analyze/vlm/cli 路由
+
+Work Log:
+- 读 worklog.md（R158-R171 全部 Stage Summary + 3-b/8-b 历史发现清单），建立已修复项排除清单（MOL-001..009、MOL-M1..M9、MOL-L1..L5、VLM-001..013、PY-001..008、AGENT-*、90 项汇总）。
+- 逐文件精读 R170/R171 新增/重写代码：recipe-viz.ts（1220 行全文，含 hideOtherChains/restoreHiddenChains/buildChainLoci/collectChainIds/cleanup_previous/draw_pair_labels 两遍式/cartoon_transparency 接入）、chain-colors.ts（主题工厂 + 复刻 fallback）、cartoon-transparency.ts（applyOrUpdateTagged 透明层 + clearVizTransparency）、label-sizing.ts（getLociCenter/getLabelSizeRatios）、measurement-utils.ts（snapshot/diff/remove/clearAll）、commands.ts 的 executeMultiAngleCapture（1577 行中的 1128-1577：两遍式 label 循环 + cleanupCapture Step1/2/2b/2c/3/4 + finally）、camera.ts、loci.ts、structure-helpers.ts、selection-utils.ts、interactions.ts、screenshot-utils.ts、vlm-capture-loop.ts、vlm-client.ts、measure.ts（3 处 color prop 修复点）、command-schema.ts、domain-tools.ts、tool-definitions.ts、recipe-aliases.ts、recipe-runner.ts（缓存键统一验证）。
+- 对照 node_modules/molstar 5.11.0 源码逐一核验可疑 API：StateBuilder.to/delete/applyOrUpdateTagged（commonjs/mol-state/state/builder.js — Root.delete 对缺失 ref 静默 no-op、applyOrUpdateTagged 按 hasTags 全匹配在子节点中查找）、tryCreateComponent/tryCreateComponentFromExpression/tryCreateComponentStatic（builder/structure.js — applyOrUpdateTagged(keyTag) 会"更新"既有同名静态组件并合并 tags）、TransparencyStructureRepresentation3DFromBundle（非 decorator、params {layers:[{bundle,value}]}、官方 setStructureTransparency 同型）、MeasurementManager.state 六数组初始化 + addLabel 的 labelParams/visualParams 展开、Text.Params 全字段（customText/textSize/sizeFactor/offsetX/Y/Z/tether*/attachment 均存在）、createStructureRepresentationParams 的 string 路径只读 type/color/size/typeParams/colorParams（证实 R171 修复方向正确）、ThemeProvider.defaultValues 为属性、Loci.getCenter 支持 element-loci、bundle 内 lib.loci.Loci / StateTransforms / fromLoci 均存在。
+- 核验 use-agent-session.ts 的 pairwise 双对捕获分支（1019-1136）与 vlm-capture-loop 的交互（_pairIndex 池对齐、abort 信号传递）。
+- 审查 /api/analyze/run/route.ts（allowlist/GC/temp cleanup/错误分类）、/api/vlm/select-best/route.ts（限流/尺寸上限/超时/注入清洗）、cli-registry.ts 关键段（pyStr/pyNum/CHILD_ENV/getRecipe/pairwise_interactions analyze_pair 全文）。
+- git 取证：git ls-files + git log --diff-filter=D 确认 4-1 声称删除的 /api/llm/agent/round/route.ts 实际仍在（未删、仍 git 跟踪、无 D 提交），而 use-agent-loop/agent-loop 确已删除——补充 grep 确认该路由零调用方但仍为可达的 App Router POST 端点。
+- 未修改任何代码（review-only）；tsc/lint 未运行（无改动）。
+
+Stage Summary:
+- 10 项新发现（2 High / 6 Medium / 2 Low），全部为 90 项历史清单之外或声称已修但实际未修的项：
+- MOL2-01 (High) water/ligand 生命周期缺口：recipe-viz.ts:694-720 隐藏步骤经 tryCreateComponentStatic 的 applyOrUpdateTagged(keyTag) 给 preset 自带的 water/ligand 组件打上 water-hide/ligand-hide 并隐藏；cleanupCapture（commands.ts:1180-1259）无任何恢复步骤 → 首次 interactions 系分析后用户实时视图永久丢失配体显示；下一次分析的 cleanup_previous（recipe-viz.ts:659-667）把这些组件整棵删除，随后重建的静态组件无任何 representation → 配体/水从此不可再显示（set_representation 主路径用 updateRepresentationsType 不重建组件）。R170 移除 isRecapture-skip 后 viz 每轮重跑，放大了该破坏。修复：隐藏前记录组件+先前 isHidden，cleanupCapture 恢复可见性；cleanup_previous 只删"我们创建"的组件（按创建时记录的 ref），不要按 tag 删 preset 组件。
+- MOL2-02 (High) Task 4-1 声称删除的 src/app/api/llm/agent/round/route.ts 实际仍在且仍被 git 跟踪（无删除提交；3 个 chat 文件确实已删）——AGENT-002 的"遗留 prompt 漂移"端点仍活着：未鉴权、无限流、自带 36 工具旧 system prompt 直调 ZAI。应 git rm 该路由（及空目录）。
+- MOL2-03 (Medium) recipe-aliases.ts:157-161 normalizeRecipeName 的 fallback 返回原始串而非 normalized（`RECIPE_ALIASES[normalized] || recipe`）——R169 MOL-L5 修复对其自己的例子 "cross-pdb-rmsd" 无效（normalized= cross_pdb_rmsd 不在 ALIASES → 返回原串 → NO_INPUT 分支仍漏判 + getRecipe 400）。cross_pdb_rmsd/_aligned、align_and_superpose、align_save_transformed、per_residue_rmsd_two、blast_chain_id、entity_analysis、sequence_align/features、detect_pockets 等带空格/连字符变体全部失效。修复：`|| normalized`。
+- MOL2-04 (Medium) interactions.ts:64-69 show_interactions 在预构建 bundle 上因 lib.molscript 缺失恒提前 return（同 MOL-L4 已为 toggle_component_visibility 修复的同类问题），commands.ts:593-596 仍返回 ok:true "Showing neighborhood within X Å"——agent 以为成功。修复：改用 R170 的 loci→toExpression 邻域方案或如实返回 ok:false。
+- MOL2-05 (Medium) use-agent-session.ts pairwise 分支的 abort 传播缺口：998-999 创建 localController 并存入 vlmAbortRef，但 1052 的 executeCommand 捕获与 1103 的 selectBestWithRetry 均未传 signal（仅非 pairwise 的 runVlmControlledCaptureLoop:1173 用了）——会话切换后孤儿捕获+VLM 继续跑（VLM-002 修复未覆盖 R163 pairwise 路径，仅靠 90s fetch 超时兜底）。
+- MOL2-06 (Medium) /api/analyze/run 无请求体大小上限：body.fileContent/fileContent2（route.ts:276-279/300-313）不经任何长度校验直接 writeFile 到 /tmp——App Router route handler 无默认 body 限制，单个超大 body 全量进内存+落盘（VLM 路由 R165 已加 4.2M/图上限，此路由没有）。修复：加 Content-Length/字符串长度上限（如 20MB）。
+- MOL2-07 (Medium) pairwise _pairIndex 池回退不一致：use-agent-session.ts:1022-1025 的回退 = in_contact 过滤但【不排序】；recipe-viz.ts:489-494 的回退 = 【全量 pairs（含 in_contact:false）】。当所有 pair total<3 时（弱界面）两池顺序可错位 → 截图显示的链对与 carousel/VLM 标签的链对不同（且隐藏错误的链）。修复：两侧共用同一"过滤+排序"纯函数。
+- MOL2-08 (Low) vizAddedMeasurementRefs（recipe-viz.ts:42）在 cleanupCapture 成功后从不清空：下一轮 cleanup_previous（:633-637）对已删 refs 调 removeMeasurementCells——builder.delete 对缺失 ref 静默 no-op 但 removed++ 计数照加（measurement-utils.ts:114-124），"Removed N leaked measurement cells" 日志虚高，掩盖真实泄漏检测；__drainCaptureQueue 也不重置该模块态（与 camera 态不同）。
+- MOL2-09 (Low) 死代码簇：recipe-viz.ts:389-413 applyPreset 定义后零调用；domain-tools.ts registerDomainTools（:41）零调用方（活路径是 pdb-tools/use-agent-session 直连 executeCommand），连同 tool-registry.ts 构成 ~500 行死注册层，且其 :42 exec、:321-323 buildCommand 占位符从未使用；commands.ts:55 仍导入零使用的 checkIfBlackScreen。
+- MOL2-10 (Low) cartoon-transparency.ts:114-144 以【第一个结构】的全原子 bundle 构造透明层，却应用到【所有结构】的所有 cartoon representation——多结构场景下 bundle 的 unit id 与第二结构不匹配，Transparency.ofBundle 静默得到空层（罕见但无声失效）。修复：按 representation 所属结构各自 fromLoci。
+- 正面确认（R170/R171 关键假设成立）：applyOrUpdateTagged 幂等性、透明层 tag 挂在 Representation3D 子节点且父删级联、chain-colors 主题工厂 defaultValues 为属性且与 updateRepresentationsTheme 同源、measure.ts 3 处 color prop 修复与 createStructureRepresentationParams 源码一致、两遍式 label 循环的 ratio 按 prepared 索引对齐、addLabel labelParams 全字段存在、cleanup finally 全路径覆盖、measurement 六数组快照形状与 bundle 一致。
+
+---
+Task ID: 4-d
+Agent: subagent (molcraft fixes)
+Task: 修复 MOL2-01/03/04/06/08（water/ligand 组件损毁 + recipe 别名回退 + show_interactions no-op + analyze 载荷上限 + refs 计数虚高）
+
+Work Log:
+- 前置：读 worklog 尾部（R170/R171 + Task 2-b 的 MOL2 全部发现），全文精读 6 个目标文件（recipe-viz.ts/commands.ts/interactions.ts/measurement-utils.ts/recipe-aliases.ts/analyze/run/route.ts），并对照 node_modules/molstar 5.11.0 源码核验关键 API：tryCreateComponentStatic 的 keyTag=`structure-component-static-${type}` 与 applyOrUpdateTagged 的 tag 合并语义（builder/structure.js + state/builder.js）、structure-component helper 会给静态 water/ligand 组件打 label "Water"/"Ligand"（helpers/structure-component.js——证实 cleanup_previous 的 label 匹配同样命中 preset 组件，破坏路径比 review 描述的 tag 路径还多一条）、toggleVisibility→setSubtreeVisibility→cell.state.isHidden（behavior/static/state.js）、StateObjectSelector.ref/.cell、GridLookup3D.find(x,y,z,r)→{count,indices}（indices 为 unit.elements 内位置，与 StructureElement.Loci 索引约定一致，common.js Result.create 证实）、默认 auto preset 按结构尺寸分流到 polymerAndLigand（有 water/ligand 组件）或 polymerCartoon/atomicDetail（无）。
+- MOL2-01（High，3 文件）：
+  - recipe-viz.ts：① 新增模块态 vizHiddenNonPolymer（{ref, wasHidden, created} 三元组快照，模式对齐 snapshotMeasurementRefs/viz-chain 替身）+ restoreHiddenNonPolymer 导出（unhide preset 组件、按 ref 删除我们创建的 stand-in；先收集后操作——for...of 中边删边迭代会漏项，行为测试抓出后修正）+ __resetVizMeasurementRefs 导出；② hide_non_polymer 步骤重写：按 keyTag structure-component-static-water/ligand 查找 preset 组件→存在则 toggleVisibility('hide') 原地隐藏并快照 isHidden（不再向 tryCreateComponentStatic 传 label/tags——那会经 applyOrUpdateTagged 把 water-hide/ligand-hide 合并进 preset 组件）；不存在（polymer-cartoon/atomic-detail 场景）才创建无自定义 tag 的 stand-in（按 ref 跟踪、restore 时删除）；③ cleanup_previous：新增 restoreHiddenNonPolymer 兜底（中断运行泄漏恢复），删除准则中移除 water-hide/ligand-hide tag、structure-component-Water/Ligand 前缀、label === "Water"/"Ligand" 四处对 preset 组件的致命匹配——只保留 interface-sidechain 系我们的 viz tag。
+  - commands.ts：cleanupCapture 新增 Step 2d restoreHiddenNonPolymer（在 Step 2b 链恢复/2c 透明层清除之后）——分析捕获完成后 water/ligand（HEM！）回到实时视图。
+  - 行为验证（mock bundle 的 bun 脚本，两套）：preset 组件路径——run1 隐藏不删除、restore 复显、run2 复跑零 stand-in 且组件完整；stand-in 路径——无 preset 组件时创建 2 个无 tag stand-in、restore 全删、模拟中断运行后下一轮 cleanup_previous 清泄漏再重建恰 2 个、终态零残留；全部断言通过。
+- MOL2-03（recipe-aliases.ts）：normalizeRecipeName fallback `|| recipe` → `|| normalized`。bun 脚本验证 16 组用例（cross-pdb-rmsd/cross-pdb-rmsd-aligned/align and superpose/align-save-transformed/per residue rmsd two/blast chain id/entity analysis/detect pockets/sequence align/h-bonds 等全部归一为合法 recipe key；interface/hbond 别名不受影响；isCanonicalRecipe("cross-pdb-rmsd") 现为 true）。检查两个调用方（commands.ts analyze_run、analyze/run route）均受益、无人依赖旧行为。真实 API 冒烟：POST /api/analyze/run {recipe:"cross-pdb-rmsd"} → 200 且 cross_pdb_rmsd 真实执行（1HHB/2HHB RMSD）——旧代码此处是 400 Unknown recipe。
+- MOL2-04（interactions.ts + commands.ts）：showInteractionsAround 整体重写为 R170 已验证的 loci→toExpression 方案：中心解析链（whole-Structure boundary → bundle Loci.getCenter（复用 label-sizing 的 getLociCenter）→ 首元素 unit boundary → 结构 boundary 兜底）→ 逐 atomic unit `lookup3d.find(x,y,z,radius)` 空间索引选邻域（替代缺失的 MolScript Q.struct.generator.within）→ SE.Loci + toExpression → 先删旧 interactions-neighborhood 组件（幂等）→ tryCreateComponentFromExpression（传 sr.cell 而非旧代码的裸 data——StateObjectRef 解析裸 Structure 恒失败）→ addRepresentation ball-and-stick/element-symbol（R170 生产验证的参数路径，替代不存在的 component.addRepresentations）→ highlightOnly 保留；返回值 void→boolean，commands.ts show_interactions 据此返回诚实的 ok:false。顺带修掉旧代码给组件打的伪 structure-component-static-polymer tag（曾让邻域组件在 hideOtherChains 等按 tag 找 polymer 的路径中被误当 polymer）。mock 行为测试 7 项断言（传 cell 不传 data、tag 只有 interactions-neighborhood、stale 组件先删、表达经 toExpression、空邻域/无 bundle/无结构均 false）+ 3 项边界用例全过。
+- MOL2-06（analyze/run/route.ts）：POST 早期（recipe 归一化之后、param 校验之前）对 fileContent/fileContent2 各加 20_000_000 字符上限 → 400 + 明确信息（App Router route handler 无默认 body 限制；UI 上传已有 10MB 上限，此为直连 API 路径的防御）。真实 API 冒烟：20,000,001 字符 → 400 "too large"；小文件正常通过并执行。
+- MOL2-08（recipe-viz.ts + commands.ts + measurement-utils.ts）：① removeMeasurementCells 计数前检查 plugin.state.data.cells.has(ref)——builder.delete 对缺失 ref 静默 no-op 但旧代码 removed++ 照加，"Removed N leaked" 日志虚高；② 新增 __resetVizMeasurementRefs，cleanupCapture Step 1 成功移除 delta（或 clearAllMeasurements 兜底）后清空 vizAddedMeasurementRefs（失败路径不清、保留泄漏安全网）；③ __drainCaptureQueue 增加 refs 重置（对齐 __resetCameraState 的模式，结构清除后旧结构 refs 不再被计入泄漏）。mock 测试：m1/m3/m2 → removed=2、m3（已删）不计入。
+- 验证：① eslint 6 个改动文件 0 error/0 warning；② tsc 全项目 138→128（另一并行 agent 也在消错）；本任务文件签名级对比：recipe-viz 16→14（消除 2 个 tryCreateComponentStatic TS2339）、interactions 4→2（消除 addRepresentations TS2551 + 4 参 TS2554）、commands 22→22（签名集合完全一致，仅行号漂移）、其余三文件 0→0——零新增错误；③ bun test 既有 molcraft 三套件前后均 114 pass/12 fail（12 个失败为预存环境问题，stash 对照确认非本次引入）；④ dev.log 无编译失败，/api/analyze/run 实测 200/400 行为符合预期。未跑 next build（按指示）。
+- 范围声明：MOL2-02（git rm 遗留路由）由主 agent 处理（git status 已见该路由被删除）；MOL2-05/07（use-agent-session pairwise abort/池一致性）与 components/** 明确出范围未动。
+
+Stage Summary:
+- MOL2-01 根除：preset 的 water/ligand 组件从"被 tag/label 匹配删除+重建无表示"改为"原地隐藏+isHidden 快照+cleanupCapture 恢复"；stand-in 仅在 preset 无该组件时创建且按 ref 跟踪删除；配体（HEM）在 pairwise 分析后回到实时视图且可重复运行不损毁。行为测试覆盖 preset/stand-in/中断恢复三路径全过。
+- MOL2-03 一行修复 + 16 用例 + 真实 API 验证（cross-pdb-rmsd → 200 实跑 cross_pdb_rmsd）。
+- MOL2-04 从恒 no-op 变为真邻域可视化（lookup3d 空间索引 + SE.Loci.toExpression，R170 同族方案），并顺带修复传裸 Structure 无法解析 StateObjectRef、伪 polymer tag、重复调用残留三个潜伏 bug；agent 现在能拿到诚实的失败回报。
+- MOL2-06 analyze/run 20M 字符/文件上限（fileContent/fileContent2），实测 400/通过边界正常。
+- MOL2-08 三管齐下：cells.has 存在性计数 + cleanupCapture 成功后清空跟踪数组（失败保留安全网）+ __drainCaptureQueue 重置模块态——泄漏日志不再虚高。
+- 全部改动 6 文件 +337/-106；eslint 0/0；tsc 零新增（净 -4）；既有测试套件零回归。
+
+---
+Task ID: 4-c
+Agent: subagent (API routes hardening)
+Task: 修复 API-01/02/03/04/05/06/09/10/13（3 High + 关键 Medium）+ 删除复活死路由
+
+Work Log:
+- 前置：读 worklog 尾部（Task 2-c 的 API-01~15 全部发现 + Task 4-d 修复记录 + R165 VLM 路由限流/载荷上限模式）。注意：到岗时工作树中已存在本任务的一批未完成改动（上次 4-c 运行中断，未写 worklog、未 git rm、未验证）——本次逐文件全文审计每处改动是否完整正确（对照任务要求逐条核对），补齐缺失步骤，再做 lint/tsc/冒烟验证。同工作树另有并行 agent 在改 src/lib/agent/**（AG2-* 修复）与 molcraft 文件（4-d），均未触碰。
+- API-01（High, evaluations/run/route.ts）：① targets>20 → 400 "Too many targets"（MAX_TARGETS=20，在任何外部 API/LLM 工作前拦截）；② maxPdb 上限钳 200（Math.max(0,Math.min(200,…))，钳制不拒绝，风格对齐既有 maxLitCount），batch 循环内 per-target bMaxPdb 同样 Math.min(…, 200)；③ maxBlastHits 上限钳 100。验证：25 targets → 400；2 targets 合法批流照常跑（SSE 正常、UniProt/RCSB 真实拉取、maxPdb=2 生效）。
+- API-02（High, db-config/route.ts）：① 路径锚定——path.resolve(fsPath) 后强制要求以 .db 结尾且位于 dbDir()（writableRoot()/db，Electron 打包态即 userData/db）内，否则 400（在 fs.mkdir/fs.writeFile/prisma db push 之前）；② create:true 且目标已存在、非空、且首 16 字节不是 "SQLite format 3" → 400 拒绝清零（readExistingHeader 用 fs.open+read 读魔数）；③ initSchema(bunx prisma db push --accept-data-loss) 只会作用于通过锚定检查的路径（action=init 分支操作的是 active DB，同样来自锚定来源）。验证：schema.prisma → 400；/tmp/evil.db → 400；相对路径 ../../etc/evil.db → 400；db/ 下伪造非 SQLite 文件 create:true → 400 且文件内容完好；seed-demo 未动（按指示）。
+- API-03 + API-13（High, target-evaluation.ts + 新增 src/lib/eval-report-paths.ts + evaluations/[uniprotId]/report/run/route.ts + batch-report/[batchId]/route.ts）：① 新共享助手 evalReportsDir()（EVAL_REPORTS_DIR env 覆盖 → 否则 <writableRoot>/db/evaluation-reports，mkdirSync 按需创建，模式对齐 dbDir()/hermesDir()）+ sanitizeReportFilenamePart()；② REPORT_DIR 从硬编码 /Users/lijing/… 改为 evalReportsDir()，写路径 fs.mkdir(REPORT_DIR) 保留；③ generateEvaluationReport 入口补 /^[A-Z][A-Z0-9]{5}$/ 校验（与 runTargetEvaluation :699 同款，不匹配返回 ok:false 结构化错误而非抛异常，匹配该函数既有错误形状）；④ 文件名整串消毒（uniprot 与 proteinName 都过 [\\/:*?"<>|\s]→_ 替换，原先 uniprot 裸拼）；⑤ report/run 路由入口同样 400 校验；⑥ batch-report EVALS_DIR 同一来源（API-13，白名单文件名 map 保持不变）。eval-report-file/** 核实为纯 DB 读取（SkillEvaluationReport/Evaluation 表），与新目录零耦合，兼容性无影响。验证：AAAAAA1 → 400；..%2F..%2Fetc%2Fpasswd → 400；batch-report 未知 id → 404（不再依赖原作者机器路径）；db/evaluation-reports/ 按需创建。
+- API-04（Medium-High, pubmed-fetch/route.ts）：唯一外部 fetch（NCBI esummary）补 signal: AbortSignal.timeout(30_000)（对齐 src/lib/pubmed.ts 模式）；validIds 截断至 MAX_PUBMED_IDS=500（截断不拒绝），响应新增 requested/truncated 字段；补 runtime=nodejs + maxDuration=120。验证：505 个 ID → total=500, requested=505, truncated=true（测试写入的 500 条垃圾 PubMedArticle 行已从 db/my-pdb-tracker.db 清除，表恢复 532 行）。
+- API-05（Medium-High, llm/chat + llm/chat/stream + ai-summary + ai-weekly-summary + 新增 src/lib/llm-rate-limit.ts）：① 抽共享限流助手 llm-rate-limit.ts（R165 VLM-006 同款滑动窗口 10 req/min，globalThis 挂载、per-route bucket、Map>1000 惰性清理、429+Retry-After），四个路由 POST 入口最先插入（ai-summary/ai-weekly-summary 此前完全无守卫，结构简单直接可插）；② buildUserPrompt（chat 与 stream 两份同构实现）三重上限：analysisResults 只取末 20 条（带 "showing last N of M" 标注）、每条 m.content 截 50k 字符（带 …[truncated] 标记）、组装后总 prompt 硬顶 200k 字符（带截断标记）；③ stream 路由断连感知：LLM 调用前检查 request.signal.aborted、打字机循环每 tick 检查、send()/controller.close() 包 try/catch（enqueue 对已关闭 controller 抛错）、request.signal 透传给 generateText → llm.ts runCli/runCliInWsl 的 abort 监听器 kill 子进程、callAnyLlm 每次回退前检查 signal.aborted、SDK 分支把 signal 传给 callAnthropic/callOpenai（SDK 原生支持）/callZai（race abortGuard）。
+- API-06（Medium, llm.ts）：callAnthropic/callOpenai/callZai 各自包 90s 硬超时（SDK_CALL_TIMEOUT_MS=90_000，对齐 VLM-005/AGENT-M6 的补位）——withSdkTimeout(signal) 内联小组合器（AbortController + setTimeout + caller-signal 转发，未导入 src/lib/agent，符合指示），Anthropic/OpenAI SDK 走 { signal } 请求选项原生取消；z-ai SDK create() 不接受 signal → Promise.race(调用, abortGuard(signal))，超时/取消不再阻塞供应商回退链；每次 attempt 独立 dispose（clearTimeout + removeEventListener）。
+- API-09（High, 删除）：核实 src/app/api/llm/agent/ 仅含 round/route.ts（上次运行已从磁盘删除但未 git rm）；rg 全仓确认零活引用（仅 4 处历史注释，全部位于明确出范围的 src/components/**、src/lib/molcraft/**、src/lib/agent/**，按范围纪律未改，注释本身描述的就是"该路由已删除"的历史事实）；git rm -r 已执行并暂存（git status: `D  src/app/api/llm/agent/round/route.ts`）。验证：POST /api/llm/agent/round → 404。
+- API-10（Medium, 六个外部数据路由）：sequence/validation/contacts/annotations 的全部 fetch 位点补 signal: AbortSignal.timeout(10_000)（保留既有 next:{revalidate}，annotations 共 6 处、contacts 3 处、validation 2 处、sequence 1 处逐一核对无遗漏）；rama 的裸 https.get（无任何超时）整体改写为 fetch+10s 超时（保持"无论状态码都 JSON.parse 响应体"的旧语义，PDBe 错误体由调用方检查）；pdb-download/[pdbId] 补 /^[A-Za-z0-9]{4}$/ 4 字符守卫（400，对齐 pdb-image 模式）。验证：pdb-download abc!d → 400；sequence/4HHB 新超时下正常 200 返回真实 FASTA。
+- 验证汇总：① bunx eslint 19 个改动/新增文件 → 0 error / 0 warning；② bunx tsc --noEmit → 我方文件 0 错误（全项目 139 个错误全部位于 molcraft/components 等出范围文件，属并行 agent 与预存问题）；③ 16 组 curl 冒烟（见各条目内联"验证："）全部符合预期；④ 未跑 next build、未重启 dev server（期间 dev server 被外部监管进程自动重启数次，与本次改动无关，均已等待恢复后重试）；⑤ 清理冒烟残留（db/guard-smoke-test.db、PubMedArticle 500 条垃圾行）。
+- 范围声明：API-07（llm/icon bin 路径）、API-08（import 载荷上限）、API-11/12（查询 N+1/无界读）、API-14/15 未在本任务清单内未动；seed-demo 按指示保持原样。
+
+Stage Summary:
+- 3 个 High 全部落地：evaluations/run 批量上限+钳制（25→400 实测）、db-config 任意文件清零原语封死（路径锚定 db/ + .db + SQLite 魔数守卫，4 组攻击路径实测 400 且目标文件零损伤）、评估报告路径穿越封死（uniprot 双端格式校验 + 整文件名消毒 + REPORT_DIR env/项目内可写目录，原作者硬编码路径全部清除，batch-report 同步对齐）。
+- 中危补齐：pubmed-fetch 30s 超时+500 上限（truncated 标志实测）；四个 LLM 路由共享 R165 同款限流（llm-chat / llm-chat-stream / ai-summary / ai-weekly-summary，11 连发第 11 次 429+Retry-After 实测）；buildUserPrompt 三重载荷上限；stream 全链路断连感知（signal 透传到 CLI 子进程 kill / SDK 取消）；llm.ts 三家 SDK 90s 硬超时；六路由外部 fetch 10s 超时 + rama 裸 https.get 改 fetch + pdb-download ID 守卫；复活的死路由 /api/llm/agent/round 已 git rm 暂存并实测 404。
+- 改动面：17 个路由/lib 文件修改 + 2 个新共享助手（llm-rate-limit.ts、eval-report-paths.ts）+ 1 个文件 git rm；eslint 0/0、tsc 零新增、合法请求行为保持（2-target 批流/4HHB FASTA/未知 batch 404 等对照组全过）。
+
+---
+Task ID: 4-b
+Agent: subagent (agent subsystem fixes)
+Task: 修复审查发现 AG2-01~11,13（agent 子系统 3 High + 7 Medium + 2 Low）
+
+Work Log:
+- 前置：读 worklog 尾部（Task 2-a 的 AG2-01~14 全文 + R168/R169 修复明细 + Task 4-d 范围），全文精读 13 个目标文件（loop/manager/zai-adapter/openai-compat-adapter/assembler/signal-utils/adapter/session-settings + 8 个 API 路由）逐条核对行号与真实代码。发现本任务的前一次执行已在工作树留下大部分 AG2 修复但未收尾（未写 worklog、AG2-09 语义与任务要求相悖、遗留 .smoke-tmp/）：本 session 完成复核、修正、补齐与全部验证。
+- AG2-01（High，loop.ts）：R164 的 429/瞬时错误重试对 provider 错误不可达——两个适配器把一切错误 yield 成 finish-error chunk 而非 throw，for-await 正常结束走 break。修复：for-await 结束后检查 assembler.finish——若为 error 且 isRateLimitError/isTransientError 匹配（且未 abort），走与 catch 路径共享的 retryWithBackoff（共享 attempt 计数器不双计；backoff 内 new BlockAssembler() + chunkSeqs=[] 重置组装器，失败尝试的 chunk 事件留在审计日志但 sourceEventSeqs 不含它们 → LLM 不可见）；非重试错误/重试耗尽照旧快速失败。验证（bun 单测，.smoke-tmp/ag2-unit-test.ts）：429 finish-error chunk → 5.3s 后重试 → done/FINAL-ANSWER、adapter 恰 2 次调用、1 个 turn/start + 1 个 assistant/message；401 非重试 → 1 次调用 <1s 失败、turn/end{error}。
+- AG2-02（High，loop.ts + regenerate/route.ts）：regenerate 路由先算 replace [lastUserSeq+1, lastEventSeq]，随后 drive() 入口的 orphan recovery 追加 seq > replaceEnd 的合成 tool/result → 其宿主 assistant tool_calls 消息被 replace 移除而合成 tool/result 留在 surface → 永久 wire-format 400。修复：loop 暴露公共 recoverOrphans()（内部复用 R164 recoverOrphanedToolCalls，幂等），regenerate 路由在计算 replaceEnd 之前调用它，replace 区间覆盖恢复事件。验证（单测）：模拟断线会话（tool/call 无 tool/result）→ recoverOrphans() 后追加了 tool/result@4 + turn/end@5，seq 超过恢复前尾部 → 路由其后计算的 replaceEnd 必然覆盖它们，deriveMessages 含 tool 消息（可被 replace 移除，无悬空）。
+- AG2-03（High，tool-results/route.ts + loop.ts）：审批门/截断门用客户端提交的 r.name 判定。修复：pendingCallIds 集合升级为 Map<callId, recordedName>（扫描 tool/call 记录名字、tool/result 按 message.source.callId 移除）；提交名与记录名不一致 → 409；requiresApproval 与 SCREENSHOT_TOOLS 判定、以及传给 manager.submitResults 的 name 全部用记录名。验证（curl）：伪造 name='capture_multi_angle' 提交 call_dup_1（记录名 pdb_load）→ 409 "does not match the recorded tool call name"。
+- AG2-04（Medium，tool-results/route.ts）：同批 results 内重复 callId 不去重。修复：请求体校验循环内 pendingCalls.delete(r.callId) 即时消费——第二条同 callId 的查找落空 → 409。验证（curl）：同体两条 call_dup_1 → 409 "unknown, already resolved, or duplicated"。
+- AG2-05（Medium，loop.ts）：assemble→prepareCall 在 try 之外，适配器缺失时 prepareCall throw 逃逸 turn 记账（status 卡 running、turn 悬开、路由 500）。修复：effectiveProvider/effectiveModel/assembler/chunkSeqs 提升到 try 外声明，整个 assemble→renderPrompt→prepareCall→流式循环段并入既有 try/catch——turn/end{error} + setStatusIdle 必然执行。验证（单测）：ghost provider（无适配器）→ outcome={kind:'error'}、status='idle'、恰好 1 个 turn/end{error:"No LLM adapter..."}。
+- AG2-06（Medium，providers/route.ts + sessions/route.ts + session/settings.ts + manager.ts）：① providers POST 的 providerId 先对 PROVIDER_CATALOG 校验（setDefault 与 config 两分支共用，400 带完整目录列表）——不再持久化垃圾默认供应商；② validateSettingsBody 从 settings 路由迁入共享模块 session/settings.ts，sessions 路由用它校验 body.agent（provider/model/temperature/maxStepsPerTurn），只透传白名单字段；③ manager.createSession 对 partial agent 选项改为逐字段 ?? 默认值合并（不再整体替换导致 provider/model undefined）。验证（curl）：setDefault providerId='definitely-not-a-provider' → 400；agent.temperature='x' / agent.provider='bogus-provider' / agent.maxStepsPerTurn=0 → 全 400 带明确信息；合法值（zai/glm-4.6/0.5/20）→ 200。
+- AG2-07（Medium，openai-compat-adapter.ts）：timeout.dispose() 在 fetch finally 中执行，resp.text()（错误分支 + 正常分支）在 dispose 之后无超时——服务器发完头后 body 停滞则 text() 永久挂死 driveLock。修复：重构为外层 try/finally 包住 fetch + 全部 body 读取（!resp.ok 的 errText 与 200 的 raw 都在 timeout 保护内，abort 中的 body 读取被识别为 timeout 而非 "invalid JSON"），dispose() 移到最终 finally。验证（bun 单测）：本地 HTTP 服务器发 200+头+半截 body 后停滞，调用方 signal 2.5s abort → 2502ms 即返回 finish-error "Failed to read response body: The operation timed out"（旧代码此处永久挂起）。
+- AG2-08（Medium，manager.ts）：resumeSession 无 in-flight 去重（check-then-act 竞态，两个并发冷启动各建 Session/AgentLoop，后写覆盖前者 → 孤儿 loop 吞消息）。修复：resumingIds: Map<string, Promise<...>>，进行中的 resume 直接 await 共享同一 promise，finally 清除表项；实际工作下沉 doResumeSession()。验证（bun 单测，自建会话+落库后新 manager 冷启动）：3 个并发 resumeSession 返回同一 Session 对象（引用相等）、loop 注册、完成后表项清除（后续 resume 走 live 路径）。
+- AG2-09（Medium，sessions/import/route.ts）：① 载荷上限：先 request.text() 读原文再 JSON.parse——总 JSON >50MB → 413，事件数 >20,000 → 400（Content-Length 不可信故以实读长度为准）；② 重放的 session/settings 事件用共享 validateSettingsBody 校验：**skip-and-warn 语义**（本 session 把前次执行留下的整批 400-reject 改回任务指定的跳过+警告——单条坏设置不杀整个导入，会话对该设置回落默认值）；data 非对象也视为非法跳过（否则会 vacuously 通过校验并把垃圾持久化）；合法事件改用校验后的白名单值 append（导入里的未知多余字段不进持久日志）；③ 顺带修复导入重放的 **FK 竞态数据丢失**（冒烟测试实测 ~1/3 导入行存在但 0 事件：createSession 的 fire-and-forget upsertSessionRow 与重放事件的 appendEventRow 竞速，事件 INSERT 先落 SQLite → 外键约束失败被静默吞掉 → 重启后导入的对话凭空消失）——重放前 await upsertSessionRow()（幂等）。验证（curl + prisma）：坏设置导入 → 200、eventCount=2（坏事件跳过、好事件保留，GET settings 只见合法值）、dev.log 出现两条 [agent-import] AG2-09 警告；20,001 事件 → 400；FK 竞态修复后连续 5 次导入全部 3/3 事件落库（修复前 1/3 丢失）。
+- AG2-10（Medium，messages/route.ts + tool-results/route.ts）：服务端载荷上限。content ≤50,000 字符（400）、results ≤32 条（400）、单条 result JSON 序列化 ≤4MB（400），错误信息带实际值与上限。验证（curl）：50,001 字符 → 400（恰 50,000 → 200 且真实 LLM 正常应答，golden path 无回归）；33 条 results → 400；4,194,415 字符 result → 400。
+- AG2-11（Low，approval/route.ts + manager.ts）：resolveApproval 全局扫描所有内存 session 的 callId → A 会话路由可决议 B 会话。修复：resolveApproval(sessionId, callId, outcome) 把扫描限定在请求的 session（tool/call 事件里必须存在该 callId），否则返回 false → 路由 404。验证（curl）：callId 只存在于 B 会话时经 A 会话路由决议 → 404 "No pending approval for that callId in this session"；经其所属会话 → 200。
+- AG2-13（Low，manager.ts）：审批 resolver 的 req.signal abort 监听器正常决议后不移除。修复：PendingApproval 增加 dispose()（clearTimeout + removeEventListener），resolveApproval 正常路径、5 分钟超时、abort 三条结算路径统一调用（镜像 AGENT-M8 模式；settled 标志防双重结算）。
+- 顺带清理（同一批文件的既有问题）：① loop.ts/manager.ts 的 3 个 pre-existing tsc 错误清零——extractSessionSettings 参数放宽为 readonly SessionEvent[]、evictTimer 去掉错误的 readonly（lazy-init 赋值）、resolveApproval 签名收窄为 Exclude<ApprovalOutcome,'unavailable'>（事件类型本就只收三值）；② credentials.ts 补回 getProviderProfile 再导出——providers/test 与 providers/[providerId]/models 两路由从 credentials 导入该函数但其从未被再导出（TS2724 + 运行时模块解析失败，两路由实际不可用）。修复后 tsc 对 src/lib/agent + src/app/api/agent 全目录 0 错误。
+- 验证总览：① 13 个改动文件 bunx eslint 逐文件 0 error/0 warning；② tsc：agent 子系统（lib/agent + api/agent）0 错误（此前 5 个 pre-existing 已顺带清零，全项目其余错误均在 components/molcraft 等出范围目录且与 R171 基线一致）；③ bun 单测 2 套 6 项断言（AG2-01 重试/快速失败、AG2-02 orphan 恢复、AG2-05 适配器缺失、AG2-07 body 读取超时、AG2-08 并发 resume 单飞）全 PASS；④ curl 冒烟 16 组（见上各条）全部命中预期状态码与错误信息，另含 1 组真实工具流 e2e：导入带 pending pdb_load 的会话 → 提交合法 tool-result → 200 且 LLM 正常续步（85s 返回 set_representation tool-calls）；⑤ 测试产生的 14 个会话已全部 DELETE 清理，.smoke-tmp/ 临时目录已移除；未跑 next build（按指示），未重启 dev server（期间 dev server 被外部重启过数次，与本次改动无关，重启后全部冒烟重验通过）。
+
+Stage Summary:
+- 12/12 项（AG2-01~11、13）全部落地：3 High（429 重试对 finish-error chunk 生效、regenerate 前 orphan 恢复消悬空 tool 消息、审批/截断门改用事件记录的工具名）+ 7 Medium（批内 callId 去重、prepareCall 入 try、provider/agent 字段校验、body 读取超时、resume 单飞、导入校验+上限、服务端载荷上限）+ 2 Low（审批会话内限定、abort 监听器全路径清理）。
+- 额外收获 3 项：导入重放 FK 竞态数据丢失（实测 1/3 导入丢全部事件，await 幂等 upsert 修复后 5/5 落库）；getProviderProfile 缺失再导出致 providers/test + providers/models 两路由不可用（一行补齐）；agent 子系统 tsc 从 5 个 pre-existing 错误清零。
+- 改动面：13 文件 +648/-258；eslint 0/0；tsc agent 目录 0 错误；16 组 curl 冒烟 + 6 项 bun 单测全过；真实工具流 e2e 无回归。AG2-12（标题生成无超时）与 AG2-14（死代码/查询参数密钥）不在本任务清单内未动。
+
+---
+Task ID: 5 (R172)
+Agent: main (全面代码审查 + 真实测试 + 修复调度)
+Task: 用户要求"全面代码审查和真实测试"——4 路并行深度审查（agent/molcraft/API/前端）+ agent-browser E2E 真实测试 + 修复全部 High 与关键 Medium。
+
+Work Log:
+- 并行派出 4 个 Explore 审查子代理（2-a/2-b/2-c/2-d），各自通读 worklog 历史修复清单避免重复上报，共产出 53 项新发现：
+  - 2-a agent 子系统 14 项（3 High：AG2-01 429 重试死代码 / AG2-02 regenerate 悬空 tool 消息致会话报废 / AG2-03 审批门信任客户端提交的 name 可伪造）
+  - 2-b molcraft 10 项（2 High：MOL2-01 water/ligand 组件被 hide+cleanup 永久损毁 / MOL2-02 已删的旧 LLM 路由复活可达）
+  - 2-c API 路由 15 项（3 High：API-01 evaluations/run 无界批处理 / API-02 db-config 任意文件清零原语 / API-03 评估报告路径穿越+硬编码个人目录）
+  - 2-d 前端 14 项（3 High：FE-01 并行 tool results 回放丢失→永久 pending 卡片 / FE-02 Chat tab 切换销毁 live session / FE-03 autoCapturePending/vlmPending 永不清除→永久 spinner）
+- agent-browser E2E 真实测试（分段推进以对抗 ~2.5 分钟 kill 周期）：首页完整渲染（结构卡片/筛选/模式切换）无 JS 错误 → 搜索 4HHB → 分析视图 3D 加载（A,C/B,D 实体+HEM/PO4 配体）→ Agent 会话全链路（sessions 200 → SSE 200 → messages 200 → LLM 响应事件流完整 turn/step/user/title/header/assistant/turn-end + usage 统计）→ 第一轮会话 LLM 自主调用 pairwise_interactions，R171 完整管线 console 实证（Hidden chains C,D → focus 22 residues minRadius=20 → ball-and-stick 22 residues → 3 distance lines → 6 pair labels → transparency 0.4）+ 两轮 tool-results 200。
+- 修复调度（文件集不相交的 4 路并行）：
+  - 4-b 子代理：AG2-01~11,13 全部 12 项（loop.ts finish-error 重试接入 backoff、loop.recoverOrphans() 前置到 regenerate replaceEnd 计算之前、tool-results 按 Map<callId,recordedName> 校验+批内去重 409、prepareCall 入 try、providers/sessions 路由复用共享 validateSettingsBody、openai-compat 超时覆盖 body 读取、manager resumingIds 单飞 promise、import 复用校验+20k 事件/50MB 上限、messages/tool-results 50k chars/32 条/4MB 上限、审批按会话隔离 404、PendingApproval.dispose 清理）+ 附带修复 import-replay FK 竞态（静默丢失全部 DB 事件）+ getProviderProfile 死导出复活。curl smoke 全 PASS（超长 400、重复 409、伪造 name 409、非法 provider 400、跨会话审批 404）。
+  - 4-c 子代理：API-01/02/03/04/05/06/09/10/13（evaluations targets≤20+maxPdb/maxBlastHits 钳制、db-config 限 db 目录+.db 后缀+SQLite 头校验、uniprot 正则双重入口+全文件名消毒+EVAL_REPORTS_DIR env→db/evaluation-reports、pubmed-fetch 30s 超时+500 ID 上限、llm/chat+stream+ai-summary+ai-weekly-summary 共享滑动窗口限流 10 req/min 429+prompt 三级上限+断连感知杀子进程、llm.ts 三 SDK 90s 超时、git rm 复活的 /api/llm/agent/round、6 个外部数据路由 12 处 fetch 10s 超时+pdb-download pdbId 守卫）。16 项 curl smoke 全 PASS。
+  - 4-d 子代理：MOL2-01/03/04/06/08（water/ligand 改 in-place hide+hierarchy.toggleVisibility+快照恢复，不再 tag-merge 进 preset 组件也不再按 tag 删；normalizeRecipeName 回退 ||normalized（cross-pdb-rmsd 别名实测 200）；show_interactions 用 R170 loci→toExpression 方案重写并修 3 个潜伏 bug；analyze/run 20MB 载荷上限；removeMeasurementCells 按存在性计数+清理后清空 refs）。mock 行为测试全 PASS。
+  - 4-a main：FE-01（tool/result 反向遍历仅在 callId 匹配时 break，并行批次回放不再丢 result）+ FE-02（chatMounted 惰性挂载+CSS hidden 保持挂载，onClick 内同步置位避免 set-state-in-effect）+ FE-03（vlmPending/autoCapturePending 在全部 4 条终止路径清除 + pairwise 空截图路径显式 autoCaptureError + ToolCallCard spinner 条件排除 error 终态）+ FE-07（import 失败 toast + sessionId 形状校验 + 成功 toast）+ MOL2-05（pairwise 每对捕获前检查 abort + selectBestWithRetry 透传 signal）+ MOL2-07（客户端传 _pairChains、recipe-viz 优先按链身份匹配 pair，消除两侧池回退规则错位）。
+- 修复后浏览器复测：完整 7 工具流（pdb_load→set_representation→set_color_theme→fetch_metadata→pdb_analyze{interface_residues A-B}→pdb_analyze{summary}）全 200 无页面错误；**MOL2-01 修复真实生效 console 实证**：`[viz:hide] Hidden water (preset static component — restored after capture)` + `Hidden ligand (preset static component — restored after capture)` + transparency 0.4 正常；管线后续步骤被 kill 周期截断（环境限制，与 R170/R171 记录一致）。
+- 验证汇总：① 全部改动文件 eslint 0/0（分目录跑避免 OOM；全仓 2 个 error 均为 pre-existing 的 background-tasks-panel/ToolStatsPopover set-state-in-effect，stash 对比确认）；② tsc 138→123 净减 15（4-b 清 3 个 agent 子系统错误、4-d 清 2 个 tryCreateComponentStatic 错误、4-c 零新增），改动文件零新增；③ 4-b/4-c curl smoke 共 25+ 项全 PASS；④ VLM 视觉验证因 createVision 需后端路由配合（SDK 直调不支持 image_url），沿用 R171 已验证结论。
+
+Stage Summary:
+- 全面审查 53 项新发现 → 修复 38 项（11/11 High + 24 项 Medium + 3 项 Low）：FE-01/02/03/07+MOL2-05/06/07（main）、AG2 全部 12 项（4-b）、API 9 项（4-c）、MOL2 5 项（4-d）。未修的 15 项为 Low（FE-04~06/08~14、AG2-12/14、MOL2-09/10、API-07/08/11/12/14/15 中的低危项）——均不影响核心功能与安全边界。
+- E2E 真实测试核心用户流程全通过（浏览→搜索→3D→Agent 聊天→LLM 工具调用→可视化管线），R171 pairwise 管线与 R172 MOL2-01 修复均在真实浏览器 console 实证生效。
+- 3 个安全漏洞闭环：任意文件清零（db-config）、路径穿越写文件（eval-report）、审批门绕过（tool-results name 伪造）。
+- 2 个会话损毁 bug 闭环：regenerate 悬空 tool 消息（永久 400）、import FK 竞态（静默丢事件）。
+- tsc 基线 138→123；lint 零新增；44 文件改动待推送。

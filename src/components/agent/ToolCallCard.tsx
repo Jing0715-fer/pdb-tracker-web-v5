@@ -157,7 +157,6 @@ function StatusPill({ status, startedAt, durationMs }: { status: string; started
     update();
     const i = setInterval(update, 100);
     return () => { mounted = false; clearInterval(i); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, startedAt]);
   if (status === 'running' || status === 'pending') {
     return (
@@ -207,7 +206,9 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
   // R115.2: Show auto-capture pending/error for pdb_analyze results
   const r = result as any;
   if (name === 'pdb_analyze' && r) {
-    if (r.autoCapturePending && !r.autoCapture) {
+    // FE-03 (R172): exclude the error terminal state — the pending spinner
+    // previously shadowed the autoCaptureError branch below forever.
+    if (r.autoCapturePending && !r.autoCapture && !r.autoCaptureError) {
       // R146: Show detailed progress from the VLM capture loop
       const progress = r.autoCaptureProgress;
       const phaseText = progress?.phase === 'capturing'
@@ -612,8 +613,10 @@ function ScreenshotResult({ name, screenshots, result }: {
         </div>
       )}
 
-      {/* R140: VLM pending state for explicit capture_multi_angle */}
-      {vlmPending && !vlmResult && (
+      {/* R140: VLM pending state for explicit capture_multi_angle.
+          FE-03 (R172): also exclude the vlmError terminal state so the
+          spinner never spins alongside (or instead of) the error notice. */}
+      {vlmPending && !vlmResult && !vlmError && (
         <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-claude-text-muted">
           <Loader2 className="h-3 w-3 animate-spin" />
           <span>VLM 分析中...</span>

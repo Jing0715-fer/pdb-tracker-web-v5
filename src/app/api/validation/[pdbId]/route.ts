@@ -26,9 +26,11 @@ export async function GET(
   }
 
   try {
+    // API-10: 10s timeout on all external fetches (options merged with the
+    // existing next:{revalidate} cache config).
     const res = await fetch(
       `https://data.rcsb.org/rest/v1/core/entry/${upperId}`,
-      { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 } }
+      { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 }, signal: AbortSignal.timeout(10_000) }
     );
 
     if (!res.ok) {
@@ -69,7 +71,7 @@ export async function GET(
         try {
           const entityRes = await fetch(
             `https://data.rcsb.org/rest/v1/core/polymer_entity/${upperId}/${entityId}`,
-            { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 } }
+            { headers: { 'Accept': 'application/json' }, next: { revalidate: 3600 }, signal: AbortSignal.timeout(10_000) }
           );
           if (entityRes.ok) {
             const entityData = await entityRes.json();

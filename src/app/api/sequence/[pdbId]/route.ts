@@ -16,9 +16,11 @@ export async function GET(
     }
 
     // Use RCSB FASTA endpoint (PDBe doesn't have a FASTA API)
+    // API-10: 10s timeout — a hung RCSB connection previously hung the
+    // request indefinitely (pdb-image/rcsb.ts already had timeouts).
     const response = await fetch(
       `https://www.rcsb.org/fasta/entry/${upperPdbId}`,
-      { next: { revalidate: 3600 } }
+      { next: { revalidate: 3600 }, signal: AbortSignal.timeout(10_000) }
     );
 
     if (!response.ok) {

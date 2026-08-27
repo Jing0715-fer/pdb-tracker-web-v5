@@ -194,3 +194,9 @@ export function listAllProvidersWithStatus(): Array<ProviderProfile & {
 }
 
 export { CONFIG_FILE };
+// Re-export the catalog profile lookup — the providers/test and
+// providers/[providerId]/models routes import it from HERE (this module was
+// its only import surface before the barrel), and the missing re-export
+// broke both routes at module-resolution time (TS2724 + a runtime import
+// error). Additive; the catalog remains the source of truth.
+export { getProviderProfile };
