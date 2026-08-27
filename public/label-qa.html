@@ -2,25 +2,27 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Label Rendering QA — Molstar</title>
+<title>Pairwise Viz QA — Molstar (R170)</title>
 <style>
   body { margin:0; font-family:system-ui; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
   .header { padding:6px 12px; background:#000; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .header button { padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
-  .header button.r163 { background:#2ecc71; color:#000; font-weight:bold; }
+  .header button.primary { background:#2ecc71; color:#000; font-weight:bold; }
   #viewer { flex:1; position:relative; background:#fff; min-height:300px; }
   #viewer canvas { display:block; }
-  #result { height:42vh; background:#000; padding:6px; overflow:auto; }
-  #result img { max-height:38vh; border:1px solid #444; }
-  #log { height:80px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:4px; overflow-y:auto; }
+  #result { height:30vh; background:#000; padding:6px; overflow:auto; }
+  #result.collapsed { display:none; }
+  #result img { max-height:40vh; border:1px solid #444; margin:2px; }
+  #log { height:110px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:4px; overflow-y:auto; }
 </style>
 </head>
 <body>
 <div class="header">
-  <button id="btnOld">OLD (textSize 0.8, sizeFactor 0.6, offsetZ 2.0, opacity 0.7, black box)</button>
-  <button id="btnNew">R162 (textSize 0.45, sizeFactor 0.33, offsetZ 0.6, opacity 0.42, black box)</button>
-  <button id="btnR163" class="r163">R163 anti-overlap (no bg box, golden-angle spiral, 6 attachments)</button>
-  <button id="btnClear">Clear labels</button>
+  <button id="btnR163">R163 labels (spiral offset — OLD)</button>
+  <button id="btnR170" class="primary">R170 labels (attachment+tether rings)</button>
+  <button id="btnSticks">Sticks only (show_sidechains replica)</button>
+  <button id="btnCombo" class="primary">FULL combo (R170: hide CD + sticks + labels + pair labels + lines)</button>
+  <button id="btnClear">Clear all</button>
   <span id="status">loading molstar…</span>
 </div>
 <div id="viewer"></div>
@@ -35,34 +37,34 @@ function log(m) { logEl.innerHTML += '[' + new Date().toLocaleTimeString() + '] 
 
 let viewer = null, plugin = null;
 
-// 15 interface residues from the 4HHB A-B pairwise analysis (real data,
-// matches what extractResidueLabels returns for the pairwise_interactions recipe)
-const INTERFACE_RESIDUES = [
-  { chain: 'A', resno: 31,  text: 'R31'  },
-  { chain: 'B', resno: 127, text: 'Q127' },
-  { chain: 'A', resno: 122, text: 'H122' },
-  { chain: 'B', resno: 30,  text: 'R30'  },
-  { chain: 'A', resno: 34,  text: 'L34'  },
-  { chain: 'B', resno: 124, text: 'P124' },
-  { chain: 'A', resno: 107, text: 'V107' },
-  { chain: 'B', resno: 111, text: 'V111' },
-  { chain: 'A', resno: 119, text: 'P119' },
-  { chain: 'B', resno: 55,  text: 'M55'  },
-  { chain: 'A', resno: 33,  text: 'V33'  },
-  { chain: 'B', resno: 128, text: 'A128' },
-  { chain: 'A', resno: 111, text: 'A111' },
-  { chain: 'B', resno: 115, text: 'A115' },
-  { chain: 'A', resno: 123, text: 'A123' },
-  { chain: 'B', resno: 34,  text: 'V34'  },
-  { chain: 'A', resno: 110, text: 'A110' },
-  { chain: 'B', resno: 122, text: 'F122' },
-  { chain: 'A', resno: 120, text: 'A120' },
-  { chain: 'B', resno: 51,  text: 'P51'  },
-  { chain: 'A', resno: 125, text: 'P125' },
+// ---- REAL 4HHB A-B pairwise data (from /api/analyze/run pairwise_interactions) ----
+const AB_INTERACTIONS = [
+  { type:"hbond",       chain1:"A", resno1:114, resname1:"PRO", atom1:"O",   chain2:"B", resno2:116, resname2:"HIS", atom2:"NE2", distance_A:2.66 },
+  { type:"hbond",       chain1:"A", resno1:31,  resname1:"ARG", atom1:"NH1", chain2:"B", resno2:127, resname2:"GLN", atom2:"OE1", distance_A:2.81 },
+  { type:"hbond",       chain1:"A", resno1:122, resname1:"HIS", atom1:"ND1", chain2:"B", resno2:30,  resname2:"ARG", atom2:"NH1", distance_A:3.06 },
+  { type:"hydrophobic", chain1:"A", resno1:34,  resname1:"LEU", atom1:"CD1", chain2:"B", resno2:124, resname2:"PRO", atom2:"CB",  distance_A:3.6 },
+  { type:"hydrophobic", chain1:"A", resno1:107, resname1:"VAL", atom1:"CG2", chain2:"B", resno2:111, resname2:"VAL", atom2:"CG1", distance_A:3.85 },
+  { type:"hydrophobic", chain1:"A", resno1:107, resname1:"VAL", atom1:"CG1", chain2:"B", resno2:115, resname2:"ALA", atom2:"CB",  distance_A:3.95 },
+  { type:"hydrophobic", chain1:"A", resno1:119, resname1:"PRO", atom1:"CG",  chain2:"B", resno2:55,  resname2:"MET", atom2:"CE",  distance_A:3.97 },
+  { type:"hydrophobic", chain1:"A", resno1:119, resname1:"PRO", atom1:"C",   chain2:"B", resno2:33,  resname2:"VAL", atom2:"CG1", distance_A:4.17 },
 ];
-
+const THREE_TO_ONE = { ALA:"A",ARG:"R",ASN:"N",ASP:"D",CYS:"C",GLN:"Q",GLU:"E",GLY:"G",HIS:"H",ILE:"I",LEU:"L",LYS:"K",MET:"M",PHE:"F",PRO:"P",SER:"S",THR:"T",TRP:"W",TYR:"Y",VAL:"V" };
 const chainColors = { A: 0xe74c3c, B: 0x3498db, C: 0x2ecc71, D: 0xe67e22 };
 
+// unique interface residues in input order (mirrors recipe-viz dedup)
+function interfaceResidues() {
+  const seen = new Set(), out = [];
+  for (const c of AB_INTERACTIONS) {
+    for (const side of [1, 2]) {
+      const ch = c['chain'+side], rn = c['resno'+side], nm = c['resname'+side];
+      const key = ch+':'+rn;
+      if (!seen.has(key)) { seen.add(key); out.push({ chain: ch, resno: rn, resname: nm }); }
+    }
+  }
+  return out;
+}
+
+// ---- buildResidueLoci — EXACT replica of recipe-viz.ts (R166-fixed: unit.elements[i]) ----
 function buildResidueLoci(refs) {
   const bundle = window.molstar;
   const SE = bundle?.lib?.structure?.StructureElement;
@@ -73,108 +75,241 @@ function buildResidueLoci(refs) {
   const data = structs[0]?.cell?.obj?.data;
   if (!data) return null;
   const refSet = new Set(refs.map(r => `${r.chain}:${r.resno}`));
+  const atomMap = new Map();
+  for (const ref of refs) if (ref.atomName) atomMap.set(`${ref.chain}:${ref.resno}`, ref.atomName);
   const elementsByUnit = new Map();
   for (const unit of data.units) {
     if (unit.kind !== 0) continue;
     const indices = [];
     for (let i = 0; i < unit.elements.length; i++) {
-      const loc = SE.Location.create(data, unit, i);
+      const loc = SE.Location.create(data, unit, unit.elements[i]); // R166 fix
       const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
       const resno = SP.residue.auth_seq_id(loc);
-      if (refSet.has(`${chainId}:${resno}`)) indices.push(i);
+      const key = `${chainId}:${resno}`;
+      if (!refSet.has(key)) continue;
+      const atomName = atomMap.get(key);
+      if (atomName) {
+        const atomId = SP.atom.label_atom_id(loc);
+        if (atomId !== atomName) continue;
+      }
+      indices.push(i);
     }
     if (indices.length > 0) elementsByUnit.set(unit, indices);
   }
   if (elementsByUnit.size === 0) return null;
   const elements = [];
   elementsByUnit.forEach((indices, unit) => elements.push({ unit, indices }));
-  return new SE.Loci(data, elements);
+  const loci = new SE.Loci(data, elements);
+  const expr = SE.Loci.toExpression(loci);
+  return { loci, expr };
 }
 
-async function addLabels(mode) {
-  const meas = plugin.managers.structure.measurement;
-  // focus interface first (minRadius matches applyRecipeVisualization)
-  const allRefs = INTERFACE_RESIDUES.map(r => ({ chain: r.chain, resno: r.resno }));
-  const focusLoci = buildResidueLoci(allRefs);
-  if (focusLoci) {
-    plugin.managers.camera.focusLoci(focusLoci, { minRadius: 40 });
-    await new Promise(r => setTimeout(r, 600));
-  }
-  let idx = 0;
-  for (const lbl of INTERFACE_RESIDUES) {
-    const loci = buildResidueLoci([{ chain: lbl.chain, resno: lbl.resno }]);
-    if (!loci) { log('no loci for ' + lbl.text); continue; }
-    idx++;
-    const params = mode === 'old' ? {
-      customText: lbl.text,
-      labelParams: {
-        customText: lbl.text,
-        textColor: chainColors[lbl.chain] ?? 0xffffff,
-        textSize: 0.8, sizeFactor: 0.6,
-        offsetX: 0, offsetY: 0, offsetZ: 2.0,
-        borderWidth: 0.15, borderColor: 0x000000,
-        background: true, backgroundColor: 0x000000, backgroundOpacity: 0.7, backgroundMargin: 0.2,
-        tether: true, tetherLength: 0.5, tetherBaseWidth: 0.1,
-      },
-    } : mode === 'new' ? {
-      customText: lbl.text,
-      labelParams: {
-        customText: lbl.text,
-        textColor: chainColors[lbl.chain] ?? 0xffffff,
-        textSize: 0.45, sizeFactor: 0.33,
-        offsetX: 0, offsetY: 0, offsetZ: 0.6,
-        borderWidth: 0.08, borderColor: 0x000000,
-        background: true, backgroundColor: 0x000000, backgroundOpacity: 0.42, backgroundMargin: 0.12,
-        tether: true, tetherLength: 0.4, tetherBaseWidth: 0.06,
-      },
-    } : (() => {
-      // R163 anti-overlap: golden-angle spiral + 6 corner attachments + no bg box
-      // (mirrors src/lib/molcraft/commands.ts R163 label placement exactly)
-      const ATTACHMENTS = ['top-left','bottom-right','top-right','bottom-left','middle-left','middle-right'];
-      const GOLDEN = 2.39996;
-      const i = idx;
-      const ring = Math.floor(i / ATTACHMENTS.length);
-      const theta = i * GOLDEN;
-      const radius = 2.2 + ring * 2.8;
-      return {
-        customText: lbl.text,
-        labelParams: {
-          customText: lbl.text,
-          textColor: chainColors[lbl.chain] ?? 0xffffff,
-          textSize: 0.5, sizeFactor: 0.5,
-          offsetX: +(Math.cos(theta) * radius).toFixed(2),
-          offsetY: +(Math.sin(theta) * radius).toFixed(2),
-          offsetZ: 0.3,
-          borderWidth: 0.18, borderColor: 0x101010,
-          background: false,
-          attachment: ATTACHMENTS[i % ATTACHMENTS.length],
-          tether: true, tetherLength: 2.0, tetherBaseWidth: 0.2,
-        },
-      };
-    })();
-    await meas.addLabel(loci, params);
-  }
-  log(mode.toUpperCase() + ' labels added (' + INTERFACE_RESIDUES.length + ')');
-  await new Promise(r => setTimeout(r, 900));
-  // capture screenshot into result area
-  try {
-    const dataUri = await plugin.helpers?.viewportScreenshot?.getImageDataUri({ width: 1200, height: 800, transparency: false, axes: true });
-    if (dataUri) {
-      const img = document.createElement('img');
-      img.src = dataUri;
-      img.dataset.mode = mode;
-      document.getElementById('result').prepend(img);
-      window.__lastShot = dataUri;
-      log('screenshot captured (' + mode + ')');
+// ---- hide chains not in [A,B] (per-pair view cleanup) ----
+async function hideOtherChains(keep) {
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  for (const s of structs) {
+    for (const c of (s.components || [])) {
+      const tags = c?.cell?.transform?.tags;
+      // static per-chain components carry the chain id in their label
+      const label = c?.cell?.obj?.label || '';
+      const m = /Chain ([A-Z])/.exec(label);
+      if (m && !keep.includes(m[1])) {
+        plugin.managers.structure.hierarchy.toggleVisibility([c], 'hide');
+      }
     }
-  } catch (e) { log('capture failed: ' + e.message); }
+  }
+  log('hid chains other than ' + keep.join(','));
 }
 
-function clearLabels() {
+async function focusInterface() {
+  const refs = interfaceResidues().map(r => ({ chain: r.chain, resno: r.resno }));
+  const res = buildResidueLoci(refs);
+  if (res) {
+    plugin.managers.camera.focusLoci(res.loci, { minRadius: 20 });
+    await new Promise(r => setTimeout(r, 700));
+    log('focusLoci minRadius=20 on ' + refs.length + ' residues');
+  }
+}
+
+// ---- show_sidechains replica (recipe-viz.ts show_sidechains step) ----
+async function showSidechains() {
+  const refs = interfaceResidues().map(r => ({ chain: r.chain, resno: r.resno }));
+  const result = buildResidueLoci(refs);
+  if (!result) { log('buildResidueLoci returned NULL — no sticks'); return; }
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  const sr = structs[0];
+  const tag = 'interface-sidechains-' + Date.now();
+  const component = await plugin.builders.structure.tryCreateComponentFromExpression(
+    sr.cell, result.expr, tag, { tags: ['interface-sidechain'] }
+  );
+  if (!component) { log('tryCreateComponentFromExpression returned undefined'); return; }
+  await plugin.builders.structure.representation.addRepresentation(component, {
+    type: "ball-and-stick",
+    typeParams: { sizeFactor: 0.2, ignoreHydrogens: true },
+  });
+  log('ball-and-stick component created for ' + refs.length + ' residues');
+  await new Promise(r => setTimeout(r, 600));
+}
+
+// ---- labels: R163 placement (spiral shader offsets — current production) ----
+async function addLabelsR163() {
+  const meas = plugin.managers.structure.measurement;
+  const ATTACHMENTS = ['top-left','bottom-right','top-right','bottom-left','middle-left','middle-right'];
+  const GOLDEN = 2.39996;
+  let idx = 0;
+  for (const r of interfaceResidues()) {
+    const res = buildResidueLoci([{ chain: r.chain, resno: r.resno }]);
+    if (!res) { log('no loci ' + r.resname + r.resno); continue; }
+    const i = idx++;
+    const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
+    const ring = Math.floor(i / ATTACHMENTS.length);
+    const theta = i * GOLDEN;
+    const radius = 2.2 + ring * 2.8;
+    await meas.addLabel(res.loci, {
+      labelParams: {
+        customText: (THREE_TO_ONE[r.resname]||'?') + r.resno,
+        textColor: chainColors[r.chain] ?? 0xffffff,
+        textSize: 0.5, sizeFactor: 0.5,
+        offsetX: +(Math.cos(theta) * radius).toFixed(2),
+        offsetY: +(Math.sin(theta) * radius).toFixed(2),
+        offsetZ: 0.3,
+        borderWidth: 0.18, borderColor: 0x101010,
+        background: false,
+        attachment, tether: true, tetherLength: 2.0, tetherBaseWidth: 0.2,
+      },
+    });
+  }
+  log('R163 labels added (' + idx + ')');
+  await new Promise(r => setTimeout(r, 900));
+}
+
+// ---- labels: R170 placement (attachment cycle + tetherLength rings, NO shader offset) ----
+async function addLabelsR170() {
+  const meas = plugin.managers.structure.measurement;
+  // 8 outer attachments (skip middle-center — no tether direction)
+  const ATTACHMENTS = ['top-center','top-right','middle-right','bottom-right','bottom-center','bottom-left','middle-left','top-left'];
+  let idx = 0;
+  for (const r of interfaceResidues()) {
+    const res = buildResidueLoci([{ chain: r.chain, resno: r.resno }]);
+    if (!res) { log('no loci ' + r.resname + r.resno); continue; }
+    const i = idx++;
+    const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
+    const ring = Math.floor(i / ATTACHMENTS.length);
+    const tetherLength = 1.6 + ring * 1.1;   // ring 0..3 → 1.6..4.9 (PD max 5)
+    await meas.addLabel(res.loci, {
+      labelParams: {
+        customText: (THREE_TO_ONE[r.resname]||'?') + r.resno,
+        textColor: chainColors[r.chain] ?? 0xffffff,
+        textSize: 0.5, sizeFactor: 0.5,
+        offsetX: 0, offsetY: 0, offsetZ: 0.4,
+        borderWidth: 0.18, borderColor: 0x101010,
+        background: false,
+        attachment, tether: true, tetherLength, tetherBaseWidth: 0.18,
+      },
+    });
+  }
+  log('R170 labels added (' + idx + ')');
+  await new Promise(r => setTimeout(r, 900));
+}
+
+// ---- pair labels: "PRO114–HIS116 2.7Å" anchored at atom-pair midpoint ----
+async function addPairLabels() {
+  const meas = plugin.managers.structure.measurement;
+  const top = AB_INTERACTIONS.slice(0, 6);
+  let n = 0;
+  for (const it of top) {
+    // loci containing BOTH endpoint atoms → anchor = midpoint between them
+    const res = buildResidueLoci([
+      { chain: it.chain1, resno: it.resno1, atomName: it.atom1 },
+      { chain: it.chain2, resno: it.resno2, atomName: it.atom2 },
+    ]);
+    if (!res) { log('pair loci miss ' + it.resname1 + it.resno1); continue; }
+    const text = `${it.resname1}${it.resno1}–${it.resname2}${it.resno2} ${it.distance_A.toFixed(1)}Å`;
+    await meas.addLabel(res.loci, {
+      labelParams: {
+        customText: text,
+        textColor: 0xffd700,
+        textSize: 0.42, sizeFactor: 0.42,
+        offsetX: 0, offsetY: 0, offsetZ: 0.6,
+        borderWidth: 0.16, borderColor: 0x101010,
+        background: false,
+        attachment: (n % 2 === 0) ? 'top-center' : 'bottom-center',
+        tether: true, tetherLength: 0.9, tetherBaseWidth: 0.14,
+      },
+    });
+    n++;
+  }
+  log('pair labels added (' + n + ')');
+}
+
+// ---- H-bond dashed lines (draw_interaction_lines replica) ----
+async function drawLines() {
+  const meas = plugin.managers.structure.measurement;
+  const lines = AB_INTERACTIONS.filter(c => (c.type === 'hbond' || c.type === 'salt_bridge') && c.atom1 && c.atom2);
+  for (const c of lines) {
+    const r1 = buildResidueLoci([{ chain: c.chain1, resno: c.resno1, atomName: c.atom1 }]);
+    const r2 = buildResidueLoci([{ chain: c.chain2, resno: c.resno2, atomName: c.atom2 }]);
+    if (r1 && r2) {
+      await meas.addDistance(r1.loci, r2.loci);
+    } else {
+      log('atoms not found: ' + c.chain1 + ':' + c.resno1 + '(' + c.atom1 + ')');
+    }
+  }
+  log('drew ' + lines.length + ' distance lines');
+}
+
+function capture(tag) {
+  return new Promise(async (resolve) => {
+    // collapse the result strip so the LIVE canvas keeps a decent size
+    // (this bundle's getImageDataUri ignores width/height args and captures
+    // at the current canvas size — see R170 notes)
+    const resultEl = document.getElementById('result');
+    resultEl.classList.add('collapsed');
+    // robust settle (plain timeouts — rAF may never fire in headless/background tabs)
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const dataUri = await Promise.race([
+        plugin.helpers?.viewportScreenshot?.getImageDataUri({ width: 1200, height: 800, transparency: false, axes: true }),
+        new Promise(r2 => setTimeout(() => r2(null), 60000)),
+      ]);
+      resultEl.classList.remove('collapsed');
+      if (dataUri) {
+        const img = document.createElement('img');
+        img.src = dataUri; img.dataset.mode = tag;
+        document.getElementById('result').prepend(img);
+        window.__lastShot = dataUri;
+        window.__lastTag = tag;
+        log('captured (' + tag + ') bytes=' + dataUri.length);
+        resolve(dataUri);
+        return;
+      }
+      log('capture returned empty (' + tag + ')');
+    } catch (e) { resultEl.classList.remove('collapsed'); log('capture failed: ' + e.message); }
+    resolve(null);
+  });
+}
+
+async function clearAll() {
   try { plugin.managers.structure.measurement.clear(); } catch (e) {}
+  // remove sidechain components
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  for (const s of structs) {
+    const toRemove = [];
+    for (const c of (s.components || [])) {
+      const tags = c?.cell?.transform?.tags;
+      if (Array.isArray(tags) && tags.includes('interface-sidechain')) toRemove.push(c);
+    }
+    for (const c of toRemove) plugin.managers.structure.hierarchy.remove([c], true);
+  }
+  // unhide all chains
+  for (const s of structs) {
+    for (const c of (s.components || [])) {
+      plugin.managers.structure.hierarchy.toggleVisibility([c], 'show');
+    }
+  }
   document.getElementById('result').innerHTML = '';
   window.__lastShot = null;
-  log('labels cleared');
+  log('cleared');
 }
 
 async function init() {
@@ -195,19 +330,28 @@ async function init() {
   log('viewer created');
   await viewer.loadPdb('4HHB');
   await new Promise(r => setTimeout(r, 3000));
-  // chain-id coloring like the agent flow
   try {
     const structs = plugin.managers.structure.hierarchy.current.structures;
     const comps = [];
     for (const s of structs) for (const c of (s.components || [])) comps.push(c);
     plugin.managers.structure.component.updateRepresentationsTheme(comps, { color: 'chain-id' });
   } catch (e) { log('theme failed: ' + e.message); }
-  statusEl.textContent = 'ready — click OLD / R162 / R163';
+  statusEl.textContent = 'ready';
   log('4HHB loaded');
-  document.getElementById('btnOld').onclick = () => addLabels('old');
-  document.getElementById('btnNew').onclick = () => addLabels('new');
-  document.getElementById('btnR163').onclick = () => addLabels('r163');
-  document.getElementById('btnClear').onclick = clearLabels;
+
+  document.getElementById('btnR163').onclick = async () => { await focusInterface(); await addLabelsR163(); await capture('r163'); };
+  document.getElementById('btnR170').onclick = async () => { await focusInterface(); await addLabelsR170(); await capture('r170'); };
+  document.getElementById('btnSticks').onclick = async () => { await focusInterface(); await showSidechains(); await capture('sticks'); };
+  document.getElementById('btnCombo').onclick = async () => {
+    await hideOtherChains(['A','B']);
+    await focusInterface();
+    await showSidechains();
+    await addLabelsR170();
+    await addPairLabels();
+    await drawLines();
+    await capture('combo');
+  };
+  document.getElementById('btnClear').onclick = clearAll;
 }
 init().catch(e => { statusEl.textContent = 'init failed: ' + e.message; log('init error: ' + e.message); });
 </script>

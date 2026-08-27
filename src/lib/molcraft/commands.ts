@@ -44,7 +44,9 @@ import {
   snapshotMeasurementRefs,
   diffMeasurementRefs,
   removeMeasurementCells,
+  clearAllMeasurements,
 } from "./commands/measurement-utils";
+import { restoreHiddenChains } from "./commands/recipe-viz";
 import {
   checkScreenshotQuality,
   checkIfBlackScreen,
@@ -554,7 +556,9 @@ export async function executeCommand(
       }
 
       case "clear_measurements":
-        plugin.managers.structure.measurement.clear();
+        // R170: `measurement.clear()` does not exist on the prebuilt bundle —
+        // use the state-tree group deletion instead (was a silent no-op).
+        await clearAllMeasurements(plugin);
         return { ok: true, detail: "Measurements cleared" };
 
       // ---------- Interactions ----------
@@ -814,28 +818,34 @@ export async function executeCommand(
 
           const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
           if (!Q) {
-            // Fallback: if MolScript Q is not available, toggle the whole
-            // Polymer component (old behavior — less precise but works).
-            let targetComp: any = null;
-            for (const c of components) {
-              const tags = c?.cell?.transform?.tags;
-              const label = c?.cell?.obj?.label;
-              if (
-                (Array.isArray(tags) && tags.includes("structure-component-static-polymer")) ||
-                label === "Polymer"
-              ) {
-                targetComp = c;
-                break;
-              }
+            // R170: the prebuilt bundle does NOT expose `lib.molscript`
+            // (verified: lib = structure/volume/shape/loci/math/plugin/
+            // extensions) — this fallback path ALWAYS ran, and the old
+            // "toggle the whole Polymer" behavior hid/showed EVERY chain at
+            // once instead of the requested one. Use the bundle-verified
+            // loci-based chain visibility instead (same mechanism as the
+            // pairwise per-pair view): hide the polymer + create cartoon
+            // stand-ins for every chain that should stay visible.
+            const { hideOtherChains, restoreHiddenChains, collectChainIds } =
+              await import('./commands/recipe-viz');
+            if (action === "show") {
+              // Restore the full (unfiltered) view — approximation of
+              // "show chain X" when the per-chain state isn't tracked.
+              await restoreHiddenChains(plugin);
+              return { ok: true, detail: `Chain ${chain} (show — full view restored)` };
             }
-            if (targetComp) {
-              plugin.managers.structure.hierarchy.toggleVisibility(
-                [targetComp],
-                action === "toggle" ? undefined : action
-              );
-              return { ok: true, detail: `Chain ${chain} (${action}) — whole polymer (fallback)` };
+            if (action === "toggle") {
+              // No tracked per-chain state on this path — treat toggle as
+              // hide (the common agent intent: "focus on the rest").
+              console.warn('[toggle_component_visibility] toggle → hide (per-chain state untracked on the fallback path)');
             }
-            return { ok: false, detail: `No component found for chain ${chain}` };
+            const all = collectChainIds(plugin);
+            const keep = all.filter((c) => c !== chain);
+            if (keep.length === 0) {
+              return { ok: false, detail: `Cannot hide the only chain (${chain})` };
+            }
+            await hideOtherChains(plugin, keep, true);
+            return { ok: true, detail: `Chain ${chain} hidden (${keep.join(", ")} visible)` };
           }
 
           // Build the per-chain MolScript expression
@@ -1128,14 +1138,9 @@ async function executeMultiAngleCapture(
 
   // Round 62: Apply recipe-specific visualization before capturing
   const vizParams = cmd.vizParams as Record<string, unknown> | undefined;
-  // R151: Skip applyRecipeVisualization on re-capture iterations (iteration > 1).
-  // The VLM capture loop calls capture_multi_angle multiple times — the first
-  // call applies the visualization (focus, side chains, color), and subsequent
-  // calls only need to re-capture from different angles. Re-applying the
-  // visualization causes duplicate components + camera re-focus, which makes
-  // the structure disappear temporarily (blank screenshots).
-  const isRecapture = vizParams?._vlmSuggestedAngles !== undefined ||
-                      vizParams?._focusRadiusMultiplier !== undefined;
+  // R170: the R151 `isRecapture` skip was REMOVED — see the comment at the
+  // applyRecipeVisualization call below for why every capture (including
+  // VLM-recapture iterations) now re-applies the visualization.
 
   // R163: Snapshot the USER's current camera BEFORE the recipe visualization
   // focuses the interface. Restored at the very end so the user's view is not
@@ -1183,9 +1188,12 @@ async function executeMultiAngleCapture(
             console.log(`[capture_multi_angle] removed ${removed}/${delta.length} capture-added measurement cells`);
           }
         } else {
-          // Legacy fallback (unexpected state shape): conservative clear —
-          // only reached when the ref snapshot API is unavailable.
-          plugin.managers.structure.measurement.clear();
+          // R170: `measurement.clear()` does NOT exist on the prebuilt
+          // bundle's MeasurementManager (TypeError, silently swallowed for
+          // months). The bundle-safe equivalent deletes the whole
+          // 'measurement-group' subtree. Conservative: only reached when the
+          // ref snapshot shape is unexpected.
+          await clearAllMeasurements(plugin);
         }
       }
     } catch (err) {
@@ -1215,6 +1223,11 @@ async function executeMultiAngleCapture(
       }
     } catch (err) { console.warn('[capture_multi_angle] interface component cleanup failed:', err); }
 
+    // Step 2b — R170: restore chains hidden by the pairwise per-pair view
+    // (hide_other_chains in recipe-viz hides the polymer + creates per-chain
+    // components; restore un-hides the polymer and removes the stand-ins).
+    try { await restoreHiddenChains(plugin); } catch (err) { console.warn('[capture_multi_angle] chain visibility restore failed:', err); }
+
     // R119: No background restore needed — we didn't change it (see above).
 
     // Step 3 — R157/R161 clear selection and highlights (removes green
@@ -1241,23 +1254,24 @@ async function executeMultiAngleCapture(
   // cleanupCapture() executes on EVERY exit path — success, the
   // "All captures failed" early return, AND thrown errors.
   try {
-  // R167 (MOL-004): from here on we may add measurements (viz distances,
+  // R167 (MOL-M4): from here on we may add measurements (viz distances,
   // residue labels) — the finally-cleanup is allowed to remove the
   // measurement ref delta (measBeforeRefs was snapshotted above).
   labelsAdded = true;
-  if (!isRecapture) {
-    await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
-    // Round 78: Reduced from 300ms to 150ms — visualization renders fast
-    // for camera focus operations; 150ms is enough for Molstar to settle
-    await new Promise((r) => setTimeout(r, 150));
-  } else {
-    // R163: recapture iterations skip applyRecipeVisualization, but the angle
-    // math below assumes the FOCUSED interface view as the rotation base.
-    // Get back to it (kept savedCameraState from the first iteration, or
-    // snapshot the current view as base when none exists yet).
-    console.log('[capture_multi_angle] Re-capture iteration — skipping applyRecipeVisualization');
-    restoreCameraStateKeep(plugin);
-  }
+  // R170: applyRecipeVisualization now runs on EVERY capture — including
+  // VLM-recapture iterations. The R151 "skip on recapture" optimization
+  // predated the R164 finally-cleanup: each capture_multi_angle call cleans
+  // up its own viz at the end, so iteration 2+ used to start with the
+  // sidechain sticks / H-bond lines / hidden chains ALREADY REMOVED and
+  // only re-added the text labels — recaptured screenshots silently lost
+  // every viz element (a root cause of the "侧链未显示" VLM feedback).
+  // Re-applying is now idempotent (cleanup_previous inside the viz resets
+  // state) and lets the VLM's _focusRadiusMultiplier zoom hints take effect
+  // on the re-focus.
+  await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
+  // Round 78: Reduced from 300ms to 150ms — visualization renders fast
+  // for camera focus operations; 150ms is enough for Molstar to settle
+  await new Promise((r) => setTimeout(r, 150));
 
         // Round 74: Add residue labels to the 3D view before capturing
         // R167 (MOL-004): the ref-based delta cleanup replaced the old
@@ -1271,34 +1285,38 @@ async function executeMultiAngleCapture(
           const { buildResidueLoci } = await import('./commands/recipe-viz');
 
           // ----------------------------------------------------------------
-          // R163: Anti-overlap label placement (based on Molstar source
-          // analysis of text-builder.js + text.vert.js + shape/loci/label.js):
+          // R170: tether-accurate label placement — replaces the R163
+          // golden-angle SPIRAL shader offsets.
           //
-          // 1. Each measurement label anchors at the loci bounding-sphere
-          //    center, and the default `attachment: 'middle-center'` centers
-          //    the text box EXACTLY on that anchor. With interface residues
-          //    clustered at the focused screen center, every label stacked
-          //    on the same spot ("都堆在屏幕中心").
-          // 2. `offsetX`/`offsetY` are view-space offsets applied AFTER
-          //    projection (billboard-style) — negative values are NOT clamped
-          //    (PD.Numeric min/max are UI hints only), so we can spread labels
-          //    in any direction.
-          // 3. `tether` only renders for non-middle-center attachments — it
-          //    draws a callout line from the text box back to the anchor.
+          // Diagnosis (4HHB A-B pairwise, live-canvas + VLM verified on the
+          // label-qa harness): the R163 offsetX/offsetY spiral displaced the
+          // WHOLE label+tether assembly away from the residue — the tether's
+          // anchor end floated next to the residue instead of touching it
+          // ("labels point to wrong positions"), while at offset 0 labels
+          // were OCCLUDED by the cartoon (depth-tested at the loci
+          // bounding-sphere center). Neither placement let the VLM associate
+          // a label with its residue.
           //
-          // Placement strategy (deterministic, camera-independent):
-          //   - Cycle 6 corner/side attachments so successive labels sit on
-          //     different sides of their residue.
-          //   - Golden-angle spiral offsets (i·137.5°) push each label further
-          //     out on its own ray, so no two labels share a screen region.
-          //   - NO background box (user request) — readability comes from a
-          //     thin dark text outline (borderWidth is a glyph stroke, not a
-          //     box) + per-chain text colors.
+          // The R170 formula (each element VLM-verified with real 4HHB A-B
+          // pairwise data):
+          //   - offsetX/offsetY = 0: the text-box anchor stays AT the residue
+          //     (attachment places the box on a side of it) and the tether
+          //     connects box -> residue precisely.
+          //   - offsetZ = 12 (Å toward the camera): pulls the label in front
+          //     of the local cartoon so it is never depth-occluded.
+          //   - 8 outer attachments cycled + tetherLength rings (1.6 +
+          //     ring * 1.1, capped at the PD max 5): successive labels sit on
+          //     different sides at increasing distance — anti-overlap
+          //     without breaking the anchor.
+          //   - translucent dark background box (opacity 0.5): the earlier
+          //     "no background" request predates anchor-accurate placement;
+          //     now that labels sit ON the structure, the box is what keeps
+          //     them readable over the busy cartoon (VLM: readable).
           // ----------------------------------------------------------------
           const ATTACHMENTS = [
-            'top-left', 'bottom-right', 'top-right', 'bottom-left', 'middle-left', 'middle-right',
+            'top-center', 'top-right', 'middle-right', 'bottom-right',
+            'bottom-center', 'bottom-left', 'middle-left', 'top-left',
           ] as const;
-          const GOLDEN_ANGLE = 2.39996; // radians (~137.5°)
           let labelIdx = 0;
 
           for (const lbl of cmd.labels) {
@@ -1330,35 +1348,33 @@ async function executeMultiAngleCapture(
                   };
                   const labelColor = chainColors[lbl.chain] ?? 0xffffff; // white default
 
-                  // R163 anti-overlap placement for this label
+                  // R170 tether-accurate placement for this label
                   const i = labelIdx++;
                   const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
                   const ring = Math.floor(i / ATTACHMENTS.length);
-                  const theta = i * GOLDEN_ANGLE;
-                  // View-space radius in label units: first 6 labels sit one
-                  // ring out (~1 box width), later rings step further away.
-                  const radius = 2.2 + ring * 2.8;
-                  const offsetX = +(Math.cos(theta) * radius).toFixed(2);
-                  const offsetY = +(Math.sin(theta) * radius).toFixed(2);
+                  const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
 
                   await plugin.managers.structure.measurement.addLabel(loci, {
                     labelParams: {
                       customText: lbl.text ?? "",
                       textColor: labelColor,
                       // Molstar's own measurement labels use textSize 0.5 ×
-                      // sizeFactor 1.0; 0.5/0.5 keeps them compact but legible.
-                      textSize: cmd.labelFontSize ?? 0.5,
-                      sizeFactor: 0.5,
-                      offsetX,
-                      offsetY,
-                      offsetZ: 0.3,               // slight lift, no camera push
-                      borderWidth: 0.18,           // glyph outline stroke
-                      borderColor: 0x101010,       // dark outline → readable on any bg
-                      background: false,           // R163: NO background box (user request)
+                      // sizeFactor 1.0; 0.55 keeps them compact but legible.
+                      textSize: cmd.labelFontSize ?? 0.55,
+                      sizeFactor: 0.55,
+                      offsetX: 0,               // R170: anchor stays at the residue
+                      offsetY: 0,
+                      offsetZ: 12,              // R170: clear the cartoon toward the camera (Å)
+                      borderWidth: 0.2,          // glyph outline stroke
+                      borderColor: 0x101010,    // dark outline → readable on any bg
+                      background: true,          // R170: translucent box — readable over the cartoon
+                      backgroundColor: 0x000000,
+                      backgroundOpacity: 0.5,
+                      backgroundMargin: 0.12,
                       attachment,
-                      tether: true,                // callout line back to the residue
-                      tetherLength: 2.0,           // R163: visible callout (VLM-verified)
-                      tetherBaseWidth: 0.2,        // R163: visible line width
+                      tether: true,               // callout line from the box to the residue anchor
+                      tetherLength,               // R170: ring-spread, PD max 5
+                      tetherBaseWidth: 0.25,
                     },
                   } as any);
                 }

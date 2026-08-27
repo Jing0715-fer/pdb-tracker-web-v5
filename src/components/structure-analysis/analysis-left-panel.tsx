@@ -77,6 +77,7 @@ import {
   type LoadedStructure,
 } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
+import { clearAllMeasurements } from "@/lib/molcraft/commands/measurement-utils";
 import type { LlmCommand, ResidueRef } from "@/lib/molcraft/command-schema";
 import { useRunCommand } from "./use-run-command";
 import { SequenceViewer } from "./sequence-viewer";
@@ -555,7 +556,8 @@ function MeasureTab() {
     clearMeasurements();
     if (viewer) {
       try {
-        viewer.plugin.managers.structure.measurement.clear();
+        // R170: bundle-safe clear (measurement.clear() is not in the bundle).
+        void clearAllMeasurements(viewer.plugin);
       } catch {
         // ignore
       }
@@ -1210,7 +1212,8 @@ function InteractionVizCard() {
   const handleClear = useCallback(() => {
     if (!viewer) return;
     try {
-      viewer.plugin.managers.structure.measurement.clear();
+      // R170: bundle-safe clear (measurement.clear() is not in the bundle).
+      void clearAllMeasurements(viewer.plugin);
       toast("Distance lines cleared", "info");
     } catch {
       // ignore

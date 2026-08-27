@@ -23,6 +23,7 @@ import { MeasureOverlay } from '@/components/molcraft-molstar/measure-overlay';
 import { MeasureToolbar } from '@/components/molcraft-molstar/measure-toolbar';
 import { useAppStore } from '@/lib/molcraft/store';
 import { executeCommand } from '@/lib/molcraft/commands';
+import { clearAllMeasurements } from '@/lib/molcraft/commands/measurement-utils';
 import { useAtomPicking } from '@/components/structure-analysis/use-atom-picking';
 import {
   Loader2, ChevronDown, Eye, EyeOff, Layers, Focus,
@@ -114,7 +115,8 @@ export function PdbViewerLite({ pdbId, className }: PdbViewerLiteProps) {
       clearMeasurements();
       clearInteractionLines();
       try {
-        viewer.plugin.managers.structure.measurement.clear();
+        // R170: bundle-safe clear (measurement.clear() is not in the bundle).
+        void clearAllMeasurements(viewer.plugin);
       } catch { /* ignore */ }
     }
     prevPdbIdRef.current = pdbId;

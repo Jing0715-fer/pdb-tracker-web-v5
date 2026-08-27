@@ -21,6 +21,7 @@
  */
 
 import type { MolstarPlugin } from "./types";
+import { clearAllMeasurements } from "./commands/measurement-utils";
 
 // -----------------------------------------------------------------
 // Types
@@ -893,9 +894,12 @@ export function clearInteractionState(plugin: MolstarPlugin): void {
   } catch {
     /* ignore */
   }
-  // Clear Molstar's native measurement manager (old distance/angle lines).
+  // R170: Clear Molstar's native measurement manager (old distance/angle
+  // lines). `measurement.clear()` does NOT exist on the prebuilt bundle —
+  // the state-tree group deletion below is the bundle-safe equivalent
+  // (this call was a silent no-op before R170).
   try {
-    plugin.managers.structure.measurement.clear();
+    void clearAllMeasurements(plugin);
   } catch {
     /* ignore */
   }
@@ -935,8 +939,9 @@ const measureModeReps: unknown[] = [];
  * Used by the toolbar's "clear all" button.
  */
 export function clearAllMeasurementsAndFocus(plugin: MolstarPlugin): void {
+  // R170: bundle-safe measurement clear (see clearInteractionState).
   try {
-    plugin.managers.structure.measurement.clear();
+    void clearAllMeasurements(plugin);
   } catch {
     /* ignore */
   }

@@ -6,6 +6,7 @@
 
 import type { MolstarPlugin } from "../types";
 import { getFirstStructureData, isLociEmpty } from "./structure-helpers";
+import { clearAllMeasurements } from "./measurement-utils";
 
 /**
  * R138: Show the interaction neighborhood around a target loci.
@@ -118,7 +119,9 @@ export async function showInteractionsAround(
 
 /** R138: Clear all interaction-related state (measurements + neighborhood components). */
 export async function clearInteractions(plugin: MolstarPlugin): Promise<void> {
-  plugin.managers.structure.measurement.clear();
+  // R170: `measurement.clear()` does not exist on the prebuilt bundle —
+  // state-tree group deletion is the bundle-safe equivalent.
+  await clearAllMeasurements(plugin);
 
   // Remove neighborhood components tagged with 'interactions-neighborhood'
   try {

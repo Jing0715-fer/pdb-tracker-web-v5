@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { executeCommand, __drainCaptureQueue } from '@/lib/molcraft/commands';
 import type { CommandResult } from '@/lib/molcraft/commands';
+import { clearAllMeasurements } from '@/lib/molcraft/commands/measurement-utils';
 import type { VlmResult } from '@/lib/molcraft/vlm-client';
 import type { MolstarViewer } from '@/lib/molcraft/types';
 import { toolToCommand, requiresApproval, SERVER_SIDE_TOOLS } from '@/lib/agent/pdb-tools';
@@ -1506,7 +1507,8 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         }
       }
       // measurements (distance lines / labels) + selection visuals
-      try { plugin.managers.structure.measurement.clear(); } catch { /* ignore */ }
+      // R170: bundle-safe clear (measurement.clear() is not in the bundle).
+      try { await clearAllMeasurements(plugin); } catch { /* ignore */ }
       try {
         plugin.managers.interactivity?.lociSelects?.deselectAll?.();
       } catch { /* ignore */ }

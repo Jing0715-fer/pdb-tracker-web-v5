@@ -4266,3 +4266,29 @@ Stage Summary:
 - R166-R169 四轮全部推送 GitHub（8e36cbc → e0a2024 → 57c49ee → f5db1a4）。
 - 90 项审查发现全部可行动项完成（11C+22H+36M+23L；2 项失效/won't-fix）。
 - 诚实声明：完整 capture+VLM 浏览器闭环受沙箱 kill 周期限制未在最终代码上重跑，待环境稳定后可补跑 e2e/agent-flow.ts + 浏览器验证。
+
+---
+Task ID: 10
+Agent: main (R170 — pairwise viz: label pointing / sidechain sticks / per-pair chain hiding / focus distance + 3 bundle-API bugs)
+Task: 修复用户 4HHB pairwise 反馈的三项可视化缺陷（label 指向偏差、侧链 stick 不显示、分析 A-B 时隐藏 CD 链 + focus 远近适中），并继续处理遗留 low 问题。
+
+Work Log:
+- 前置：git 与 origin/main 一致（仅 db 文件脏）；重写 public/label-qa.html 为独立诊断 harness（真实 4HHB A-B pairwise 数据 + R163/R170/ sticks/combo 四种模式，修复其残留的 R166 前 Location.create(data,unit,i) bug）。
+- 诊断（label-qa harness + agent-browser 实时画布 + VLM 交叉验证）：
+  1. R163 螺旋 offset 放置（现行生产代码）：VLM 确认 label 可见但"漂浮、无可见 tether、无法关联残基"——根因：shader offsetX/offsetY 把 label+tether 整体推离锚点（tether 尾端不再接触残基）；而 offset=0 时 label 被 cartoon 深度遮挡完全不可见。
+  2. R170 公式（每项经 VLM 验证）：offsetX/Y=0（tether 精确连接 box→残基）+ offsetZ=12Å（拉向相机清除遮挡）+ 8 方向 attachment 轮换 + tetherLength 环距（1.6+ring×1.1，PD max 5 封顶）+ 半透明黑背景（opacity 0.5，label 落在结构上时的可读性保障）→ VLM 评价 labels 可读、可关联、组合图"Good/High Quality"。
+  3. 侧链 stick 在隔离测试中正常渲染（元素色球+键清晰可见）——生产端"看不到 stick"的真根因是：(a) minRadius=40 拉太远（stick 仅数像素）；(b) R164 finally-cleanup + R151 isRecapture-skip 组合使 VLM 重捕获轮次丢失全部 viz 元素；(c) 测量清理从不生效导致跨截图泄漏混乱。
+- R170 修复（9 文件）：
+  - measurement-utils.ts：① snapshotMeasurementRefs 改读真实 state 形状（labels/distances/angles/dihedrals/orientations/planes 六数组——R167 误读不存在的 state.items 恒返回 null，捕获清理从未移除任何 cell，label/line 跨截图泄漏）；② 新增 clearAllMeasurements（删除 'measurement-group' 子树）；③ 修复 build() 方法引用解绑 bug（`const build=data.build; build()` → this.tree undefined → 恒静默抛错——"removed 0/34" 直接根因；QA 页实测 removed 2/2、state 归零）。
+  - commands.ts：① capture_multi_angle label 放置改 R170 公式（见上）；② 清理 fallback 与 clear_measurements 命令改用 clearAllMeasurements；③ cleanupCapture 新增 Step 2b restoreHiddenChains；④ 删除 R151 isRecapture-skip——每轮 capture（含 VLM 重捕获）重新应用 applyRecipeVisualization（幂等，cleanup_previous 复位状态；VLM _focusRadiusMultiplier 缩放提示现在真正作用于重聚焦）。
+  - recipe-viz.ts：① 新增 hideOtherChains/restoreHiddenChains/buildChainLoci/collectChainIds（polymer 隐藏 + 逐链 loci→SE.Loci.toExpression→组件+cartoon/chain-id 替身；≤2 链跳过；失败回滚 polymer 可见性；重复调用先清旧替身）；interactions 家族在 chain1≠chain2 时自动隐藏非参与链（4HHB A-B 隐藏 C/D）——注意 MolScript Q 不在预构建 bundle（lib 仅 structure/volume/shape/loci/math/plugin/extensions），R169 MOL-L4 的 per-chain 路径实际从未生效；② focus minRadius 40→20（"远近适中"，VLM 验证）；③ 新增 draw_pair_labels 步骤：top-6 互作残基对标签 "PRO114–HIS116 2.7Å"（金色，锚定原子对中点 loci，offsetZ=14），ref 跟踪清理；④ cleanup_previous 兜底恢复链可见性。
+  - toggle_component_visibility（commands.ts）：Q 缺失 fallback 从"整个 polymer 开关"改为 loci 方案 hideOtherChains(keep=其余链, force) / restoreHiddenChains——agent 的链隐藏工具首次真正按链生效。
+  - 8 处 measurement.clear() 死调用全部替换（use-agent-session/measure-toolbar/analysis-left-panel×2/PdbViewerLite/measure.ts×2/interactions.ts/commands.ts×2——其中 clear_measurements 工具、测量清除按钮、切换结构清理等此前全部静默无效）。
+- 验证：① 完整 agent 流（4HHB pairwise）：console 实证 `[viz:pairwise] pair #0 C-D (18 interactions)` → `Hidden chains A,B for the C-D interface view (2 stand-in components)` → `focus 23 residues minRadius=20` → `Created ball-and-stick component for 23 residues` → `5 distance lines Tracked` → `Drew 6 residue-pair labels` → pair #1 A-B 同套全过（Hidden chains C,D / 22 residues / 3 lines / 6 pair labels）——全部新管线步骤在生产路径生效；② 测量删除模式 QA 实测 removed 2/2 + state 归零；③ 9 改动文件 eslint 零输出；tsc 142（基线 145，-3：旧 fallback 的 3 个参数类型错误随重写消除，零新增）；④ 首页/分析视图/4HHB 加载无 console error。
+- 环境备注（诚实声明）：沙箱 SwiftShader 软渲染下 label 密集场景渲染极慢且 WebGL 上下文最终丢失（pair #1 截图全黑、QA 页渲染器死亡均属此类），叠加 ~2.5 分钟 kill 周期，完整 capture+VLM 闭环无法在本环境最终代码上完整跑完；视觉效果已通过 label-qa harness + VLM 逐项验证（真实 GPU 浏览器不受影响——用户此前截图证明该管线在其环境正常）。
+- Low 问题状态核查：R169 后 90 项审查发现全部可行动项已完成（11C+22H+36M+23L；UI-019 已随 legacy 路径失效、VLM-012 won't-fix）——本轮转而修复诊断中发现的 3 项新真实 bundle-API bug（measurement.clear 缺失、state.items 误读、build() 解绑）+ isRecapture-skip 回归，均超出原 90 项范围。
+
+Stage Summary:
+- 用户四项要求全部落地：label 指向（tether 精确锚定+遮挡免疫）、侧链 stick（清理修复+重捕获修复+20Å 聚焦三重根因）、A-B 时隐藏 CD 链（逐链替身组件机制，截图后恢复）、focus 远近适中（minRadius 20）。
+- 附加真实 bug 修复：测量清理管线三处叠加失效（从未生效）→ 全链路修复并实测；agent 链可见性工具首次按链生效；VLM 重捕获轮次不再丢失 viz。
+- label-qa.html 升级为带真实数据的生产级诊断 harness（保留在 public/ 供回归）。

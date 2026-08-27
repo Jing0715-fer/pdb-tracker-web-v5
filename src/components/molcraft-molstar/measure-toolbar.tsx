@@ -31,6 +31,7 @@
 
 import { useCallback, useState } from 'react';
 import { useAppStore } from '@/lib/molcraft/store';
+import { clearAllMeasurements } from '@/lib/molcraft/commands/measurement-utils';
 import {
   Ruler, Triangle, Sigma, Tag, X, Copy, Download, Undo2, FileText,
   MousePointerClick, ChevronDown, ChevronRight, Trash2,
@@ -65,7 +66,9 @@ export function MeasureToolbar({ pdbId, className = '' }: MeasureToolbarProps) {
     clearInteractionLines();
     if (viewer) {
       try {
-        viewer.plugin.managers.structure.measurement.clear();
+        // R170: bundle-safe clear (`measurement.clear()` does not exist on
+        // the prebuilt bundle — this button used to silently do nothing).
+        void clearAllMeasurements(viewer.plugin);
       } catch { /* ignore */ }
     }
     toast('Measurements cleared', 'info');
