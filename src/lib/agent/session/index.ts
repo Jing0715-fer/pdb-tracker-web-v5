@@ -48,6 +48,9 @@ export class Session {
   private currentStep = 0;
   private requestHeader: RequestHeader | null = null;
   private headerLogged = false;
+  // R168 (AGENT-M4): next seq to assign — initialized to max(loaded seqs) + 1
+  // so appends never collide with persisted (possibly gapped) seqs.
+  private nextSeqFloor = 0;
 
   constructor(opts: SessionOptions) {
     this.id = opts.id;
@@ -57,6 +60,7 @@ export class Session {
       for (const ev of opts.events) {
         this.events.push(ev);
         this.eventsBySeq.set(ev.seq, ev);
+        if (ev.seq >= this.nextSeqFloor) this.nextSeqFloor = ev.seq + 1;
         if (ev.type === 'turn/start') this.currentTurn = (ev.data as { turn: number }).turn;
         if (ev.type === 'step/start') this.currentStep = (ev.data as { step: number }).step;
         if (ev.type === 'request/header') this.requestHeader = (ev.data as { header: RequestHeader }).header;
@@ -92,7 +96,16 @@ export class Session {
     data: SessionEventMap[T],
     extra?: Pick<SessionEventBase, 'surfaceOp' | 'sourceEventSeqs'>,
   ): SessionEvent<T> {
-    const seq = this.events.length;
+    // R168 (AGENT-M4): resumed sessions keep their persisted seqs, and
+    // appendEventRow persistence is best-effort (failures are logged and
+    // dropped), so loaded seqs can be non-contiguous. Deriving seq from
+    // events.length could then COLLIDE with an existing event's seq —
+    // eventsBySeq.set would shadow the old event and deriveMessages would
+    // project the new event twice. Use max(existing seq) + 1 instead.
+    const seq = this.events.length > 0
+      ? Math.max(this.events[this.events.length - 1]!.seq + 1, this.nextSeqFloor)
+      : 0;
+    this.nextSeqFloor = Math.max(this.nextSeqFloor, seq + 1);
     const time = Date.now();
     const event = deepFreeze({
       type,

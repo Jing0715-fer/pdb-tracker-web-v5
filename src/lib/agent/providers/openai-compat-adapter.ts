@@ -15,6 +15,7 @@
 
 import type { LlmAdapter, GenerateOptions, StreamChunk, Message, ToolSchema, ContentBlock } from '../llm/types';
 import { newCallId } from '../types';
+import { withTimeoutSignal } from '../llm/signal-utils';
 import type { ProviderProfile } from './catalog';
 import { resolveApiKey, resolveBaseURL } from './credentials';
 
@@ -143,18 +144,25 @@ export class OpenAICompatAdapter implements LlmAdapter {
     // Remove undefined fields.
     Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
 
+    // R168 (AGENT-M6): hard per-attempt timeout — a hung fetch previously
+    // blocked the drive indefinitely (see signal-utils.ts).
+    const timeout = withTimeoutSignal(options.signal);
     let resp: Response;
     try {
       resp = await fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: options.signal,
+        signal: timeout.signal,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      yield { type: 'finish', reason: { kind: 'error', error: `Fetch failed: ${msg}` } };
+      const msg = timeout.timedOut()
+        ? `LLM request timed out after 120s (provider: ${this.provider}, model: ${options.model})`
+        : `Fetch failed: ${err instanceof Error ? err.message : String(err)}`;
+      yield { type: 'finish', reason: { kind: 'error', error: msg } };
       return;
+    } finally {
+      timeout.dispose();
     }
 
     if (!resp.ok) {

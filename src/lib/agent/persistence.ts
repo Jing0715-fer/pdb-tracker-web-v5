@@ -71,12 +71,33 @@ export async function loadSessionEvents(sessionId: string): Promise<SessionEvent
       where: { sessionId },
       orderBy: { seq: 'asc' },
     });
-    return rows.map((r) => ({
-      type: r.type,
-      seq: r.seq,
-      time: r.time.getTime(),
-      data: JSON.parse(r.data),
-    })) as SessionEvent[];
+    // R168 (AGENT-M3): a single malformed row used to fail the WHOLE load
+    // (the function-wide catch returned []) — the session then looked wiped
+    // on resume while the DB still held its events, and subsequent appends
+    // created duplicate (sessionId, seq) rows. Parse per-row instead: skip +
+    // warn on bad rows so one corrupt entry can at most lose itself.
+    const events: SessionEvent[] = [];
+    let skipped = 0;
+    for (const r of rows) {
+      try {
+        events.push({
+          type: r.type,
+          seq: r.seq,
+          time: r.time.getTime(),
+          data: JSON.parse(r.data),
+        } as SessionEvent);
+      } catch (rowErr) {
+        skipped++;
+        console.warn(
+          `[agent-persistence] skipping corrupt event row (session=${sessionId} seq=${r.seq}):`,
+          rowErr instanceof Error ? rowErr.message : rowErr
+        );
+      }
+    }
+    if (skipped > 0) {
+      console.warn(`[agent-persistence] loadSessionEvents: skipped ${skipped}/${rows.length} corrupt rows for session ${sessionId}`);
+    }
+    return events;
   } catch (err) {
     console.error('[agent-persistence] loadSessionEvents failed:', err);
     return [];
@@ -91,7 +112,10 @@ export async function getSessionRow(sessionId: string): Promise<{
 } | null> {
   try {
     return await db.agentSession.findUnique({ where: { id: sessionId } });
-  } catch {
+  } catch (err) {
+    // R168 (AGENT-L3): log like every sibling — a transient DB failure was
+    // indistinguishable from "session not found" (resume 404'd without a trace).
+    console.error('[agent-persistence] getSessionRow failed:', err);
     return null;
   }
 }

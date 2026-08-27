@@ -62,12 +62,35 @@ export async function POST(
 
   // Replay the forked events into the new session. We re-append with new
   // seqs + times, preserving event type + data + surfaceOp.
+  // R168 (AGENT-M9): replay the ORIGINAL surfaceOp — the previous code
+  // rewrote every surface-eligible event to {op:'append'}, discarding the
+  // replace ops emitted by regenerate's followupWithReplace: forking a
+  // session that used regenerate resurrected the replaced-out assistant
+  // turn (both stale + regenerated answers visible to the fork's LLM).
+  // replace ops reference SOURCE seqs — remap them through seqMap since the
+  // new session renumbers. When either endpoint is not part of the forked
+  // range (defensive), degrade to append.
+  const seqMap = new Map<number, number>();
   for (const ev of forkEvents) {
-    const surfaceOp =
-      ev.type === 'user/message' || ev.type === 'assistant/message' || ev.type === 'tool/result'
-        ? { surfaceOp: { op: 'append' as const } }
-        : {};
-    newSession.append(ev.type as never, ev.data as never, surfaceOp as never);
+    const isSurfaceEligible =
+      ev.type === 'user/message' || ev.type === 'assistant/message' || ev.type === 'tool/result';
+    let surfaceOpExtra: { surfaceOp?: { op: 'append' } | { op: 'replace'; start: number; end: number } } = {};
+    if (isSurfaceEligible) {
+      const sop = (ev as { surfaceOp?: { op: string; start?: number; end?: number } }).surfaceOp;
+      if (sop?.op === 'replace' && typeof sop.start === 'number' && typeof sop.end === 'number') {
+        const start = seqMap.get(sop.start);
+        const end = seqMap.get(sop.end);
+        if (start !== undefined && end !== undefined) {
+          surfaceOpExtra = { surfaceOp: { op: 'replace', start, end } };
+        } else {
+          surfaceOpExtra = { surfaceOp: { op: 'append' } };
+        }
+      } else {
+        surfaceOpExtra = { surfaceOp: { op: 'append' } };
+      }
+    }
+    const appended = newSession.append(ev.type as never, ev.data as never, surfaceOpExtra as never);
+    seqMap.set(ev.seq, appended.seq);
   }
 
   return NextResponse.json({

@@ -75,6 +75,15 @@ export class AgentLoop {
     this.session = session;
     this.options = options;
     this.inbox = new Inbox();
+    // R168 (AGENT-M2): rehydrate turn/step from the session log. A fresh loop
+    // over a RESUMED session previously started at turn=0/step=0, so
+    // needsTurnStart's `this.turn === 0` clause always fired and appended a
+    // DUPLICATE turn/start {turn:1} even when the log already had turns 1..N
+    // (and mid-turn, right after a tool/result) — colliding turn numbers and
+    // mislabeled turn/step metadata corrupted UI grouping and the audit trail.
+    // Session reconstructs these from the event log (see Session constructor).
+    this.turn = session.turn;
+    this.step = session.step;
     // Default request header logging on first step.
   }
 

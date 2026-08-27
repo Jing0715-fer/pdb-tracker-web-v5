@@ -151,7 +151,27 @@ export class ToolRuntime {
     const onAbort = () => controller.abort(callerSignal.reason);
     if (callerSignal.aborted) onAbort();
     else callerSignal.addEventListener('abort', onAbort, { once: true });
+    try {
+      return await this.runDispatch(name, args, opts, callId, controller, callerSignal);
+    } finally {
+      // R168 (AGENT-M8): detach the abort-bridge listener on EVERY exit
+      // path. {once:true} only auto-removed it on an actual abort — on
+      // normal completion it stayed attached to the long-lived loop
+      // controller forever, so every server-side tool call permanently
+      // accumulated one more listener (unbounded growth in long sessions).
+      callerSignal.removeEventListener('abort', onAbort);
+    }
+  }
 
+  /** Inner dispatch pipeline — see dispatch() for the signal plumbing. */
+  private async runDispatch(
+    name: string,
+    args: unknown,
+    opts: DispatchOptions,
+    callId: CallId,
+    controller: AbortController,
+    callerSignal: AbortSignal,
+  ): Promise<ToolExecutionResult> {
     const deferred: string[] = [];
     let concluded = false;
     const ctx: ToolRunContext = {
@@ -225,12 +245,31 @@ export class ToolRuntime {
     let value: Json;
     try {
       const execPromise = tool.execute(args, ctx);
+      // R168 (AGENT-M8): clear the timer when the tool wins the race (it
+      // previously stayed scheduled for timeoutMs) AND abort the tool's
+      // controller when the timeout wins (the execution previously kept
+      // running in the background against an aborted-intent signal). The
+      // losing promise's late rejection is swallowed so it cannot surface
+      // as an unhandled rejection.
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const timeout = tool.timeoutMs
-        ? new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Tool "${name}" timed out after ${tool.timeoutMs}ms`)), tool.timeoutMs),
-          )
+        ? new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+              controller.abort(
+                typeof DOMException === 'function'
+                  ? new DOMException(`Tool "${name}" timed out after ${tool.timeoutMs}ms`, 'TimeoutError')
+                  : new Error(`Tool "${name}" timed out after ${tool.timeoutMs}ms`),
+              );
+              reject(new Error(`Tool "${name}" timed out after ${tool.timeoutMs}ms`));
+            }, tool.timeoutMs);
+          })
         : null;
-      value = timeout ? (await Promise.race([execPromise, timeout])) : await execPromise;
+      try {
+        value = timeout ? (await Promise.race([execPromise, timeout])) : await execPromise;
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      }
+      void Promise.resolve(execPromise).catch(() => undefined);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return this.errorResult(callId, name, 'ExecutionError', 'execution', msg);

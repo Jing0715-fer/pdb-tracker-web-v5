@@ -56,6 +56,34 @@ export async function POST(
     return NextResponse.json({ error: 'results array is required' }, { status: 400 });
   }
 
+  // R168 (AGENT-M5): every submitted callId must match an UNRESOLVED
+  // tool/call of this session. Previously any callId was accepted — a
+  // fabricated or double-submitted result produced tool messages without
+  // (or doubled against) their assistant tool_calls blocks, a wire-format
+  // violation that breaks the next LLM call (OpenAI/ZAI require every
+  // tool_calls message to be followed by exactly one tool message per id).
+  const events = manager.getEvents(sessionId);
+  const pendingCallIds = new Set<string>();
+  for (const ev of events) {
+    if (ev.type === 'tool/call') {
+      const data = ev.data as { callId?: string };
+      if (data.callId) pendingCallIds.add(data.callId);
+    } else if (ev.type === 'tool/result') {
+      const callId = (ev.data as { message?: { source?: { callId?: string } } })?.message?.source?.callId;
+      if (callId) pendingCallIds.delete(callId);
+    }
+  }
+  for (const r of body.results) {
+    if (!pendingCallIds.has(r.callId)) {
+      return NextResponse.json(
+        {
+          error: `callId "${r.callId}" does not match a pending tool call (unknown, already resolved, or duplicated)`,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   // Security gate: verify approval-required tools have a corresponding
   // approval/decided event before accepting the result. This prevents a
   // malicious client from bypassing approval by POSTing tool-results directly.
@@ -70,7 +98,6 @@ export async function POST(
   // result is an error (ok: false) — this lets the rejection flow
   // cleanly without bypassing approval for SUCCESS results.
   const { requiresApproval } = await import('@/lib/agent/pdb-tools');
-  const events = manager.getEvents(sessionId);
   const allowedCallIds = new Set<string>();
   const rejectedCallIds = new Set<string>();
   for (const ev of events) {

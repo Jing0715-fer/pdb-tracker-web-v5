@@ -18,6 +18,7 @@
 
 import type { LlmAdapter, GenerateOptions, StreamChunk, Message, ToolSchema, ContentBlock } from './types';
 import { newCallId } from '../types';
+import { withTimeoutSignal } from './signal-utils';
 
 interface ZaiSdk {
   chat: {
@@ -129,6 +130,9 @@ export class ZaiLlmAdapter implements LlmAdapter {
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const sdk = await this.sdk();
+    // R168 (AGENT-M6): hard per-attempt timeout — a hung provider connection
+    // previously blocked the drive indefinitely (see signal-utils.ts).
+    const timeout = withTimeoutSignal(options.signal);
     let resp: ZaiResponse;
     try {
       resp = await sdk.chat.completions.create({
@@ -139,12 +143,16 @@ export class ZaiLlmAdapter implements LlmAdapter {
         thinking: { type: 'disabled' as const },
         temperature: options.temperature,
         max_tokens: options.maxTokens,
-        ...(options.signal ? { signal: options.signal } : {}),
+        signal: timeout.signal,
       } as Record<string, unknown>);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = timeout.timedOut()
+        ? `LLM request timed out after 120s (provider: zai, model: ${options.model})`
+        : err instanceof Error ? err.message : String(err);
       yield { type: 'finish', reason: { kind: 'error', error: msg } };
       return;
+    } finally {
+      timeout.dispose();
     }
 
     const choice = resp.choices?.[0];

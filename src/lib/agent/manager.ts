@@ -92,9 +92,20 @@ export class AgentManager {
   private readonly eventLog = new Map<string, SessionEvent[]>();
   /** Per-session drive serialization: prevents concurrent drive() calls from corrupting loop state. */
   private readonly driveLocks = new Map<string, Promise<unknown>>();
+  // R168 (AGENT-M1): idle-eviction bookkeeping. loops/sessions/eventLog were
+  // only cleared by explicit deleteSession — every created/resumed session
+  // was pinned forever (and events retain full multi-MB screenshot dataUris
+  // since R165), so a long-lived server grew without bound. Idle sessions are
+  // now evicted from MEMORY (DB rows survive; resumeSession restores on
+  // demand via ensureSession).
+  private readonly lastActivity = new Map<string, number>();
+  private readonly evictTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly IDLE_EVICT_MS = 30 * 60 * 1000;
+  private static readonly EVICT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
   constructor() {
     const llm = new LlmRuntime();
+    this.startEvictor();
     // Always register the ZAI adapter (uses the z-ai SDK's built-in auth).
     llm.registerAdapter(['zai', 'auto'], new ZaiLlmAdapter());
 
@@ -292,10 +303,12 @@ export class AgentManager {
     this.sessions.set(id, session);
     this.loops.set(id, loop);
     this.eventLog.set(id, []);
+    this.touch(id); // R168 (AGENT-M1)
 
     // Subscribe to session events → buffer + broadcast via ctx events + persist.
     session.subscribe((event) => {
       this.eventLog.get(id)?.push(event);
+      this.touch(id); // R168 (AGENT-M1): every event is activity
       this.ctx.emit('session/event', { sessionId: id, event });
       // Best-effort persistence — never block the agent loop.
       void appendEventRow(id, event);
@@ -334,9 +347,52 @@ export class AgentManager {
   /** Ensure a session is in memory, auto-resuming from DB if needed. */
   async ensureSession(sessionId: string): Promise<Session | null> {
     const existing = this.getSession(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      this.touch(sessionId);
+      return existing;
+    }
     const resumed = await this.resumeSession(sessionId);
     return resumed?.session ?? null;
+  }
+
+  /** R168 (AGENT-M1): record session activity (resets the idle clock). */
+  private touch(sessionId: string): void {
+    this.lastActivity.set(sessionId, Date.now());
+  }
+
+  private startEvictor(): void {
+    if (this.evictTimer) return;
+    const t = setInterval(() => this.sweepIdleSessions(), AgentManager.EVICT_SWEEP_INTERVAL_MS);
+    // Never keep the process alive just for the sweeper.
+    (t as { unref?: () => void }).unref?.();
+    this.evictTimer = t;
+  }
+
+  /** Evict memory-resident sessions idle beyond IDLE_EVICT_MS. */
+  private sweepIdleSessions(): void {
+    const now = Date.now();
+    // Conservative: never evict while ANY approval decision is pending
+    // (PendingApproval does not carry a sessionId; approvals are rare +
+    // short-lived, so blocking the whole sweep is cheap and safe).
+    if (this.approvals.size > 0) return;
+    for (const [sessionId, last] of this.lastActivity.entries()) {
+      if (now - last < AgentManager.IDLE_EVICT_MS) continue;
+      const loop = this.loops.get(sessionId);
+      if (loop && loop.getStatus() === 'running') {
+        this.touch(sessionId);
+        continue;
+      }
+      if (this.driveLocks.has(sessionId)) continue; // drive in flight
+      if (loop) loop.cancel('idle eviction');
+      this.loops.delete(sessionId);
+      this.sessions.delete(sessionId);
+      this.eventLog.delete(sessionId);
+      this.lastActivity.delete(sessionId);
+      console.log(
+        `[agent-manager] R168 (AGENT-M1): evicted idle session ${sessionId} ` +
+        `(idle ${Math.round((now - last) / 60000)}min; DB row kept — auto-resumes on demand)`
+      );
+    }
   }
 
   deleteSession(sessionId: string): boolean {
@@ -345,6 +401,7 @@ export class AgentManager {
     this.loops.delete(sessionId);
     this.sessions.delete(sessionId);
     this.eventLog.delete(sessionId);
+    this.lastActivity.delete(sessionId); // R168 (AGENT-M1)
     void deleteSessionRow(sessionId);
     return true;
   }
@@ -427,17 +484,30 @@ export class AgentManager {
       createdAt: row.createdAt.getTime(),
       events,
     });
+    // R168 (AGENT-M7): seed provider/model from the session's persisted
+    // request header (the last one actually used) instead of hardcoding
+    // zai/glm-4.6 — a session created under e.g. deepseek silently switched
+    // providers after a server restart. Falls back to the same defaults
+    // createSession uses when the session never issued a request.
+    const lastHeader = session.getRequestHeader();
+    const resumeProviderId = getDefaultProvider() ?? 'zai';
+    const resumeProfile = PROVIDER_CATALOG.find((p) => p.id === resumeProviderId);
+    const resumeModel = resumeProfile
+      ? (getProviderConfig(resumeProviderId).defaultModel ?? resumeProfile.defaultModel)
+      : 'glm-4.6';
     const loop = new AgentLoop(this.ctx, session, {
-      provider: 'zai',
-      model: 'glm-4.6',
+      provider: lastHeader?.provider ?? resumeProviderId,
+      model: lastHeader?.model ?? resumeModel,
       maxStepsPerTurn: 10,
     });
     this.sessions.set(sessionId, session);
     this.loops.set(sessionId, loop);
     this.eventLog.set(sessionId, [...events]);
+    this.touch(sessionId); // R168 (AGENT-M1)
     // Re-subscribe so future appends broadcast + persist.
     session.subscribe((event) => {
       this.eventLog.get(sessionId)?.push(event);
+      this.touch(sessionId); // R168 (AGENT-M1): every event is activity
       this.ctx.emit('session/event', { sessionId, event });
       void appendEventRow(sessionId, event);
     });

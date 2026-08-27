@@ -4167,3 +4167,27 @@ Stage Summary:
 - R167 修复 9/9 指派 Medium（MOL-M1~M9）+ 2 项 E2E 新发现（component.remove bundle 误用 ×3 处）+ type-tag 补丁。
 - 用户可见收益：standalone hbonds/salt_bridges/hydrophobic_contacts 自动截图现在有界面聚焦、侧链 stick、H-bond 虚线（与 pairwise 修复同级的可视化正确性提升）；用户手动的测量/标签在自动捕获后不再被抹掉；LLM 请求的 label 文字真正渲染。
 - 90 项审查发现累计进度：11/11 Critical + 22/22 High + 26/32 Medium（Task 7 的 14 项 + Task 8-c 的 12 项）；Low 仍 25 项待做（R168 计划：AGENT-M1~M10 agent-loop Medium；R169：全部 Low）。
+
+---
+Task ID: 8-d
+Agent: main (R168 agent-loop Medium batch)
+Task: 修复 Task 8-a 重审发现的 10 项 agent-loop Medium 问题（AGENT-M1~M10）。
+
+Work Log:
+- AGENT-M1（manager.ts）：新增 30 分钟空闲驱逐——lastActivity map + 5 分钟 sweep（unref 定时器，不阻止进程退出）；驱逐仅清内存（loops/sessions/eventLog/lastActivity），DB 行保留、ensureSession 按需自动 resume；保护：running loop / driveLocks 在飞 / 任一 pending approval 时跳过。touch() 在 createSession/resumeSession/ensureSession/每个 session.subscribe 回调中打点。
+- AGENT-M2（loop.ts）：AgentLoop 构造函数从 session.turn/session.step 重 hydrate（Session 已从事件日志重建二者）——修复重启后 needsTurnStart 的 `this.turn === 0` 恒真 → 重复 turn/start {turn:1} 撞号 + turn/step 元数据错标。
+- AGENT-M3（persistence.ts）：loadSessionEvents 改为逐行 try/catch——单条损坏行只损失自身（warn + skip），不再让整个会话在 resume 时"看起来被清空"并在后续 append 中产生重复 (sessionId, seq) 行。
+- AGENT-M4（session/index.ts）：append 的 seq 改为 max(已有 seq)+1（nextSeqFloor 字段，构造时初始化）——修复持久化 gap（appendEventRow best-effort 失败）下 events.length 推导的 seq 与既有事件撞号（eventsBySeq 覆盖 + deriveMessages 双投影）。
+- AGENT-M5（tool-results/route.ts）：提交的每个 callId 必须匹配未决 tool/call（扫描事件流构建 pendingCallIds 集合：tool/call 加入、tool/result 按 message.source.callId 移除）——伪造/重复提交返回 409（原先静默接受，产生无主/翻倍的 tool 消息，破坏下一次 LLM 调用的 wire-format）。
+- AGENT-M6（llm/signal-utils.ts 新文件 + 两适配器）：withTimeoutSignal 组合调用方 signal + 120s 硬超时（Node18 兼容的手工组合，dispose() 在 finally 清定时器/摘监听）；zai-adapter 的 create() 与 openai-compat 的 fetch 均接入，超时报错带 provider/model 语义。
+- AGENT-M7（manager.ts resumeSession）：provider/model 从会话持久化的最后 request/header 读取（此前硬编码 zai/glm-4.6——deepseek 会话重启后静默换供应商）；无 header 时回落到与 createSession 相同的默认值链。
+- AGENT-M8（tools/registry.ts）：dispatch 拆为薄包装 + runDispatch 内层，finally 中 removeEventListener 摘除 abort 桥接监听（原先 {once:true} 仅在真实 abort 时自摘，正常完成后永久累积在长生命周期 loop controller 上）；超时竞争修复——工具获胜时 clearTimeout、超时获胜时 controller.abort() 停止后台执行、败方 promise 的迟到 rejection 被吞掉避免 unhandled rejection。
+- AGENT-M9（fork/route.ts）：重放时保留原始 surfaceOp——replace op 的 [start,end] 通过 seqMap（旧 seq→新 seq，append 返回值驱动）重映射；端点不在 fork 范围时降级 append。修复 regenerate 后 fork 复活被替换的旧回答（fork 的 LLM 可见历史与源会话分叉）。
+- AGENT-M10（settings/route.ts）：validateSettingsBody——temperature 有限数 0-2、maxStepsPerTurn 整数 1-50、providerId 必须在 PROVIDER_CATALOG、model 非空 ≤100、systemPromptOverride ≤8000；非法值 400 带明确信息（原先原样合并进持久化 settings，0 步上限让每回合秒触"达到最大步数限制"、字符串 temperature 打挂后续所有 LLM 调用）。
+- 顺带（L3）：getSessionRow 的 catch 加 console.error（与兄弟函数一致，瞬时 DB 故障不再与"会话不存在"无法区分）。
+- 验证：① 纯逻辑测试（bun）：gapped seqs [0,2,4] → append 得 5/6 无撞号、事件数=唯一 seq 数 PASS、turn/step 重 hydrate 1/1 PASS、新会话首 seq=0 PASS；② API 冒烟：settings 非法 temperature/maxStepsPerTurn/providerId 全 400（信息含完整 provider 列表）、合法值 200；伪造 callId 409；③ 真实工具流回归：pdb_load tool-call → 提交真实 callId 200 继续 → 重复提交同一 callId 409；④ 正常中文对话驱动 golden path 正常（R168 改动共存无冲突）；⑤ 11 个改动文件逐文件 eslint 零问题；dev.log 无 error/unhandled。
+
+Stage Summary:
+- R168 修复 10/10 agent-loop Medium（会话恢复路径 turn/step/provider/seq 四类重 hydration 语义、内存无界增长、路由输入信任、LLM/工具双层超时与资源泄漏）。
+- 90 项审查发现累计：11/11 Critical + 22/22 High + 36/32 Medium（Task 7:14 + Task 8-c:12 + Task 8-d:10）；Low 进度 1/25（L3 顺带）。
+- 剩余：25 Low（R169：UI-016~022、VLM-013、PY-006/007/008、AGENT-L1~L10、MOL-L1~L5——其中 UI-019 随 chat-helpers 删除已失效、VLM-012 属固有非确定性拟记 won't-fix）。
