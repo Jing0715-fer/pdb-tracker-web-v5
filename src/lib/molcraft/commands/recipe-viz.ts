@@ -29,6 +29,8 @@ import {
   diffMeasurementRefs,
   removeMeasurementCells,
 } from "./measurement-utils";
+import { applyCartoonTransparency, clearVizTransparency } from "./cartoon-transparency";
+import { getLociCenter, getLabelSizeRatios } from "./label-sizing";
 
 /**
  * R167 (MOL-M4): measurement cells added by the interactions-family viz
@@ -415,10 +417,19 @@ export async function applyRecipeVisualization(
       const structs = getStructures(plugin);
       const components = collectComponents(plugin, structs);
       if (components.length === 0) return;
+      // R171: EXCLUDE the interface-sidechain component — re-theming it with
+      // chain-id (or any global theme) silently overrode the element-symbol
+      // coloring of the sidechain sticks ("侧链的stick没有按照不同原子染色"
+      // root cause #2). The sticks must keep per-atom CPK coloring.
+      const themedComponents = components.filter((c: any) => {
+        const tags = c?.cell?.transform?.tags;
+        return !(Array.isArray(tags) && tags.includes("interface-sidechain"));
+      });
+      if (themedComponents.length === 0) return;
       const normalized = normalizeColorTheme(theme);
       if (normalized) {
         plugin.managers.structure.component.updateRepresentationsTheme(
-          components,
+          themedComponents,
           { color: normalized }
         );
       } else {
@@ -627,6 +638,10 @@ export async function applyRecipeVisualization(
           // R170: also restore chains left hidden by a previous interrupted
           // run (cleanupCapture is the normal restore path).
           await restoreHiddenChains(plugin);
+          // R171: remove leaked cartoon transparency layers from a previous
+          // interrupted run (cleanupCapture is the normal restore path).
+          const clearedT = await clearVizTransparency(plugin);
+          if (clearedT > 0) console.log(`[viz:cleanup] Cleared ${clearedT} leaked transparency layer(s)`);
           // R161: Clear selection + green boxes (deselectAll is the real API;
           // the old lociSelects.clearHighlights() was a silent no-op).
           clearAllSelectionVisuals(plugin);
@@ -876,7 +891,14 @@ export async function applyRecipeVisualization(
                   multipleBonds: true,
                   ignoreHydrogens: true,
                 },
-                colorTheme: { name: "element-symbol", params: {} },
+                // R171: `colorTheme: { name, params }` was silently IGNORED —
+                // createStructureRepresentationParams' string-type path only
+                // reads `color`/`colorParams` (verified against molstar 5.11.0
+                // helpers/structure-representation-params.js). With the WRONG
+                // prop the sticks fell back to the representation default and
+                // were then re-themed to chain-id by applyColorTheme (see the
+                // exclusion added there). `color` is the correct prop.
+                color: "element-symbol",
               });
               console.log(`[viz:show_sidechains] Created ball-and-stick component for ${refs.length} residues`);
             } else {
@@ -966,7 +988,13 @@ export async function applyRecipeVisualization(
           if (top.length === 0) return;
 
           const measBefore = snapshotMeasurementRefs(plugin);
-          let drawn = 0;
+
+          // R171: pass 1 — resolve each pair's loci and anchor center. The
+          // camera is already at the focused-interface view, so the anchor
+          // distances measured NOW drive per-label size compensation below
+          // ("有一些比较远的氨基酸的label很小看不清楚" — text is true 3D
+          // geometry whose screen size shrinks ~1/distance).
+          const prepared: Array<{ it: Record<string, unknown>; result: { loci: unknown } }> = [];
           for (const it of top) {
             try {
               // Loci spanning BOTH endpoints (atom-level when the recipe
@@ -976,13 +1004,31 @@ export async function applyRecipeVisualization(
                 { chain: it.chain2 as string, resno: it.resno2 as number, atomName: it.atom2 as string | undefined },
               ];
               const result = buildResidueLoci(plugin, refs);
-              if (!result) continue;
+              if (result) prepared.push({ it, result });
+            } catch (err) { console.warn('[viz:pair_labels] one pair failed:', err); }
+          }
+          if (prepared.length === 0) return;
+
+          const ratios = getLabelSizeRatios(
+            plugin,
+            prepared.map((p) => getLociCenter(p.result.loci)),
+            14 // offsetZ used below — the depth labels actually render at
+          );
+
+          let drawn = 0;
+          for (let idx = 0; idx < prepared.length; idx++) {
+            const { it, result } = prepared[idx];
+            try {
+              const ratio = ratios[idx] ?? 1;
               const d = it.distance_A != null ? ` ${Number(it.distance_A).toFixed(1)}Å` : "";
               await plugin.managers.structure.measurement.addLabel(result.loci, {
                 labelParams: {
                   customText: `${it.resname1 ?? ''}${it.resno1}–${it.resname2 ?? ''}${it.resno2}${d}`,
                   textColor: 0xffd700, // gold — distinct from per-residue chain colors
-                  textSize: 0.42, sizeFactor: 0.42,
+                  // R171: distance-compensated sizing (far pairs render as
+                  // large as near ones; clamped so outliers stay sane).
+                  textSize: 0.48 * ratio,
+                  sizeFactor: 0.48 * ratio,
                   offsetX: 0, offsetY: 0,
                   offsetZ: 14,          // clear the cartoon toward the camera (Å)
                   borderWidth: 0.16, borderColor: 0x101010,
@@ -1000,6 +1046,16 @@ export async function applyRecipeVisualization(
           if (addedRefs.length > 0) vizAddedMeasurementRefs.push(...addedRefs);
           console.log(`[viz:pair_labels] Drew ${drawn} residue-pair labels (${addedRefs.length} tracked for cleanup)`);
         }, "draw_pair_labels");
+
+        // R171: semi-transparent cartoon — the interface sidechain sticks sit
+        // IN/BEHIND the cartoon surface; at full opacity they are hard to make
+        // out ("界面还是看得不是很清晰"). A 0.4 transparency layer on the
+        // cartoon representations (polymer + per-pair stand-ins; the
+        // element-colored sticks stay solid) lets the sticks read through.
+        // Cleared by cleanupCapture and the next run's cleanup_previous.
+        await safe(async () => {
+          await applyCartoonTransparency(plugin, 0.4);
+        }, "cartoon_transparency");
 
         await safe(async () => { await applyColorTheme("chain-id"); }, "color_chain");
         break;

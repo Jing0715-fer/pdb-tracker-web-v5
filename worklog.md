@@ -4292,3 +4292,33 @@ Stage Summary:
 - 用户四项要求全部落地：label 指向（tether 精确锚定+遮挡免疫）、侧链 stick（清理修复+重捕获修复+20Å 聚焦三重根因）、A-B 时隐藏 CD 链（逐链替身组件机制，截图后恢复）、focus 远近适中（minRadius 20）。
 - 附加真实 bug 修复：测量清理管线三处叠加失效（从未生效）→ 全链路修复并实测；agent 链可见性工具首次按链生效；VLM 重捕获轮次不再丢失 viz。
 - label-qa.html 升级为带真实数据的生产级诊断 harness（保留在 public/ 供回归）。
+
+---
+Task ID: 11
+Agent: main (R171 — pairwise viz round 2: chain-matched label colors / element-colored sticks / cartoon transparency / distance-compensated label sizes)
+Task: 修复用户第二轮 pairwise 可视化反馈的四个问题：① label 颜色与链颜色不一致 ② 侧链 stick 未按原子（元素）染色 ③ 界面不清晰（给 cartoon 加透明度）④ 较远氨基酸的 label 太小看不清。
+
+Work Log:
+- 根因诊断（全部对照 node_modules/molstar 5.11.0 源码逐一验证，bundle 版本与之一致）：
+  1. label 颜色不一致：capture_multi_angle 的 label 循环用硬编码 map（A→红/B→蓝…），而 cartoon 的 chain-id 主题用 'many-distinct' 调色板。
+  2. stick 未按元素染色：两个叠加 bug——(a) show_sidechains 给 addRepresentation 传 `colorTheme: {name:'element-symbol', params:{}}`，但 createStructureRepresentationParams 的字符串 type 路径只读 `color`/`colorParams`（colorTheme prop 被静默忽略）；(b) interactions 场景末尾 applyColorTheme("chain-id") 对 collectComponents 返回的【全部】组件 updateRepresentationsTheme——包括侧链组件——把 ball-and-stick 刷成链色。measure.ts 还有 3 处同型错误（`colorTheme:{name:'element'}`——"element" 甚至不是合法主题名）。
+  3. 透明度：updateRepresentationsTheme 只支持 color/size；Molstar 透明度是独立 state transform（StateTransforms.Representation.TransparencyStructureRepresentation3DFromBundle，挂在 Representation3D cell 下——官方 setStructureTransparency 即此实现）；bundle 的 lib.plugin.StateTransforms 暴露该 transform，lib.structure.StructureElement.Bundle.fromLoci 可造 layer；viewer 以 wboit 模式创建（molstar-viewer.tsx 显式传参）→ 可渲染。
+  4. 远处 label 小：读 text 顶点着色器确认 corner offset 在 clip space 应用但除以 w（视深）→ 文字屏幕尺寸 ∝ 1/距离；textSize（Shape 尺寸）× sizeFactor（uniform）二者相乘共同决定字形大小。
+- 新文件 commands/chain-colors.ts：主路径直接调 plugin.representation.structure.themes.colorThemeRegistry.get('chain-id').factory({structure}, defaultValues) 并对每链首原子 query theme.color(loc)——与 updateRepresentationsTheme 同一工厂，构造即正确（免一切调色板复刻风险）；fallback 复刻主题 serial 逻辑（structAsymMap 顺序遍历 + many-distinct 25 色）。
+- 新文件 commands/cartoon-transparency.ts：applyCartoonTransparency（全原子 loci→Bundle→applyOrUpdateTagged('viz-transparency') 挂到非侧链组件的 cartoon 类 repr 上）+ clearVizTransparency（遍历 state.data.cells 删 tagged cell）；幂等（applyOrUpdateTagged 更新而非堆叠）。
+- 新文件 commands/label-sizing.ts：getLociCenter（bundle Loci.getCenter）+ getLabelSizeRatios（相机位置→各 label 锚点距离→(d-offsetZ)/(mean-offsetZ) 比值 clamp [0.85,2.6]）。
+- recipe-viz.ts：① show_sidechains 改 `color: "element-symbol"`；② applyColorTheme 过滤掉 tagged 'interface-sidechain' 的组件（元素着色不再被覆盖）；③ interactions 家族在 color_chain 前接入 applyCartoonTransparency(0.4)；④ draw_pair_labels 重构为两遍式（先解析 loci+锚点→距离比值→按比值放大 textSize/sizeFactor 0.48×ratio，基线 0.42→0.48）；⑤ cleanup_previous 增加 clearVizTransparency。
+- commands.ts：capture_multi_angle label 循环重构为两遍式——pass1 解析 loci+锚点，getChainColorMap/getLabelLabelColor 取链色（删除 R155 硬编码红蓝绿 map），pass2 按 ratio 放大字号；cleanupCapture 新增 Step 2c clearVizTransparency。
+- measure.ts：3 处 `colorTheme:{name:'element'}` → `color:"element-symbol"`。
+- QA harness（public/label-qa.html）升级 R171 模式：完整复刻新生产管线（含主题工厂链色、element stick、透明度、距离补偿），init 时自动运行链色检查写日志。
+- 验证：
+  1. 浏览器（QA 页，真实 4HHB）：init 日志实证工厂方案输出 `A=0x1b9e77(青绿) C=0xd95f02(橙) B=0x7570b3(紫) D=0xe7298a(粉)`——注意 serial 顺序是 A,C,B,D（4HHB mmCIF structAsymMap 顺序），非字母序；复刻 fallback 遍历同一 map 顺序，两者一致。
+  2. VLM 视觉验证（QA 页 R171 组合渲染后截图）：cartoon 半透明（"internal structure visible through ribbons"）✓；侧链球棍按元素着色（红 O/蓝 N/灰 C 球体透过半透明 cartoon 可见）✓；标签按链着色（H116 蓝紫=链 B 色、GLS 青绿=链 A 色，各自匹配相邻链）✓；前后景标签均可读 ✓。
+  3. 生产路径 E2E（主应用 agent 聊天→pairwise_interactions）：两对界面（C-D、A-B）console 实证完整 R171 管线——`Hidden chains A,B/C,D` → `focus 23/22 residues minRadius=20` → `ball-and-stick for 23/22 residues` → `Tracked 5/3 lines` → `Drew 6 pair labels` → `[viz:transparency] 4 cartoon representation(s) at 0.4 transparency`（两对各一次）→ 清理 `removed 34/34` + `31/31`（= 23+5+6 / 22+3+6，标签+线全数追踪并干净移除，证明生产 label 循环无错运行）；无页面 error。
+  4. lint：6 个改动文件零输出；tsc 138 vs 基线 142（git stash 对比，零新增、净 -4）。
+- 环境备注（诚实声明）：沙箱 SwiftShader 下两对界面的最终截图全黑（WebGL 上下文在重负载渲染后死亡，R170 已记录的同类环境限制；用户真实 GPU 不受影响——其此前截图证明该管线在其环境正常）。视觉效果已由 QA harness + VLM 在渲染死亡前逐项验证。
+
+Stage Summary:
+- 用户四项要求全部落地：label 与链同色（主题工厂直查，构造即正确）、侧链 stick 元素着色（param 名修复 + 主题更新排除侧链组件双保险）、cartoon 0.4 透明度（官方 transparency transform，侧链保持实心，截图后自动清除）、远处 label 距离补偿放大（textSize×sizeFactor×ratio，clamp 2.6）。
+- 附加修复：measure.ts 3 处同型 addRepresentation 参数 bug（element 主题名不存在 + colorTheme prop 无效）。
+- 关键 API 发现：plugin.representation.structure.themes.colorThemeRegistry 可直查任意内置主题的真实着色——为未来"标签/注记与结构同色"类需求提供了通用方案。

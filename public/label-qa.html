@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Pairwise Viz QA — Molstar (R170)</title>
+<title>Pairwise Viz QA — Molstar (R171)</title>
 <style>
   body { margin:0; font-family:system-ui; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
   .header { padding:6px 12px; background:#000; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -19,9 +19,10 @@
 <body>
 <div class="header">
   <button id="btnR163">R163 labels (spiral offset — OLD)</button>
-  <button id="btnR170" class="primary">R170 labels (attachment+tether rings)</button>
+  <button id="btnR170">R170 labels (attachment+tether rings)</button>
   <button id="btnSticks">Sticks only (show_sidechains replica)</button>
-  <button id="btnCombo" class="primary">FULL combo (R170: hide CD + sticks + labels + pair labels + lines)</button>
+  <button id="btnCombo" class="primary">FULL combo R170 (hide CD + sticks + labels)</button>
+  <button id="btnR171" class="primary">R171 combo (chain-colored labels + element sticks + transparency + size comp)</button>
   <button id="btnClear">Clear all</button>
   <span id="status">loading molstar…</span>
 </div>
@@ -49,7 +50,165 @@ const AB_INTERACTIONS = [
   { type:"hydrophobic", chain1:"A", resno1:119, resname1:"PRO", atom1:"C",   chain2:"B", resno2:33,  resname2:"VAL", atom2:"CG1", distance_A:4.17 },
 ];
 const THREE_TO_ONE = { ALA:"A",ARG:"R",ASN:"N",ASP:"D",CYS:"C",GLN:"Q",GLU:"E",GLY:"G",HIS:"H",ILE:"I",LEU:"L",LYS:"K",MET:"M",PHE:"F",PRO:"P",SER:"S",THR:"T",TRP:"W",TYR:"Y",VAL:"V" };
-const chainColors = { A: 0xe74c3c, B: 0x3498db, C: 0x2ecc71, D: 0xe67e22 };
+const chainColors = { A: 0xe74c3c, B: 0x3498db, C: 0x2ecc71, D: 0xe67e22 }; // OLD R155 map (kept for R163/R170 comparison)
+
+// ---- R171: chain color map — replica of commands/chain-colors.ts ----
+// Must produce the SAME colors as Molstar's chain-id theme (many-distinct).
+const MANY_DISTINCT = [
+  0x1b9e77, 0xd95f02, 0x7570b3, 0xe7298a, 0x66a61e, 0xe6ab02, 0xa6761d, 0x666666,
+  0xe41a1c, 0x377eb8, 0x4daf4a, 0x984ea3, 0xff7f00, 0xffff33, 0xa65628, 0xf781bf, 0x999999,
+  0x66c2a5, 0xfc8d62, 0x8da0cb, 0xe78ac3, 0xa6d854, 0xffd92f, 0xe5c494, 0xb3b3b3,
+];
+function getChainColorMap() {
+  // PRIMARY (R171): query the REAL chain-id theme factory — same provider
+  // updateRepresentationsTheme uses, so colors are exact by construction.
+  const factoryMap = new Map();
+  try {
+    const data = plugin.managers.structure.hierarchy.current.structures[0]?.cell?.obj?.data;
+    const provider = plugin.representation?.structure?.themes?.colorThemeRegistry?.get?.('chain-id');
+    if (data && provider && typeof provider.factory === 'function') {
+      const theme = provider.factory({ structure: data }, provider.defaultValues);
+      if (theme && typeof theme.color === 'function') {
+        const SE = window.molstar?.lib?.structure?.StructureElement;
+        const SP = window.molstar?.lib?.structure?.StructureProperties;
+        if (SE && SP) {
+          for (const unit of data.units) {
+            if (unit.kind !== 0 || !unit.elements || !unit.elements.length) continue;
+            const loc = SE.Location.create(data, unit, unit.elements[0]);
+            const cid = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+            if (cid && !factoryMap.has(cid)) {
+              const c = theme.color(loc);
+              if (typeof c === 'number') factoryMap.set(cid, c);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { log('theme factory query failed: ' + e.message); }
+  if (factoryMap.size > 0) {
+    log('chain color map (FACTORY): ' + JSON.stringify(Array.from(factoryMap.entries()).map(([k, v]) => k + '=0x' + v.toString(16))));
+    return factoryMap;
+  }
+  // FALLBACK: structAsymMap replication (mirrors commands/chain-colors.ts)
+  const map = new Map();
+  const data = plugin.managers.structure.hierarchy.current.structures[0]?.cell?.obj?.data;
+  const models = data?.models;
+  if (Array.isArray(models) && models.length > 0) {
+    const seen = new Set(); let serial = 0;
+    for (const m of models) {
+      const asym = m?.properties?.structAsymMap;
+      if (!asym || typeof asym.forEach !== 'function') continue;
+      asym.forEach((v, labelId) => {
+        const authId = (typeof v?.auth_id === 'string' && v.auth_id !== '') ? v.auth_id : labelId;
+        if (!authId || seen.has(authId)) return;
+        seen.add(authId);
+        map.set(authId, MANY_DISTINCT[serial % MANY_DISTINCT.length]);
+        serial++;
+      });
+    }
+  }
+  log('chain color map (REPLICATION): ' + JSON.stringify(Array.from(map.entries()).map(([k, v]) => k + '=0x' + v.toString(16))));
+  return map;
+}
+
+// ---- R171: distance-compensated label sizing — replica of label-sizing.ts ----
+function getLociCenter(loci) {
+  try {
+    const Loci = window.molstar?.lib?.loci?.Loci;
+    if (Loci && typeof Loci.getCenter === 'function') {
+      const c = Loci.getCenter(loci);
+      if (c && typeof c[0] === 'number') return [c[0], c[1], c[2]];
+    }
+  } catch (e) {}
+  return null;
+}
+function getLabelSizeRatios(centers, offsetZ) {
+  const ones = centers.map(() => 1);
+  let cam = null;
+  try {
+    const p = plugin.canvas3d?.camera?.position;
+    if (p && typeof p[0] === 'number') cam = [p[0], p[1], p[2]];
+  } catch (e) {}
+  if (!cam) { log('no camera position — ratios all 1'); return ones; }
+  const dists = centers.map(c => {
+    if (!c) return null;
+    const dx = c[0]-cam[0], dy = c[1]-cam[1], dz = c[2]-cam[2];
+    return Math.sqrt(dx*dx + dy*dy + dz*dz);
+  });
+  const valid = dists.filter(d => d != null);
+  if (valid.length === 0) return ones;
+  const mean = valid.reduce((s, d) => s + d, 0) / valid.length;
+  const effMean = Math.max(mean - offsetZ, 1);
+  const ratios = dists.map(d => {
+    if (d == null) return 1;
+    const eff = Math.max(d - offsetZ, 1);
+    return Math.min(Math.max(eff / effMean, 0.85), 2.6);
+  });
+  log('label dists: ' + dists.map(d => d == null ? '-' : d.toFixed(1)).join(', ') + ' | mean=' + mean.toFixed(1) + ' | ratios=' + ratios.map(r => r.toFixed(2)).join(', '));
+  return ratios;
+}
+
+// ---- R171: cartoon transparency — replica of commands/cartoon-transparency.ts ----
+const VIZ_TRANSPARENCY_TAG = 'viz-transparency';
+function buildAllAtomsLoci() {
+  const SE = window.molstar?.lib?.structure?.StructureElement;
+  if (!SE) return null;
+  const data = plugin.managers.structure.hierarchy.current.structures[0]?.cell?.obj?.data;
+  if (!data) return null;
+  const elements = [];
+  for (const unit of data.units) {
+    if (unit.kind !== 0) continue;
+    const n = unit.elements.length;
+    if (n === 0) continue;
+    const indices = new Array(n);
+    for (let i = 0; i < n; i++) indices[i] = i;
+    elements.push({ unit, indices });
+  }
+  return elements.length ? new SE.Loci(data, elements) : null;
+}
+async function applyCartoonTransparency(value) {
+  const SE = window.molstar?.lib?.structure?.StructureElement;
+  const T = window.molstar?.lib?.plugin?.StateTransforms?.Representation?.TransparencyStructureRepresentation3DFromBundle;
+  if (!SE || !T) { log('transparency APIs missing'); return 0; }
+  const loci = buildAllAtomsLoci();
+  if (!loci) { log('all-atoms loci null'); return 0; }
+  const layerBundle = SE.Bundle.fromLoci(loci);
+  let applied = 0;
+  for (const s of plugin.managers.structure.hierarchy.current.structures) {
+    for (const c of (s.components || [])) {
+      const tags = c?.cell?.transform?.tags;
+      if (Array.isArray(tags) && tags.includes('interface-sidechain')) continue;
+      for (const r of (c.representations || [])) {
+        const typeName = r?.cell?.transform?.params?.type?.name || '';
+        if (!typeName.includes('cartoon')) continue;
+        try {
+          const b = plugin.state.data.build();
+          b.to(r.cell.transform.ref).applyOrUpdateTagged(VIZ_TRANSPARENCY_TAG, T, {
+            layers: [{ bundle: layerBundle, value }],
+          });
+          await b.commit();
+          applied++;
+        } catch (e) { log('transparency one repr failed: ' + e.message); }
+      }
+    }
+  }
+  log('cartoon transparency applied to ' + applied + ' representation(s) at ' + value);
+  return applied;
+}
+async function clearVizTransparency() {
+  const state = plugin.state.data;
+  const toDelete = [];
+  for (const [ref, cell] of state.cells) {
+    const tags = cell?.transform?.tags;
+    if (Array.isArray(tags) && tags.includes(VIZ_TRANSPARENCY_TAG)) toDelete.push(ref);
+  }
+  if (toDelete.length === 0) return 0;
+  const b = state.build();
+  for (const ref of toDelete) { try { b.delete(ref); } catch (e) {} }
+  await b.commit();
+  log('cleared ' + toDelete.length + ' transparency cell(s)');
+  return toDelete.length;
+}
 
 // unique interface residues in input order (mirrors recipe-viz dedup)
 function interfaceResidues() {
@@ -145,10 +304,26 @@ async function showSidechains() {
   if (!component) { log('tryCreateComponentFromExpression returned undefined'); return; }
   await plugin.builders.structure.representation.addRepresentation(component, {
     type: "ball-and-stick",
-    typeParams: { sizeFactor: 0.2, ignoreHydrogens: true },
+    typeParams: { sizeFactor: 0.2, bondScale: 0.15, bondSpacing: 0.05, aromaticBonds: true, multipleBonds: true, ignoreHydrogens: true },
+    color: "element-symbol",   // R171: correct prop (colorTheme was ignored)
   });
-  log('ball-and-stick component created for ' + refs.length + ' residues');
+  log('ball-and-stick component created for ' + refs.length + ' residues (element-symbol)');
   await new Promise(r => setTimeout(r, 600));
+}
+
+// ---- R171: re-theme cartoons to chain-id WITHOUT touching the sidechain sticks ----
+async function reThemeCartoons() {
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  const comps = [];
+  for (const s of structs) {
+    for (const c of (s.components || [])) {
+      const tags = c?.cell?.transform?.tags;
+      if (Array.isArray(tags) && tags.includes('interface-sidechain')) continue;
+      comps.push(c);
+    }
+  }
+  plugin.managers.structure.component.updateRepresentationsTheme(comps, { color: 'chain-id' });
+  log('re-themed ' + comps.length + ' non-sidechain component(s) to chain-id');
 }
 
 // ---- labels: R163 placement (spiral shader offsets — current production) ----
@@ -242,6 +417,77 @@ async function addPairLabels() {
   log('pair labels added (' + n + ')');
 }
 
+// ---- R171 labels: chain-matched colors + distance-compensated sizes ----
+async function addLabelsR171() {
+  const meas = plugin.managers.structure.measurement;
+  const residues = interfaceResidues();
+  const colorMap = getChainColorMap();
+  // pass 1: loci + anchors
+  const prepared = [];
+  for (const r of residues) {
+    const res = buildResidueLoci([{ chain: r.chain, resno: r.resno }]);
+    if (res) prepared.push({ r, loci: res.loci });
+  }
+  const ratios = getLabelSizeRatios(prepared.map(p => getLociCenter(p.loci)), 12);
+  const ATTACHMENTS = ['top-center','top-right','middle-right','bottom-right','bottom-center','bottom-left','middle-left','top-left'];
+  let n = 0;
+  for (let idx = 0; idx < prepared.length; idx++) {
+    const { r, loci } = prepared[idx];
+    const i = n++;
+    const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
+    const ring = Math.floor(i / ATTACHMENTS.length);
+    const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
+    const ratio = ratios[idx] ?? 1;
+    await meas.addLabel(loci, {
+      labelParams: {
+        customText: (THREE_TO_ONE[r.resname]||'?') + r.resno,
+        textColor: colorMap.get(r.chain) ?? 0xffffff,
+        textSize: 0.55 * ratio, sizeFactor: 0.55 * ratio,
+        offsetX: 0, offsetY: 0, offsetZ: 12,
+        borderWidth: 0.2, borderColor: 0x101010,
+        background: true, backgroundColor: 0x000000, backgroundOpacity: 0.5, backgroundMargin: 0.12,
+        attachment, tether: true, tetherLength, tetherBaseWidth: 0.25,
+      },
+    });
+  }
+  log('R171 labels added (' + n + ')');
+}
+
+// ---- R171 pair labels: distance-compensated ----
+async function addPairLabelsR171() {
+  const meas = plugin.managers.structure.measurement;
+  const top = AB_INTERACTIONS.slice(0, 6);
+  const prepared = [];
+  for (const it of top) {
+    const res = buildResidueLoci([
+      { chain: it.chain1, resno: it.resno1, atomName: it.atom1 },
+      { chain: it.chain2, resno: it.resno2, atomName: it.atom2 },
+    ]);
+    if (res) prepared.push({ it, loci: res.loci });
+  }
+  const ratios = getLabelSizeRatios(prepared.map(p => getLociCenter(p.loci)), 14);
+  let n = 0;
+  for (let idx = 0; idx < prepared.length; idx++) {
+    const { it, loci } = prepared[idx];
+    const text = `${it.resname1}${it.resno1}–${it.resname2}${it.resno2} ${it.distance_A.toFixed(1)}Å`;
+    const ratio = ratios[idx] ?? 1;
+    await meas.addLabel(loci, {
+      labelParams: {
+        customText: text,
+        textColor: 0xffd700,
+        textSize: 0.48 * ratio, sizeFactor: 0.48 * ratio,
+        offsetX: 0, offsetY: 0, offsetZ: 14,
+        borderWidth: 0.16, borderColor: 0x101010,
+        background: true, backgroundColor: 0x000000, backgroundOpacity: 0.55, backgroundMargin: 0.1,
+        attachment: (n % 2 === 0) ? 'top-center' : 'bottom-center',
+        tether: true, tetherLength: 0.9, tetherBaseWidth: 0.16,
+      },
+    });
+    n++;
+  }
+  log('R171 pair labels added (' + n + ')');
+}
+
 // ---- H-bond dashed lines (draw_interaction_lines replica) ----
 async function drawLines() {
   const meas = plugin.managers.structure.measurement;
@@ -291,6 +537,7 @@ function capture(tag) {
 
 async function clearAll() {
   try { plugin.managers.structure.measurement.clear(); } catch (e) {}
+  try { await clearVizTransparency(); } catch (e) {}
   // remove sidechain components
   const structs = plugin.managers.structure.hierarchy.current.structures;
   for (const s of structs) {
@@ -338,6 +585,9 @@ async function init() {
   } catch (e) { log('theme failed: ' + e.message); }
   statusEl.textContent = 'ready';
   log('4HHB loaded');
+  // R171 verification: run the chain-color factory query immediately and log
+  // it — pure JS, verifiable from the page log without heavy re-rendering.
+  try { getChainColorMap(); } catch (e) { log('chain color check failed: ' + e.message); }
 
   document.getElementById('btnR163').onclick = async () => { await focusInterface(); await addLabelsR163(); await capture('r163'); };
   document.getElementById('btnR170').onclick = async () => { await focusInterface(); await addLabelsR170(); await capture('r170'); };
@@ -350,6 +600,21 @@ async function init() {
     await addPairLabels();
     await drawLines();
     await capture('combo');
+  };
+  // R171: the full new production pipeline — chain-matched label colors,
+  // element-symbol sticks (surviving the chain-id re-theme), 0.4 cartoon
+  // transparency and distance-compensated label/pair-label sizes.
+  document.getElementById('btnR171').onclick = async () => {
+    await hideOtherChains(['A','B']);
+    await focusInterface();
+    await showSidechains();
+    await addLabelsR171();
+    await addPairLabelsR171();
+    await drawLines();
+    await reThemeCartoons();
+    await applyCartoonTransparency(0.4);
+    await new Promise(r => setTimeout(r, 1200));
+    await capture('r171');
   };
   document.getElementById('btnClear').onclick = clearAll;
 }

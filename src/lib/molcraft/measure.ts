@@ -500,12 +500,15 @@ export async function disableFocusBehaviors(plugin: MolstarPlugin): Promise<() =
       );
       if (polymer?.cell) {
         // Add ball-and-stick with low opacity so cartoon is still visible underneath.
+        // R171: `colorTheme: { name, params }` was silently ignored (the string-
+        // type path of createStructureRepresentationParams only reads `color`),
+        // and "element" is not a valid theme name — use `color: "element-symbol"`.
         const rep = await plugin.builders.structure.representation.addRepresentation(
           polymer.cell,
           {
             type: "ball-and-stick",
             typeParams: { alpha: 0.5 },
-            colorTheme: { name: "element", params: {} },
+            color: "element-symbol",
           }
         );
         if (rep) {
@@ -778,10 +781,13 @@ export async function showResidueSidechain(
 
     // Add ball-and-stick representation.
     try {
+      // R171: `color` (string) is the prop the representation builder reads;
+      // the previous `colorTheme: { name: "element" }` was silently ignored
+      // and "element" is not even a valid theme name.
       await plugin.builders.structure.representation.addRepresentation(component, {
         type: "ball-and-stick",
         typeParams: {},
-        colorTheme: { name: "element", params: {} },
+        color: "element-symbol",
       });
     } catch (e) {
       console.warn("[showResidueSidechain] addRepresentation failed:", e);
@@ -813,12 +819,13 @@ export async function showAtomsForInteraction(plugin: MolstarPlugin): Promise<()
         (c: any) => c?.cell?.transform?.tags?.includes("structure-component-static-polymer")
       );
       if (polymer?.cell) {
+        // R171: `color` (string) — see the other addRepresentation call sites.
         const rep = await plugin.builders.structure.representation.addRepresentation(
           polymer.cell,
           {
             type: "ball-and-stick",
             typeParams: { alpha: 0.5 },
-            colorTheme: { name: "element", params: {} },
+            color: "element-symbol",
           }
         );
         if (rep) {

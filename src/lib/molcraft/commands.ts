@@ -47,6 +47,9 @@ import {
   clearAllMeasurements,
 } from "./commands/measurement-utils";
 import { restoreHiddenChains } from "./commands/recipe-viz";
+import { getChainColorMap, getChainLabelColor } from "./commands/chain-colors";
+import { getLociCenter, getLabelSizeRatios } from "./commands/label-sizing";
+import { clearVizTransparency } from "./commands/cartoon-transparency";
 import {
   checkScreenshotQuality,
   checkIfBlackScreen,
@@ -1228,6 +1231,11 @@ async function executeMultiAngleCapture(
     // components; restore un-hides the polymer and removes the stand-ins).
     try { await restoreHiddenChains(plugin); } catch (err) { console.warn('[capture_multi_angle] chain visibility restore failed:', err); }
 
+    // Step 2c — R171: remove the viz-added cartoon transparency layers
+    // (applied by the interactions-family recipe viz). The user's live view
+    // must not stay semi-transparent after the analysis finishes.
+    try { await clearVizTransparency(plugin); } catch (err) { console.warn('[capture_multi_angle] transparency restore failed:', err); }
+
     // R119: No background restore needed — we didn't change it (see above).
 
     // Step 3 — R157/R161 clear selection and highlights (removes green
@@ -1317,73 +1325,102 @@ async function executeMultiAngleCapture(
             'top-center', 'top-right', 'middle-right', 'bottom-right',
             'bottom-center', 'bottom-left', 'middle-left', 'top-left',
           ] as const;
-          let labelIdx = 0;
 
+          // ----------------------------------------------------------------
+          // R171 pass 1 — resolve every label's loci FIRST (single-residue,
+          // non-destructive; same R160 buildResidueLoci → lociFromResidue
+          // fallback chain as before), so per-label sizing can be planned
+          // from the anchors' real camera distances before anything is drawn.
+          // ----------------------------------------------------------------
+          type LabelSpec = NonNullable<typeof cmd.labels>[number];
+          const prepared: Array<{ lbl: LabelSpec; loci: unknown }> = [];
           for (const lbl of cmd.labels) {
+            if (lbl.chain === undefined || lbl.resno === undefined) continue;
             try {
-              if (lbl.chain !== undefined && lbl.resno !== undefined) {
-                // R160: single-residue loci (non-destructive, no green box)
-                let loci: unknown = null;
-                const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
-                if (singleResult) {
-                  loci = singleResult.loci;
-                }
-                // Fallback to lociFromResidue if buildResidueLoci failed
-                if (!loci) {
-                  loci = await lociFromResidue(viewer, {
-                    chain: lbl.chain,
-                    resno: lbl.resno,
-                  });
-                }
-                if (loci) {
-                  // R155: Use chain-specific colors for labels
-                  // Chain A → red, B → blue, C → green, D → orange, etc.
-                  const chainColors: Record<string, number> = {
-                    'A': 0xe74c3c, // red
-                    'B': 0x3498db, // blue
-                    'C': 0x2ecc71, // green
-                    'D': 0xe67e22, // orange
-                    'E': 0x9b59b6, // purple
-                    'F': 0x1abc9c, // teal
-                  };
-                  const labelColor = chainColors[lbl.chain] ?? 0xffffff; // white default
-
-                  // R170 tether-accurate placement for this label
-                  const i = labelIdx++;
-                  const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
-                  const ring = Math.floor(i / ATTACHMENTS.length);
-                  const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
-
-                  await plugin.managers.structure.measurement.addLabel(loci, {
-                    labelParams: {
-                      customText: lbl.text ?? "",
-                      textColor: labelColor,
-                      // Molstar's own measurement labels use textSize 0.5 ×
-                      // sizeFactor 1.0; 0.55 keeps them compact but legible.
-                      textSize: cmd.labelFontSize ?? 0.55,
-                      sizeFactor: 0.55,
-                      offsetX: 0,               // R170: anchor stays at the residue
-                      offsetY: 0,
-                      offsetZ: 12,              // R170: clear the cartoon toward the camera (Å)
-                      borderWidth: 0.2,          // glyph outline stroke
-                      borderColor: 0x101010,    // dark outline → readable on any bg
-                      background: true,          // R170: translucent box — readable over the cartoon
-                      backgroundColor: 0x000000,
-                      backgroundOpacity: 0.5,
-                      backgroundMargin: 0.12,
-                      attachment,
-                      tether: true,               // callout line from the box to the residue anchor
-                      tetherLength,               // R170: ring-spread, PD max 5
-                      tetherBaseWidth: 0.25,
-                    },
-                  } as any);
-                }
+              let loci: unknown = null;
+              const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
+              if (singleResult) {
+                loci = singleResult.loci;
               }
+              // Fallback to lociFromResidue if buildResidueLoci failed
+              if (!loci) {
+                loci = await lociFromResidue(viewer, {
+                  chain: lbl.chain,
+                  resno: lbl.resno,
+                });
+              }
+              if (loci) prepared.push({ lbl, loci });
             } catch (err) {
               console.warn(
                 `[capture_multi_angle] label "${lbl.text}" failed:`,
                 err
               );
+            }
+          }
+
+          if (prepared.length > 0) {
+            // R171: label colors that MATCH the cartoon — the chain-id color
+            // theme assigns chains the 'many-distinct' palette (A teal,
+            // B orange, …), NOT the previously hard-coded red/blue/green map.
+            // getChainColorMap replicates the theme's exact serial logic
+            // (structAsymMap order), so each label is tinted with the same
+            // color as the chain it belongs to ("label的颜色和链的颜色不一致").
+            const chainColorMap = getChainColorMap(plugin);
+
+            // R171: distance-compensated sizing — labels render as true 3D
+            // text whose screen size shrinks ~1/view-distance; anchors deeper
+            // in the interface got unreadably small. Ratios scale BOTH
+            // textSize and sizeFactor (both multiply glyph size) by the
+            // anchor's effective depth relative to the mean, clamped.
+            const ratios = getLabelSizeRatios(
+              plugin,
+              prepared.map((p) => getLociCenter(p.loci)),
+              12 // the offsetZ labels render with (see addLabel below)
+            );
+
+            let labelIdx = 0;
+            for (let idx = 0; idx < prepared.length; idx++) {
+              const { lbl, loci } = prepared[idx];
+              try {
+                const labelColor = getChainLabelColor(plugin, lbl.chain, chainColorMap);
+
+                // R170 tether-accurate placement for this label
+                const i = labelIdx++;
+                const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
+                const ring = Math.floor(i / ATTACHMENTS.length);
+                const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
+                const ratio = ratios[idx] ?? 1;
+
+                await plugin.managers.structure.measurement.addLabel(loci, {
+                  labelParams: {
+                    customText: lbl.text ?? "",
+                    textColor: labelColor,
+                    // Molstar's own measurement labels use textSize 0.5 ×
+                    // sizeFactor 1.0; 0.55 keeps them compact but legible.
+                    // R171: × ratio — far labels render as large as near ones.
+                    textSize: (cmd.labelFontSize ?? 0.55) * ratio,
+                    sizeFactor: 0.55 * ratio,
+                    offsetX: 0,               // R170: anchor stays at the residue
+                    offsetY: 0,
+                    offsetZ: 12,              // R170: clear the cartoon toward the camera (Å)
+                    borderWidth: 0.2,          // glyph outline stroke
+                    borderColor: 0x101010,    // dark outline → readable on any bg
+                    background: true,          // R170: translucent box — readable over the cartoon
+                    backgroundColor: 0x000000,
+                    backgroundOpacity: 0.5,
+                    backgroundMargin: 0.12,
+                    attachment,
+                    tether: true,               // callout line from the box to the residue anchor
+                    tetherLength,               // R170: ring-spread, PD max 5
+                    tetherBaseWidth: 0.25,
+                  },
+                } as any);
+              } catch (err) {
+                console.warn(
+                  `[capture_multi_angle] label "${lbl.text}" failed:`,
+                  err
+                );
+              }
             }
           }
           // Round 78: Reduced from 100ms to 50ms — labels render synchronously
