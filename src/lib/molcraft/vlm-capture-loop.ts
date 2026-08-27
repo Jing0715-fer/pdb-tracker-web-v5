@@ -26,6 +26,29 @@
 import type { VlmResult, ScreenshotData } from './vlm-client';
 import { selectBestWithRetry, needsRecapture } from './vlm-client';
 
+/**
+ * R164 (MOL-008): screenshot with a stable capture identity + VLM feedback
+ * attached BY IDENTITY instead of array position.
+ *
+ * The re-capture loop rebuilds the screenshots array in a NEW order every
+ * iteration (kept screenshots first, re-captured angles appended after), so
+ * associating VLM scores/issues by array index misattributes feedback once
+ * the array is reshuffled — a good screenshot can be flagged for re-capture
+ * (or a bad one spared), producing spurious "needs recapture" loops. Each
+ * screenshot entering the loop gets a unique `captureId`; the VLM round
+ * writes `vlmScore`/`vlmIssue` back onto the objects by identity, and
+ * selectAnglesToRecapture reads them from the objects.
+ */
+export interface TrackedScreenshot extends ScreenshotData {
+  /** Unique identity — assigned once when the screenshot enters the loop;
+   * re-captures of the same angle get a FRESH id (they are new captures). */
+  captureId: string;
+  /** Score from the most recent VLM round (undefined = not scored this round). */
+  vlmScore?: number;
+  /** Issue from the most recent VLM round (undefined = not scored this round). */
+  vlmIssue?: string;
+}
+
 /** Configuration for the VLM-controlled capture loop. */
 export interface CaptureLoopOptions {
   /** Maximum number of capture→VLM iterations (default 2). */
@@ -38,7 +61,8 @@ export interface CaptureLoopOptions {
   width?: number;
   /** Screenshot height. */
   height?: number;
-  /** R146: Per-VLM-call timeout in ms (default 45000 = 45s). */
+  /** R146/R163: Per-VLM-call timeout in ms (default 150000 = 150s —
+   * accommodates the server's 5s/15s/45s 429-backoff schedule plus inference). */
   vlmTimeoutMs?: number;
   /** R146: Progress callback — called after each capture + VLM step. */
   onProgress?: (progress: {
@@ -48,6 +72,13 @@ export interface CaptureLoopOptions {
     screenshotsCount: number;
     quality?: string;
   }) => void;
+  /**
+   * R164 (VLM-002): optional AbortSignal — when aborted (user navigates
+   * away mid-VLM), the in-flight fetch is cancelled AND the server-side
+   * req.signal fires so the server stops retrying the VLM call instead
+   * of paying full token cost for an orphan result.
+   */
+  signal?: AbortSignal;
 }
 
 /** Result of the VLM-controlled capture loop. */
@@ -160,14 +191,22 @@ export function selectAnglesToRecapture(
   const toRecapture: Array<{ index: number; angle: string; reason: string }> = [];
 
   for (let i = 0; i < screenshots.length; i++) {
-    const score = vlm.scores?.[i] ?? 0;
-    const issue = vlm.issues?.[i] ?? '';
+    const s = screenshots[i] as ScreenshotData & { vlmScore?: number; vlmIssue?: string };
+    // R164 (MOL-008): prefer the VLM feedback attached to the screenshot
+    // OBJECT (written back by identity after each VLM round). The positional
+    // vlm.scores[i] fallback only serves untracked callers — between
+    // re-capture iterations the array is rebuilt in a new order (kept
+    // screenshots first, re-captured angles appended after), so positional
+    // indexes can attribute a score to the WRONG screenshot and flag good
+    // captures for re-capture (or spare bad ones).
+    const score = s.vlmScore ?? vlm.scores?.[i] ?? 0;
+    const issue = s.vlmIssue ?? vlm.issues?.[i] ?? '';
     const isBad = score < threshold || (issue && issue !== '无问题' && issue.length > 0);
 
     if (isBad) {
       toRecapture.push({
         index: i,
-        angle: screenshots[i]!.angle,
+        angle: s.angle,
         reason: `score=${score}, issue="${issue}"`,
       });
     }
@@ -251,16 +290,29 @@ export async function runVlmControlledCaptureLoop(
   const maxIterations = options.maxIterations ?? 2;
   const acceptableQuality = options.acceptableQuality ?? 'acceptable';
   const initialAngles = options.angles ?? ['front', 'side', 'top'];
-  const vlmTimeoutMs = options.vlmTimeoutMs ?? 45000;
+  const vlmTimeoutMs = options.vlmTimeoutMs ?? 150000;
   const onProgress = options.onProgress;
 
-  let currentScreenshots: ScreenshotData[] = [];
+  // R164 (MOL-008): stable per-capture identity bookkeeping (see
+  // TrackedScreenshot). Every screenshot entering the loop is wrapped with a
+  // unique captureId; re-captures get fresh ids because they are NEW
+  // captures of the same angle, not the same screenshot.
+  let captureSeq = 0;
+  const track = (s: ScreenshotData): TrackedScreenshot => ({
+    ...s,
+    captureId: `cap-${++captureSeq}`,
+  });
+
+  let currentScreenshots: TrackedScreenshot[] = [];
   let currentVlm: VlmResult | null = null;
   let vizParams = { ...initialVizParams };
   let iteration = 0;
 
   // R146: Helper to call VLM with a timeout, so it doesn't hang forever
-  const runVlmWithTimeout = async (screenshots: ScreenshotData[]): Promise<VlmResult | null> => {
+  // R164 (VLM-002): also chain the caller's AbortSignal so client
+  // disconnect propagates through the Promise.race AND into the
+  // selectBestWithRetry fetch + the server's req.signal.
+  const runVlmWithTimeout = async (screenshots: TrackedScreenshot[]): Promise<VlmResult | null> => {
     onProgress?.({
       iteration,
       maxIterations,
@@ -268,16 +320,58 @@ export async function runVlmControlledCaptureLoop(
       screenshotsCount: screenshots.length,
     });
 
+    // R164 (VLM-002): if caller aborted, short-circuit.
+    if (options.signal?.aborted) {
+      console.log('[vlm-capture-loop] caller aborted — skipping VLM call');
+      return null;
+    }
+
     try {
-      // Race the VLM call against a timeout
-      const vlmPromise = selectBestWithRetry(screenshots, recipe, analysisSummary);
-      const timeoutPromise = new Promise<null>((resolve) => {
-        setTimeout(() => {
-          console.warn(`[vlm-capture-loop] VLM call timed out after ${vlmTimeoutMs}ms`);
-          resolve(null);
-        }, vlmTimeoutMs);
-      });
-      return await Promise.race([vlmPromise, timeoutPromise]);
+      // Build an inner controller chained to BOTH the caller's signal
+      // AND the timeout — whichever fires first wins.
+      const innerController = new AbortController();
+      const onCallerAbort = () => innerController.abort();
+      if (options.signal) options.signal.addEventListener('abort', onCallerAbort, { once: true });
+      const timeoutId = setTimeout(() => {
+        console.warn(`[vlm-capture-loop] VLM call timed out after ${vlmTimeoutMs}ms`);
+        innerController.abort();
+      }, vlmTimeoutMs);
+      try {
+        // Race the VLM call against the timeout. The innerController.signal
+        // is passed to selectBestWithRetry → fetch → /api/vlm/select-best,
+        // which uses it as req.signal so the server stops retrying.
+        //
+        // R164 (MOL-008): send only the plain wire fields — the loop-local
+        // bookkeeping fields (captureId/vlmScore/vlmIssue) must not leak
+        // into the request payload. The array order here IS the input order
+        // the VLM's scores/issues arrays will use.
+        const vlmPromise = selectBestWithRetry(
+          screenshots.map(s => ({ dataUri: s.dataUri, angle: s.angle, label: s.label })),
+          recipe,
+          analysisSummary,
+          innerController.signal,
+        );
+        const timeoutPromise = new Promise<null>((resolve) => {
+          innerController.signal.addEventListener('abort', () => resolve(null), { once: true });
+        });
+        const result = await Promise.race([vlmPromise, timeoutPromise]);
+        if (result) {
+          // R164 (MOL-008): the VLM returns scores/issues indexed by INPUT
+          // order. Write them back onto the screenshot objects BY IDENTITY
+          // (input position i → screenshots[i]) immediately, so any later
+          // reordering of the array during re-capture merges can never
+          // misattribute feedback. Screenshots beyond the returned array
+          // length get explicitly reset to undefined ("not scored").
+          for (let i = 0; i < screenshots.length; i++) {
+            screenshots[i]!.vlmScore = result.scores?.[i];
+            screenshots[i]!.vlmIssue = result.issues?.[i];
+          }
+        }
+        return result;
+      } finally {
+        clearTimeout(timeoutId);
+        if (options.signal) options.signal.removeEventListener('abort', onCallerAbort);
+      }
     } catch (err) {
       console.warn('[vlm-capture-loop] VLM call failed:', err);
       return null;
@@ -302,13 +396,18 @@ export async function runVlmControlledCaptureLoop(
     }
 
     if (iteration === 1) {
-      currentScreenshots = captureResult.screenshots;
+      // R164 (MOL-008): tag every screenshot with a stable captureId.
+      currentScreenshots = captureResult.screenshots.map(track);
     } else {
       // Plan C: Merge new screenshots with existing good ones
       // Replace only the angles that were re-captured
       const capturedAngles = new Set(captureResult.screenshots.map(s => s.angle));
       currentScreenshots = currentScreenshots.filter(s => !capturedAngles.has(s.angle));
-      currentScreenshots = [...currentScreenshots, ...captureResult.screenshots];
+      // R164 (MOL-008): re-captures are NEW screenshots → fresh captureIds,
+      // and they carry no vlmScore/vlmIssue until the next VLM round writes
+      // feedback back by identity (never inherited from the screenshot of
+      // the same angle they just replaced).
+      currentScreenshots = [...currentScreenshots, ...captureResult.screenshots.map(track)];
     }
 
     // R146: Run VLM with timeout (prevents "stuck on VLM analyzing" bug)

@@ -41,25 +41,13 @@ import { ChartRenderer, ALL_CHART_LABELS } from "./chart-renderer";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-// Lazy-load ChatTab (and its heavy dependencies: Molstar, ReactMarkdown, etc.)
-// to avoid OOM during webpack compilation in the 4GB sandbox. The chat panel
-// is only needed when the user clicks the "Chat" tab, so deferring its
-// compilation until then keeps the rest of the Analysis panel fast.
-const ChatTab = dynamic(
-  () => import("./chat-tab").then((m) => m.ChatTab),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-full text-claude-text-muted text-xs gap-2">
-        <div className="h-3 w-3 border-2 border-claude-accent border-t-transparent rounded-full animate-spin" />
-        Loading chat…
-      </div>
-    ),
-  }
-);
-
 // DeepSeek-Harness-inspired agent panel — new agent subsystem
 // (append-only session log + turn/step loop + tool registry + LLM seam).
+// R164 (AGENT-002 / MOL-002 / UI-009): the legacy chat-tab.tsx (ChatTab) +
+// use-agent-loop.ts + /api/llm/agent/round route were deleted — they held a
+// divergent system prompt that re-introduced the duplicate-capture bug
+// ("ALWAYS call capture_multi_angle after pdb_analyze"). The DSH panel is
+// now the only chat surface in the structure-analysis view.
 const AgentChatPanel = dynamic(
   () => import("@/components/agent/ChatPanel").then((m) => m.AgentChatPanel),
   {
@@ -102,7 +90,6 @@ type RightTab = "results" | "chat" | "reports" | "entities" | "history";
 
 export function AnalysisRightPanel({ structureInfo }: { structureInfo?: StructureInfo | null }) {
   const [tab, setTab] = useState<RightTab>("reports");
-  const [chatMode, setChatMode] = useState<"dsh" | "legacy">("dsh");
   const activeAnalysisChart = useAppStore((s) => s.activeAnalysisChart);
   const setActiveAnalysisChart = useAppStore((s) => s.setActiveAnalysisChart);
   const saveSession = useAppStore((s) => s.saveSession);
@@ -245,32 +232,8 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
         {tab === "reports" && <ReportsTab />}
         {tab === "chat" && (
           <div className="flex flex-col h-full min-h-0">
-            <div className="flex items-center gap-1 px-2 py-1 border-b border-claude-border bg-claude-bg-surface shrink-0">
-              <button
-                onClick={() => setChatMode("dsh")}
-                className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
-                  chatMode === "dsh"
-                    ? "bg-claude-accent text-white"
-                    : "text-claude-text-muted hover:text-claude-text hover:bg-claude-bg-elevated"
-                }`}
-                title="DeepSeek Harness 架构的 agent 子系统（会话事件日志 + turn/step 循环 + 工具注册表）"
-              >
-                DeepSeek Harness
-              </button>
-              <button
-                onClick={() => setChatMode("legacy")}
-                className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
-                  chatMode === "legacy"
-                    ? "bg-claude-accent text-white"
-                    : "text-claude-text-muted hover:text-claude-text hover:bg-claude-bg-elevated"
-                }`}
-                title="原有 Molcraft agent loop"
-              >
-                Legacy
-              </button>
-            </div>
             <div className="flex-1 min-h-0">
-              {chatMode === "dsh" ? <AgentChatPanel /> : <ChatTab />}
+              <AgentChatPanel />
             </div>
           </div>
         )}

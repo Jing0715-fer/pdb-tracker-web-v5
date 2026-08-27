@@ -1,20 +1,33 @@
 /**
  * POST /api/agent/sessions/[sessionId]/regenerate
  *
- * Re-drive the agent loop from the last user message — drops the most recent
- * assistant turn and re-runs the step. This gives the user a "regenerate
- * response" action without re-sending the user message.
+ * R164 (AGENT-003): TRUE regeneration — drops the previous assistant turn
+ * from the model-visible surface (via SurfaceOp.replace carried through the
+ * inbox) while preserving the full event log for audit, then re-drives
+ * the agent from the last user message.
  *
- * Implementation: finds the last user/message event, trims the session log
- * back to (and including) that event, then drives the loop. The trimmed
- * events are persisted (a compaction event marks the boundary).
+ * Previous implementation just appended a duplicate user message + drove,
+ * which doubled the chat on every Regenerate click and never actually
+ * replaced the prior assistant answer. Now we:
+ *   1. Find the last user/message seq.
+ *   2. Compute the surface range to drop: [lastUserSeq + 1, lastEventSeq].
+ *   3. Call loop.followupWithReplace(userText, start, end) — enqueues a
+ *      user message that carries surfaceOp.replace. When drive() claims
+ *      it and appends it to the session, SurfaceManager.recompute drops
+ *      the prior assistant turn + tool results from the surface (LLM no
+ *      longer sees them) but the events stay in the durable log.
+ *   4. Drive the loop — deriveMessages() projects only the surface up to
+ *      the new user message, so the LLM produces a fresh answer.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAgentManager } from '@/lib/agent/manager';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// R164 (AGENT-005): raised from 60 to match the messages route —
+// regenerate calls loop.drive() which now retries on 429 with
+// 5s / 15s / 45s backoff.
+export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 export async function POST(
@@ -35,32 +48,46 @@ export async function POST(
   // Find the last user/message event seq.
   const events = manager.getEvents(sessionId);
   let lastUserSeq = -1;
+  let lastUserEvent = null as null | (typeof events)[number];
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i]!.type === 'user/message') {
       lastUserSeq = events[i]!.seq;
+      lastUserEvent = events[i]!;
       break;
     }
   }
-  if (lastUserSeq < 0) {
+  if (lastUserSeq < 0 || !lastUserEvent) {
     return NextResponse.json(
       { error: 'No user message to regenerate from' },
       { status: 400 },
     );
   }
 
-  // Re-inject the last user message into the inbox, then drive.
-  // We don't trim the log (that would lose history); instead we just send
-  // a follow-up that re-asks the same question. The agent will produce a
-  // fresh response. This is the simplest correct approach.
-  const lastUserEvent = events.find((e) => e.seq === lastUserSeq);
-  const userData = lastUserEvent!.data as { content: Array<{ type: string; text?: string }> };
+  // Compute the surface range to drop: [lastUserSeq + 1, lastEventSeq].
+  const lastEvent = events[events.length - 1];
+  const replaceEnd = lastEvent ? lastEvent.seq : lastUserSeq;
+  const replaceStart = lastUserSeq + 1;
+
+  // Extract the user's text from the prior user/message event.
+  const userData = lastUserEvent.data as {
+    content: Array<{ type: string; text?: string }>;
+  };
   const userText = userData.content
-    .filter((b) => b.type === 'text' && b.text)
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text!)
     .join(' ');
 
-  // Re-send the user message (opens a new turn with a fresh LLM call).
-  loop.followup(userText);
+  // Enqueue the user message with surfaceOp.replace — drive() will claim
+  // it, open a fresh turn, and append it; SurfaceManager drops the
+  // [replaceStart, replaceEnd] range from the model-visible surface
+  // (the previous assistant turn + tool results) before appending this
+  // new user message.
+  if (replaceStart <= replaceEnd) {
+    loop.followupWithReplace(userText, replaceStart, replaceEnd);
+  } else {
+    // No prior assistant turn to drop — just re-ask the same question.
+    loop.followup(userText);
+  }
 
   try {
     const outcome = await manager.drive(sessionId);

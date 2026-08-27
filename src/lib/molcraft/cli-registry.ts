@@ -27,9 +27,52 @@ const PATH_SEP = process.platform === 'win32' ? ';' : ':';
 const pathParts = ENV_PATH.split(PATH_SEP).filter(Boolean);
 const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
 const FULL_PATH = fullParts.join(PATH_SEP);
-const CHILD_ENV = { ...process.env, PATH: FULL_PATH };
+/**
+ * R164 (PY-001): Exported child environment for Python subprocesses.
+ *
+ * Previously this was a private `const CHILD_ENV` only used inside
+ * cli-registry.ts (probeAllClis). The recipe-runner.ts — used by
+ * /api/evaluations/run — spawned Python WITHOUT setting `env`, so it
+ * inherited `process.env.PATH` which may NOT include the venv where
+ * biopython/numpy/scipy live (common in systemd/pm2/cron prod setups).
+ * Every biopython recipe then ImportError'd on the first `import Bio`,
+ * silently returning null. Now recipe-runner.ts imports and uses this
+ * same env, so both spawn sites agree.
+ */
+export const CHILD_ENV = { ...process.env, PATH: FULL_PATH };
 // Cross-platform: Windows uses "where" instead of "which"
 const WHICH_CMD = process.platform === 'win32' ? 'where' : 'which';
+
+// ============================================================
+// R164 (MOL-001 / PY-002): Python source-injection hardening.
+//
+// User/LLM-controlled params (chain1, chain2, ligandCompId, cutoff,
+// radius, distanceCutoff, angleTolerance, ligand_filter_id, etc.)
+// used to be interpolated directly into Python source via template
+// strings: `chain1_id = ${pyStr(chain1)}`. A crafted chain1 like
+//   '";__import__("os").system("rm -rf $HOME");"'
+// would expand to
+//   chain1_id = "";__import__("os").system("rm -rf $HOME");""
+// and execute arbitrary Python on the venv's python3. execFile (no
+// shell) does NOT prevent Python-source-level injection.
+//
+// pyStr() and pyNum() produce safe Python literals: JSON.stringify
+// yields a Python-3.6+-compatible quoted string literal, and pyNum
+// validates finite numbers in a sane range.
+//
+// Defense in depth: /api/analyze/run also validates params upstream.
+// ============================================================
+export function pyStr(v: unknown): string {
+  return JSON.stringify(String(v ?? ''));
+}
+export function pyNum(v: unknown, max = 1000): string {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > max) return '0';
+  return String(n);
+}
+export function pyBool(v: unknown): string {
+  return v ? 'True' : 'False';
+}
 
 export interface CliAdapter {
   id: string;
@@ -324,7 +367,7 @@ print(json.dumps({
     buildScript: (inputPath, params) => {
       const pairs = JSON.stringify(params.pairs ?? []);
       return `${RECIPE_HEADER}
-pairs = json.loads('''${pairs}''')
+pairs = json.loads(${pyStr(pairs)})
 struct = load_structure(r"${inputPath}")
 def find_atom(struct, chain, resno, atom=None):
     for model in struct:
@@ -392,9 +435,9 @@ print(json.dumps({"atoms": found, "distances": dists}, ensure_ascii=False, inden
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-chain1 = "${chain1}"
-chain2 = "${chain2}"
-cutoff = ${cutoff}
+chain1 = ${pyStr(chain1)}
+chain2 = ${pyStr(chain2)}
+cutoff = ${pyNum(cutoff, 100)}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
     print(json.dumps({"error": f"chain {chain1} or {chain2} not found", "available_chains": [c.id for c in model]}))
@@ -505,7 +548,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-cutoff = ${cutoff}
+cutoff = ${pyNum(cutoff, 100)}
 model = next(iter(struct))
 sg_atoms = []
 for res in model.get_residues():
@@ -543,7 +586,7 @@ print(json.dumps({"count": len(bonds), "bonds": bonds, "cutoff": cutoff}, ensure
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
+chain1 = ${pyStr(chain1)}; chain2 = ${pyStr(chain2)}; cutoff = ${pyNum(cutoff, 100)}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
     print(json.dumps({"error": f"chain {chain1} or {chain2} not found", "available_chains": [c.id for c in model]}))
@@ -627,10 +670,10 @@ import numpy as np
 import math
 
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"; chain2_id = "${chain2}"
-intra_chain = ${intraChain ? "True" : "False"}  # allow same-chain pairs (auto-enabled when chain1==chain2)
-dist_tolerance = ${distTol}  # added to distance upper bounds
-angle_tolerance = ${angleTol}  # subtracted from angle lower bounds
+chain1_id = ${pyStr(chain1)}; chain2_id = ${pyStr(chain2)}
+intra_chain = ${pyBool(intraChain)}  # allow same-chain pairs (auto-enabled when chain1==chain2)
+dist_tolerance = ${pyNum(distTol, 10)}  # added to distance upper bounds
+angle_tolerance = ${pyNum(angleTol, 90)}  # subtracted from angle lower bounds
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
     print(json.dumps({"error": f"chain not found", "available": [c.id for c in model]}))
@@ -877,8 +920,8 @@ for h in sorted(hbonds, key=lambda x: x['distance_A']):
 # Round 71: Optional ligand filter — when ligandCompId is set, only keep
 # H-bonds where either the donor or acceptor residue is near the ligand.
 # This prevents returning 1000+ H-bonds for large single-chain structures.
-ligand_filter_id = "${ligandCompId}"
-ligand_cutoff = ${ligandRadius}
+ligand_filter_id = ${pyStr(ligandCompId)}
+ligand_cutoff = ${pyNum(ligandRadius, 50)}
 if ligand_filter_id:
     ligand_residues = [r for r in model.get_residues() if r.resname == ligand_filter_id]
     if ligand_residues:
@@ -955,8 +998,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
-intra_chain = ${intraChain ? "True" : "False"}
+chain1 = ${pyStr(chain1)}; chain2 = ${pyStr(chain2)}; cutoff = ${pyNum(cutoff, 100)}
+intra_chain = ${pyBool(intraChain)}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
     print(json.dumps({"error": f"chain {chain1} or {chain2} not found", "available_chains": [c.id for c in model]}))
@@ -1038,8 +1081,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-chain1 = "${chain1}"; chain2 = "${chain2}"; cutoff = ${cutoff}
-intra_chain = ${intraChain ? "True" : "False"}
+chain1 = ${pyStr(chain1)}; chain2 = ${pyStr(chain2)}; cutoff = ${pyNum(cutoff, 100)}
+intra_chain = ${pyBool(intraChain)}
 model = next(iter(struct))
 if chain1 not in model or chain2 not in model:
     print(json.dumps({"error": f"chain {chain1} or {chain2} not found", "available_chains": [c.id for c in model]}))
@@ -1102,14 +1145,17 @@ print(json.dumps({
 import math
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"; chain2_id = "${chain2}"
+chain1_id = ${pyStr(chain1)}; chain2_id = ${pyStr(chain2)}
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
     print(json.dumps({"error": f"chain {chain1_id} or {chain2_id} not found", "available_chains": [c.id for c in model]}))
     raise SystemExit
 
 # ---- 1. Salt Bridges (ARG/LYS/HIS+ ↔ ASP/GLU-, < 4.0Å) ----
-POS = {'ARG': ['NH1', 'NH2'], 'LYS': ['NZ'], 'HIS': ['ND1', 'NE2']}
+# R164 (VLM-001): added ARG 'NE' (was missing — inconsistent with the
+# standalone salt_bridges recipe; ARG NE...OD1/OD2/OE1/OE2 salt bridges
+# were silently missed by all_interactions).
+POS = {'ARG': ['NH1', 'NH2', 'NE'], 'LYS': ['NZ'], 'HIS': ['ND1', 'NE2']}
 NEG = {'ASP': ['OD1', 'OD2'], 'GLU': ['OE1', 'OE2']}
 SALT_CUTOFF = 4.0
 pos1 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain1_id] if r.resname in POS for a in r if a.get_name() in POS[r.resname]]
@@ -1145,7 +1191,13 @@ for a_tuple in neg1:
 
 # ---- 2. Hydrogen Bonds (N/O donor-acceptor, < 3.5Å) ----
 # Skip atom pairs already classified as salt bridges to avoid double-counting.
+# R164 (VLM-001): recognize universal backbone N (donor) and O/OXT (acceptor)
+# so backbone H-bonds (alpha-helices, beta-sheets, inter-chain backbone) are
+# detected — previously DONOR_RES/ACCEPTOR_RES were keyed only by sidechain
+# residue code, so every backbone N-H...O=C H-bond was invisible.
 HBOND_CUTOFF = 3.5
+BACKBONE_DONOR_ATOMS = {'N', 'OXT'}   # backbone amide N (donor); OXT on terminal
+BACKBONE_ACCEPTOR_ATOMS = {'O', 'OXT'} # backbone carbonyl O (acceptor)
 DONOR_RES = {
     'SER': ['OG'], 'THR': ['OG1'], 'TYR': ['OH'], 'CYS': ['SG'],
     'ASN': ['ND2'], 'GLN': ['NE2'], 'HIS': ['ND1', 'NE2'],
@@ -1168,10 +1220,57 @@ for sb in salt_bridges:
     ])
     salt_pair_keys.add(k)
 
-donors1 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain1_id] if r.resname in DONOR_RES for a in r if a.get_name() in DONOR_RES.get(r.resname, [])]
-acceptors1 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain1_id] if r.resname in ACCEPTOR_RES for a in r if a.get_name() in ACCEPTOR_RES.get(r.resname, [])]
-donors2 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain2_id] if r.resname in DONOR_RES for a in r if a.get_name() in DONOR_RES.get(r.resname, [])]
-acceptors2 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain2_id] if r.resname in ACCEPTOR_RES for a in r if a.get_name() in ACCEPTOR_RES.get(r.resname, [])]
+donors1 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain1_id] for a in r if (a.get_name() in BACKBONE_DONOR_ATOMS) or (r.resname in DONOR_RES and a.get_name() in DONOR_RES.get(r.resname, []))]
+acceptors1 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain1_id] for a in r if (a.get_name() in BACKBONE_ACCEPTOR_ATOMS) or (r.resname in ACCEPTOR_RES and a.get_name() in ACCEPTOR_RES.get(r.resname, []))]
+donors2 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain2_id] for a in r if (a.get_name() in BACKBONE_DONOR_ATOMS) or (r.resname in DONOR_RES and a.get_name() in DONOR_RES.get(r.resname, []))]
+acceptors2 = [(a, a.get_parent(), a.get_parent().get_parent()) for r in model[chain2_id] for a in r if (a.get_name() in BACKBONE_ACCEPTOR_ATOMS) or (r.resname in ACCEPTOR_RES and a.get_name() in ACCEPTOR_RES.get(r.resname, []))]
+
+# ---- R163: D-H...A angle helpers (shared with pairwise_interactions) ----
+# PDB files rarely carry explicit hydrogens; when H is missing the standard
+# approximation is the X-D...A angle at the donor (X = bonded heavy atom).
+HBOND_MIN_ANGLE = 120.0
+
+def _angle_at(p1, p2, p3):
+    import math as _math
+    v1 = [p1[k] - p2[k] for k in range(3)]
+    v2 = [p3[k] - p2[k] for k in range(3)]
+    n1 = _math.sqrt(sum(v * v for v in v1))
+    n2 = _math.sqrt(sum(v * v for v in v2))
+    if n1 < 1e-6 or n2 < 1e-6:
+        return None
+    cos_a = sum(v1[k] * v2[k] for k in range(3)) / (n1 * n2)
+    cos_a = max(-1.0, min(1.0, cos_a))
+    return _math.degrees(_math.acos(cos_a))
+
+_bond_cache = {}
+
+def _bonded_partner(atom, want_h):
+    key = (id(atom), want_h)
+    if key in _bond_cache:
+        return _bond_cache[key]
+    best, best_d = None, (1.3 if want_h else 1.9)
+    try:
+        for other in atom.get_parent():
+            if other is atom:
+                continue
+            if (other.element == 'H') != want_h:
+                continue
+            d = float(atom - other)
+            if d < best_d:
+                best, best_d = other, d
+    except Exception:
+        best = None
+    _bond_cache[key] = best
+    return best
+
+def _hbond_angle(donor, acceptor):
+    h = _bonded_partner(donor, True)
+    if h is not None:
+        return _angle_at(donor.coord, h.coord, acceptor.coord)
+    x = _bonded_partner(donor, False)
+    if x is not None:
+        return _angle_at(x.coord, donor.coord, acceptor.coord)
+    return None
 
 hbonds = []
 for d_tuple in donors1:
@@ -1183,11 +1282,15 @@ for d_tuple in donors1:
             k = frozenset([(cd.id, int(rd.id[1]), d.get_name()), (ca.id, int(ra.id[1]), a.get_name())])
             if k in salt_pair_keys:
                 continue
+            ang = _hbond_angle(d, a)  # R163: directionality check
+            if ang is not None and ang < HBOND_MIN_ANGLE:
+                continue
             hbonds.append({
                 "type": "hbond",
                 "chain1": cd.id, "resno1": int(rd.id[1]), "resname1": rd.resname, "atom1": d.get_name(),
                 "chain2": ca.id, "resno2": int(ra.id[1]), "resname2": ra.resname, "atom2": a.get_name(),
                 "distance_A": round(d_dist, 2),
+                "angle_deg": round(ang, 1) if ang is not None else None,
             })
 for d_tuple in donors2:
     d, rd, cd = d_tuple
@@ -1198,11 +1301,15 @@ for d_tuple in donors2:
             k = frozenset([(cd.id, int(rd.id[1]), d.get_name()), (ca.id, int(ra.id[1]), a.get_name())])
             if k in salt_pair_keys:
                 continue
+            ang = _hbond_angle(d, a)  # R163: directionality check
+            if ang is not None and ang < HBOND_MIN_ANGLE:
+                continue
             hbonds.append({
                 "type": "hbond",
                 "chain1": cd.id, "resno1": int(rd.id[1]), "resname1": rd.resname, "atom1": d.get_name(),
                 "chain2": ca.id, "resno2": int(ra.id[1]), "resname2": ra.resname, "atom2": a.get_name(),
                 "distance_A": round(d_dist, 2),
+                "angle_deg": round(ang, 1) if ang is not None else None,
             })
 
 # ---- 3. Hydrophobic Contacts (C-C between hydrophobic residues, < 4.5Å) ----
@@ -1245,6 +1352,286 @@ print(json.dumps({
     },
   },
   {
+    id: "pairwise_interactions",
+    label: "全部链对互作 (Pairwise Chain Interactions)",
+    description:
+      "自动枚举结构中所有聚合链的两两组合（A-B、A-C、B-C…），对每一对分别检测盐桥、氢键、疏水接触，返回逐对结果与汇总。多链结构链间互作分析的首选配方",
+    requires: ["biopython"],
+    params: [],
+    buildScript: (inputPath) => `${RECIPE_HEADER}
+from Bio.PDB import NeighborSearch
+from collections import defaultdict
+
+struct = load_structure(r"${inputPath}")
+try:
+    model = next(iter(struct))
+except StopIteration:
+    print(json.dumps({"error": "no models"})); raise SystemExit
+
+AA = set("ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL MSE".split())
+# R164 (VLM-001): POS now includes ARG 'NE' (was missing — inconsistent
+# with the standalone salt_bridges recipe; ARG NE...OD1/OD2/OE1/OE2
+# salt bridges were silently missed).
+POS = {'ARG': ['NH1', 'NH2', 'NE'], 'LYS': ['NZ'], 'HIS': ['ND1', 'NE2']}
+NEG = {'ASP': ['OD1', 'OD2'], 'GLU': ['OE1', 'OE2']}
+# R164 (VLM-001): Add universal BACKBONE donors/acceptors so the recipe
+# catches alpha-helix, beta-sheet, beta-turn, and backbone-mediated
+# inter-chain H-bonds. Previously DONORS/ACCEPTORS were keyed only by
+# sidechain residue code, so every backbone N-H...O=C H-bond was
+# invisible — for 4HHB-class interfaces with significant backbone
+# H-bond networks the LLM got a structurally misleading "few H-bonds"
+# picture. The standalone 'hbonds' recipe (cli-registry.ts:644-677)
+# already included backbone N/O via DONOR_ATOMS/ACCEPTOR_ATOMS, so
+# the two recipes disagreed on the same physical concept.
+BACKBONE_DONORS = {'N'}                # universal backbone amide donor
+BACKBONE_ACCEPTORS = {'O', 'OXT'}      # universal backbone carbonyl acceptor
+DONORS = {'SER': ['OG'], 'THR': ['OG1'], 'TYR': ['OH'], 'CYS': ['SG'], 'ASN': ['ND2'], 'GLN': ['NE2'], 'HIS': ['ND1', 'NE2'], 'LYS': ['NZ'], 'ARG': ['NE', 'NH1', 'NH2'], 'TRP': ['NE1']}
+ACCEPTORS = {'ASP': ['OD1', 'OD2'], 'GLU': ['OE1', 'OE2'], 'ASN': ['OD1'], 'GLN': ['OE1'], 'SER': ['OG'], 'THR': ['OG1'], 'TYR': ['OH'], 'HIS': ['ND1', 'NE2'], 'MET': ['SD']}
+HYDROPHOBIC = {'ALA', 'VAL', 'LEU', 'ILE', 'MET', 'PHE', 'TRP', 'PRO'}
+SALT_CUTOFF = 4.0
+HBOND_CUTOFF = 3.5
+HYDRO_CUTOFF = 4.5
+SEARCH_CUTOFF = 5.0
+
+# ---- collect polymer chains (>= 5 amino-acid residues) ----
+chain_res = {}
+for chain in model:
+    aa = [r for r in chain if r.id[0].strip() == '' and r.resname in AA]
+    if len(aa) >= 5:
+        chain_res[chain.id] = aa
+chains = sorted(chain_res.keys())
+
+if len(chains) == 0:
+    print(json.dumps({"error": "no polymer chains found"})); raise SystemExit
+
+def analyze_pair(res_list_1, cid1, res_list_2, cid2, cross_atom_pairs, intra=False):
+    """Analyze one chain pair from pre-computed cross atom pairs.
+
+    R163: H-bonds now require a directional angle criterion (D-H...A > 120 deg)
+    in addition to the D...A distance cutoff, which removes false positives
+    where a donor and acceptor are close but point away from each other.
+    PDB entries usually lack explicit hydrogens, so when no H is bonded to
+    the donor we approximate the angle with X-D...A (X = the heavy atom
+    covalently bonded to the donor, e.g. C-N...O for backbone amides).
+    """
+    import math as _math
+
+    def _angle_at(p1, p2, p3):
+        """Angle (deg) at p2 formed by p1-p2-p3."""
+        v1 = [p1[k] - p2[k] for k in range(3)]
+        v2 = [p3[k] - p2[k] for k in range(3)]
+        n1 = _math.sqrt(sum(v * v for v in v1))
+        n2 = _math.sqrt(sum(v * v for v in v2))
+        if n1 < 1e-6 or n2 < 1e-6:
+            return None
+        cos_a = sum(v1[k] * v2[k] for k in range(3)) / (n1 * n2)
+        cos_a = max(-1.0, min(1.0, cos_a))
+        return _math.degrees(_math.acos(cos_a))
+
+    # R163: cache bonded-partner lookups per atom object
+    _bond_cache = {}
+
+    def _bonded_partner(atom, want_h):
+        """Nearest same-residue atom (H if want_h else heavy) within covalent range."""
+        key = (id(atom), want_h)
+        if key in _bond_cache:
+            return _bond_cache[key]
+        best, best_d = None, (1.3 if want_h else 1.9)
+        try:
+            res = atom.get_parent()
+            for other in res:
+                if other is atom:
+                    continue
+                if (other.element == 'H') != want_h:
+                    continue
+                d = float(atom - other)
+                if d < best_d:
+                    best, best_d = other, d
+        except Exception:
+            best = None
+        _bond_cache[key] = best
+        return best
+
+    def _hbond_angle(donor, acceptor):
+        """D-H...A angle (>120 deg required).
+
+        With an explicit H bonded to the donor this is the true angle at H;
+        otherwise it falls back to the X-D...A angle at the donor, where X is
+        the donor's bonded heavy atom (standard no-hydrogen approximation).
+        Returns None when no bonded partner can be found (angle not testable).
+        """
+        h = _bonded_partner(donor, True)
+        if h is not None:
+            return _angle_at(donor.coord, h.coord, acceptor.coord)
+        x = _bonded_partner(donor, False)
+        if x is not None:
+            return _angle_at(x.coord, donor.coord, acceptor.coord)
+        return None
+
+    HBOND_MIN_ANGLE = 120.0  # D-H...A angularity cutoff (deg)
+
+    salt, hbs, hyd = [], [], []
+    salt_keys, hyd_seen = set(), set()
+    for a, b in cross_atom_pairs:
+        ra, rb = a.get_parent(), b.get_parent()
+        if ra is rb:
+            continue  # same residue (intra mode)
+        d = float(a - b)
+        an, bn = a.get_name(), b.get_name()
+        # salt bridge
+        if d <= SALT_CUTOFF:
+            a_pos = ra.resname in POS and an in POS[ra.resname]
+            a_neg = ra.resname in NEG and an in NEG[ra.resname]
+            b_pos = rb.resname in POS and bn in POS[rb.resname]
+            b_neg = rb.resname in NEG and bn in NEG[rb.resname]
+            if (a_pos and b_neg) or (a_neg and b_pos):
+                key = frozenset([(cid1, ra.id[1], an), (cid2, rb.id[1], bn)])
+                if key not in salt_keys:
+                    salt_keys.add(key)
+                    salt.append({
+                        "type": "salt_bridge", "chain1": cid1, "resno1": int(ra.id[1]), "resname1": ra.resname, "atom1": an,
+                        "chain2": cid2, "resno2": int(rb.id[1]), "resname2": rb.resname, "atom2": bn,
+                        "distance_A": round(d, 2),
+                    })
+        # hydrogen bond (R163: distance + D-H...A angle > 120 deg)
+        # R164 (VLM-001): also recognize universal BACKBONE N (donor) and
+        # BACKBONE O/OXT (acceptor) so backbone-mediated H-bonds (alpha-
+        # helices, beta-sheets, beta-turns, inter-chain backbone H-bonds)
+        # are detected — previously the recipe only matched sidechain
+        # donors/acceptors and silently missed every backbone H-bond.
+        if d <= HBOND_CUTOFF:
+            a_don = (an in BACKBONE_DONORS) or (ra.resname in DONORS and an in DONORS[ra.resname])
+            b_acc = (bn in BACKBONE_ACCEPTORS) or (rb.resname in ACCEPTORS and bn in ACCEPTORS[rb.resname])
+            b_don = (bn in BACKBONE_DONORS) or (rb.resname in DONORS and bn in DONORS[rb.resname])
+            a_acc = (an in BACKBONE_ACCEPTORS) or (ra.resname in ACCEPTORS and an in ACCEPTORS[ra.resname])
+            if (a_don and b_acc) or (b_don and a_acc):
+                k = frozenset([(cid1, ra.id[1], an), (cid2, rb.id[1], bn)])
+                if k not in salt_keys:  # don't double count salt bridges
+                    donor, acceptor = (a, b) if a_don and b_acc else (b, a)
+                    ang = _hbond_angle(donor, acceptor)
+                    if ang is not None and ang < HBOND_MIN_ANGLE:
+                        continue  # directionality test failed — false positive
+                    hbs.append({
+                        "type": "hbond", "chain1": cid1, "resno1": int(ra.id[1]), "resname1": ra.resname, "atom1": an,
+                        "chain2": cid2, "resno2": int(rb.id[1]), "resname2": rb.resname, "atom2": bn,
+                        "distance_A": round(d, 2),
+                        "angle_deg": round(ang, 1) if ang is not None else None,
+                    })
+        # hydrophobic (residue-pair level)
+        if d <= HYDRO_CUTOFF and ra.resname in HYDROPHOBIC and rb.resname in HYDROPHOBIC and a.element == 'C' and b.element == 'C':
+            key = tuple(sorted([ra.resname + str(ra.id[1]) + cid1, rb.resname + str(rb.id[1]) + cid2]))
+            if key not in hyd_seen:
+                hyd_seen.add(key)
+                hyd.append({
+                    "type": "hydrophobic", "chain1": cid1, "resno1": int(ra.id[1]), "resname1": ra.resname, "atom1": an,
+                    "chain2": cid2, "resno2": int(rb.id[1]), "resname2": rb.resname, "atom2": bn,
+                    "distance_A": round(d, 2),
+                })
+    all_int = sorted(salt + hbs + hyd, key=lambda x: x["distance_A"])
+    return {
+        "salt_bridges": salt, "hbonds": hbs, "hydrophobic": hyd, "all": all_int,
+    }
+
+# ---- build a single NeighborSearch over all polymer atoms ----
+all_atoms = []
+for cid in chains:
+    for r in chain_res[cid]:
+        for a in r:
+            all_atoms.append(a)
+ns = NeighborSearch(all_atoms)
+all_close = ns.search_all(SEARCH_CUTOFF, level='A')
+
+# group close atom pairs by (unordered) chain pair
+cross_by_pair = defaultdict(list)
+for a, b in all_close:
+    ra, rb = a.get_parent(), b.get_parent()
+    if ra is None or rb is None:
+        continue
+    ca = ra.get_parent().id
+    cb = rb.get_parent().id
+    if ca == cb:
+        continue
+    key = tuple(sorted([ca, cb]))
+    # keep atom order (chain1, chain2) consistent with sorted key
+    if ca == key[0]:
+        cross_by_pair[key].append((a, b))
+    else:
+        cross_by_pair[key].append((b, a))
+
+pairs_out = []
+for i in range(len(chains)):
+    for j in range(i + 1, len(chains)):
+        c1, c2 = chains[i], chains[j]
+        cross = cross_by_pair.get((c1, c2), [])
+        if not cross:
+            pairs_out.append({
+                "chain1": c1, "chain2": c2, "in_contact": False,
+                "min_distance_A": None, "total": 0, "salt_bridges": 0,
+                "hbonds": 0, "hydrophobic": 0, "interactions": [],
+            })
+            continue
+        min_d = min(float(a - b) for a, b in cross)
+        res = analyze_pair(chain_res[c1], c1, chain_res[c2], c2, cross)
+        pairs_out.append({
+            "chain1": c1, "chain2": c2, "in_contact": True,
+            "min_distance_A": round(min_d, 2),
+            "total": len(res["all"]),
+            "salt_bridges": len(res["salt_bridges"]),
+            "hbonds": len(res["hbonds"]),
+            "hydrophobic": len(res["hydrophobic"]),
+            "interactions": res["all"][:15],
+        })
+
+# single-chain structure: run intra-chain analysis instead
+intra_note = None
+if len(chains) == 1:
+    c1 = chains[0]
+    intra_close = []
+    for a, b in all_close:
+        ra, rb = a.get_parent(), b.get_parent()
+        if ra is None or rb is None or ra is rb:
+            continue
+        if ra.get_parent().id == c1 and rb.get_parent().id == c1:
+            intra_close.append((a, b))
+    res = analyze_pair(chain_res[c1], c1, chain_res[c1], c1, intra_close, intra=True)
+    pairs_out.append({
+        "chain1": c1, "chain2": c1, "in_contact": True, "intra_chain": True,
+        "min_distance_A": None,
+        "total": len(res["all"]),
+        "salt_bridges": len(res["salt_bridges"]),
+        "hbonds": len(res["hbonds"]),
+        "hydrophobic": len(res["hydrophobic"]),
+        "interactions": res["all"][:15],
+    })
+    intra_note = "只有一条聚合链 — 已执行链内 (intra-chain) 互作分析"
+
+contact_pairs = [p for p in pairs_out if p["in_contact"]]
+significant = [p for p in contact_pairs if p["total"] >= 3]
+significant.sort(key=lambda p: -p["total"])
+best = significant[0] if significant else (contact_pairs[0] if contact_pairs else None)
+
+out = {
+    "recipe": "pairwise_interactions",
+    "n_chains": len(chains),
+    "chains": chains,
+    "n_pairs": len(pairs_out),
+    "n_contact_pairs": len(contact_pairs),
+    "pairs": pairs_out,
+    "significant_pairs": [[p["chain1"], p["chain2"]] for p in significant],
+    "note": intra_note,
+}
+if best:
+    out["best_pair"] = {"chain1": best["chain1"], "chain2": best["chain2"], "total": best["total"]}
+    # compatibility fields for applyRecipeVisualization / extractResidueLabels:
+    # surface the best pair as if it were a single all_interactions result
+    out["chain1"] = best["chain1"]
+    out["chain2"] = best["chain2"]
+    out["total"] = best["total"]
+    out["interactions"] = best["interactions"]
+print(json.dumps(out, ensure_ascii=False, indent=2))
+`,
+  },
+  {
     id: "ramachandran",
     label: "Ramachandran 图 (φ/ψ 角)",
     description:
@@ -1264,7 +1651,7 @@ print(json.dumps({
 from Bio.PDB import PPBuilder
 import math
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
+chain_filter = ${pyStr(chain)}
 model = next(iter(struct))
 ppb = PPBuilder()
 polypeptides = []
@@ -1355,8 +1742,8 @@ print(json.dumps({
 from Bio.PDB import NeighborSearch
 from collections import defaultdict
 struct = load_structure(r"${inputPath}")
-ligand_id = "${ligandCompId}"
-cutoff = ${cutoff}
+ligand_id = ${pyStr(ligandCompId)}
+cutoff = ${pyNum(cutoff, 100)}
 model = next(iter(struct))
 # Find ligand residues
 ligand_residues = [r for r in model.get_residues() if r.resname == ligand_id]
@@ -1462,8 +1849,8 @@ from Bio import pairwise2
 from Bio.PDB import PPBuilder
 from Bio.SeqUtils import seq1
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"
-chain2_id = "${chain2}"
+chain1_id = ${pyStr(chain1)}
+chain2_id = ${pyStr(chain2)}
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
     print(json.dumps({"error": f"chain {chain1_id} or {chain2_id} not found", "available_chains": [c.id for c in model]}))
@@ -1559,7 +1946,7 @@ print(json.dumps({
 from Bio.PDB import NeighborSearch
 import math
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
+chain_filter = ${pyStr(chain)}
 model = next(iter(struct))
 # Residue charges (approximate, at physiological pH)
 CHARGES = {
@@ -1663,7 +2050,7 @@ from Bio.SeqUtils import seq1
 from Bio.SeqUtils.IsoelectricPoint import IsoelectricPoint
 from Bio.PDB import PPBuilder
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
+chain_filter = ${pyStr(chain)}
 model = next(iter(struct))
 ppb = PPBuilder()
 results = []
@@ -1775,8 +2162,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import math
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"
-chain2_id = "${chain2}"
+chain1_id = ${pyStr(chain1)}
+chain2_id = ${pyStr(chain2)}
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
     print(json.dumps({"error": f"chain {chain1_id} or {chain2_id} not found", "available_chains": [c.id for c in model]}))
@@ -1859,7 +2246,7 @@ print(json.dumps({
 from Bio.PDB import PPBuilder
 import math
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
+chain_filter = ${pyStr(chain)}
 model = next(iter(struct))
 ppb = PPBuilder()
 ss_counts = {"alpha_helix": 0, "beta_sheet": 0, "coil": 0, "turn": 0}
@@ -1934,7 +2321,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import math
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
+chain_filter = ${pyStr(chain)}
 model = next(iter(struct))
 chain_data = {}
 for chain_obj in model:
@@ -2029,8 +2416,8 @@ import json, math, os, urllib.request
 import numpy as np
 from Bio.PDB import PDBParser, MMCIFParser
 
-pdb_ids = json.loads('''${pdbIds}''')
-chain_id = "${chain}"
+pdb_ids = json.loads(${pyStr(pdbIds)})
+chain_id = ${pyStr(chain)}
 cache_dir = "/tmp/molcraft-analysis/pdb"
 os.makedirs(cache_dir, exist_ok=True)
 
@@ -2169,8 +2556,8 @@ from Bio import pairwise2
 from Bio.PDB import PDBParser, MMCIFParser, PPBuilder
 from Bio.SeqUtils import seq1
 
-pdb_ids = json.loads('''${pdbIds}''')
-chain_id = "${chain}"
+pdb_ids = json.loads(${pyStr(pdbIds)})
+chain_id = ${pyStr(chain)}
 cache_dir = "/tmp/molcraft-analysis/pdb"
 os.makedirs(cache_dir, exist_ok=True)
 
@@ -2337,7 +2724,7 @@ from Bio.PDB import NeighborSearch
 import numpy as np
 import math
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"; chain2_id = "${chain2}"
+chain1_id = ${pyStr(chain1)}; chain2_id = ${pyStr(chain2)}
 model = next(iter(struct))
 if chain1_id not in model or chain2_id not in model:
     print(json.dumps({"error": f"chain not found", "available": [c.id for c in model]}))
@@ -2476,7 +2863,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"; chain2_id = "${chain2}"; cutoff = ${cutoff}
+chain1_id = ${pyStr(chain1)}; chain2_id = ${pyStr(chain2)}; cutoff = ${pyNum(cutoff, 100)}
 model = next(iter(struct))
 # Auto-detect available chains if the specified ones don't exist
 available_chains = [c.id for c in model]
@@ -2599,7 +2986,7 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-cutoff = ${cutoff}
+cutoff = ${pyNum(cutoff, 100)}
 model = next(iter(struct))
 METALS = {'ZN', 'MG', 'CA', 'MN', 'FE', 'CU', 'NI', 'CO', 'CD', 'NA', 'K', 'MO', 'W'}
 metal_residues = []
@@ -2772,14 +3159,26 @@ from Bio.PDB import PDBParser
 import subprocess, os, math
 
 # --- Step 1: Run pdb2pqr to assign real forcefield charges ---
+# R167 (PY-004): pdb2pqr scatters intermediate files (naming records,
+# propka temp files, .in templates) into its CWD, which it previously
+# inherited from the Node parent — the Next.js project root when spawned
+# via /api/analyze/run (that route sets no cwd). Run it inside a private
+# temp dir instead, point every derived path (.pqr / apbs .in) into that
+# dir (previously they polluted the shared PDB cache dir), and register
+# cleanup via atexit so the dir is removed even on the SystemExit error
+# paths below.
+import tempfile, atexit, shutil
+pdb2pqr_wd = tempfile.mkdtemp(prefix="pdb2pqr_")
+atexit.register(shutil.rmtree, pdb2pqr_wd, True)
 input_pdb = r"${inputPath}"
-pqr_path = input_pdb.rsplit('.', 1)[0] + "_charged.pqr"
-ff_name = "${ff}"
+pqr_path = os.path.join(pdb2pqr_wd, "charged.pqr")
+apbs_in_path = os.path.join(pdb2pqr_wd, "apbs.in")
+ff_name = ${pyStr(ff)}
 pdb2pqr_ok = False
 pdb2pqr_log = ""
 try:
-    cmd = ["pdb2pqr", "--ff=" + ff_name, "--whitespace", "--apbs-input", input_pdb.rsplit('.', 1)[0] + "_apbs.in", input_pdb, pqr_path]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    cmd = ["pdb2pqr", "--ff=" + ff_name, "--whitespace", "--apbs-input", apbs_in_path, input_pdb, pqr_path]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=pdb2pqr_wd)
     if proc.returncode == 0 and os.path.exists(pqr_path) and os.path.getsize(pqr_path) > 100:
         pdb2pqr_ok = True
     else:
@@ -2789,7 +3188,7 @@ except Exception as e:
 
 # --- Step 2: Parse PQR for charges (with fallback) ---
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
+chain_filter = ${pyStr(chain)}
 model = next(iter(struct))
 
 # Fallback charge table
@@ -2884,7 +3283,7 @@ epsilon_r = 78.5
 kB = 1.381e-23
 T = 298.15
 NA = 6.022e23
-I = ${ionic} / 1000
+I = ${pyNum(ionic, 1000)} / 1000
 debye = math.sqrt(epsilon_0 * epsilon_r * kB * T / (2 * NA * e_charge**2 * I * 1000)) * 1e10
 k_coulomb = (e_charge**2 * NA) / (4 * math.pi * epsilon_0 * epsilon_r * 1e-10) / 1000
 
@@ -2916,9 +3315,9 @@ median_abs = abs_pots[len(abs_pots)//2] if abs_pots else 0
 surface_charged = [r for r in results if abs(r['potential_kJ_mol']) > median_abs]
 print(json.dumps({
     'chain_filter': chain_filter or 'all',
-    'ionic_strength_mM': ${ionic},
+    'ionic_strength_mM': ${pyNum(ionic, 1000)},
     'debye_length_A': round(debye, 2),
-    'grid_spacing_A': ${grid},
+    'grid_spacing_A': ${pyNum(grid, 10)},
     'forcefield': ff_name if pdb2pqr_ok else 'fallback (simple)',
     'pdb2pqr_used': pdb2pqr_ok,
     'pdb2pqr_log': pdb2pqr_log if not pdb2pqr_ok else '',
@@ -2953,8 +3352,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 from Bio.PDB import ShrakeRupley
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chain}"
-threshold = ${threshold}
+chain_filter = ${pyStr(chain)}
+threshold = ${pyNum(threshold, 100)}
 model = next(iter(struct))
 # Compute SASA using biopython's Shrake-Rupley
 sr = ShrakeRupley()
@@ -3065,8 +3464,8 @@ print(json.dumps({
 from Bio.PDB import NeighborSearch
 import numpy as np
 struct = load_structure(r"${inputPath}")
-ligand_id = "${ligandCompId}"
-radius = ${radius}
+ligand_id = ${pyStr(ligandCompId)}
+radius = ${pyNum(radius, 100)}
 model = next(iter(struct))
 # Find ligand
 ligand_residues = [r for r in model.get_residues() if r.resname == ligand_id]
@@ -3145,8 +3544,8 @@ print(json.dumps({
 import numpy as np
 from Bio.PDB import NeighborSearch
 struct = load_structure(r"${inputPath}")
-ligand_id = "${ligandCompId}"
-radius = ${radius}
+ligand_id = ${pyStr(ligandCompId)}
+radius = ${pyNum(radius, 100)}
 model = next(iter(struct))
 ligand_residues = [r for r in model.get_residues() if r.resname == ligand_id]
 if not ligand_residues:
@@ -3250,9 +3649,9 @@ import numpy as np
 from Bio.PDB import NeighborSearch
 import math
 struct = load_structure(r"${inputPath}")
-ligand_id = "${ligandCompId}"
-radius = ${radius}
-fragment_set = "${fragmentSet}"
+ligand_id = ${pyStr(ligandCompId)}
+radius = ${pyNum(radius, 100)}
+fragment_set = ${pyStr(fragmentSet)}
 model = next(iter(struct))
 ligand_residues = [r for r in model.get_residues() if r.resname == ligand_id]
 if not ligand_residues:
@@ -3424,15 +3823,43 @@ print(json.dumps({
     buildScript: (inputPath, params) => {
       const chain1 = String(params.chain1 ?? "A");
       const chain2 = String(params.chain2 ?? "A");
-      const secondPath = String((params as any).__secondPath__ ?? "");
+      // R167 (PY-005): explicit __secondPath__ validation. Callers that
+      // staged the field with String(maybeUndefined) produced the literal
+      // string "undefined" — truthy, non-empty, so it sailed past the
+      // recipe's `if not path2` guard and Python died with a bare
+      // FileNotFoundError opening a file named "undefined" (HTTP 500, no
+      // actionable error). Reject non-strings and junk literals up front;
+      // the legitimate "no second structure" case stays the empty string
+      // → path2 = None → clear JSON error from the script itself.
+      const rawSecondPath = (params as Record<string, unknown>).__secondPath__;
+      if (rawSecondPath != null && typeof rawSecondPath !== "string") {
+        throw new Error(
+          `per_residue_rmsd_two: __secondPath__ must be a staged file path string (the route sets it from fileContent2), got ${typeof rawSecondPath}`
+        );
+      }
+      const JUNK_PATH_LITERALS = new Set(["undefined", "null", "nan", "none", "[object object]"]);
+      const trimmedSecondPath = typeof rawSecondPath === "string" ? rawSecondPath.trim() : "";
+      if (
+        trimmedSecondPath &&
+        (JUNK_PATH_LITERALS.has(trimmedSecondPath.toLowerCase()) ||
+          trimmedSecondPath.length > 500 ||
+          !/[\\/]/.test(trimmedSecondPath))
+      ) {
+        throw new Error(
+          `per_residue_rmsd_two: __secondPath__ is not a valid staged structure path (${JSON.stringify(
+            trimmedSecondPath.slice(0, 100)
+          )}) — provide fileContent2 so the route can stage the second structure`
+        );
+      }
+      const secondPath = trimmedSecondPath;
       return `${RECIPE_HEADER}
 import math
 import numpy as np
 from Bio.PDB import PDBParser, MMCIFParser
 path1 = r"${inputPath}"
-path2 = r"${secondPath}"
-chain1_id = "${chain1}"
-chain2_id = "${chain2}"
+path2 = ${secondPath ? pyStr(secondPath) : 'None'}
+chain1_id = ${pyStr(chain1)}
+chain2_id = ${pyStr(chain2)}
 if not path2 or path2 == "":
     print(json.dumps({"error": "second structure fileContent2 is required"}))
     raise SystemExit
@@ -3527,9 +3954,9 @@ import numpy as np
 from Bio.PDB import NeighborSearch
 from scipy.ndimage import label
 struct = load_structure(r"${inputPath}")
-grid_spacing = ${gridSpacing}
-probe_radius = ${probeRadius}
-min_volume = ${minVolume}
+grid_spacing = ${pyNum(gridSpacing, 10)}
+probe_radius = ${pyNum(probeRadius, 10)}
+min_volume = ${pyNum(minVolume, 10000)}
 model = next(iter(struct))
 all_atoms = list(model.get_atoms())
 protein_atoms = [a for a in all_atoms if a.get_parent().id[0].strip() == "" and a.get_parent().resname != "HOH"]
@@ -3843,8 +4270,8 @@ from Bio.Blast import NCBIWWW
 import time
 
 struct = load_structure(r"${inputPath}")
-chain_filter = "${chainFilter}"
-evalue_threshold = ${evalue}
+chain_filter = ${pyStr(chainFilter)}
+evalue_threshold = ${pyNum(evalue, 100)}
 model = next(iter(struct))
 ppb = PPBuilder()
 
@@ -3931,10 +4358,10 @@ from Bio import pairwise2
 from Bio.PDB import PDBParser, MMCIFParser, PPBuilder
 from Bio.SeqUtils import seq1
 
-pdb1 = "${pdbId1}".lower()
-pdb2 = "${pdbId2}".lower()
-chain1_id = "${chain1}"
-chain2_id = "${chain2}"
+pdb1 = ${pyStr(pdbId1)}.lower()
+pdb2 = ${pyStr(pdbId2)}.lower()
+chain1_id = ${pyStr(chain1)}
+chain2_id = ${pyStr(chain2)}
 cache_dir = "/tmp/molcraft-analysis/pdb"
 os.makedirs(cache_dir, exist_ok=True)
 
@@ -4056,10 +4483,10 @@ from Bio import pairwise2
 from Bio.PDB import PDBParser, MMCIFParser, PPBuilder, PDBIO
 from Bio.SeqUtils import seq1
 
-pdb1 = "${pdbId1}".lower()
-pdb2 = "${pdbId2}".lower()
-chain1_id = "${chain1}"
-chain2_id = "${chain2}"
+pdb1 = ${pyStr(pdbId1)}.lower()
+pdb2 = ${pyStr(pdbId2)}.lower()
+chain1_id = ${pyStr(chain1)}
+chain2_id = ${pyStr(chain2)}
 cache_dir = "/tmp/molcraft-analysis/pdb"
 os.makedirs(cache_dir, exist_ok=True)
 
@@ -4184,8 +4611,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import math
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"
-target_pH = ${pH}
+chain1_id = ${pyStr(chain1)}
+target_pH = ${pyNum(pH, 14)}
 model = next(iter(struct))
 if chain1_id not in model:
     print(json.dumps({"error": f"chain {chain1_id} not found"}))
@@ -4245,8 +4672,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import math
 struct = load_structure(r"${inputPath}")
-chain1_id = "${chain1}"
-window = ${windowSize}
+chain1_id = ${pyStr(chain1)}
+window = ${pyNum(windowSize, 100)}
 model = next(iter(struct))
 if chain1_id not in model:
     print(json.dumps({"error": f"chain {chain1_id} not found"}))
@@ -4310,8 +4737,8 @@ print(json.dumps({
       return `${RECIPE_HEADER}
 import math
 struct = load_structure(r"${inputPath}")
-ligand_id = "${ligandCompId}"
-radius = ${radius}
+ligand_id = ${pyStr(ligandCompId)}
+radius = ${pyNum(radius, 100)}
 model = next(iter(struct))
 
 # Find ligand atoms

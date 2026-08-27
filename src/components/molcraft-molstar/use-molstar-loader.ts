@@ -15,6 +15,8 @@ import type { MolstarGlobal } from "@/lib/molcraft/types";
  * We also intentionally do NOT remove the script tag on unmount — the IIFE's
  * side effects (window.molstar assignment) are idempotent and safe to reuse
  * for future viewer instances. Removing the tag doesn't "unload" the JS.
+ * A FAILED load is different: its tag is removed and the loading flag is
+ * cleared (see onerror) so the next mount can retry with a fresh injection.
  */
 declare global {
   interface Window {
@@ -48,12 +50,37 @@ export function useMolstarLoader() {
     // If a script is already loading (another MolstarViewer instance mounted
     // first), don't inject a second one — just poll for the global.
     if (window.__molstarScriptLoading) {
+      // UI-006: bounded poll. Previously this branch polled forever: when the
+      // first mount's <script> FAILED, its onerror left
+      // window.__molstarScriptLoading = true and the dead tag in the DOM, so
+      // every later mount spun here eternally showing
+      // "Initializing 3D Viewer...". Now (a) the owner's onerror removes the
+      // tag and clears the flag, letting the next mount re-inject, and
+      // (b) this poll gives up — with an error — when the flag is cleared
+      // without a global appearing, or after 60 × 500ms = 30s.
+      let polls = 0;
+      const MAX_POLLS = 60;
       pollInterval = setInterval(() => {
-        if (check() && pollInterval) {
-          clearInterval(pollInterval);
+        if (check()) {
+          if (pollInterval) clearInterval(pollInterval);
           pollInterval = null;
+          return;
         }
-      }, 50);
+        if (!window.__molstarScriptLoading) {
+          // The mount that owned the script failed and cleaned up — don't
+          // keep waiting for a global that will never appear.
+          if (pollInterval) clearInterval(pollInterval);
+          pollInterval = null;
+          if (!cancelled) setError("Failed to load /molstar.js");
+          return;
+        }
+        polls += 1;
+        if (polls >= MAX_POLLS) {
+          if (pollInterval) clearInterval(pollInterval);
+          pollInterval = null;
+          if (!cancelled) setError("Timed out waiting for /molstar.js to load");
+        }
+      }, 500);
       return () => {
         cancelled = true;
         if (pollInterval) clearInterval(pollInterval);
@@ -72,7 +99,19 @@ export function useMolstarLoader() {
         }
       }, 50);
     };
-    script.onerror = () => setError("Failed to load /molstar.js");
+    // UI-006: on failure, remove the dead tag and clear the loading flag so
+    // the NEXT mount can inject a fresh <script> instead of polling forever.
+    // (The unmount cleanup below still intentionally keeps both — on success
+    // the global is reusable.)
+    script.onerror = () => {
+      try {
+        document.head.removeChild(script);
+      } catch {
+        /* tag already gone */
+      }
+      window.__molstarScriptLoading = false;
+      if (!cancelled) setError("Failed to load /molstar.js");
+    };
     document.head.appendChild(script);
 
     return () => {

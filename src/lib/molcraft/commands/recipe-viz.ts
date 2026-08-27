@@ -22,6 +22,7 @@ import { getStructures, collectComponents, getFirstStructureData, isLociEmpty } 
 import { lociFromResidue } from "./loci";
 import { normalizeColorTheme } from "./color-theme";
 import { nextFrame } from "./screenshot-utils";
+import { clearAllSelectionVisuals } from "./selection-utils";
 
 /**
  * R154: Build a StructureElement.Loci for a specific residue (and optionally atom)
@@ -69,7 +70,17 @@ export function buildResidueLoci(
     if (unit.kind !== 0) continue; // atomic only
     const indices: number[] = [];
     for (let i = 0; i < unit.elements.length; i++) {
-      const loc = SE.Location.create(data, unit, i);
+      // R166 (multi-chain loci bug): Location.create's 3rd arg is the
+      // ELEMENT (model atom index, i.e. unit.elements[i]) — NOT the position
+      // `i` within the unit. Passing `i` read the WRONG atoms' properties:
+      // for single-chain structures the first unit's elements start at 0 so
+      // it appeared to work, but on multi-chain structures (4HHB A/B/C/D)
+      // chain B/D atoms reported chain A → every chain:resno lookup missed →
+      // no interface focus, no sidechain sticks, no labels, no H-bond lines.
+      // NOTE: the indices collected below still use `i` — StructureElement
+      // .Loci's `indices` ARE positions within unit.elements (that part was
+      // always correct).
+      const loc = SE.Location.create(data, unit, unit.elements[i]);
       const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
       const resno = SP.residue.auth_seq_id(loc);
       const key = `${chainId}:${resno}`;
@@ -103,11 +114,45 @@ export function buildResidueLoci(
   return { loci, expr };
 }
 
+/**
+ * R164 (MOL-005): deep-clone viz params before use.
+ *
+ * applyRecipeVisualization mutates its `params` argument in two places:
+ *   1. the R140 nested-`.data` merge (lifts inner keys to the top level)
+ *   2. the R163 pairwise pair selection (overwrites chain1/chain2/interactions)
+ *
+ * Previously these mutations hit the CALLER's object — the caller's vizParams
+ * was silently polluted across VLM re-capture iterations (e.g. pair #2's
+ * chain1/chain2 sticking around when pair #1 was re-visualized). Recipe
+ * analysis payloads are pure JSON, so structuredClone (or a JSON round-trip)
+ * fully isolates the caller; the shallow-copy fallback is a last resort for
+ * exotic non-cloneable values.
+ */
+function cloneVizParams(params: Record<string, unknown>): Record<string, unknown> {
+  try {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(params) as Record<string, unknown>;
+    }
+  } catch { /* non-cloneable value inside — fall through to JSON clone */ }
+  try {
+    return JSON.parse(JSON.stringify(params)) as Record<string, unknown>;
+  } catch (err) {
+    console.warn('[applyRecipeVisualization] deep clone failed — falling back to shallow copy:', err);
+    return { ...params };
+  }
+}
+
 export async function applyRecipeVisualization(
   viewer: MolstarViewer,
   recipe: string,
   params?: Record<string, unknown>
 ): Promise<void> {
+  // R164 (MOL-005): work on a deep clone — every mutation below (the nested
+  // `.data` merge and the pairwise chain1/chain2/interactions overwrites)
+  // must stay local to this call and never leak into the caller's params.
+  if (params && typeof params === 'object') {
+    params = cloneVizParams(params);
+  }
   try {
     const plugin = (viewer as unknown as { plugin?: MolstarPlugin }).plugin;
     if (!plugin) return;
@@ -206,6 +251,8 @@ export async function applyRecipeVisualization(
         const ligandCompId = params?.ligandCompId as string | undefined;
         if (ligandCompId) {
           await safe(async () => {
+            // R161: lociFromResidue is now non-destructive (unit traversal),
+            // so focusing a ligand no longer leaves a green selection box.
             const loci = await lociFromResidue(viewer, { compId: ligandCompId });
             if (loci) plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
           }, "focus_ligand");
@@ -234,16 +281,53 @@ export async function applyRecipeVisualization(
       case "salt_bridges":
       case "hydrophobic_contacts":
       case "interface_residues":
-      case "oligomer_analysis": {
+      case "oligomer_analysis":
+      case "pairwise_interactions": {
+        // R161: For pairwise_interactions, normalize the payload first: the
+        // recipe returns per-pair results; pick the pair to visualize and
+        // surface its chain1/chain2/interactions so the focus/sidechain/line
+        // logic below visualizes THAT interface.
+        //
+        // R163: vizParams._pairIndex selects WHICH significant pair to show
+        // (0 = most significant, 1 = second, …). The client auto-capture flow
+        // captures the top-2 interfaces separately so the VLM report covers
+        // the main interfaces, not just the single best one.
+        if (recipe === "pairwise_interactions") {
+          const pairs = (params as any)?.pairs as Array<Record<string, unknown>> | undefined;
+          if (Array.isArray(pairs) && pairs.length > 0) {
+            // significant pairs sorted by interaction count (desc) — same
+            // ordering as the recipe's significant_pairs field
+            const significant = pairs
+              .filter(p => p.in_contact !== false && (Number(p.total ?? 0) || 0) > 0)
+              .sort((a, b) => (Number(b.total ?? 0) || 0) - (Number(a.total ?? 0) || 0));
+            const pool = significant.length > 0 ? significant : pairs;
+            const pairIndex = Number((params as any)?._pairIndex ?? 0);
+            const best = pool[Math.min(Math.max(pairIndex, 0), pool.length - 1)]!;
+            const bestInteractions = best.interactions as Array<Record<string, unknown>> | undefined;
+            // R163: always overwrite chain1/chain2/interactions for the
+            // selected pair (previously only set when missing, so a stale
+            // top-level best-pair field could pin the viz to the wrong pair)
+            if (best.chain1) (params as any).chain1 = best.chain1;
+            if (best.chain2) (params as any).chain2 = best.chain2;
+            if (Array.isArray(bestInteractions)) {
+              (params as any).interactions = bestInteractions;
+            }
+            console.log(
+              `[viz:pairwise] Visualizing pair #${Math.min(Math.max(pairIndex, 0), pool.length - 1)} ` +
+              `${best.chain1}-${best.chain2} (${best.total ?? 0} interactions of ${pairs.length} pairs analyzed, ` +
+              `${pool.length} in contact)`
+            );
+          }
+        }
+
           // R157: Clean up ALL previous visualization artifacts before applying new one.
         // This prevents label/line/sidechain/water/ligand accumulation across analyses.
         await safe(async () => {
           // Clear all measurements (distance lines, labels)
           try { plugin.managers.structure.measurement.clear(); } catch (err) { console.warn('[viz:cleanup] measurement.clear failed:', err); }
-          // R157: Clear selection and highlights (removes green selection box)
-          try { plugin.managers.structure.selection.clear(); } catch (err) { console.warn('[viz:cleanup] selection.clear failed:', err); }
-          try { plugin.managers.interactivity.lociSelects.clearHighlights(); } catch (err) { /* best-effort */ }
-          try { plugin.managers.interactivity.lociHighlights.clearHighlights(); } catch (err) { /* best-effort */ }
+          // R161: Clear selection + green boxes (deselectAll is the real API;
+          // the old lociSelects.clearHighlights() was a silent no-op).
+          clearAllSelectionVisuals(plugin);
           // Remove previous components (sidechains, water, ligand, and ANY ball-and-stick)
           const structs = getStructures(plugin);
           let removedCount = 0;

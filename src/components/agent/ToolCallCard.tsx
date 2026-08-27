@@ -8,8 +8,8 @@
 
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight, Crosshair } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight, Crosshair, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/molcraft/store';
 import type { ConversationNode } from './use-agent-session';
@@ -248,6 +248,12 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
         const vlmMs = r.autoCapture.vlmDurationMs;
         const vlmIterations = r.autoCapture.vlmIterations;
         const vlmAcceptable = r.autoCapture.vlmAcceptable;
+        // R163: VLM failure marker — when the VLM pass failed (after the
+        // 5s/15s/45s backoff schedule), explicitly flag the screenshots as
+        // NOT visually verified so the user knows the analysis text is
+        // based on the numeric Python results alone.
+        const vlmFailed = Boolean(r.autoCapture.vlmError) || (!r.autoCapture.vlmResult && !r.autoCapture.vlmPending);
+        const vlmErrorText = typeof r.autoCapture.vlmError === 'string' ? r.autoCapture.vlmError : '';
         return (
           <div className="text-xs">
             {/* R116.2: Show timing for auto-capture + VLM */}
@@ -260,7 +266,7 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
                     截图 {captureMs < 1000 ? `${captureMs}ms` : `${(captureMs / 1000).toFixed(1)}s`}
                   </span>
                 )}
-                {vlmMs != null && (
+                {vlmMs != null && !vlmFailed && (
                   <span className="flex items-center gap-0.5">
                     <Timer className="h-2.5 w-2.5" />
                     VLM {vlmMs < 1000 ? `${vlmMs}ms` : `${(vlmMs / 1000).toFixed(1)}s`}
@@ -278,6 +284,20 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
                     {vlmAcceptable ? '✓ 质量 acceptable' : '⚠ 需改进'}
                   </span>
                 )}
+                {vlmFailed && (
+                  <span
+                    className="px-1 py-0.5 rounded-full text-[8px] bg-red-500/15 text-red-600 flex items-center gap-0.5"
+                    title={vlmErrorText || 'VLM 视觉验证未完成（已重试 5s/15s/45s）'}
+                  >
+                    <ShieldAlert className="h-2.5 w-2.5" />
+                    未经视觉验证
+                  </span>
+                )}
+              </div>
+            )}
+            {vlmFailed && (
+              <div className="mb-1.5 px-2 py-1 rounded-md bg-red-500/10 border border-red-500/25 text-[9px] text-red-600 leading-relaxed">
+                ⚠ {vlmErrorText || 'VLM 视觉验证未完成'}（已按 5s/15s/45s 指数退避重试）。以下分析结论仅基于数值计算结果，未经截图视觉校验。
               </div>
             )}
             <ScreenshotResult name="capture_multi_angle" screenshots={autoScreenshots} result={r.autoCapture} />
@@ -322,7 +342,12 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
     }
   }
   // capture_multi_angle: { ok: true, data: { screenshots: [{ dataUri, angle, label, cameraState }] } }
-  if (name === 'capture_multi_angle' && r.data) {
+  // UI-003: recapture_screenshot executes the SAME capture_multi_angle
+  // command (see pdb-tools toolToCommand), so its persisted/live result has
+  // the identical shape — it must render as an image carousel too, not raw
+  // JSON (the server persists it unstripped specifically so a resumed
+  // session can re-render the screenshots).
+  if ((name === 'capture_multi_angle' || name === 'recapture_screenshot') && r.data) {
     const data = r.data as Record<string, unknown>;
     if (Array.isArray(data.screenshots)) {
       return (data.screenshots as Array<Record<string, unknown>>).map((s) => ({
@@ -347,6 +372,67 @@ function ScreenshotResult({ name, screenshots, result }: {
   const [showRaw, setShowRaw] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [restoringView, setRestoringView] = useState(false);
+
+  // UI-005: the fullscreen zoom overlay is a proper modal dialog — focus
+  // moves into it on open and is restored to the opener on close.
+  const zoomModalRef = useRef<HTMLDivElement>(null);
+  const zoomRestoreFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!zoomed) return;
+    zoomRestoreFocusRef.current = document.activeElement as HTMLElement | null;
+    zoomModalRef.current?.focus();
+    return () => {
+      zoomRestoreFocusRef.current?.focus?.();
+      zoomRestoreFocusRef.current = null;
+    };
+  }, [zoomed]);
+
+  // UI-005: keyboard support + focus trap for the zoom dialog. Escape
+  // closes, ←/→ navigate shots, and Tab wraps between the first and last
+  // focusable element inside the dialog (it never leaks to the page below).
+  const handleZoomKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      setZoomed(false);
+      return;
+    }
+    if (e.key === 'ArrowLeft' && screenshots.length > 1) {
+      e.preventDefault();
+      setCurrentIdx((currentIdx - 1 + screenshots.length) % screenshots.length);
+      return;
+    }
+    if (e.key === 'ArrowRight' && screenshots.length > 1) {
+      e.preventDefault();
+      setCurrentIdx((currentIdx + 1) % screenshots.length);
+      return;
+    }
+    if (e.key === 'Tab') {
+      const container = zoomModalRef.current;
+      if (!container) return;
+      const focusables = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === first || !container.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !container.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
 
   // R113.3: Extract VLM result from the tool result
   // R140: Also check vlmPending for explicit capture_multi_angle calls
@@ -377,6 +463,16 @@ function ScreenshotResult({ name, screenshots, result }: {
       <div className="text-[10px] uppercase tracking-wide text-claude-text-muted mb-1.5 flex items-center justify-between">
         <span>result · {name}</span>
         <div className="flex items-center gap-1.5">
+          {/* R163: VLM failure flag on the screenshot carousel */}
+          {vlmError && !vlmResult && (
+            <span
+              className="px-1.5 py-0.5 rounded-full text-[9px] bg-red-500/15 text-red-600 flex items-center gap-0.5 normal-case"
+              title={typeof vlmError === 'string' ? vlmError : undefined}
+            >
+              <ShieldAlert className="h-2.5 w-2.5" />
+              未经视觉验证
+            </span>
+          )}
           {qualityLabel && (
             <span className={`px-1.5 py-0.5 rounded-full text-[9px] text-white ${qualityColor}`}>
               {qualityLabel}
@@ -444,15 +540,24 @@ function ScreenshotResult({ name, screenshots, result }: {
         )}
       </div>
 
-      {/* R140: Fullscreen zoom modal */}
+      {/* R140: Fullscreen zoom modal (UI-005: proper dialog semantics —
+          role/aria-modal, Escape to close, focus moved in on open and
+          restored on close, Tab trapped inside) */}
       {zoomed && (
         <div
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+          ref={zoomModalRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`截图预览 ${currentIdx + 1}/${screenshots.length}${current.label || current.angle ? `：${current.label || current.angle}` : ''}`}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 outline-none"
           onClick={() => setZoomed(false)}
+          onKeyDown={handleZoomKeyDown}
         >
           {/* Close button */}
           <button
             onClick={() => setZoomed(false)}
+            aria-label="关闭预览"
             className="absolute top-4 right-4 h-10 w-10 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
           >
             <XClose className="h-5 w-5" />
@@ -463,12 +568,14 @@ function ScreenshotResult({ name, screenshots, result }: {
             <>
               <button
                 onClick={(e) => { e.stopPropagation(); setCurrentIdx((currentIdx - 1 + screenshots.length) % screenshots.length); }}
+                aria-label="上一张截图"
                 className="absolute left-4 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
               >
                 <ChevronLeft className="h-6 w-6" />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); setCurrentIdx((currentIdx + 1) % screenshots.length); }}
+                aria-label="下一张截图"
                 className="absolute right-4 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-white/10 text-white flex items-center justify-center hover:bg-white/20 transition-colors"
               >
                 <ChevronRight className="h-6 w-6" />

@@ -51,6 +51,15 @@ export interface DispatchOptions {
   guards: ToolGuard[];
   /** Called when a tool defers context for the next step boundary. */
   onDeferContext?: (message: string) => void;
+  /**
+   * R165 (AGENT-007): external call id (e.g. the LLM's tool-call id) to use
+   * for this dispatch. When omitted an internal id is generated. Threading
+   * the external id matters for approvals: ApprovalService.request keys the
+   * pending promise by ctx.callId, and the client resolves approvals by the
+   * LLM's tool-call id (from approval/asked events + the /approval route) —
+   * a mismatch would leave the promise unresolvable.
+   */
+  callId?: CallId;
 }
 
 export class ToolRuntime {
@@ -134,7 +143,8 @@ export class ToolRuntime {
     args: unknown,
     opts: DispatchOptions,
   ): Promise<ToolExecutionResult> {
-    const callId = newCallId();
+    // R165 (AGENT-007): prefer the caller-provided (external) call id.
+    const callId = opts.callId ?? newCallId();
     const callerSignal = opts.parentSignal ?? new AbortController().signal;
     const controller = new AbortController();
     // Fuse caller signal + this dispatch's signal.

@@ -58,15 +58,21 @@ import {
 } from "./commands/loci";
 import {
   saveCameraState,
-  restoreCameraState,
   restoreCameraStateKeep,
   getCurrentCameraState,
   applyCameraAngle,
+  saveUserCameraState,
+  restoreUserCameraState,
+  __resetCameraState,
 } from "./commands/camera";
 import { showInteractionsAround, clearInteractions } from "./commands/interactions";
 import { setTrackballAnimate } from "./commands/animation";
 import { applyRecipeVisualization } from "./commands/recipe-viz";
 import { alignStructures } from "./commands/alignment";
+import {
+  clearAllSelectionVisuals,
+  clearAllSelectionVisualsAndWait,
+} from "./commands/selection-utils";
 
 // Re-export CommandResult so existing `import { CommandResult }` callers work.
 export type { CommandResult } from "./commands/types";
@@ -74,6 +80,64 @@ export type { CommandResult } from "./commands/types";
 // ============================================================
 // executeCommand — main entry point
 // ============================================================
+
+/**
+ * R161: capture_multi_angle mutex — serializes screenshot sessions.
+ *
+ * The auto-capture loop (fired after pdb_analyze) and any explicit
+ * capture_multi_angle tool call can otherwise run CONCURRENTLY: they fight
+ * over camera state, duplicate labels, and race the measurement-count
+ * cleanup, producing duplicated/garbled screenshots. This queue guarantees
+ * only one capture session runs at a time.
+ */
+let captureChain: Promise<unknown> = Promise.resolve();
+function enqueueCapture<T>(fn: () => Promise<T>): Promise<T> {
+  const run = captureChain.then(fn, fn);
+  // Keep the chain alive even if this capture fails.
+  captureChain = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * R164 (MOL-003 / UI-004): Drain the capture queue + reset module state.
+ *
+ * Called from clearViewerStructures (use-agent-session.ts) BEFORE the
+ * structure is removed. Without this:
+ * 1. A capture_multi_angle queued behind `enqueueCapture` against the
+ *    OLD (now removed) structure would keep running, throwing errors
+ *    against undefined component refs.
+ * 2. The next session's first capture_multi_angle would call
+ *    restoreUserCameraState(plugin) onto a snapshot taken against the
+ *    OLD structure's coordinate frame, leaving the camera at a
+ *    degenerate angle pointing at empty space.
+ *
+ * The drain works by:
+ *  - Replacing captureChain with a resolved promise so any new
+ *    enqueueCapture runs immediately (no waiting on the stale queue).
+ *  - The previously-queued task's `fn` callback will still run (it's
+ *    already in-flight), but its cleanup branch is best-effort and
+ *    tolerates missing components (R143 safe() wrappers).
+ *  - Also calls __resetCameraState() to clear savedCameraState +
+ *    savedUserCameraState so the next session starts fresh.
+ */
+export function __drainCaptureQueue(): void {
+  // Replace the chain — any prior task already in flight continues,
+  // but new enqueueCapture calls won't wait on it.
+  captureChain = Promise.resolve();
+  // Reset the module-level camera snapshots so the next session's
+  // first capture doesn't restore a stale coordinate frame.
+  try {
+    __resetCameraState();
+  } catch (err) {
+    console.warn('[__drainCaptureQueue] could not reset camera state:', err);
+  }
+  console.log('[__drainCaptureQueue] capture chain drained + camera state reset');
+}
+
+/** R164 (MOL-003 / UI-004): alias matching camera.ts's __resetCameraState name. */
+export function __resetCaptureState(): void {
+  __drainCaptureQueue();
+}
 
 export async function executeCommand(
   viewer: MolstarViewer,
@@ -563,8 +627,8 @@ export async function executeCommand(
       }
 
       case "clear_selection":
-        plugin.managers.structure.selection.clear();
-        plugin.managers.interactivity.lociSelects.deselectAll();
+        // R161: deselectAll() actually clears the green canvas marks.
+        clearAllSelectionVisuals(plugin);
         return { ok: true, detail: "Selection cleared" };
 
       case "set_granularity":
@@ -669,328 +733,11 @@ export async function executeCommand(
       // Round 62: Applies recipe-specific 3D visualization before capturing
       // so the screenshot is more informative (e.g. focus on ligand for
       // binding_pocket, show interactions for all_interactions, etc.)
-      case "capture_multi_angle": {
-        const angles = cmd.angles ?? (["front", "side", "top", "back"] as const);
-        const width = cmd.width ?? 1200;
-        const height = cmd.height ?? 800;
+      // R161: Serialized through enqueueCapture to prevent concurrent capture
+      // sessions (auto-capture + explicit capture) from racing each other.
+      case "capture_multi_angle":
+        return await enqueueCapture(() => executeMultiAngleCapture(viewer, cmd));
 
-        // Round 62: Apply recipe-specific visualization before capturing
-        const vizParams = cmd.vizParams as Record<string, unknown> | undefined;
-        // R151: Skip applyRecipeVisualization on re-capture iterations (iteration > 1).
-        // The VLM capture loop calls capture_multi_angle multiple times — the first
-        // call applies the visualization (focus, side chains, color), and subsequent
-        // calls only need to re-capture from different angles. Re-applying the
-        // visualization causes duplicate components + camera re-focus, which makes
-        // the structure disappear temporarily (blank screenshots).
-        const isRecapture = vizParams?._vlmSuggestedAngles !== undefined ||
-                            vizParams?._focusRadiusMultiplier !== undefined;
-        if (!isRecapture) {
-          await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
-          // Round 78: Reduced from 300ms to 150ms — visualization renders fast
-          // for camera focus operations; 150ms is enough for Molstar to settle
-          await new Promise((r) => setTimeout(r, 150));
-        } else {
-          console.log('[capture_multi_angle] Re-capture iteration — skipping applyRecipeVisualization');
-        }
-
-        // Round 74: Add residue labels to the 3D view before capturing
-        // R137 (code-review): Capture the measurement count BEFORE adding any
-        // labels so the cleanup later only removes the labels we add here —
-        // NOT user-added measurements. Previously `beforeMeasCount` was never
-        // assigned, so the cleanup fell through to `meas.clear()` which wiped
-        // every measurement in the scene (distances, angles, labels, etc.).
-        let beforeMeasCount: number | undefined;
-        if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
-          try {
-            const meas = plugin.managers.structure.measurement as any;
-            const items = meas?.state?.items;
-            beforeMeasCount = Array.isArray(items)
-              ? items.length
-              : (typeof items === 'object' && items ? Object.keys(items).length : 0);
-          } catch (err) {
-            console.warn('[capture_multi_angle] beforeMeasCount read failed:', err);
-            beforeMeasCount = undefined;
-          }
-          // R160: Use buildResidueLoci for labels to avoid selection side effects.
-          // lociFromResidue's fallback path calls selection.clear() + structureInteractivity
-          // which creates the green selection box visible in screenshots.
-          // buildResidueLoci uses StructureElement directly (no selection).
-          const { buildResidueLoci } = await import('./commands/recipe-viz');
-          const labelRefs = cmd.labels
-            .filter(lbl => lbl.chain !== undefined && lbl.resno !== undefined)
-            .map(lbl => ({ chain: lbl.chain!, resno: lbl.resno! }));
-          const labelLociResult = buildResidueLoci(plugin, labelRefs);
-
-          for (const lbl of cmd.labels) {
-            try {
-              if (lbl.chain !== undefined && lbl.resno !== undefined) {
-                // R160: Try to get loci from the pre-built batch loci first
-                let loci: unknown = null;
-                if (labelLociResult) {
-                  // Extract this residue's loci from the batch result
-                  // We can't easily extract individual loci from a batch, so
-                  // we fall back to buildResidueLoci for this single residue
-                  const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
-                  if (singleResult) {
-                    loci = singleResult.loci;
-                  }
-                }
-                // Fallback to lociFromResidue if buildResidueLoci failed
-                if (!loci) {
-                  loci = await lociFromResidue(viewer, {
-                    chain: lbl.chain,
-                    resno: lbl.resno,
-                  });
-                }
-                if (loci) {
-                  // R155: Use chain-specific colors for labels
-                  // Chain A → red, B → blue, C → green, D → orange, etc.
-                  const chainColors: Record<string, number> = {
-                    'A': 0xe74c3c, // red
-                    'B': 0x3498db, // blue
-                    'C': 0x2ecc71, // green
-                    'D': 0xe67e22, // orange
-                    'E': 0x9b59b6, // purple
-                    'F': 0x1abc9c, // teal
-                  };
-                  const labelColor = chainColors[lbl.chain] ?? 0xffffff; // white default
-
-                  // Round 75: Use larger font size for better screenshot readability
-                  // R155: Use labelParams for proper API + chain-specific colors
-                  // R156: Add sizeFactor for consistent text size, background for readability
-                  // R157: Add offsetZ to float labels above structure (prevent occlusion)
-                  await plugin.managers.structure.measurement.addLabel(loci, {
-                    customText: lbl.text ?? "",
-                    labelParams: {
-                      customText: lbl.text ?? "",
-                      textColor: labelColor,
-                      textSize: cmd.labelFontSize ?? 1.0,
-                      sizeFactor: 0.6,
-                      offsetX: 0,
-                      offsetY: 0,
-                      offsetZ: 2.0,          // R157: push label toward camera to avoid occlusion
-                      borderWidth: 0.15,
-                      borderColor: 0x000000,
-                      background: true,
-                      backgroundColor: 0x000000,
-                      backgroundOpacity: 0.7,
-                      backgroundMargin: 0.2,
-                      tether: true,
-                      tetherLength: 0.5,
-                      tetherBaseWidth: 0.1,
-                    },
-                  } as any);
-                }
-              }
-            } catch (err) {
-              console.warn(
-                `[capture_multi_angle] label "${lbl.text}" failed:`,
-                err
-              );
-            }
-          }
-          // Round 78: Reduced from 100ms to 50ms — labels render synchronously
-          await new Promise((r) => setTimeout(r, 50));
-        }
-
-        // R119: DO NOT change background color for screenshots.
-        // Previous code set bg to white/cream which caused the viewer to go
-        // white screen when the restore step didn't execute (e.g. non-blocking
-        // auto-capture failure). Screenshots work fine with the current bg.
-
-        const results: Array<{
-          dataUri: string;
-          angle: string;
-          label: string;
-          cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
-        }> = [];
-
-        // R160: Clear selection and highlights BEFORE capturing (not after)
-        // This ensures no green selection box appears in any screenshot
-        try { plugin.managers.structure.selection.clear(); } catch (err) { /* best-effort */ }
-        try { plugin.managers.interactivity.lociSelects.clearHighlights(); } catch (err) { /* best-effort */ }
-        try { plugin.managers.interactivity.lociHighlights.clearHighlights(); } catch (err) { /* best-effort */ }
-        await new Promise(r => setTimeout(r, 100)); // R160: wait for highlight clear to render
-
-        // R130: Save camera state before capture loop, restore after
-        // R143 (code-review fix): Save AFTER applyRecipeVisualization so the
-        // saved state is the focused-interface view. Then RESTORE before each
-        // angle so rotations don't accumulate (side→top was rotating from
-        // the side position, not from front, causing overlapping screenshots).
-        saveCameraState(plugin);
-        for (const angle of angles) {
-          try {
-            // R143: Restore to saved state before EACH angle so rotations
-            // are absolute (from the focused view), not cumulative.
-            // This fixes the bug where "top" was a tilted side view instead
-            // of a true top-down view.
-            if (angle !== 'front') {
-              restoreCameraStateKeep(plugin);
-            }
-            // R130: applyCameraAngle rotates from current position (no reset)
-            await applyCameraAngle(plugin, angle);
-            // R130: Wait for render to settle (500ms total in applyCameraAngle)
-            await nextFrame();
-            await nextFrame();
-            // Capture
-            const dataUri =
-              await plugin.helpers?.viewportScreenshot?.getImageDataUri({
-                width,
-                height,
-                transparency: false,
-                axes: true,
-              });
-            // R144: Capture the camera state AFTER rotation, BEFORE quality check.
-            // This is the view the user will restore when they click "恢复视角".
-            const cameraState = getCurrentCameraState(plugin);
-            if (dataUri) {
-              // Round 90: Check if the screenshot is all-black (or nearly so).
-              // If the structure hasn't rendered yet, the canvas will be
-              // uniform color. We decode a small sample of pixels from the
-              // base64 data and check variance. Skip if all-black.
-              // R99.3: Use accurate async quality check (decodes pixels)
-              const quality = await checkScreenshotQuality(dataUri);
-              if (quality === 'black' || quality === 'white') {
-                console.warn(`[capture_multi_angle] angle "${angle}" produced a ${quality} screenshot — retrying`);
-                // Try one more time with a longer delay
-                await new Promise((r) => setTimeout(r, 200));
-                await nextFrame();
-                await nextFrame();
-                const retryDataUri =
-                  await plugin.helpers?.viewportScreenshot?.getImageDataUri({
-                    width,
-                    height,
-                    transparency: false,
-                    axes: true,
-                  });
-                if (retryDataUri) {
-                  const retryQuality = await checkScreenshotQuality(retryDataUri);
-                  if (retryQuality === 'ok') {
-                    results.push({
-                      dataUri: retryDataUri,
-                      angle,
-                      label: `${cmd.label ?? cmd.recipe} - ${angle}`,
-                      cameraState: cameraState ?? undefined,
-                    });
-                  } else {
-                    // Retry also failed — use the original (with a warning)
-                    console.warn(`[capture_multi_angle] retry for "${angle}" also ${retryQuality}`);
-                    results.push({
-                      dataUri,
-                      angle,
-                      label: `${cmd.label ?? cmd.recipe} - ${angle}`,
-                      cameraState: cameraState ?? undefined,
-                    });
-                  }
-                } else {
-                  // No retry data — use original
-                  results.push({
-                    dataUri,
-                    angle,
-                    label: `${cmd.label ?? cmd.recipe} - ${angle}`,
-                    cameraState: cameraState ?? undefined,
-                  });
-                }
-              } else {
-                // Quality is ok — use the original screenshot
-                results.push({
-                  dataUri,
-                  angle,
-                  label: `${cmd.label ?? cmd.recipe} - ${angle}`,
-                  cameraState: cameraState ?? undefined,
-                });
-              }
-            }
-          } catch (err) {
-            console.warn(
-              `[capture_multi_angle] angle "${angle}" failed:`,
-              err
-            );
-          }
-        }
-
-        if (results.length === 0) {
-          return { ok: false, detail: "All captures failed" };
-        }
-
-        // R99.4: Selective measurement cleanup — only remove measurements
-        // added during this capture, not user-added ones.
-        // We compare the measurement count before and after, then remove
-        // only the delta (the ones we added).
-        if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
-          try {
-            const meas = plugin.managers.structure.measurement as any;
-            // Get current measurements (after capture — includes our additions)
-            const currentMeas = meas?.state?.items;
-            if (currentMeas && beforeMeasCount !== undefined) {
-              const currentCount = Array.isArray(currentMeas)
-                ? currentMeas.length
-                : (typeof currentMeas === 'object' ? Object.keys(currentMeas).length : 0);
-              const added = currentCount - beforeMeasCount;
-              if (added > 0) {
-                // Remove the last N measurements (the ones we added)
-                // Molstar's measurement manager supports removeLast
-                if (typeof meas.removeLast === 'function') {
-                  for (let i = 0; i < added; i++) {
-                    try { meas.removeLast(); } catch (err) { console.warn('[capture_multi_angle] removeLast failed:', err); break; }
-                  }
-                } else {
-                  // Fallback: clear all if removeLast not available
-                  meas.clear();
-                }
-              }
-            } else {
-              // Fallback: clear all if state not accessible
-              meas.clear();
-            }
-          } catch (err) {
-            console.warn("[capture_multi_angle] label cleanup failed:", err);
-          }
-        }
-
-        // Round 91/R148: Clean up interface sidechain components we added
-        // R148: Changed to match the 'interface-sidechain' tag instead of label text
-        try {
-          const structs = getStructures(plugin);
-          for (const s of structs) {
-            const toRemove: any[] = [];
-            for (const c of (s.components || [])) {
-              const tags = c?.cell?.transform?.tags;
-              const label = c?.cell?.obj?.label;
-              // Match by tag OR by label prefix (backward compatible)
-              if ((Array.isArray(tags) && tags.includes('interface-sidechain')) ||
-                  (label && (label.includes("Interface residues") || label.startsWith("Interface ")))) {
-                toRemove.push(c);
-              }
-            }
-            for (const c of toRemove) {
-              try { plugin.managers.structure.component.remove(c); } catch (err) { console.warn('[capture_multi_angle] failed to remove interface component:', err); }
-            }
-          }
-        } catch (err) { console.warn('[capture_multi_angle] interface component cleanup failed:', err); }
-
-        // R119: No background restore needed — we didn't change it (see above).
-
-        // R157: Clear selection and highlights (removes green selection box from screenshots)
-        try { plugin.managers.structure.selection.clear(); } catch (err) { console.warn('[capture_multi_angle] selection.clear failed:', err); }
-        try { plugin.managers.interactivity.lociSelects.clearHighlights(); } catch (err) { /* best-effort */ }
-        try { plugin.managers.interactivity.lociHighlights.clearHighlights(); } catch (err) { /* best-effort */ }
-
-        // R130: Restore saved camera state so structure stays visible
-        restoreCameraState(plugin);
-        await new Promise(r => setTimeout(r, 200));
-        await nextFrame();
-
-        return {
-          ok: true,
-          detail: `Captured ${results.length} angles for ${cmd.recipe}`,
-          data: {
-            recipe: cmd.recipe,
-            label: cmd.label ?? cmd.recipe,
-            screenshots: results,
-          },
-        };
-      }
 
       // ---------- Alignment ----------
       case "align_structures": {
@@ -1350,5 +1097,434 @@ export async function executeCommand(
       ok: false,
       detail: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+
+// ============================================================
+// R161: executeMultiAngleCapture — the capture_multi_angle body, extracted
+// from the executeCommand switch so it can be serialized through the
+// enqueueCapture mutex (prevents auto-capture + explicit capture races).
+// ============================================================
+
+async function executeMultiAngleCapture(
+  viewer: MolstarViewer,
+  cmd: Extract<LlmCommand, { type: "capture_multi_angle" }>
+): Promise<CommandResult> {
+  const plugin = viewer.plugin;
+  const angles = cmd.angles ?? (["front", "side", "top", "back"] as const);
+  const width = cmd.width ?? 1200;
+  const height = cmd.height ?? 800;
+
+  // Round 62: Apply recipe-specific visualization before capturing
+  const vizParams = cmd.vizParams as Record<string, unknown> | undefined;
+  // R151: Skip applyRecipeVisualization on re-capture iterations (iteration > 1).
+  // The VLM capture loop calls capture_multi_angle multiple times — the first
+  // call applies the visualization (focus, side chains, color), and subsequent
+  // calls only need to re-capture from different angles. Re-applying the
+  // visualization causes duplicate components + camera re-focus, which makes
+  // the structure disappear temporarily (blank screenshots).
+  const isRecapture = vizParams?._vlmSuggestedAngles !== undefined ||
+                      vizParams?._focusRadiusMultiplier !== undefined;
+
+  // R163: Snapshot the USER's current camera BEFORE the recipe visualization
+  // focuses the interface. Restored at the very end so the user's view is not
+  // left locked at the analysis-focused position after the LLM analysis.
+  // (On VLM-recapture iterations the camera is already back at the user view
+  // restored by the previous iteration, so re-saving is still correct.)
+  saveUserCameraState(plugin);
+
+  // R137 (code-review): measurement count BEFORE adding any labels so the
+  // cleanup later only removes the labels we add here — NOT user-added
+  // measurements. Hoisted out of the label block (MOL-004) so the
+  // finally-cleanup below can read it even when an early step throws.
+  let beforeMeasCount: number | undefined;
+  // R164 (MOL-004): set to true once the label-adding pass has actually
+  // started. The finally-cleanup only touches measurements when we know we
+  // may have added some — otherwise an early throw (before any label was
+  // added) would meas.clear() the USER's own measurements.
+  let labelsAdded = false;
+
+  // R164 (MOL-004): ALL capture cleanup, extracted into a local function so
+  // it can run from a finally block. Previously this logic only executed on
+  // the happy path — any mid-capture throw (applyRecipeVisualization
+  // internals, dynamic-import failure, render errors) skipped it entirely
+  // and leaked labels, interface components and the camera lock into every
+  // subsequent operation. Every step is individually guarded: a failing
+  // cleanup step must neither mask the original capture error nor abort the
+  // remaining cleanup steps.
+  const cleanupCapture = async (): Promise<void> => {
+    // Step 1 — R99.4 selective measurement (label-delta) cleanup: only
+    // remove the measurements added during THIS capture, not user-added
+    // ones (compares the count before/after and removes the delta).
+    try {
+      if (labelsAdded) {
+        const meas = plugin.managers.structure.measurement as any;
+        // Get current measurements (after capture — includes our additions)
+        const currentMeas = meas?.state?.items;
+        if (currentMeas && beforeMeasCount !== undefined) {
+          const currentCount = Array.isArray(currentMeas)
+            ? currentMeas.length
+            : (typeof currentMeas === 'object' ? Object.keys(currentMeas).length : 0);
+          const added = currentCount - beforeMeasCount;
+          if (added > 0) {
+            // Remove the last N measurements (the ones we added)
+            // Molstar's measurement manager supports removeLast
+            if (typeof meas.removeLast === 'function') {
+              for (let i = 0; i < added; i++) {
+                try { meas.removeLast(); } catch (err) { console.warn('[capture_multi_angle] removeLast failed:', err); break; }
+              }
+            } else {
+              // Fallback: clear all if removeLast not available
+              meas.clear();
+            }
+          }
+        } else {
+          // Fallback: clear all if state not accessible
+          meas.clear();
+        }
+      }
+    } catch (err) {
+      console.warn("[capture_multi_angle] label cleanup failed:", err);
+    }
+
+    // Step 2 — Round 91/R148 interface sidechain component cleanup
+    // (matches the 'interface-sidechain' tag instead of label text).
+    try {
+      const structs = getStructures(plugin);
+      for (const s of structs) {
+        const toRemove: any[] = [];
+        for (const c of (s.components || [])) {
+          const tags = c?.cell?.transform?.tags;
+          const label = c?.cell?.obj?.label;
+          // Match by tag OR by label prefix (backward compatible)
+          if ((Array.isArray(tags) && tags.includes('interface-sidechain')) ||
+              (label && (label.includes("Interface residues") || label.startsWith("Interface ")))) {
+            toRemove.push(c);
+          }
+        }
+        for (const c of toRemove) {
+          try { plugin.managers.structure.component.remove(c); } catch (err) { console.warn('[capture_multi_angle] failed to remove interface component:', err); }
+        }
+      }
+    } catch (err) { console.warn('[capture_multi_angle] interface component cleanup failed:', err); }
+
+    // R119: No background restore needed — we didn't change it (see above).
+
+    // Step 3 — R157/R161 clear selection and highlights (removes green
+    // selection box from the live viewer after capture). Uses deselectAll()
+    // — the clearHighlights() variant never existed on lociSelects.
+    try { clearAllSelectionVisuals(plugin); } catch (err) { console.warn('[capture_multi_angle] selection cleanup failed:', err); }
+
+    // Step 4 — R130 restore the focused analysis view first (keeps
+    // savedCameraState for potential VLM-recapture iterations that need it
+    // as angle base), then R163 restore the USER's pre-analysis view — the
+    // camera must not stay locked at the focused-interface position after
+    // the LLM analysis finishes.
+    // (User-reported: "执行完LLM分析后视角还是被锁定的")
+    try { restoreCameraStateKeep(plugin); } catch (err) { console.warn('[capture_multi_angle] camera state restore failed:', err); }
+    try { restoreUserCameraState(plugin); } catch (err) { console.warn('[capture_multi_angle] user camera restore failed:', err); }
+    // Let the restored view settle before handing control back.
+    try {
+      await new Promise(r => setTimeout(r, 200));
+      await nextFrame();
+    } catch (err) { console.warn('[capture_multi_angle] post-cleanup settle failed:', err); }
+  };
+
+  // R164 (MOL-004): the whole capture body runs inside try/finally so
+  // cleanupCapture() executes on EVERY exit path — success, the
+  // "All captures failed" early return, AND thrown errors.
+  try {
+  if (!isRecapture) {
+    await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
+    // Round 78: Reduced from 300ms to 150ms — visualization renders fast
+    // for camera focus operations; 150ms is enough for Molstar to settle
+    await new Promise((r) => setTimeout(r, 150));
+  } else {
+    // R163: recapture iterations skip applyRecipeVisualization, but the angle
+    // math below assumes the FOCUSED interface view as the rotation base.
+    // Get back to it (kept savedCameraState from the first iteration, or
+    // snapshot the current view as base when none exists yet).
+    console.log('[capture_multi_angle] Re-capture iteration — skipping applyRecipeVisualization');
+    restoreCameraStateKeep(plugin);
+  }
+
+        // Round 74: Add residue labels to the 3D view before capturing
+        // R137 (code-review): `beforeMeasCount` is hoisted above the try
+        // (MOL-004) — it is captured BEFORE adding any labels so the
+        // cleanup only removes the labels we add here — NOT user-added
+        // measurements. Previously `beforeMeasCount` was never assigned,
+        // so the cleanup fell through to `meas.clear()` which wiped every
+        // measurement in the scene (distances, angles, labels, etc.).
+        if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
+          try {
+            const meas = plugin.managers.structure.measurement as any;
+            const items = meas?.state?.items;
+            beforeMeasCount = Array.isArray(items)
+              ? items.length
+              : (typeof items === 'object' && items ? Object.keys(items).length : 0);
+          } catch (err) {
+            console.warn('[capture_multi_angle] beforeMeasCount read failed:', err);
+            beforeMeasCount = undefined;
+          }
+          // R160: Use buildResidueLoci for labels to avoid selection side effects.
+          // lociFromResidue's fallback path calls selection.clear() + structureInteractivity
+          // which creates the green selection box visible in screenshots.
+          // buildResidueLoci uses StructureElement directly (no selection).
+          const { buildResidueLoci } = await import('./commands/recipe-viz');
+          // R164 (MOL-004): labels are about to be added — from here on the
+          // finally-cleanup is allowed to remove the measurement delta.
+          labelsAdded = true;
+
+          // ----------------------------------------------------------------
+          // R163: Anti-overlap label placement (based on Molstar source
+          // analysis of text-builder.js + text.vert.js + shape/loci/label.js):
+          //
+          // 1. Each measurement label anchors at the loci bounding-sphere
+          //    center, and the default `attachment: 'middle-center'` centers
+          //    the text box EXACTLY on that anchor. With interface residues
+          //    clustered at the focused screen center, every label stacked
+          //    on the same spot ("都堆在屏幕中心").
+          // 2. `offsetX`/`offsetY` are view-space offsets applied AFTER
+          //    projection (billboard-style) — negative values are NOT clamped
+          //    (PD.Numeric min/max are UI hints only), so we can spread labels
+          //    in any direction.
+          // 3. `tether` only renders for non-middle-center attachments — it
+          //    draws a callout line from the text box back to the anchor.
+          //
+          // Placement strategy (deterministic, camera-independent):
+          //   - Cycle 6 corner/side attachments so successive labels sit on
+          //     different sides of their residue.
+          //   - Golden-angle spiral offsets (i·137.5°) push each label further
+          //     out on its own ray, so no two labels share a screen region.
+          //   - NO background box (user request) — readability comes from a
+          //     thin dark text outline (borderWidth is a glyph stroke, not a
+          //     box) + per-chain text colors.
+          // ----------------------------------------------------------------
+          const ATTACHMENTS = [
+            'top-left', 'bottom-right', 'top-right', 'bottom-left', 'middle-left', 'middle-right',
+          ] as const;
+          const GOLDEN_ANGLE = 2.39996; // radians (~137.5°)
+          let labelIdx = 0;
+
+          for (const lbl of cmd.labels) {
+            try {
+              if (lbl.chain !== undefined && lbl.resno !== undefined) {
+                // R160: single-residue loci (non-destructive, no green box)
+                let loci: unknown = null;
+                const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
+                if (singleResult) {
+                  loci = singleResult.loci;
+                }
+                // Fallback to lociFromResidue if buildResidueLoci failed
+                if (!loci) {
+                  loci = await lociFromResidue(viewer, {
+                    chain: lbl.chain,
+                    resno: lbl.resno,
+                  });
+                }
+                if (loci) {
+                  // R155: Use chain-specific colors for labels
+                  // Chain A → red, B → blue, C → green, D → orange, etc.
+                  const chainColors: Record<string, number> = {
+                    'A': 0xe74c3c, // red
+                    'B': 0x3498db, // blue
+                    'C': 0x2ecc71, // green
+                    'D': 0xe67e22, // orange
+                    'E': 0x9b59b6, // purple
+                    'F': 0x1abc9c, // teal
+                  };
+                  const labelColor = chainColors[lbl.chain] ?? 0xffffff; // white default
+
+                  // R163 anti-overlap placement for this label
+                  const i = labelIdx++;
+                  const attachment = ATTACHMENTS[i % ATTACHMENTS.length];
+                  const ring = Math.floor(i / ATTACHMENTS.length);
+                  const theta = i * GOLDEN_ANGLE;
+                  // View-space radius in label units: first 6 labels sit one
+                  // ring out (~1 box width), later rings step further away.
+                  const radius = 2.2 + ring * 2.8;
+                  const offsetX = +(Math.cos(theta) * radius).toFixed(2);
+                  const offsetY = +(Math.sin(theta) * radius).toFixed(2);
+
+                  await plugin.managers.structure.measurement.addLabel(loci, {
+                    labelParams: {
+                      customText: lbl.text ?? "",
+                      textColor: labelColor,
+                      // Molstar's own measurement labels use textSize 0.5 ×
+                      // sizeFactor 1.0; 0.5/0.5 keeps them compact but legible.
+                      textSize: cmd.labelFontSize ?? 0.5,
+                      sizeFactor: 0.5,
+                      offsetX,
+                      offsetY,
+                      offsetZ: 0.3,               // slight lift, no camera push
+                      borderWidth: 0.18,           // glyph outline stroke
+                      borderColor: 0x101010,       // dark outline → readable on any bg
+                      background: false,           // R163: NO background box (user request)
+                      attachment,
+                      tether: true,                // callout line back to the residue
+                      tetherLength: 2.0,           // R163: visible callout (VLM-verified)
+                      tetherBaseWidth: 0.2,        // R163: visible line width
+                    },
+                  } as any);
+                }
+              }
+            } catch (err) {
+              console.warn(
+                `[capture_multi_angle] label "${lbl.text}" failed:`,
+                err
+              );
+            }
+          }
+          // Round 78: Reduced from 100ms to 50ms — labels render synchronously
+          await new Promise((r) => setTimeout(r, 50));
+        }
+
+        // R119: DO NOT change background color for screenshots.
+        // Previous code set bg to white/cream which caused the viewer to go
+        // white screen when the restore step didn't execute (e.g. non-blocking
+        // auto-capture failure). Screenshots work fine with the current bg.
+
+        const results: Array<{
+          dataUri: string;
+          angle: string;
+          label: string;
+          cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] };
+        }> = [];
+
+        // R161: Clear selection and highlights BEFORE capturing (not after)
+        // This ensures no green selection box appears in any screenshot.
+        // R161 fix: the old `lociSelects.clearHighlights()` call was a no-op
+        // (method doesn't exist in the prebuilt bundle — TypeError swallowed
+        // by try/catch), so green boxes persisted. deselectAll() is the real API.
+        await clearAllSelectionVisualsAndWait(plugin, 120);
+
+        // R130: Save camera state before capture loop, restore after
+        // R143 (code-review fix): Save AFTER applyRecipeVisualization so the
+        // saved state is the focused-interface view. Then RESTORE before each
+        // angle so rotations don't accumulate (side→top was rotating from
+        // the side position, not from front, causing overlapping screenshots).
+        saveCameraState(plugin);
+        for (const angle of angles) {
+          try {
+            // R143: Restore to saved state before EACH angle so rotations
+            // are absolute (from the focused view), not cumulative.
+            // This fixes the bug where "top" was a tilted side view instead
+            // of a true top-down view.
+            if (angle !== 'front') {
+              restoreCameraStateKeep(plugin);
+            }
+            // R130: applyCameraAngle rotates from current position (no reset)
+            await applyCameraAngle(plugin, angle);
+            // R130: Wait for render to settle (500ms total in applyCameraAngle)
+            await nextFrame();
+            await nextFrame();
+            // Capture
+            const dataUri =
+              await plugin.helpers?.viewportScreenshot?.getImageDataUri({
+                width,
+                height,
+                transparency: false,
+                axes: true,
+              });
+            // R144: Capture the camera state AFTER rotation, BEFORE quality check.
+            // This is the view the user will restore when they click "恢复视角".
+            const cameraState = getCurrentCameraState(plugin);
+            if (dataUri) {
+              // Round 90: Check if the screenshot is all-black (or nearly so).
+              // If the structure hasn't rendered yet, the canvas will be
+              // uniform color. We decode a small sample of pixels from the
+              // base64 data and check variance. Skip if all-black.
+              // R99.3: Use accurate async quality check (decodes pixels)
+              const quality = await checkScreenshotQuality(dataUri);
+              if (quality === 'black' || quality === 'white') {
+                console.warn(`[capture_multi_angle] angle "${angle}" produced a ${quality} screenshot — retrying`);
+                // Try one more time with a longer delay
+                await new Promise((r) => setTimeout(r, 200));
+                await nextFrame();
+                await nextFrame();
+                const retryDataUri =
+                  await plugin.helpers?.viewportScreenshot?.getImageDataUri({
+                    width,
+                    height,
+                    transparency: false,
+                    axes: true,
+                  });
+                if (retryDataUri) {
+                  const retryQuality = await checkScreenshotQuality(retryDataUri);
+                  if (retryQuality === 'ok') {
+                    results.push({
+                      dataUri: retryDataUri,
+                      angle,
+                      label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                      cameraState: cameraState ?? undefined,
+                    });
+                  } else {
+                    // Retry also failed — use the original (with a warning)
+                    console.warn(`[capture_multi_angle] retry for "${angle}" also ${retryQuality}`);
+                    results.push({
+                      dataUri,
+                      angle,
+                      label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                      cameraState: cameraState ?? undefined,
+                    });
+                  }
+                } else {
+                  // No retry data — use original
+                  results.push({
+                    dataUri,
+                    angle,
+                    label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                    cameraState: cameraState ?? undefined,
+                  });
+                }
+              } else {
+                // Quality is ok — use the original screenshot
+                results.push({
+                  dataUri,
+                  angle,
+                  label: `${cmd.label ?? cmd.recipe} - ${angle}`,
+                  cameraState: cameraState ?? undefined,
+                });
+              }
+            }
+          } catch (err) {
+            console.warn(
+              `[capture_multi_angle] angle "${angle}" failed:`,
+              err
+            );
+          }
+        }
+
+        if (results.length === 0) {
+          return { ok: false, detail: "All captures failed" };
+        }
+
+        // R164 (MOL-004): the label-delta removal, interface-component
+        // removal, selection clearing and camera restores all live in
+        // cleanupCapture() above — executed by the finally block below on
+        // EVERY exit path (including this early return, which previously
+        // skipped the cleanup and leaked labels/components/camera-lock).
+
+        return {
+          ok: true,
+          detail: `Captured ${results.length} angles for ${cmd.recipe}`,
+          data: {
+            recipe: cmd.recipe,
+            label: cmd.label ?? cmd.recipe,
+            screenshots: results,
+          },
+        };
+  } catch (err) {
+    // R164 (MOL-004): log, then let the finally block run the cleanup BEFORE
+    // the error propagates — the caller (executeCommand's outer try/catch →
+    // { ok: false }) still sees the original failure, but the viewer is no
+    // longer left with leaked labels/components/camera-lock.
+    console.warn('[capture_multi_angle] capture failed — running cleanup before rethrow:', err);
+    throw err;
+  } finally {
+    // Cleanup must never mask the original error: every step inside
+    // cleanupCapture is individually guarded, so this await cannot reject.
+    await cleanupCapture();
   }
 }

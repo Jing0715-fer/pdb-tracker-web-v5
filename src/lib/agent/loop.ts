@@ -16,7 +16,7 @@
  * idle when waiting on tool results from the client.
  */
 
-import { deepFreeze, newMessageId, type CallId } from './types';
+import { deepFreeze, newMessageId, type CallId, type Seq } from './types';
 import { BlockAssembler } from './llm/assembler';
 import type {
   AssistantMessage,
@@ -32,6 +32,10 @@ import { Session } from './session';
 import { Inbox, type InboxMessage } from './inbox';
 import { AgentContext } from './context';
 import type { ToolDefinition } from './tools/types';
+// R164 (AGENT-001): used in drive() to emit approval/asked events for
+// approval-required tools so the client UI + tool-results gate both
+// see the approval decision.
+import { requiresApproval } from './pdb-tools';
 
 export type AgentStatus = 'idle' | 'running';
 
@@ -90,6 +94,24 @@ export class AgentLoop {
     );
   }
 
+  /**
+   * R164 (AGENT-003): Regenerate — re-send the last user message but mark it
+   * with surfaceOp.replace so the loop, when it appends this claimed message,
+   * drops the previous assistant turn + tool results from the model-visible
+   * surface (while preserving them in the durable event log for audit).
+   */
+  followupWithReplace(content: string, replaceStart: Seq, replaceEnd: Seq): void {
+    this.inbox.send(
+      {
+        content: [{ type: 'text', text: content }],
+        inboxKind: 'user',
+        surfaceOp: { op: 'replace', start: replaceStart, end: replaceEnd },
+      },
+      'next-turn',
+      true,
+    );
+  }
+
   /** Steer mid-turn (wakes the next step). */
   steer(content: string): void {
     this.inbox.send(
@@ -121,6 +143,25 @@ export class AgentLoop {
    * calls drive() again.
    */
   async drive(): Promise<DriveOutcome> {
+    // R164 (AGENT-004): Orphan tool-call recovery. When the client drops
+    // mid-turn (network loss, page close, user navigates away), the server
+    // persists `tool/call` events (loop.ts:317-323) but no `tool/result`
+    // ever follows. The next drive() previously saw lastEvent.type !==
+    // 'tool/result' → midTurnContinuation=false → returned done, leaving
+    // the surface with an assistant message containing `tool_calls`
+    // blocks but NO matching tool-result messages — a wire-format
+    // contract violation that breaks the next LLM call (OpenAI/ZAI both
+    // require every assistant tool_calls message to be followed by tool
+    // messages for each call_id, returning 400 otherwise).
+    //
+    // Fix: at drive() entry, walk the surface for any assistant/message
+    // whose tool-call callIds have no matching tool/result event, and
+    // synthesize tool/result events with `error: 'client did not return
+    // result (session recovered)'` for each orphan callId. Also close
+    // the orphaned turn with turn/end { kind: 'interrupted' } so the new
+    // user message opens a fresh turn.
+    this.recoverOrphanedToolCalls();
+
     // Detect mid-turn continuation: the last event is a tool/result (the turn
     // is still open, waiting for the next step after the client executed a
     // tool). In that case we drive the next step WITHOUT requiring new inbox
@@ -176,8 +217,13 @@ export class AgentLoop {
     this.session.append('step/start', { turn: this.turn, step: this.step });
 
     // Append claimed user messages.
+    // R164 (AGENT-003): honor an optional surfaceOp carried on the inbox
+    // message (used by regenerate to drop the previous assistant turn).
     for (const m of claimed) {
-      this.session.append('user/message', m, { surfaceOp: { op: 'append' } });
+      const { surfaceOp: carriedOp, ...msgWithoutOp } = m;
+      this.session.append('user/message', msgWithoutOp, {
+        surfaceOp: carriedOp ?? { op: 'append' },
+      });
     }
 
     // Assemble prompt.
@@ -229,27 +275,103 @@ export class AgentLoop {
     };
 
     // Stream + accumulate.
+    // R164 (AGENT-005): retry the LLM stream on 429 / transient network
+    // errors with 5s / 15s / 45s backoff (mirroring the VLM route's
+    // schedule). Previously a single 429 from GLM-4.6 killed the whole
+    // turn — the legacy /api/llm/agent/round route had a 2-retry 5s·2^n
+    // backoff, but the new agent path had zero retries.
     const prepared = this.ctx.llm.prepareCall({
       provider: effectiveProvider,
       model: effectiveModel,
       temperature: settings.temperature ?? this.options.temperature,
       maxTokens: this.options.maxTokens,
     });
-    const assembler = new BlockAssembler();
-    const chunkSeqs: number[] = [];
+    let assembler = new BlockAssembler();
+    let chunkSeqs: number[] = [];
+    const LLM_BACKOFF_SCHEDULE_MS = [5_000, 15_000, 45_000];
+    const isRateLimitError = (err: unknown): boolean => {
+      const e = err as { status?: number; statusCode?: number; message?: string; code?: number };
+      if (e?.status === 429 || e?.statusCode === 429 || e?.code === 429) return true;
+      const msg = String(e?.message ?? '');
+      return /429|rate.?limit|too many requests/i.test(msg);
+    };
+    const isTransientError = (err: unknown): boolean => {
+      const msg = String((err as { message?: string })?.message ?? '');
+      return /timeout|etimedout|econnreset|econnrefused|socket hang up|network|fetch failed|aborted/i.test(msg);
+    };
     try {
-      for await (const chunk of prepared.stream(request)) {
-        const ev = this.session.append('assistant/chunk', {
-          turn: this.turn,
-          step: this.step,
-          chunk,
-        });
-        chunkSeqs.push(ev.seq);
-        assembler.push(chunk);
+      let attempt = 0;
+      while (true) {
+        // Check abort BEFORE each attempt — if the user cancelled the
+        // session or the controller aborted, stop retrying.
+        if (this.controller.signal.aborted) {
+          throw new DOMException('Agent loop aborted', 'AbortError');
+        }
+        try {
+          for await (const chunk of prepared.stream(request)) {
+            const ev = this.session.append('assistant/chunk', {
+              turn: this.turn,
+              step: this.step,
+              chunk,
+            });
+            chunkSeqs.push(ev.seq);
+            assembler.push(chunk);
+          }
+          break; // success — exit retry loop
+        } catch (err) {
+          // If the abort signal fired during streaming, don't retry.
+          if (this.controller.signal.aborted) throw err;
+          const retryable = isRateLimitError(err) || isTransientError(err);
+          if (!retryable || attempt >= LLM_BACKOFF_SCHEDULE_MS.length) {
+            // Non-retryable or schedule exhausted — rethrow to outer catch.
+            throw err;
+          }
+          const baseMs = LLM_BACKOFF_SCHEDULE_MS[attempt]!;
+          // R164 (VLM-008 mirror): jitter by 0-500ms so concurrent
+          // sessions retrying in lockstep don't thundering-herd the LLM.
+          const waitMs = baseMs + Math.floor(Math.random() * 500);
+          console.warn(
+            `[agent-loop] LLM stream attempt ${attempt + 1} failed ` +
+            `(${isRateLimitError(err) ? '429 rate limit' : 'transient error'}) — ` +
+            `retrying in ${(waitMs / 1000).toFixed(1)}s ` +
+            `(${LLM_BACKOFF_SCHEDULE_MS.length - attempt} retries left). error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          // R164: reset the assembler + chunkSeqs so the retry's chunks
+          // don't concatenate with the failed attempt's partial chunks
+          // (which would produce garbled assistant/message content).
+          // The old chunk events stay in the durable log for audit but
+          // are NOT surface-eligible, so the LLM never sees them.
+          assembler = new BlockAssembler();
+          chunkSeqs = [];
+          // Interruptible sleep — if abort fires during the wait, exit
+          // immediately instead of waiting the full backoff.
+          await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(() => {
+              this.controller.signal.removeEventListener('abort', onAbort);
+              resolve();
+            }, waitMs);
+            const onAbort = () => {
+              clearTimeout(t);
+              reject(new DOMException('Agent loop aborted during backoff', 'AbortError'));
+            };
+            this.controller.signal.addEventListener('abort', onAbort, { once: true });
+          }).catch((e) => {
+            // If the abort fired during the sleep, re-throw to the outer
+            // catch block so turn/end { kind: 'aborted' } is emitted.
+            throw e;
+          });
+          attempt += 1;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.session.append('turn/end', { turn: this.turn, reason: { kind: 'error', error: msg } });
+      const isAborted = (err as { name?: string })?.name === 'AbortError' || this.controller.signal.aborted;
+      this.session.append('turn/end', {
+        turn: this.turn,
+        reason: isAborted
+          ? { kind: 'aborted', reason: msg }
+          : { kind: 'error', error: msg },
+      });
       this.setStatusIdle();
       return { kind: 'error', error: msg };
     }
@@ -266,7 +388,13 @@ export class AgentLoop {
       return { kind: 'error', error: finish.reason };
     }
 
-    const message = assembler.buildMessage(this.options.provider, this.options.model);
+    // R164 (AGENT-008): use the effective provider/model resolved from
+    // per-session settings, not the constructor-time options. Previously
+    // switching provider mid-session mis-attributed the assistant message
+    // source (loop.ts:269 used this.options.provider instead of the
+    // effectiveProvider resolved at lines 197-200). This broke the audit
+    // trail and downstream provider-aware logic.
+    const message = assembler.buildMessage(effectiveProvider, effectiveModel);
     this.session.append(
       'assistant/message',
       {
@@ -284,6 +412,13 @@ export class AgentLoop {
     );
 
     // Append tool/call events for each.
+    // R164 (AGENT-001): for approval-required tools (export_snapshot,
+    // clear_chat — client-side tools), also append an `approval/asked`
+    // event so the client UI can render the ApprovalPanel from the
+    // session event stream (not just from the drive() return value).
+    // Without this, resumed sessions don't see the pending approval
+    // (the ApprovalPanel only renders from live drive() tool-calls,
+    // not from replayed events).
     for (const tc of toolCalls) {
       this.session.append('tool/call', {
         turn: this.turn,
@@ -292,6 +427,13 @@ export class AgentLoop {
         name: tc.name,
         arguments: tc.arguments,
       });
+      if (requiresApproval(tc.name)) {
+        this.session.append('approval/asked', {
+          callId: tc.id as CallId,
+          toolName: tc.name,
+          summary: `Tool ${tc.name} requires approval before execution`,
+        });
+      }
     }
 
     const assistantText = message.content
@@ -353,33 +495,18 @@ export class AgentLoop {
     }>,
   ): void {
     for (const r of results) {
-      // For screenshot results (capture_multi_angle, capture_snapshot),
-      // the dataUri fields are large base64 strings. Don't truncate them —
-      // the full data is needed for the UI to render images.
-      // Use a larger limit (2MB) for these, normal limit (8000) for others.
+      // R165 (UI-003): screenshot results (capture_multi_angle,
+      // capture_snapshot, recapture_screenshot) are persisted UNSTRIPPED —
+      // the full data URIs must survive in the tool/result event so resumed
+      // sessions can render the images (the client's in-memory executionsRef
+      // is lost on reload; previously the R128 stripping replaced every
+      // dataUri with "[image data omitted — front]", which broke <img src>
+      // after a resume). The LLM never sees the base64 payloads: the
+      // SurfaceManager replaces long data URIs with placeholders when
+      // projecting the model-visible history (session/surface.ts).
       const isScreenshot = r.name === 'capture_multi_angle' || r.name === 'capture_snapshot' || r.name === 'recapture_screenshot';
-      // R128: For screenshot results, DON'T send the actual base64 data URIs
-      // to the LLM — they're huge (2MB each) and blow up the context window.
-      // The LLM can't see images via tool results anyway. Just send a summary.
-      // The full data is still stored in the session events for the UI.
       let resultToSend = r.result;
-      if (isScreenshot && r.ok && resultToSend) {
-        try {
-          const parsed = typeof resultToSend === 'string' ? JSON.parse(resultToSend) : JSON.parse(JSON.stringify(resultToSend));
-          // Strip dataUri from screenshots — replace with placeholder
-          if (parsed?.data?.screenshots && Array.isArray(parsed.data.screenshots)) {
-            const angles = parsed.data.screenshots.map((s: any) => s.angle || s.label || 'unknown');
-            parsed.data.screenshots = parsed.data.screenshots.map((s: any) => ({
-              angle: s.angle || '',
-              label: s.label || '',
-              dataUri: `[image data omitted — ${s.angle || s.label || 'screenshot'}]`,
-            }));
-            parsed.detail = `Captured ${angles.length} screenshots (${angles.join(', ')})`;
-          }
-          resultToSend = parsed;
-        } catch { /* keep original if parsing fails */ }
-      }
-      const maxLen = isScreenshot ? 500 : 3000; // R128: Screenshots only need 500 chars (no image data)
+      let maxLen = 3000;
       // R126: For pdb_analyze, strip the raw interaction list to keep only summary
       if (r.name === 'pdb_analyze' && r.ok && resultToSend) {
         try {
@@ -388,7 +515,9 @@ export class AgentLoop {
           if (analysisData) {
             // Keep only summary fields, not the full interaction list
             const summary: Record<string, unknown> = {};
-            for (const key of ['total', 'hbonds', 'salt_bridges', 'hydrophobic', 'chain1', 'chain2', 'ligand', 'recipe']) {
+            for (const key of ['total', 'hbonds', 'salt_bridges', 'hydrophobic', 'chain1', 'chain2', 'ligand', 'recipe',
+              // R161: pairwise_interactions summary fields
+              'n_chains', 'chains', 'n_pairs', 'n_contact_pairs', 'significant_pairs', 'best_pair', 'note', 'intra_chain']) {
               if (analysisData[key] !== undefined) summary[key] = analysisData[key];
             }
             // Include only top 5 interactions (not all 17+)
@@ -400,6 +529,28 @@ export class AgentLoop {
               }));
               summary.total_interactions = analysisData.interactions.length;
             }
+            // R161: For pairwise_interactions, include a compact per-pair summary
+            // so the LLM can report on EVERY chain pair (this is the whole point
+            // of the recipe — the LLM must see per-pair counts).
+            if (Array.isArray(analysisData.pairs)) {
+              summary.pairs = analysisData.pairs.map((p: any) => ({
+                chain1: p.chain1, chain2: p.chain2,
+                in_contact: p.in_contact, intra_chain: p.intra_chain,
+                total: p.total, salt_bridges: p.salt_bridges,
+                hbonds: p.hbonds, hydrophobic: p.hydrophobic,
+                min_distance_A: p.min_distance_A,
+                top_interactions: Array.isArray(p.interactions)
+                  ? p.interactions.slice(0, 3).map((i: any) => ({
+                      type: i.type, resname1: i.resname1, resno1: i.resno1,
+                      resname2: i.resname2, resno2: i.resno2,
+                      chain1: i.chain1, chain2: i.chain2, distance_A: i.distance_A,
+                    }))
+                  : [],
+              }));
+            }
+            // R161: Tell the LLM screenshots are automatic — prevents it from
+            // calling capture_multi_angle again and duplicating the capture.
+            summary._screenshot_note = 'Multi-angle screenshots + VLM quality check are running automatically in the background. Do NOT call capture_multi_angle / recapture_screenshot for this analysis.';
             // Replace the full data with the summary
             if (parsed?.analysisResult?.data?.data) {
               parsed.analysisResult.data.data = summary;
@@ -407,11 +558,24 @@ export class AgentLoop {
               parsed.analysisResult.data = summary;
             }
             resultToSend = parsed;
+            // R161: pairwise summaries carry per-pair data — allow more chars
+            if (Array.isArray(analysisData.pairs)) {
+              maxLen = Math.max(maxLen, 12000);
+            }
           }
         } catch { /* keep original if parsing fails */ }
       }
       const content: ContentBlock[] = r.ok
-        ? [{ type: 'text', text: JSON.stringify(resultToSend ?? {}).slice(0, maxLen) }]
+        ? [{
+            type: 'text',
+            // R165 (UI-003): screenshot results are NOT length-truncated at
+            // this layer — truncation for the LLM happens in
+            // SurfaceManager.deriveMessages (data-URI placeholders), so the
+            // persisted event keeps the full image payload.
+            text: isScreenshot
+              ? JSON.stringify(resultToSend ?? {})
+              : JSON.stringify(resultToSend ?? {}).slice(0, maxLen),
+          }]
         : [{ type: 'text', text: (r.error || 'Tool execution failed').slice(0, 500) }]; // R126: Truncate error too
       const toolResultBlock: ToolResultBlock = {
         type: 'tool-result',
@@ -479,6 +643,11 @@ export class AgentLoop {
         guards: [],
         parentSignal: this.controller.signal,
         onDeferContext: (msg) => this.inject(msg),
+        // R165 (AGENT-007): thread the LLM's tool-call id through dispatch so
+        // a hypothetical approval-required server-side tool would key its
+        // pending approval promise by the SAME id the client sees in the
+        // approval/asked event / uses on the /approval route.
+        callId: call.callId,
       });
       this.submitToolResults([
         {
@@ -498,6 +667,107 @@ export class AgentLoop {
   private setStatusIdle(): void {
     this.status = 'idle';
     this.ctx.emit('agent/status', { sessionId: this.session.id, status: 'idle' });
+  }
+
+  /**
+   * R164 (AGENT-004): Recover from orphaned tool/call events.
+   *
+   * When the client drops mid-turn (network loss, page close, user
+   * navigates away), the server persists `tool/call` events but no
+   * `tool/result` ever follows. The next LLM call sees the assistant
+   * message with `tool_calls` blocks but no matching tool messages →
+   * 400 "messages with tool_calls must be followed by tool messages".
+   *
+   * This method walks the event log, collects all `tool/call` callIds
+   * with no matching `tool/result`, and synthesizes a `tool/result`
+   * event for each with `error: 'client did not return result
+   * (session recovered)'`. If any orphans were recovered, also closes
+   * the orphaned turn with `turn/end { kind: 'interrupted' }` so the
+   * next drive() opens a fresh turn for the new user message.
+   *
+   * Idempotent — safe to call on every drive(). No-op if no orphans.
+   */
+  private recoverOrphanedToolCalls(): void {
+    const events = this.session.events_;
+    if (events.length === 0) return;
+
+    // Collect all callIds that already have a tool/result event.
+    const resolvedCallIds = new Set<string>();
+    // Collect all (callId, name, turn, step) tuples from tool/call events.
+    const toolCallTuples: Array<{ callId: string; name: string; turn: number; step: number }> = [];
+    for (const ev of events) {
+      if (ev.type === 'tool/result') {
+        const data = ev.data as { message?: { content?: Array<{ callId?: string }> } };
+        // The tool-result message's content[0].callId is the canonical id.
+        const callId = data.message?.content?.[0]?.callId;
+        if (callId) resolvedCallIds.add(callId);
+      } else if (ev.type === 'tool/call') {
+        const data = ev.data as { callId: string; name: string; turn: number; step: number };
+        toolCallTuples.push({
+          callId: data.callId,
+          name: data.name,
+          turn: data.turn,
+          step: data.step,
+        });
+      }
+    }
+
+    // Find orphans = toolCallTuples whose callId is not in resolvedCallIds.
+    // Also: a callId may appear in multiple tool/call events if the LLM
+    // called the same tool twice with the same id (rare but possible).
+    // The recovery synthesizes ONE tool/result per orphaned callId.
+    const seenOrphans = new Set<string>();
+    const orphans = toolCallTuples.filter((t) => {
+      if (resolvedCallIds.has(t.callId)) return false;
+      if (seenOrphans.has(t.callId)) return false;
+      seenOrphans.add(t.callId);
+      return true;
+    });
+
+    if (orphans.length === 0) return;
+
+    console.warn(
+      `[agent-loop] R164 (AGENT-004): recovering ${orphans.length} orphaned tool/call event(s) ` +
+      `— synthesizing tool/result with error for each. orphans: ${orphans.map((o) => o.name + ':' + o.callId).join(', ')}`,
+    );
+
+    // Synthesize a tool/result for each orphan. Use submitToolResults so the
+    // surface manager and persistence layer both stay consistent. Each
+    // recovery result is marked as an error so the LLM knows the tool call
+    // didn't complete and can retry or move on.
+    this.submitToolResults(
+      orphans.map((o) => ({
+        callId: o.callId as CallId,
+        name: o.name,
+        ok: false,
+        error: 'client did not return result (session recovered) — tool call was abandoned when the client disconnected mid-turn',
+      })),
+    );
+
+    // If the last event is now a tool/result (we just synthesized some) but
+    // the surface also contains the orphaned assistant/message with tool_calls
+    // followed by these new tool/results, the turn is logically closed. Emit
+    // turn/end { kind: 'interrupted' } so the next user message opens a fresh
+    // turn instead of treating the synthesized tool/results as a mid-turn
+    // continuation (which would skip the inbox claim and re-stream without
+    // the user's new message).
+    const lastEv = this.session.events_[this.session.events_.length - 1];
+    if (lastEv && lastEv.type === 'tool/result') {
+      // Only close if there's an open turn (no turn/end after the last turn/start).
+      let hasOpenTurn = false;
+      for (let i = events.length - 1; i >= 0; i--) {
+        const ev = events[i];
+        if (ev.type === 'turn/end') break;
+        if (ev.type === 'turn/start') { hasOpenTurn = true; break; }
+      }
+      if (hasOpenTurn) {
+        this.session.append('turn/end', {
+          turn: this.turn,
+          reason: { kind: 'interrupted' },
+        });
+        console.log('[agent-loop] R164: closed orphaned turn with turn/end { interrupted }');
+      }
+    }
   }
 
   /**

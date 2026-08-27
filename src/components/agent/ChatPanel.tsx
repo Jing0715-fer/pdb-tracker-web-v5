@@ -104,6 +104,12 @@ export function AgentChatPanel() {
           setHistoryOpen(false);
           return;
         }
+        // UI-005: if a modal dialog is open (e.g. the screenshot zoom
+        // overlay, or any shadcn dialog), it owns the Escape key and closes
+        // itself — don't blur the chat input underneath it.
+        if (document.querySelector('[role="dialog"][aria-modal="true"]')) {
+          return;
+        }
         inputRef.current?.blur();
         return;
       }
@@ -202,13 +208,15 @@ export function AgentChatPanel() {
             variant="outline"
             className={cn(
               'h-4 px-1.5 text-[10px] font-normal shrink-0',
-              session.connected
-                ? 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10'
-                : 'border-amber-500/40 text-amber-600 bg-amber-500/10',
+              session.sseDead
+                ? 'border-red-500/40 text-red-600 bg-red-500/10'
+                : session.connected
+                  ? 'border-emerald-500/40 text-emerald-600 bg-emerald-500/10'
+                  : 'border-amber-500/40 text-amber-600 bg-amber-500/10',
             )}
           >
-            <span className={cn('inline-block h-1.5 w-1.5 rounded-full mr-1', session.connected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse')} />
-            {session.connected ? 'connected' : 'connecting'}
+            <span className={cn('inline-block h-1.5 w-1.5 rounded-full mr-1', session.sseDead ? 'bg-red-500' : session.connected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse')} />
+            {session.sseDead ? 'disconnected' : session.connected ? 'connected' : 'connecting'}
           </Badge>
           {session.sessionId && (
             <span className="text-[10px] text-claude-text-muted font-mono truncate">
@@ -348,6 +356,27 @@ export function AgentChatPanel() {
         </button>
       )}
       </div>
+
+      {/* UI-010: SSE stream gave up (retry cap / fatal error) — offer a
+          refresh instead of an eternally pulsing "connecting" badge. */}
+      {session.sseDead && (
+        <div
+          role="alert"
+          className="mx-3 mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span>会话连接丢失（服务器不可达或已重启），实时更新已停止。请刷新页面以恢复。</span>
+            <button
+              onClick={() => window.location.reload()}
+              className="shrink-0 flex items-center gap-1 h-6 px-2 rounded border border-red-500/40 hover:bg-red-500/20 transition-colors"
+              title="刷新页面"
+            >
+              <RotateCw className="h-3 w-3" />
+              刷新
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Error banner */}
       {session.error && (

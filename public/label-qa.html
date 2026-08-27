@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Label Rendering QA — Molstar</title>
+<style>
+  body { margin:0; font-family:system-ui; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
+  .header { padding:6px 12px; background:#000; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .header button { padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
+  .header button.r163 { background:#2ecc71; color:#000; font-weight:bold; }
+  #viewer { flex:1; position:relative; background:#fff; min-height:300px; }
+  #viewer canvas { display:block; }
+  #result { height:42vh; background:#000; padding:6px; overflow:auto; }
+  #result img { max-height:38vh; border:1px solid #444; }
+  #log { height:80px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:4px; overflow-y:auto; }
+</style>
+</head>
+<body>
+<div class="header">
+  <button id="btnOld">OLD (textSize 0.8, sizeFactor 0.6, offsetZ 2.0, opacity 0.7, black box)</button>
+  <button id="btnNew">R162 (textSize 0.45, sizeFactor 0.33, offsetZ 0.6, opacity 0.42, black box)</button>
+  <button id="btnR163" class="r163">R163 anti-overlap (no bg box, golden-angle spiral, 6 attachments)</button>
+  <button id="btnClear">Clear labels</button>
+  <span id="status">loading molstar…</span>
+</div>
+<div id="viewer"></div>
+<div id="result"></div>
+<div id="log"></div>
+
+<script src="/molstar.js"></script>
+<script>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+function log(m) { logEl.innerHTML += '[' + new Date().toLocaleTimeString() + '] ' + m + '<br>'; logEl.scrollTop = 1e9; }
+
+let viewer = null, plugin = null;
+
+// 15 interface residues from the 4HHB A-B pairwise analysis (real data,
+// matches what extractResidueLabels returns for the pairwise_interactions recipe)
+const INTERFACE_RESIDUES = [
+  { chain: 'A', resno: 31,  text: 'R31'  },
+  { chain: 'B', resno: 127, text: 'Q127' },
+  { chain: 'A', resno: 122, text: 'H122' },
+  { chain: 'B', resno: 30,  text: 'R30'  },
+  { chain: 'A', resno: 34,  text: 'L34'  },
+  { chain: 'B', resno: 124, text: 'P124' },
+  { chain: 'A', resno: 107, text: 'V107' },
+  { chain: 'B', resno: 111, text: 'V111' },
+  { chain: 'A', resno: 119, text: 'P119' },
+  { chain: 'B', resno: 55,  text: 'M55'  },
+  { chain: 'A', resno: 33,  text: 'V33'  },
+  { chain: 'B', resno: 128, text: 'A128' },
+  { chain: 'A', resno: 111, text: 'A111' },
+  { chain: 'B', resno: 115, text: 'A115' },
+  { chain: 'A', resno: 123, text: 'A123' },
+  { chain: 'B', resno: 34,  text: 'V34'  },
+  { chain: 'A', resno: 110, text: 'A110' },
+  { chain: 'B', resno: 122, text: 'F122' },
+  { chain: 'A', resno: 120, text: 'A120' },
+  { chain: 'B', resno: 51,  text: 'P51'  },
+  { chain: 'A', resno: 125, text: 'P125' },
+];
+
+const chainColors = { A: 0xe74c3c, B: 0x3498db, C: 0x2ecc71, D: 0xe67e22 };
+
+function buildResidueLoci(refs) {
+  const bundle = window.molstar;
+  const SE = bundle?.lib?.structure?.StructureElement;
+  const SP = bundle?.lib?.structure?.StructureProperties;
+  if (!SE || !SP) return null;
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  if (!structs.length) return null;
+  const data = structs[0]?.cell?.obj?.data;
+  if (!data) return null;
+  const refSet = new Set(refs.map(r => `${r.chain}:${r.resno}`));
+  const elementsByUnit = new Map();
+  for (const unit of data.units) {
+    if (unit.kind !== 0) continue;
+    const indices = [];
+    for (let i = 0; i < unit.elements.length; i++) {
+      const loc = SE.Location.create(data, unit, i);
+      const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+      const resno = SP.residue.auth_seq_id(loc);
+      if (refSet.has(`${chainId}:${resno}`)) indices.push(i);
+    }
+    if (indices.length > 0) elementsByUnit.set(unit, indices);
+  }
+  if (elementsByUnit.size === 0) return null;
+  const elements = [];
+  elementsByUnit.forEach((indices, unit) => elements.push({ unit, indices }));
+  return new SE.Loci(data, elements);
+}
+
+async function addLabels(mode) {
+  const meas = plugin.managers.structure.measurement;
+  // focus interface first (minRadius matches applyRecipeVisualization)
+  const allRefs = INTERFACE_RESIDUES.map(r => ({ chain: r.chain, resno: r.resno }));
+  const focusLoci = buildResidueLoci(allRefs);
+  if (focusLoci) {
+    plugin.managers.camera.focusLoci(focusLoci, { minRadius: 40 });
+    await new Promise(r => setTimeout(r, 600));
+  }
+  let idx = 0;
+  for (const lbl of INTERFACE_RESIDUES) {
+    const loci = buildResidueLoci([{ chain: lbl.chain, resno: lbl.resno }]);
+    if (!loci) { log('no loci for ' + lbl.text); continue; }
+    idx++;
+    const params = mode === 'old' ? {
+      customText: lbl.text,
+      labelParams: {
+        customText: lbl.text,
+        textColor: chainColors[lbl.chain] ?? 0xffffff,
+        textSize: 0.8, sizeFactor: 0.6,
+        offsetX: 0, offsetY: 0, offsetZ: 2.0,
+        borderWidth: 0.15, borderColor: 0x000000,
+        background: true, backgroundColor: 0x000000, backgroundOpacity: 0.7, backgroundMargin: 0.2,
+        tether: true, tetherLength: 0.5, tetherBaseWidth: 0.1,
+      },
+    } : mode === 'new' ? {
+      customText: lbl.text,
+      labelParams: {
+        customText: lbl.text,
+        textColor: chainColors[lbl.chain] ?? 0xffffff,
+        textSize: 0.45, sizeFactor: 0.33,
+        offsetX: 0, offsetY: 0, offsetZ: 0.6,
+        borderWidth: 0.08, borderColor: 0x000000,
+        background: true, backgroundColor: 0x000000, backgroundOpacity: 0.42, backgroundMargin: 0.12,
+        tether: true, tetherLength: 0.4, tetherBaseWidth: 0.06,
+      },
+    } : (() => {
+      // R163 anti-overlap: golden-angle spiral + 6 corner attachments + no bg box
+      // (mirrors src/lib/molcraft/commands.ts R163 label placement exactly)
+      const ATTACHMENTS = ['top-left','bottom-right','top-right','bottom-left','middle-left','middle-right'];
+      const GOLDEN = 2.39996;
+      const i = idx;
+      const ring = Math.floor(i / ATTACHMENTS.length);
+      const theta = i * GOLDEN;
+      const radius = 2.2 + ring * 2.8;
+      return {
+        customText: lbl.text,
+        labelParams: {
+          customText: lbl.text,
+          textColor: chainColors[lbl.chain] ?? 0xffffff,
+          textSize: 0.5, sizeFactor: 0.5,
+          offsetX: +(Math.cos(theta) * radius).toFixed(2),
+          offsetY: +(Math.sin(theta) * radius).toFixed(2),
+          offsetZ: 0.3,
+          borderWidth: 0.18, borderColor: 0x101010,
+          background: false,
+          attachment: ATTACHMENTS[i % ATTACHMENTS.length],
+          tether: true, tetherLength: 2.0, tetherBaseWidth: 0.2,
+        },
+      };
+    })();
+    await meas.addLabel(loci, params);
+  }
+  log(mode.toUpperCase() + ' labels added (' + INTERFACE_RESIDUES.length + ')');
+  await new Promise(r => setTimeout(r, 900));
+  // capture screenshot into result area
+  try {
+    const dataUri = await plugin.helpers?.viewportScreenshot?.getImageDataUri({ width: 1200, height: 800, transparency: false, axes: true });
+    if (dataUri) {
+      const img = document.createElement('img');
+      img.src = dataUri;
+      img.dataset.mode = mode;
+      document.getElementById('result').prepend(img);
+      window.__lastShot = dataUri;
+      log('screenshot captured (' + mode + ')');
+    }
+  } catch (e) { log('capture failed: ' + e.message); }
+}
+
+function clearLabels() {
+  try { plugin.managers.structure.measurement.clear(); } catch (e) {}
+  document.getElementById('result').innerHTML = '';
+  window.__lastShot = null;
+  log('labels cleared');
+}
+
+async function init() {
+  const m = window.molstar;
+  if (!m || !m.Viewer) { statusEl.textContent = 'molstar bundle missing'; return; }
+  viewer = await m.Viewer.create(document.getElementById('viewer'), {
+    layoutIsExpanded: false, layoutShowControls: false,
+    layoutShowRemoteState: 'none', layoutShowSequence: false, layoutShowLog: false,
+    layoutShowLeftPanel: false, collapseLeftPanel: true, collapseRightPanel: true,
+    viewportShowReset: false, viewportShowScreenshotControls: false, viewportShowControls: false,
+    viewportShowExpand: false, viewportShowToggleFullscreen: false, viewportShowSettings: false,
+    viewportShowSelectionMode: false, viewportShowAnimation: false, viewportShowTrajectoryControls: false,
+    pdbProvider: 'pdbe', emdbProvider: 'pdbe',
+    viewportBackgroundColor: '#ffffff',
+  });
+  plugin = viewer.plugin;
+  statusEl.textContent = 'loading 4HHB…';
+  log('viewer created');
+  await viewer.loadPdb('4HHB');
+  await new Promise(r => setTimeout(r, 3000));
+  // chain-id coloring like the agent flow
+  try {
+    const structs = plugin.managers.structure.hierarchy.current.structures;
+    const comps = [];
+    for (const s of structs) for (const c of (s.components || [])) comps.push(c);
+    plugin.managers.structure.component.updateRepresentationsTheme(comps, { color: 'chain-id' });
+  } catch (e) { log('theme failed: ' + e.message); }
+  statusEl.textContent = 'ready — click OLD / R162 / R163';
+  log('4HHB loaded');
+  document.getElementById('btnOld').onclick = () => addLabels('old');
+  document.getElementById('btnNew').onclick = () => addLabels('new');
+  document.getElementById('btnR163').onclick = () => addLabels('r163');
+  document.getElementById('btnClear').onclick = clearLabels;
+}
+init().catch(e => { statusEl.textContent = 'init failed: ' + e.message; log('init error: ' + e.message); });
+</script>
+</body>
+</html>

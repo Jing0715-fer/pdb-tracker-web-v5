@@ -24,6 +24,7 @@ import type { ToolDefinition } from './tools/types';
 
 export const ANALYSIS_RECIPES = [
   'hbonds', 'salt_bridges', 'hydrophobic_contacts', 'all_interactions',
+  'pairwise_interactions',
   'binding_pocket', 'druggability', 'virtual_screening', 'druglike_screening',
   'ligand_interactions', 'disulfide_bonds', 'metal_coordination',
   'aromatic_stacking', 'water_bridges', 'sasa', 'electrostatic',
@@ -74,7 +75,9 @@ export function toolToCommand(name: string, args: Record<string, unknown>): Reco
       const params: Record<string, unknown> = { chain1: args.chain1, chain2: args.chain2 };
       if (args.ligandCompId) params.ligandCompId = args.ligandCompId;
       if (args.radius) params.radius = args.radius;
-      // Get the currently loaded PDB ID from the store (the agent doesn't need to pass it)
+      // R165 (AGENT-010): prefer an explicit pdbId argument (the LLM can now
+      // target a specific loaded structure in multi-structure sessions); fall
+      // back to the last pdb_load side-effect global for backward compat.
       const currentPdbId = args.pdbId || (typeof window !== 'undefined'
         ? (window as unknown as { __currentPdbId?: string }).__currentPdbId || ''
         : '');
@@ -135,12 +138,23 @@ export function toolToCommand(name: string, args: Record<string, unknown>): Reco
     case 'clear_measurements':
       return { type: 'clear_measurements' };
     // Screenshot
-    case 'capture_multi_angle':
-      return {
+    case 'capture_multi_angle': {
+      const cmd: Record<string, unknown> = {
         type: 'capture_multi_angle',
         recipe: args.recipe,
         angles: args.angles ?? ['front', 'side', 'top'],
       };
+      // R161: pass through vizParams-compatible fields so explicit captures
+      // (e.g. re-visualizing a previous analysis) show sidechains + lines
+      const viz: Record<string, unknown> = {};
+      if (args.ligandCompId) viz.ligandCompId = args.ligandCompId;
+      if (args.chain1) viz.chain1 = args.chain1;
+      if (args.chain2) viz.chain2 = args.chain2;
+      if (Array.isArray(args.interactions) && args.interactions.length > 0) viz.interactions = args.interactions;
+      if (Object.keys(viz).length > 0) cmd.vizParams = viz;
+      if (Array.isArray(args.labels) && args.labels.length > 0) cmd.labels = args.labels;
+      return cmd;
+    }
     case 'capture_snapshot':
       return { type: 'capture_snapshot' };
     case 'export_snapshot':
@@ -254,11 +268,16 @@ export const PDB_TOOLS: ToolDefinition[] = [
   // ── Analysis ──
   clientTool(
     'pdb_analyze',
-    'Run a structure analysis recipe. Returns detailed interaction/pocket/structure data. For single-chain structures, set chain1=chain2. For binding pocket analysis, pass ligandCompId and radius.',
+    'Run a structure analysis recipe. Returns detailed interaction/pocket/structure data. For single-chain structures, set chain1=chain2. For binding pocket analysis, pass ligandCompId and radius. IMPORTANT: use recipe "pairwise_interactions" for complete inter-chain analysis of multi-chain structures — it analyzes EVERY chain pair automatically (chain1/chain2 not needed). Multi-angle screenshots + VLM quality check run automatically after visualizable recipes; do not capture them yourself.',
     {
       recipe: { type: 'string', description: 'Analysis recipe name', required: true, enum: [...ANALYSIS_RECIPES] },
-      chain1: { type: 'string', description: 'Chain 1 ID', required: true },
-      chain2: { type: 'string', description: 'Chain 2 ID (same as chain1 for intra-chain)', required: true },
+      pdbId: {
+        type: 'string',
+        pattern: '^[A-Za-z0-9]{4}$',
+        description: 'Target the specific loaded structure (4-character PDB ID, e.g. 4HHB) — REQUIRED when multiple structures are loaded and you do not mean the currently focused one; omit to use the currently focused structure.',
+      },
+      chain1: { type: 'string', description: 'Chain 1 ID (not needed for pairwise_interactions)' },
+      chain2: { type: 'string', description: 'Chain 2 ID (same as chain1 for intra-chain; not needed for pairwise_interactions)' },
       ligandCompId: { type: 'string', description: 'Ligand compId for pocket analysis (e.g. N3, HEM)' },
       radius: { type: 'number', description: 'Pocket/interaction radius in Angstroms' },
     },
@@ -291,7 +310,7 @@ export const PDB_TOOLS: ToolDefinition[] = [
   // ── Screenshot ──
   clientTool(
     'capture_multi_angle',
-    'Capture screenshots from multiple angles. Run after pdb_analyze to visualize results.',
+    'Capture screenshots from multiple angles. NOTE: the harness ALREADY captures multi-angle screenshots automatically after every visualizable pdb_analyze — only call this when the user explicitly asks for extra screenshots or different angles.',
     {
       recipe: { type: 'string', description: 'Recipe name (auto-injected from analyze result)', enum: [...ANALYSIS_RECIPES] },
       angles: { type: 'array', description: 'Camera angles', items: { type: 'string', enum: [...CAMERA_ANGLES] } },

@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
-import { getRecipe, probeAllClis } from "./cli-registry";
+import { getRecipe, probeAllClis, CHILD_ENV } from "./cli-registry";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +34,23 @@ const CIF_URL = (id: string) =>
 // TTL: 30 minutes (structure analysis doesn't change)
 const RESULT_CACHE = new Map<string, { result: unknown | null; ts: number }>();
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * R167 (PY-003): detect recipe results that carry an error payload.
+ * Recipes report failures by printing {"error": "chain X not found"}
+ * (sometimes with ok:false) and exiting 0 — the JSON still parses into a
+ * non-null object, so the old cache logic (result !== null) stored it for
+ * the full 30-minute TTL and the error stuck until server restart.
+ */
+function isErrorShapedResult(result: unknown): boolean {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+  const r = result as Record<string, unknown>;
+  // string error ("error": "...") or structured error ("error": {message: ...})
+  if (typeof r.error === "string" && r.error.length > 0) return true;
+  if (r.error && typeof r.error === "object") return true;
+  if (r.ok === false && "error" in r) return true;
+  return false;
+}
 
 function getCached(pdbId: string, recipeId: string, params?: Record<string, unknown>): unknown | null | undefined {
   const key = `${pdbId}:${recipeId}:${params ? JSON.stringify(params) : ""}`;
@@ -467,6 +484,7 @@ export async function runAnalysisRecipe(
       timeout: 60_000,
       maxBuffer: 10 * 1024 * 1024,
       cwd: TMP_DIR,
+      env: CHILD_ENV, // R164 (PY-001): prepend venv + /home/z/.local/bin to PATH
     });
 
     // Parse JSON from stdout (the recipe prints JSON to stdout)
@@ -494,12 +512,15 @@ export async function runAnalysisRecipe(
       }
     }
 
-    // Round 35/48: Cache the result — but ONLY if it's non-null.
+    // Round 35/48: Cache the result — but ONLY if it's non-null AND not
+    // error-shaped (R167 / PY-003): recipes print {"error": ...} JSON but
+    // exit 0, so a transient "chain not found" used to stick in the
+    // 30-min cache with no recovery short of a server restart.
     // Null results (failed recipes) should NOT be cached, otherwise
     // subsequent runs will skip the actual computation and return null
     // immediately from cache, making it impossible to recover from
     // transient failures (e.g., PDB download timeout, Python error).
-    if (result !== null) {
+    if (result !== null && !isErrorShapedResult(result)) {
       setCached(pdbId, recipeId, params, result);
     }
     return result;

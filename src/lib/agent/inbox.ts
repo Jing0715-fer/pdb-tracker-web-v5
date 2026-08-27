@@ -16,8 +16,9 @@
  * queued turn-opening message.
  */
 
-import { newMessageId, type Json } from './types';
+import { newMessageId, type Json, type Seq } from './types';
 import type { UserMessage } from './llm/types';
+import type { SurfaceOp } from './session/types';
 
 export type InboxTarget = 'next-turn' | 'next-step';
 
@@ -25,6 +26,13 @@ export interface InboxMessage extends UserMessage {
   /** A free-form label for UI display (e.g. "user", "steering", "context"). */
   inboxKind?: 'user' | 'steering' | 'context';
   time: number;
+  /**
+   * R164 (AGENT-003): Optional surface operation for the loop to apply when
+   * appending this message. Used by regenerate to drop the previous
+   * assistant turn from the model-visible surface (op='replace') while
+   * preserving the full event log for audit. Defaults to { op: 'append' }.
+   */
+  surfaceOp?: SurfaceOp;
 }
 
 export class Inbox {

@@ -15,7 +15,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAgentManager } from '@/lib/agent/manager';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// R164 (AGENT-005): raised from 60 — the LLM stream now retries on 429
+// with 5s / 15s / 45s backoff (mirroring the VLM route), so a single
+// drive() can take up to 65s of backoff + 60s+ of streaming per attempt.
+export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 export async function POST(

@@ -17,7 +17,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { executeCommand } from '@/lib/molcraft/commands';
+import { executeCommand, __drainCaptureQueue } from '@/lib/molcraft/commands';
+import type { CommandResult } from '@/lib/molcraft/commands';
+import type { VlmResult } from '@/lib/molcraft/vlm-client';
 import type { MolstarViewer } from '@/lib/molcraft/types';
 import { toolToCommand, requiresApproval, SERVER_SIDE_TOOLS } from '@/lib/agent/pdb-tools';
 import type { SessionEvent } from '@/lib/agent/session/types';
@@ -64,10 +66,99 @@ export interface TokenUsageSummary {
 export type ConversationNode =
   | { kind: 'user-message'; seq: number; text: string }
   | { kind: 'assistant-message'; seq: number; text: string; reasoning?: string }
-  | { kind: 'streaming-assistant'; seq: number; text: string; done: boolean }
+  | { kind: 'streaming-assistant'; seq: number; text: string; done: boolean; turn: number; step: number }
   | { kind: 'tool-call'; seq: number; callId: string; name: string; args: Record<string, unknown>; status: 'pending' | 'running' | 'ok' | 'error'; result?: unknown; error?: string; startedAt?: number; durationMs?: number }
   | { kind: 'turn-boundary'; seq: number; turn: number; type: 'start' | 'end'; reason?: string }
   | { kind: 'step-boundary'; seq: number; turn: number; step: number; type: 'start' | 'end' };
+
+/**
+ * UI-012 (minimal hardening): screenshot payload shared by every capture
+ * path (capture_multi_angle / pdb_analyze auto-capture / recapture).
+ * Structurally compatible with vlm-client's ScreenshotData.
+ */
+export interface CaptureScreenshot {
+  dataUri: string;
+  angle: string;
+  label: string;
+  cameraState?: unknown;
+}
+
+/** UI-012: progress payload written by the VLM-controlled capture loop. */
+export interface AutoCaptureProgress {
+  iteration: number;
+  maxIterations: number;
+  phase: 'capturing' | 'vlm-analyzing' | 'done' | 'error';
+  screenshotsCount: number;
+}
+
+/** UI-012: summary attached as `autoCapture` after the VLM capture loop ends. */
+export interface AutoCaptureSummary {
+  ok: boolean;
+  detail: string;
+  data: { recipe: string; label: string; screenshots: CaptureScreenshot[] };
+  captureDurationMs: number;
+  vlmResult?: VlmResult;
+  vlmDurationMs: number;
+  vlmIterations: number;
+  vlmAcceptable?: boolean;
+  vlmError?: string;
+  pairwisePairs?: Array<{ chain1: unknown; chain2: unknown; total: unknown }>;
+}
+
+/**
+ * UI-012 (minimal): the annotated result of capture-class tool calls.
+ * `CommandResult` covers ok/detail/data/analysisResult; the agent path
+ * additionally attaches VLM + auto-capture bookkeeping to the SAME object
+ * after executeCommand returns. These fields were previously read/written
+ * through `as any`, hiding typos (e.g. `vlmEror` vs `vlmError`) from the
+ * compiler at exactly the hot mutation sites. Deliberately NO index
+ * signature — unknown keys stay compile errors. ToolCallCard keeps its own
+ * defensive reads and is unchanged.
+ */
+export interface AnnotatedCaptureResult extends CommandResult {
+  data?: CommandResult['data'] & { screenshots?: CaptureScreenshot[] };
+  /** analyze_run shape: { kind, recipe, data: API_BODY } where API_BODY nests
+   * the recipe output under its own `data` (see the R166 unwrap chain). */
+  analysisResult?: { kind?: string; recipe?: string; data?: { data?: Record<string, unknown> } & Record<string, unknown> };
+  vlmResult?: VlmResult | null;
+  vlmDurationMs?: number;
+  vlmError?: string;
+  vlmPending?: boolean;
+  autoCapture?: AutoCaptureSummary;
+  autoCaptureProgress?: AutoCaptureProgress;
+  autoCapturePending?: boolean;
+  autoCaptureError?: string;
+}
+
+/**
+ * UI-013: max POST→tools→POST round-trips per driveLoop call. Was a bare
+ * `guard < 12` that exited SILENTLY on long multi-step tasks (the agent just
+ * stopped mid-task with no message). Raised to 30 + a user-visible error
+ * banner on exhaustion.
+ */
+const MAX_DRIVE_ITERATIONS = 30;
+
+/**
+ * UI-010: max consecutive SSE failures before the stream is declared dead.
+ * After this many errors in a row we close the EventSource (instead of
+ * letting the browser retry forever) and show a "session lost — refresh"
+ * banner. A successful reconnect resets the counter, so a flaky-but-alive
+ * network never trips the cap.
+ */
+const MAX_SSE_RETRY_ERRORS = 10;
+
+/**
+ * UI-007: progress ticks re-render the whole conversation (full event walk +
+ * node re-projection); throttle them to at most one render per this many ms.
+ */
+const PROGRESS_REFRESH_MS = 500;
+
+/**
+ * UI-014: how long waitForApproval polls an unanswered approval prompt
+ * before treating it as rejected (orphaned prompts can never resolve — no
+ * drive loop outlives a page reload).
+ */
+const MAX_APPROVAL_WAIT_MS = 300_000; // 5 minutes
 
 export interface UseAgentSessionOptions {
   viewer: MolstarViewer | null;
@@ -77,6 +168,10 @@ export interface AgentSessionState {
   sessionId: string | null;
   sessionTitle: string;
   connected: boolean;
+  /** UI-010: true once the SSE stream gave up (retry cap / fatal error) —
+   * the UI shows a "session lost — refresh" banner and stops pulsing
+   * "connecting" forever. */
+  sseDead: boolean;
   driving: boolean;
   nodes: ConversationNode[];
   pendingApprovals: PendingApproval[];
@@ -161,12 +256,15 @@ function extractResidueLabels(
   };
 
   // The actual data may be nested under .data (from runRecipe)
-  const data = (analysisData as any).data ?? analysisData;
+  const data = (analysisData.data as Record<string, unknown> | undefined) ?? analysisData;
 
   // all_interactions format
+  // R163: NO label-count cap (user request) — labels are now small, have no
+  // background box, and use anti-overlap spiral placement (see commands.ts
+  // R163), so showing every interface residue is no longer occluding.
   const interactions = data.interactions as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(interactions)) {
-    for (const c of interactions.slice(0, 20)) {
+    for (const c of interactions) {
       add(c.chain1 as string, c.resno1 as number, c.resname1 as string);
       add(c.chain2 as string, c.resno2 as number, c.resname2 as string);
     }
@@ -175,7 +273,7 @@ function extractResidueLabels(
   // hbonds format
   const hbonds = data.hbonds as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(hbonds)) {
-    for (const h of hbonds.slice(0, 15)) {
+    for (const h of hbonds) {
       add(h.donor_chain as string, h.donor_resno as number, h.donor_resname as string);
       add(h.acceptor_chain as string, h.acceptor_resno as number, h.acceptor_resname as string);
     }
@@ -184,7 +282,7 @@ function extractResidueLabels(
   // salt_bridges format
   const saltBridges = data.salt_bridges as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(saltBridges)) {
-    for (const s of saltBridges.slice(0, 15)) {
+    for (const s of saltBridges) {
       add(s.pos_chain as string, s.pos_resno as number, s.pos_resname as string);
       add(s.neg_chain as string, s.neg_resno as number, s.neg_resname as string);
     }
@@ -193,7 +291,7 @@ function extractResidueLabels(
   // hydrophobic_contacts format
   const hydrophobic = data.hydrophobic_contacts as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(hydrophobic)) {
-    for (const h of hydrophobic.slice(0, 15)) {
+    for (const h of hydrophobic) {
       add(h.chain1 as string, h.resno1 as number, h.resname1 as string);
       add(h.chain2 as string, h.resno2 as number, h.resname2 as string);
     }
@@ -205,12 +303,12 @@ function extractResidueLabels(
   const c1Res = data.chain1_interface_residues as Array<Record<string, unknown>> | undefined;
   const c2Res = data.chain2_interface_residues as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(c1Res)) {
-    for (const r of c1Res.slice(0, 10)) {
+    for (const r of c1Res) {
       add(chain1, r.resno as number, r.name as string);
     }
   }
   if (Array.isArray(c2Res)) {
-    for (const r of c2Res.slice(0, 10)) {
+    for (const r of c2Res) {
       add(chain2, r.resno as number, r.name as string);
     }
   }
@@ -218,13 +316,15 @@ function extractResidueLabels(
   // binding_pocket / druggability format
   const pocketResidues = data.residues as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(pocketResidues)) {
-    for (const r of pocketResidues.slice(0, 10)) {
+    for (const r of pocketResidues) {
       add(r.chain as string, r.resno as number, r.resname as string);
     }
   }
 
-  // Limit total labels to 20 to avoid cluttering the screenshot
-  const result = labels.slice(0, 20);
+  // R163: no slice cap — every labeled residue is placed on its own
+  // anti-overlap spiral slot (commands.ts R163), so more labels no longer
+  // means "labels covering the structure".
+  const result = labels;
   if (result.length > 0) {
     console.log(`[R140] Extracted ${result.length} residue labels for ${recipe}: ${result.map(l => l.text).join(', ')}`);
   }
@@ -234,8 +334,6 @@ function extractResidueLabels(
 /** Project the session event log into UI conversation nodes. */
 function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecution>): ConversationNode[] {
   const nodes: ConversationNode[] = [];
-  // Track the streaming-assistant node by (turn, step) so chunks accumulate.
-  let streamingKey: string | null = null;
   for (const ev of events) {
     switch (ev.type) {
       case 'user/message': {
@@ -245,27 +343,32 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
       }
       case 'assistant/chunk': {
         const data = ev.data as { turn: number; step: number; chunk: StreamChunk };
-        const key = `${data.turn}:${data.step}`;
-        // Find or create the streaming node.
-        let node = nodes.find((n) => n.kind === 'streaming-assistant' && `${(n as { turn?: number }).turn ?? ''}:${(n as { step?: number }).step ?? ''}` === key) as
-          | { kind: 'streaming-assistant'; seq: number; text: string; done: boolean; turn: number; step: number }
-          | undefined;
-        if (!node) {
-          node = { kind: 'streaming-assistant', seq: ev.seq, text: '', done: false, turn: data.turn, step: data.step } as never;
-          nodes.push(node as never);
-          streamingKey = key;
+        // UI-015: find-or-create the streaming node by (turn, step), then
+        // REPLACE it with a new object instead of mutating it in place — the
+        // projection stays immutable even if node objects are ever cached
+        // across walks.
+        let idx = nodes.findIndex(
+          (n) => n.kind === 'streaming-assistant' && n.turn === data.turn && n.step === data.step,
+        );
+        if (idx < 0) {
+          nodes.push({ kind: 'streaming-assistant', seq: ev.seq, text: '', done: false, turn: data.turn, step: data.step });
+          idx = nodes.length - 1;
         }
+        const current = nodes[idx]!;
+        if (current.kind !== 'streaming-assistant') break;
+        let { text, done } = current;
         // Accumulate text-delta chunks.
         const chunk = data.chunk;
         if (chunk.type === 'text-delta') {
-          node.text += chunk.text;
+          text += chunk.text;
         } else if (chunk.type === 'block-end' && chunk.block.type === 'text') {
           // block-end carries the authoritative text — but we already
           // accumulated deltas, so only set if empty (block-end is final).
-          if (node.text === '') node.text = chunk.block.text;
+          if (text === '') text = chunk.block.text;
         } else if (chunk.type === 'finish') {
-          node.done = true;
+          done = true;
         }
+        nodes[idx] = { ...current, text, done };
         break;
       }
       case 'assistant/message': {
@@ -273,8 +376,9 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
         // Replace the streaming node with the final message (same turn/step).
         const turn = (ev.data as { turn: number }).turn;
         const step = (ev.data as { step: number }).step;
-        const key = `${turn}:${step}`;
-        const idx = nodes.findIndex((n) => n.kind === 'streaming-assistant' && `${(n as { turn?: number }).turn ?? ''}:${(n as { step?: number }).step ?? ''}` === key);
+        const idx = nodes.findIndex(
+          (n) => n.kind === 'streaming-assistant' && n.turn === turn && n.step === step,
+        );
         const reasoning = data.message.content
           .filter((b): b is Extract<ContentBlock, { type: 'reasoning' }> => b.type === 'reasoning')
           .map((b) => b.text)
@@ -288,7 +392,6 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
         if (text.trim().length === 0) {
           // Remove the streaming node if it exists — don't add an empty message.
           if (idx >= 0) nodes.splice(idx, 1);
-          streamingKey = null;
           break;
         }
         const finalNode: ConversationNode = {
@@ -302,7 +405,6 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
         } else {
           nodes.push(finalNode);
         }
-        streamingKey = null;
         break;
       }
       case 'tool/call': {
@@ -324,55 +426,62 @@ function projectNodes(events: SessionEvent[], executions: Map<string, ToolExecut
       }
       case 'tool/result': {
         const data = ev.data as { message: { content: ContentBlock[]; source: { kind: string; callId?: string } }; error?: { message: string } };
-        // Update the matching tool-call node by walking back.
+        // Update the matching tool-call node by walking back to the FIRST
+        // tool-call node from the end. UI-015: build a REPLACEMENT node
+        // object instead of mutating the found node in place — keeps the
+        // projection immutable.
         for (let i = nodes.length - 1; i >= 0; i--) {
           const n = nodes[i]!;
-          if (n.kind === 'tool-call') {
-            if (data.message.source.kind === 'tool' && data.message.source.callId === n.callId) {
-              n.status = data.error ? 'error' : 'ok';
-              n.error = data.error?.message;
+          if (n.kind !== 'tool-call') continue;
+          if (data.message.source.kind === 'tool' && data.message.source.callId === n.callId) {
+            let result = n.result;
+            let durationMs = n.durationMs;
 
-              // R139 (screenshot display fix): Prefer the executions ref result
-              // over the session event's stripped version.
-              //
-              // The R128 optimization in loop.ts strips screenshot data URIs
-              // (replacing them with "[image data omitted — front]") before
-              // storing the tool/result in the session event log, to prevent
-              // 2MB base64 strings from blowing up the LLM context window.
-              //
-              // However, the UI reads from the session event to display
-              // screenshots, so it was getting the stripped version and the
-              // <img> tags couldn't load "[image data omitted]" as a src.
-              //
-              // The executions ref (populated client-side in executeToolCall)
-              // has the FULL unstripped result with real data URIs. We prefer
-              // it for display, falling back to the event's parsed text only
-              // when the executions ref doesn't have data (e.g. resumed sessions).
-              const exec = executions.get(n.callId);
-              if (exec?.result != null) {
-                n.result = exec.result;
-                if (exec.durationMs != null) n.durationMs = exec.durationMs;
-              } else {
-                // Fall back to parsing the event's result text (stripped version)
-                let rawText = '';
-                for (const block of data.message.content) {
-                  if (block.type === 'tool-result') {
-                    for (const inner of block.content) {
-                      if (inner.type === 'text') rawText += inner.text;
-                    }
-                  } else if (block.type === 'text') {
-                    rawText += block.text;
+            // R139 / UI-003 (screenshot display): prefer the executions ref
+            // result — the live in-memory copy populated by executeToolCall
+            // — and fall back to parsing the tool/result event text when the
+            // ref has no entry (e.g. a resumed/replayed session after reload).
+            //
+            // Since the R165 fix in loop.ts, screenshot tool/result events
+            // are persisted UNSTRIPPED: the event text is the full JSON of
+            // the result, including real data:image/... URIs, so this
+            // fallback path renders screenshots correctly on resume. (The
+            // LLM never sees the base64 payloads — SurfaceManager projects
+            // them out when deriving model-visible history.)
+            const exec = executions.get(n.callId);
+            if (exec?.result != null) {
+              result = exec.result;
+              if (exec.durationMs != null) durationMs = exec.durationMs;
+            } else {
+              // Fall back to parsing the event's result text (full JSON
+              // incl. data URIs since R165; non-screenshot results may
+              // still be length-truncated server-side, in which case the
+              // JSON.parse below degrades gracefully to raw text).
+              let rawText = '';
+              for (const block of data.message.content) {
+                if (block.type === 'tool-result') {
+                  for (const inner of block.content) {
+                    if (inner.type === 'text') rawText += inner.text;
                   }
-                }
-                try {
-                  n.result = JSON.parse(rawText);
-                } catch {
-                  n.result = rawText;
+                } else if (block.type === 'text') {
+                  rawText += block.text;
                 }
               }
+              try {
+                result = JSON.parse(rawText) as unknown;
+              } catch {
+                result = rawText;
+              }
             }
-            break;
+            nodes[i] = {
+              ...n,
+              status: data.error ? 'error' : 'ok',
+              error: data.error?.message,
+              result,
+              durationMs,
+            };
           }
+          break; // first tool-call node from the end — matched or not
         }
         break;
       }
@@ -404,6 +513,9 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('New session');
   const [connected, setConnected] = useState(false);
+  // UI-010: set once the SSE stream exhausts its retry budget (or hits a
+  // fatal error) — drives the "session lost" banner in ChatPanel.
+  const [sseDead, setSseDead] = useState(false);
   const [driving, setDriving] = useState(false);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
@@ -413,6 +525,19 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   const viewerRef = useRef(viewer);
   const sessionIdRef = useRef<string | null>(null);
   const drivingRef = useRef(false);
+  // R164 (VLM-002): AbortController for any in-flight VLM call. Aborted
+  // when the user starts a new session, loads a different session, or
+  // forks — so the server's req.signal fires and the VLM backoff loop
+  // stops retrying instead of paying full token cost for an orphan
+  // result nobody will ever see.
+  const vlmAbortRef = useRef<AbortController | null>(null);
+  // UI-002: AbortController for the in-flight drive loop. Aborted when the
+  // user starts a new session / loads a different session / forks while a
+  // drive is still running — without this, setSessionId(null) flips
+  // sessionIdRef to null and the loop's next POST goes to
+  // /api/agent/sessions/null/tool-results → 404 → an error banner stuck on
+  // the brand-new empty session. Mirrors the vlmAbortRef pattern above.
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     viewerRef.current = viewer;
@@ -446,15 +571,37 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   }, []);
 
   // Subscribe to SSE events.
+  // UI-010: EventSource auto-reconnects forever on error. Cap consecutive
+  // failures (MAX_SSE_RETRY_ERRORS); once the cap trips (or the browser
+  // declares the stream fatally CLOSED, e.g. 404 after a server restart)
+  // close it for good and set sseDead so the UI shows a "session lost —
+  // refresh" banner instead of an eternally pulsing "connecting" badge.
+  // UI-001: approval prompts are only raised for LIVE tool/call events —
+  // replayed history can contain approval-required calls that were already
+  // decided in a previous page life; re-showing them leaves a phantom prompt
+  // that no drive loop will ever consume (waitForApproval only polls while a
+  // drive is running).
   useEffect(() => {
     if (!sessionId) return;
     // Clean up cross-session refs when switching sessions.
     executionsRef.current = new Map();
     decisionsRef.current = new Map();
     setPendingApprovals([]);
+    setSseDead(false);
     const es = new EventSource(`/api/agent/sessions/${sessionId}/events`);
     // Track seen seqs to deduplicate events on SSE reconnect (EventSource auto-reconnects).
     const seenSeqs = new Set<number>();
+    // Flips true once the initial historical replay finished — only then do
+    // tool/call events count as "live" for approval prompts (UI-001).
+    let replayDone = false;
+    let consecutiveErrors = 0;
+    let declaredDead = false;
+    const declareDead = () => {
+      if (declaredDead) return;
+      declaredDead = true;
+      es.close();
+      setSseDead(true);
+    };
     es.addEventListener('event', (e) => {
       try {
         const ev = JSON.parse((e as MessageEvent).data) as SessionEvent;
@@ -462,8 +609,8 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         if (seenSeqs.has(ev.seq)) return;
         seenSeqs.add(ev.seq);
         setEvents((prev) => [...prev, ev]);
-        // Detect approval/asked.
-        if (ev.type === 'tool/call') {
+        // Detect approval/asked (live events only — see UI-001 above).
+        if (ev.type === 'tool/call' && replayDone) {
           const data = ev.data as { callId: string; name: string; arguments: string };
           if (requiresApproval(data.name)) {
             setPendingApprovals((prev) => [
@@ -495,11 +642,66 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         /* ignore parse errors */
       }
     });
-    es.addEventListener('replay-done', () => setConnected(true));
-    es.addEventListener('open', () => setConnected(true));
-    es.addEventListener('error', () => setConnected(false));
+    es.addEventListener('replay-done', () => {
+      replayDone = true;
+      consecutiveErrors = 0;
+      setConnected(true);
+    });
+    es.addEventListener('open', () => {
+      // A successful (re)connect resets the failure streak (UI-010).
+      consecutiveErrors = 0;
+      setConnected(true);
+    });
+    es.addEventListener('error', () => {
+      consecutiveErrors += 1;
+      setConnected(false);
+      // readyState CLOSED = the browser gave up (fatal, e.g. HTTP 404) — no
+      // reconnect will ever come; declare dead immediately.
+      if (es.readyState === EventSource.CLOSED) {
+        declareDead();
+        return;
+      }
+      if (consecutiveErrors >= MAX_SSE_RETRY_ERRORS) declareDead();
+    });
     return () => es.close();
   }, [sessionId]);
+
+  // UI-007: progress ticks used to clone the events array on EVERY tick
+  // (`setEvents((prev) => [...prev])`), re-walking all events inside
+  // projectNodes and re-rendering every conversation node — O(n²) per
+  // pdb_analyze over a long session. Throttled here to at most one render
+  // per PROGRESS_REFRESH_MS with a trailing-edge timer so the last dropped
+  // tick still lands. Terminal writes (autoCapture/autoCaptureError/vlm*)
+  // keep calling setEvents directly — completion states render immediately.
+  const lastProgressRefreshRef = useRef(0);
+  const progressRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestProgressRefresh = useCallback(() => {
+    const now = Date.now();
+    const since = now - lastProgressRefreshRef.current;
+    if (since >= PROGRESS_REFRESH_MS) {
+      lastProgressRefreshRef.current = now;
+      if (progressRefreshTimerRef.current !== null) {
+        clearTimeout(progressRefreshTimerRef.current);
+        progressRefreshTimerRef.current = null;
+      }
+      setEvents((prev) => [...prev]);
+      return;
+    }
+    if (progressRefreshTimerRef.current === null) {
+      progressRefreshTimerRef.current = setTimeout(() => {
+        progressRefreshTimerRef.current = null;
+        lastProgressRefreshRef.current = Date.now();
+        setEvents((prev) => [...prev]);
+      }, PROGRESS_REFRESH_MS - since);
+    }
+  }, []);
+  // Cancel a pending trailing refresh on unmount.
+  useEffect(
+    () => () => {
+      if (progressRefreshTimerRef.current !== null) clearTimeout(progressRefreshTimerRef.current);
+    },
+    [],
+  );
 
   // R113.6: Listen for retry events from ToolCallCard
   useEffect(() => {
@@ -562,9 +764,18 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   const executeToolCall = useCallback(
     async (call: PendingToolCall): Promise<{ ok: boolean; result?: unknown; error?: string }> => {
       const args = parseArgs(call.arguments);
-      // Server-side tools never reach here (they execute inline).
+      // AGENT-011 (client half): server-side tools must never execute — or,
+      // worse, have their results fabricated — on the client.
+      // manager.driveWithServerTools guarantees that returned tool-calls
+      // never contain server-side tools; if one reaches here anyway
+      // (replayed old session, protocol drift) we REFUSE instead of feeding
+      // the LLM fake data. driveLoop additionally skips submitting any
+      // result for such calls (see the SERVER_SIDE_TOOLS check there).
       if (SERVER_SIDE_TOOLS.has(call.name)) {
-        return { ok: true, result: { note: 'executed server-side' } };
+        console.warn(
+          `[agent] unexpected server-side tool call reached client (protocol drift): ${call.name} (${call.callId}) — refusing to execute/fabricate`,
+        );
+        return { ok: false, error: `Server-side tool ${call.name} unexpectedly reached the client` };
       }
       const cmd = toolToCommand(call.name, args);
       if (!cmd) {
@@ -702,7 +913,8 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           const hasVizParams = args.vizParams && Object.keys(args.vizParams as object).length > 0;
           if (!hasVizParams) {
             const recipeName = String(args.recipe || 'unknown');
-            const screenshots = (result as any).data?.screenshots;
+            // UI-012: typed read instead of `(result as any).data?.screenshots`.
+            const screenshots = (result as AnnotatedCaptureResult).data?.screenshots;
             if (screenshots && Array.isArray(screenshots) && screenshots.length > 0) {
               void (async () => {
                 const vlmStartTime = Date.now();
@@ -713,23 +925,27 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   const vlmResult = await selectBestWithRetry(screenshots, recipeName, analysisSummary);
                   const vlmDuration = Date.now() - vlmStartTime;
                   if (vlmResult) {
-                    (result as any).vlmResult = vlmResult;
-                    (result as any).vlmDurationMs = vlmDuration;
+                    // UI-012: typed annotations (was `(result as any).x = …`).
+                    const annotated = result as AnnotatedCaptureResult;
+                    annotated.vlmResult = vlmResult;
+                    annotated.vlmDurationMs = vlmDuration;
                     console.log(`[agent] VLM completed for explicit capture: ${vlmDuration}ms quality=${vlmResult.quality} bestIndex=${vlmResult.bestIndex}`);
                   }
                 } catch (vlmErr) {
                   console.warn('[agent] VLM failed for explicit capture (non-blocking):', vlmErr);
-                  (result as any).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
+                  (result as AnnotatedCaptureResult).vlmError = vlmErr instanceof Error ? vlmErr.message : String(vlmErr);
                 }
                 const exec = executionsRef.current.get(call.callId);
-                if (exec) {
-                  (exec.result as any).vlmResult = (result as any).vlmResult;
-                  (exec.result as any).vlmDurationMs = (result as any).vlmDurationMs;
-                  (exec.result as any).vlmError = (result as any).vlmError;
+                if (exec?.result != null) {
+                  const annotated = exec.result as AnnotatedCaptureResult;
+                  const src = result as AnnotatedCaptureResult;
+                  annotated.vlmResult = src.vlmResult;
+                  annotated.vlmDurationMs = src.vlmDurationMs;
+                  annotated.vlmError = src.vlmError;
                   setEvents((prev) => [...prev]);
                 }
               })();
-              (result as any).vlmPending = true;
+              (result as AnnotatedCaptureResult).vlmPending = true;
             }
           }
         }
@@ -739,6 +955,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           const recipeName = String(args.recipe || '');
           const visualizableRecipes = new Set([
             'binding_pocket', 'druggability', 'all_interactions', 'hbonds',
+            'pairwise_interactions',
             'salt_bridges', 'hydrophobic_contacts', 'ligand_interactions',
             'disulfide_bonds', 'metal_coordination', 'aromatic_stacking',
             'water_bridges', 'sasa', 'electrostatic', 'interface_residues',
@@ -748,9 +965,37 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           ]);
           if (visualizableRecipes.has(recipeName)) {
             // R115.1: Fire-and-forget — don't block the main analysis
-            const analysisData = (result as any).analysisResult?.data || {};
+            //
+            // R166 (viz regression): unwrap to the RECIPE-OUTPUT level.
+            // executeCommand's analyze_run returns
+            //   analysisResult = { kind: 'recipe', recipe, data: API_BODY }
+            // and the API body itself nests the recipe output one level deeper:
+            //   API_BODY = { recipe, ok, pdbId, format, data: RECIPE_OUTPUT, stdout }
+            // Previously we stopped at the API-body level, so recipe fields
+            // (pairs, chain1/chain2, interactions, hbonds, …) were NEVER found:
+            //  - the R163 per-pair capture branch silently skipped
+            //    (`Array.isArray(analysisData.pairs)` was false) → generic
+            //    whole-structure capture instead of focused interfaces
+            //  - applyRecipeVisualization's params.pairs / chain1 / chain2 /
+            //    interactions reads all no-op'd → NO camera focus, NO
+            //    ball-and-stick sidechains, NO residue labels, NO H-bond lines
+            //    (user report on 4HHB: screenshots showed the whole tetramer)
+            // extractResidueLabels already knew about the nesting (it does its
+            // own `data ?? analysisData` unwrap) — nothing else did. Canonical
+            // unwrap (mirrors druggability-chart.tsx): `.data?.data ?? .data`.
+            // UI-012: typed read (was `(result as any).analysisResult`).
+            const _analysisResult = (result as AnnotatedCaptureResult).analysisResult;
+            const analysisData: Record<string, unknown> =
+              _analysisResult?.data?.data ?? _analysisResult?.data ?? {};
             void (async () => {
               const captureStartTime = Date.now(); // R116.2: Track auto-capture timing
+              // R164 (VLM-002): create a fresh AbortController for this
+              // capture/VLM cycle. It gets aborted when the user starts a
+              // new session, loads a different session, or forks — so the
+              // in-flight fetch is cancelled AND the server's req.signal
+              // fires and the VLM backoff loop stops retrying.
+              const localController = new AbortController();
+              vlmAbortRef.current = localController;
               try {
                 // R140: Extract interface residue labels from the analysis data
                 const residueLabels = extractResidueLabels(recipeName, analysisData);
@@ -762,6 +1007,134 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 const { runVlmControlledCaptureLoop } = await import('@/lib/molcraft/vlm-capture-loop');
                 const analysisSummary = JSON.stringify(analysisData).slice(0, 2000);
 
+                // ------------------------------------------------------------
+                // R163: pairwise_interactions → PER-PAIR focused capture.
+                // Instead of one capture of only the best chain pair, capture
+                // the TOP-2 significant interfaces (each focused on its own
+                // residues/interactions via vizParams._pairIndex) so the VLM
+                // report covers the main interfaces. Screenshots from all
+                // pairs are merged and analyzed by a single VLM call.
+                // ------------------------------------------------------------
+                if (recipeName === 'pairwise_interactions' && Array.isArray(analysisData.pairs)) {
+                  // UI-012: typed read (was `(analysisData as any).pairs`).
+                  const pairs = analysisData.pairs as Array<Record<string, unknown>>;
+                  const significant = pairs
+                    .filter(p => p.in_contact !== false && (Number(p.total ?? 0) || 0) >= 3)
+                    .sort((a, b) => (Number(b.total ?? 0) || 0) - (Number(a.total ?? 0) || 0));
+                  const topPairs = (significant.length > 0 ? significant : pairs.filter(p => p.in_contact !== false)).slice(0, 2);
+
+                  const allScreenshots: CaptureScreenshot[] = [];
+                  for (let pi = 0; pi < topPairs.length; pi++) {
+                    const pair = topPairs[pi]!;
+                    const pairTag = `${pair.chain1}-${pair.chain2}`;
+                    // per-pair labels: surface this pair as top-level fields so
+                    // extractResidueLabels picks THIS pair's residues
+                    const pairScopedData = { ...analysisData, chain1: pair.chain1, chain2: pair.chain2, interactions: pair.interactions };
+                    const pairLabels = extractResidueLabels(recipeName, pairScopedData);
+                    // top pair gets 3 angles; second pair gets 2 (keeps the
+                    // total screenshot count bounded for the VLM call)
+                    const pairAngles = pi === 0 ? ['front', 'side', 'top'] : ['front', 'side'];
+
+                    // progress: show which interface is being captured
+                    // (UI-007: throttled refresh — was a per-tick full clone)
+                    const progExec = executionsRef.current.get(call.callId);
+                    if (progExec?.result != null) {
+                      (progExec.result as AnnotatedCaptureResult).autoCaptureProgress = {
+                        iteration: pi + 1,
+                        maxIterations: topPairs.length,
+                        phase: 'capturing',
+                        screenshotsCount: allScreenshots.length,
+                      };
+                      requestProgressRefresh();
+                    }
+
+                    const capResult = await executeCommand(v, {
+                      type: 'capture_multi_angle',
+                      recipe: recipeName,
+                      angles: pairAngles as never,
+                      vizParams: { ...analysisData, _pairIndex: pi } as never,
+                      labels: pairLabels,
+                      labelFontSize: 0.5,
+                    } as never);
+                    // UI-012: typed screenshots read (was `(capResult as any).data?.screenshots`).
+                    const capShots = (capResult as AnnotatedCaptureResult).data?.screenshots;
+                    if (capResult.ok && Array.isArray(capShots)) {
+                      for (const s of capShots) {
+                        // tag the angle with the pair so the VLM prompt and
+                        // the carousel identify which interface is shown
+                        allScreenshots.push({
+                          ...s,
+                          angle: `${pairTag} ${s.angle}`,
+                          label: `界面 ${pairTag} — ${s.angle}`,
+                        });
+                      }
+                    }
+                  }
+
+                  // single VLM pass over the merged multi-pair screenshots
+                  // UI-012: typed as VlmResult | null (was `null as Awaited<...>`).
+                  let vlmResult: VlmResult | null = null;
+                  let vlmError: string | undefined;
+                  if (allScreenshots.length === 1) {
+                    // nothing to select between — mirror the explicit-capture
+                    // path's synthetic single-screenshot result (commentary
+                    // added so the VlmResult required field is explicit)
+                    vlmResult = {
+                      bestIndex: 0,
+                      commentary: '单张截图自动选择，未进行VLM分析',
+                      quality: 'acceptable',
+                      issues: ['单张截图，自动选择'],
+                      scores: [7],
+                      confidence: 'low',
+                      comments: ['单张截图自动选择，未进行VLM分析'],
+                    };
+                  } else if (allScreenshots.length > 1) {
+                    const progExec = executionsRef.current.get(call.callId);
+                    if (progExec?.result != null) {
+                      (progExec.result as AnnotatedCaptureResult).autoCaptureProgress = {
+                        iteration: 1, maxIterations: 1, phase: 'vlm-analyzing',
+                        screenshotsCount: allScreenshots.length,
+                      };
+                      requestProgressRefresh();
+                    }
+                    try {
+                      const { selectBestWithRetry } = await import('@/lib/molcraft/vlm-client');
+                      vlmResult = await selectBestWithRetry(allScreenshots, recipeName, analysisSummary);
+                      if (!vlmResult) {
+                        // R163: VLM unavailable — mark the result explicitly so
+                        // the chat UI can flag "未经视觉验证"
+                        vlmError = 'VLM 分析失败 — 截图未经视觉验证';
+                      }
+                    } catch (vlmErr) {
+                      console.warn('[agent] pairwise VLM failed (non-blocking):', vlmErr);
+                      vlmError = 'VLM 分析失败 — 截图未经视觉验证';
+                    }
+                  }
+
+                  const captureDuration = Date.now() - captureStartTime;
+                  if (allScreenshots.length > 0) {
+                    // UI-012: typed summary (was an `as any` literal).
+                    const captureResult: AutoCaptureSummary = {
+                      ok: true,
+                      detail: `Captured ${allScreenshots.length} screenshots covering ${topPairs.length} significant interface(s): ${topPairs.map(p => `${p.chain1}-${p.chain2} (${p.total} interactions)`).join(', ')}`,
+                      data: { recipe: recipeName, label: recipeName, screenshots: allScreenshots },
+                      captureDurationMs: captureDuration,
+                      vlmResult: vlmResult ?? undefined,
+                      vlmDurationMs: captureDuration,
+                      vlmIterations: 1,
+                      vlmAcceptable: vlmResult ? vlmResult.quality === 'acceptable' : undefined,
+                      vlmError,
+                      pairwisePairs: topPairs.map(p => ({ chain1: p.chain1, chain2: p.chain2, total: p.total })),
+                    };
+                    const exec = executionsRef.current.get(call.callId);
+                    if (exec?.result != null) {
+                      (exec.result as AnnotatedCaptureResult).autoCapture = captureResult;
+                      setEvents((prev) => [...prev]);
+                    }
+                  }
+                  return; // skip the single-pair loop below
+                }
+
                 // Helper: execute capture_multi_angle and return screenshots
                 const executeCapture = async (angles: string[], vizParams: Record<string, unknown>) => {
                   const capResult = await executeCommand(v, {
@@ -770,11 +1143,13 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                     angles: angles as never,
                     vizParams: vizParams as never,
                     labels: residueLabels,
-                    labelFontSize: 0.8,
+                    labelFontSize: 0.5,  // R163: molstar-native measurement-label size (labels now have no bg box + spiral placement)
                   } as never);
-                  if (capResult.ok && (capResult as any).data?.screenshots) {
+                  // UI-012: typed screenshots read (was `(capResult as any).data?.screenshots`).
+                  const capShots = (capResult as AnnotatedCaptureResult).data?.screenshots;
+                  if (capResult.ok && capShots && capShots.length > 0) {
                     return {
-                      screenshots: (capResult as any).data.screenshots,
+                      screenshots: capShots,
                       ok: true,
                     };
                   }
@@ -789,13 +1164,19 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   {
                     maxIterations: 2,
                     angles: ['front', 'side', 'top', 'back'], // R152: added back for less occlusion
-                    vlmTimeoutMs: 45000, // R146: 45s timeout per VLM call
+                    vlmTimeoutMs: 150000, // R163: 150s — fits the 5/15/45s 429-backoff schedule
+                    // R164 (VLM-002): pass the local AbortController that
+                    // gets aborted on session change so the server's
+                    // req.signal fires and the VLM backoff loop stops
+                    // retrying.
+                    signal: localController.signal,
                     onProgress: (progress) => {
                       // R146: Update UI with progress so user sees what's happening
+                      // (UI-007: throttled refresh — was a per-tick full events clone)
                       const exec = executionsRef.current.get(call.callId);
-                      if (exec) {
-                        (exec.result as any).autoCaptureProgress = progress;
-                        setEvents((prev) => [...prev]);
+                      if (exec?.result != null) {
+                        (exec.result as AnnotatedCaptureResult).autoCaptureProgress = progress;
+                        requestProgressRefresh();
                       }
                     },
                   }
@@ -804,7 +1185,8 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 const captureDuration = Date.now() - captureStartTime;
 
                 if (loopResult.screenshots.length > 0) {
-                  const captureResult = {
+                  // UI-012: typed summary (was an `as any` literal).
+                  const captureResult: AutoCaptureSummary = {
                     ok: true,
                     detail: `Captured ${loopResult.screenshots.length} angles for ${recipeName} (${loopResult.iterations} iterations)`,
                     data: {
@@ -813,11 +1195,14 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                       screenshots: loopResult.screenshots,
                     },
                     captureDurationMs: captureDuration,
-                    vlmResult: loopResult.vlm,
+                    vlmResult: loopResult.vlm ?? undefined,
                     vlmDurationMs: captureDuration,
                     vlmIterations: loopResult.iterations,
                     vlmAcceptable: loopResult.acceptable,
-                  } as any;
+                    // R163: VLM never succeeded (timeout/error after retries) —
+                    // the chat UI flags these screenshots as 未经视觉验证
+                    vlmError: loopResult.vlm ? undefined : 'VLM 分析失败 — 截图未经视觉验证',
+                  };
 
                   if (loopResult.vlm) {
                     console.log(`[agent] VLM loop completed: ${loopResult.iterations} iterations, quality=${loopResult.vlm.quality}, acceptable=${loopResult.acceptable}`);
@@ -825,8 +1210,8 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 
                   // Update execution result + trigger UI re-render
                   const exec = executionsRef.current.get(call.callId);
-                  if (exec) {
-                    (exec.result as any).autoCapture = captureResult;
+                  if (exec?.result != null) {
+                    (exec.result as AnnotatedCaptureResult).autoCapture = captureResult;
                     setEvents((prev) => [...prev]);
                   }
                 }
@@ -834,13 +1219,13 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 console.warn('[agent] Auto-capture failed (non-blocking):', captureErr);
                 // R115.2: Show error in UI but don't block the main analysis
                 const exec = executionsRef.current.get(call.callId);
-                if (exec) {
-                  (exec.result as any).autoCaptureError = captureErr instanceof Error ? captureErr.message : String(captureErr);
+                if (exec?.result != null) {
+                  (exec.result as AnnotatedCaptureResult).autoCaptureError = captureErr instanceof Error ? captureErr.message : String(captureErr);
                   setEvents((prev) => [...prev]);
                 }
               }
             })();
-            (result as any).autoCapturePending = true;
+            (result as AnnotatedCaptureResult).autoCapturePending = true;
           }
         }
 
@@ -859,25 +1244,37 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
         return { ok: false, error: msg };
       }
     },
-    [],
+    [requestProgressRefresh],
   );
 
-  /** Wait for a pending approval to be resolved (polls the pending list). */
+  /**
+   * Wait for a pending approval to be resolved (polls the pending list).
+   * UI-014: bounded wait — an orphaned prompt (e.g. the drive loop died, the
+   * tab was backgrounded) can never be answered, so after MAX_APPROVAL_WAIT_MS
+   * we treat it as rejected, record the decision, and clean the prompt off
+   * the ApprovalPanel instead of letting the interval run forever.
+   */
   const waitForApproval = useCallback(async (callId: string): Promise<'allowed-once' | 'rejected' | 'cancelled'> => {
     return await new Promise((resolve) => {
-      const check = () => {
+      const POLL_INTERVAL_MS = 300;
+      const startedAt = Date.now();
+      const interval = setInterval(() => {
         // The resolveApproval handler removes from pendingApprovals and posts.
         // We resolve when the approval disappears with a decision stored.
-        const interval = setInterval(() => {
-          const stillPending = pendingApprovalsRef.current.some((p) => p.callId === callId);
-          if (!stillPending) {
-            clearInterval(interval);
-            const decision = decisionsRef.current.get(callId) ?? 'rejected';
-            resolve(decision);
-          }
-        }, 300);
-      };
-      check();
+        const stillPending = pendingApprovalsRef.current.some((p) => p.callId === callId);
+        if (!stillPending) {
+          clearInterval(interval);
+          resolve(decisionsRef.current.get(callId) ?? 'rejected');
+          return;
+        }
+        if (Date.now() - startedAt >= MAX_APPROVAL_WAIT_MS) {
+          clearInterval(interval);
+          decisionsRef.current.set(callId, 'rejected');
+          setPendingApprovals((prev) => prev.filter((p) => p.callId !== callId));
+          console.warn(`[agent] UI-014: approval wait for ${callId} timed out after ${MAX_APPROVAL_WAIT_MS / 1000}s — treating as rejected`);
+          resolve('rejected');
+        }
+      }, POLL_INTERVAL_MS);
     });
   }, []);
 
@@ -890,18 +1287,31 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   /** Drive the loop: send message, execute tool calls, post results, repeat. */
   const driveLoop = useCallback(
     async (url: string, body: Record<string, unknown>) => {
+      // UI-002: fresh AbortController per drive. Session switches
+      // (startNewSession / loadSession / forkFromSeq) abort it, so the loop
+      // can never continue POSTing against a stale/null sessionIdRef.
+      const controller = new AbortController();
+      abortRef.current = controller;
       drivingRef.current = true;
       setDriving(true);
       try {
         let endpoint = url;
         let payload = body;
         let guard = 0;
-        while (guard < 12) {
+        // UI-013: was a silent `guard < 12` exit — long multi-step tasks just
+        // stopped with no message. Cap raised to MAX_DRIVE_ITERATIONS and the
+        // exhausted case surfaces a visible error (below the loop).
+        while (guard < MAX_DRIVE_ITERATIONS) {
           guard += 1;
+          // UI-002: a session switch may have aborted the controller while we
+          // were between fetches (e.g. waiting on an approval) — exit before
+          // touching the network or the viewer again.
+          if (controller.signal.aborted) return;
           const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+            signal: controller.signal, // UI-002: cancellable on session switch
           });
           if (!res.ok) {
             const errText = await res.text().catch(() => res.statusText);
@@ -926,6 +1336,20 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
           // Execute each tool call client-side (skip approvals not yet decided).
           const results: Array<{ callId: string; name: string; ok: boolean; result?: unknown; error?: string }> = [];
           for (const call of data.toolCalls) {
+            // UI-002: abort while a previous tool was executing (or while
+            // waiting on its approval) — stop before mutating the viewer or
+            // collecting results for a session the user already left.
+            if (controller.signal.aborted) return;
+            // AGENT-011 (client half): server-side tools are executed inline
+            // by the manager and must never be handed back to the client. If
+            // one slips through anyway (replayed old session, protocol
+            // drift), SKIP it — never fabricate and POST a fake result.
+            if (SERVER_SIDE_TOOLS.has(call.name)) {
+              console.warn(
+                `[agent] unexpected server-side tool call reached client (protocol drift): ${call.name} (${call.callId}) — result not submitted`,
+              );
+              continue;
+            }
             // If approval is required, wait for the user's decision.
             if (requiresApproval(call.name)) {
               const decision = await waitForApproval(call.callId);
@@ -948,13 +1372,32 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
               error: result.error,
             });
           }
+          // AGENT-011: if every call was a skipped server-side tool there is
+          // nothing to submit — don't fire an empty POST (the server's
+          // orphaned-call recovery handles the dangling turn on next drive).
+          if (results.length === 0) {
+            return;
+          }
           // Post results back, then loop.
           endpoint = `/api/agent/sessions/${sessionIdRef.current}/tool-results`;
           payload = { results };
         }
+        // Falling out of the while loop = iteration cap exhausted (every other
+        // exit is a `return`). UI-013: never exit silently — tell the user.
+        if (!controller.signal.aborted) {
+          setError(`任务步骤过多已停止：连续 ${MAX_DRIVE_ITERATIONS} 轮工具调用仍未完成。请尝试拆分任务或简化请求后重试。`);
+        }
+      } catch (err) {
+        // UI-002: an abort is user-initiated (session switch) — never surface
+        // it as an error banner over the freshly loaded session.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (err instanceof Error && err.name === 'AbortError') return;
+        throw err;
       } finally {
         drivingRef.current = false;
         setDriving(false);
+        // Only clear if a newer drive hasn't already replaced this controller.
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
     [executeToolCall, waitForApproval],
@@ -1028,14 +1471,76 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     }
   }, []);
 
+  /**
+   * R163: Reset the 3D viewport — remove every structure/trajectory from the
+   * Molstar state tree plus measurements/selection visuals.
+   *
+   * User-reported bug: "新建session时没有清除之前已显示的结构" — startNewSession
+   * only cleared the chat state, so the previous session's structure stayed
+   * on the canvas. Uses hierarchy.remove(trajectories) (which deletes the
+   * whole model/structure/representation subtree) rather than plugin.clear()
+   * to keep global plugin state (camera helpers, canvas props) intact.
+   */
+  const clearViewerStructures = useCallback(async () => {
+    const v = viewerRef.current;
+    const plugin = v?.plugin as any;
+    if (!plugin) return;
+    try {
+      // R164 (MOL-003 / UI-004): drain the capture mutex + reset camera
+      // state BEFORE removing the structure, so:
+      //  (a) any capture_multi_angle queued behind `enqueueCapture`
+      //      against the OLD (now removed) structure doesn't continue
+      //      running and throwing errors against undefined refs.
+      //  (b) the next session's first capture_multi_angle doesn't call
+      //      restoreUserCameraState() onto a stale snapshot taken
+      //      against the OLD structure's coordinate frame (which would
+      //      leave the camera at a degenerate angle pointing at empty
+      //      space).
+      try { __drainCaptureQueue(); } catch { /* non-blocking */ }
+      const hier = plugin.managers?.structure?.hierarchy;
+      if (hier) {
+        const trajectories = hier.current?.trajectories ?? [];
+        if (Array.isArray(trajectories) && trajectories.length > 0) {
+          await hier.remove(trajectories);
+          console.log(`[agent] Cleared ${trajectories.length} previous structure(s) from the viewport`);
+        }
+      }
+      // measurements (distance lines / labels) + selection visuals
+      try { plugin.managers.structure.measurement.clear(); } catch { /* ignore */ }
+      try {
+        plugin.managers.interactivity?.lociSelects?.deselectAll?.();
+      } catch { /* ignore */ }
+      try { plugin.canvas3d?.requestDraw?.(); } catch { /* ignore */ }
+    } catch (err) {
+      console.warn('[agent] clearViewerStructures failed (non-blocking):', err);
+    }
+  }, []);
+
   /** Start a fresh session (clears the current one). */
   const startNewSession = useCallback(async () => {
+    // UI-002: cancel any in-flight drive loop POST first — otherwise the
+    // loop keeps running against the old session and its next POST lands
+    // on /api/agent/sessions/null/tool-results (404 banner over the new
+    // empty session).
+    if (drivingRef.current && abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    // R164 (VLM-002): abort any in-flight VLM call so the server's
+    // req.signal fires and the backoff loop stops retrying.
+    if (vlmAbortRef.current) {
+      vlmAbortRef.current.abort();
+      vlmAbortRef.current = null;
+    }
     setEvents([]);
     setPendingApprovals([]);
     setError(null);
     setSessionId(null);
     setSessionTitle('New session');
     setFeedback(new Map());
+    // R163: also clear the 3D viewport so the new session starts empty
+    // (previously the previous session's structure stayed on the canvas).
+    await clearViewerStructures();
     try {
       const res = await fetch('/api/agent/sessions', {
         method: 'POST',
@@ -1052,6 +1557,17 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
 
   /** Resume an existing (persisted) session by id. */
   const loadSession = useCallback(async (id: string) => {
+    // UI-002: cancel any in-flight drive loop POST for the previous session
+    // before switching — same rationale as startNewSession.
+    if (drivingRef.current && abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    // R164 (VLM-002): abort any in-flight VLM call from the previous session.
+    if (vlmAbortRef.current) {
+      vlmAbortRef.current.abort();
+      vlmAbortRef.current = null;
+    }
     setEvents([]);
     setPendingApprovals([]);
     setError(null);
@@ -1106,6 +1622,13 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
   /** Fork the session from a specific event seq (creates a new session). */
   const forkFromSeq = useCallback(async (fromSeq: number): Promise<string | null> => {
     if (!sessionIdRef.current) return null;
+    // UI-002: cancel any in-flight drive loop POST — forking switches the
+    // active session (via loadSession below), so the old loop must not
+    // keep POSTing tool-results against the pre-fork session.
+    if (drivingRef.current && abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
     try {
       const res = await fetch(`/api/agent/sessions/${sessionIdRef.current}/fork`, {
         method: 'POST',
@@ -1126,6 +1649,7 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
     sessionId,
     sessionTitle,
     connected,
+    sseDead,
     driving,
     nodes,
     pendingApprovals,

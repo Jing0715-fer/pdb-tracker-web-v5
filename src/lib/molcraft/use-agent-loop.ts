@@ -501,7 +501,7 @@ export function useAgentLoop() {
                 if (interactions.length > 0) call.arguments.interactions = interactions;
               }
               if (!call.arguments.labels) {
-                const labels = extractResidueLabels(lastAnalysisData, 12);
+                const labels = extractResidueLabels(lastAnalysisData); // R163: no count cap
                 if (labels.length > 0) call.arguments.labels = labels;
               }
               if (!call.arguments.ligandCompId) {

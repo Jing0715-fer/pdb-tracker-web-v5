@@ -101,10 +101,12 @@ export async function showInteractionsAround(
       console.warn('[showInteractionsAround] tryCreateComponentFromExpression failed:', err);
     }
 
-    // Highlight the original target loci
+    // Highlight the original target loci (R161: lociSelects has no .highlight
+    // method in the prebuilt bundle — the real hover-highlight API lives on
+    // lociHighlights. Use highlightOnly so it doesn't stack marks.)
     try {
       if (loci && !isLociEmpty(loci)) {
-        plugin.managers.interactivity.lociSelects.highlight(loci);
+        plugin.managers.interactivity.lociHighlights.highlightOnly(loci as any);
       }
     } catch (err) {
       console.debug('[showInteractionsAround] highlight failed (best-effort):', err);
@@ -142,10 +144,16 @@ export async function clearInteractions(plugin: MolstarPlugin): Promise<void> {
     console.warn('[clearInteractions] neighborhood cleanup failed:', err);
   }
 
-  // Clear any highlights
+  // Clear any highlights (R161: hover highlights live on lociHighlights;
+  // green selection boxes are cleared via lociSelects.deselectAll()).
   try {
-    plugin.managers.interactivity.lociSelects.clearHighlights();
+    plugin.managers.interactivity.lociHighlights.clearHighlights();
   } catch (err) {
     console.debug('[clearInteractions] clearHighlights failed (best-effort):', err);
+  }
+  try {
+    plugin.managers.interactivity.lociSelects.deselectAll();
+  } catch (err) {
+    console.debug('[clearInteractions] deselectAll failed (best-effort):', err);
   }
 }

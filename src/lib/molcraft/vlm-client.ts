@@ -124,10 +124,14 @@ export function normalizeInteractions(analysisData: Record<string, unknown> | un
 /**
  * Extract residue labels from analysis data for screenshot annotation.
  * Uses one-letter amino acid codes (C145 instead of CYS145).
+ *
+ * R163: NO label-count cap (user request). Labels are rendered small,
+ * without background boxes, and with anti-overlap spiral placement
+ * (see commands.ts R163), so all residues can be labeled.
  */
 export function extractResidueLabels(
   analysisData: Record<string, unknown> | undefined,
-  maxLabels: number = 12,
+  maxLabels: number = Number.POSITIVE_INFINITY,
 ): Array<{ text: string; chain?: string; resno?: number; fullResidue?: string }> {
   if (!analysisData) return [];
   const THREE_TO_ONE: Record<string, string> = {
@@ -162,7 +166,7 @@ export function extractResidueLabels(
   // From binding_pocket residues
   const residues = analysisData.residues as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(residues)) {
-    for (const r of residues.slice(0, maxLabels)) {
+    for (const r of residues) {
       const chain = r.chain as string | undefined;
       const resno = r.resno as number | undefined;
       const resname = r.resname as string | undefined;
@@ -183,7 +187,7 @@ export function extractResidueLabels(
 
   // From normalized interactions (covers hbonds, salt_bridges, all_interactions)
   const interactions = normalizeInteractions(analysisData);
-  for (const i of interactions.slice(0, 20)) {
+  for (const i of interactions) {
     if (labels.length >= maxLabels) break;
     const key1 = `${i.chain1}:${i.resno1}`;
     if (!seen.has(key1) && i.resname1) {
@@ -207,6 +211,8 @@ export function extractResidueLabels(
     }
   }
 
+  // slice(0, Infinity) returns the whole array — callers may still pass an
+  // explicit cap for special cases (legacy use-agent-loop passes none now).
   return labels.slice(0, maxLabels);
 }
 
@@ -227,6 +233,15 @@ export interface VlmResult {
     zoom?: "in" | "out";
   };
   recipe?: string;
+  /**
+   * R165 (VLM-007): server-side parse outcome —
+   * - 'ok': the VLM response parsed and the VLM chose bestIndex.
+   * - 'parse-failed': the server could NOT parse the VLM response as JSON;
+   *   bestIndex fell back to a default — do not present it as a real VLM
+   *   selection.
+   * - 'skipped': only one screenshot was sent, VLM never ran.
+   */
+  vlmSignal?: "ok" | "parse-failed" | "skipped";
 }
 
 export interface ScreenshotData {
@@ -244,10 +259,22 @@ const VLM_CACHE_TTL = 300_000; // 5 minutes
 
 /** Generate a cache key from screenshots + recipe + summary */
 function getVlmCacheKey(screenshots: ScreenshotData[], recipe: string, analysisSummary: string): string {
-  // Use the first 100 chars of each data URI + length as a fingerprint
-  // (full data URIs are too long for a Map key)
+  // R167 (VLM-011): fingerprint = dataUri length + head 128 + tail 128.
+  // The old head-100-only fingerprint keyed on the deterministic
+  // `data:image/png;base64,` + PNG-header prefix: two UNRELATED captures
+  // with coincidentally equal length + equal first ~78 base64 chars
+  // collided (wrong VLM verdict reused), while the same screenshot with
+  // a tiny tail-side difference (PNG chunk padding, IEND region) still
+  // missed. Length + head + tail keeps the key short (~280 chars per
+  // screenshot) while anchoring both ends of the payload: identical
+  // screenshots re-hit the cache, unrelated ones no longer collide.
   const fingerprint = screenshots
-    .map((s) => `${s.dataUri.length}:${s.dataUri.slice(0, 100)}`)
+    .map((s) => {
+      const len = s.dataUri.length;
+      const head = s.dataUri.slice(0, 128);
+      const tail = len > 256 ? s.dataUri.slice(len - 128) : "";
+      return `${len}:${head}${tail}`;
+    })
     .join("|");
   return `${recipe}:${analysisSummary.slice(0, 200)}:${fingerprint}`;
 }
@@ -275,15 +302,53 @@ function setCachedVlm(key: string, result: VlmResult): void {
   vlmCache.set(key, { result, timestamp: Date.now() });
 }
 
+/** R165 (VLM-005): default fetch timeout — defense-in-depth against a hung
+ * request. The route retries 429s internally (5+15+45s backoff), so this
+ * only fires when the request is genuinely stuck. */
+const VLM_FETCH_TIMEOUT_MS = 90_000;
+
+/**
+ * R165 (VLM-005): combine the caller's abort signal with a default timeout
+ * (caller signal takes precedence in reporting; either firing aborts the
+ * fetch). Prefers AbortSignal.any and falls back to manual wiring on older
+ * browsers.
+ */
+function combineFetchSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const anyFn = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyFn === "function") {
+    return anyFn(signal ? [signal, timeout] : [timeout]);
+  }
+  const combined = new AbortController();
+  const wire = (s: AbortSignal) => {
+    if (s.aborted) {
+      combined.abort(s.reason);
+      return;
+    }
+    s.addEventListener("abort", () => combined.abort(s.reason), { once: true });
+  };
+  if (signal) wire(signal);
+  wire(timeout);
+  return combined.signal;
+}
+
 /**
  * Call /api/vlm/select-best to analyze screenshots.
  * Returns null on failure (caller can retry).
  * R108.4: Results are cached for 5 minutes to avoid re-analysis.
+ * R164 (VLM-002): optional AbortSignal — when the caller aborts (e.g.
+ * the user navigated away mid-VLM), the fetch is cancelled AND the
+ * server-side req.signal fires, so the server stops retrying the VLM
+ * call instead of paying full token cost for an orphan result.
+ * R165 (VLM-005): the fetch is also bounded by a default 90s timeout —
+ * previously a hung request (no internal timeout in the SDK/route path)
+ * could stall the capture loop indefinitely.
  */
 export async function selectBestScreenshot(
   screenshots: ScreenshotData[],
   recipe: string,
   analysisSummary: string,
+  signal?: AbortSignal,
 ): Promise<VlmResult | null> {
   // R108.4: Check cache first
   const cacheKey = getVlmCacheKey(screenshots, recipe, analysisSummary);
@@ -302,15 +367,43 @@ export async function selectBestScreenshot(
         recipe,
         analysisSummary,
       }),
+      // R164 (VLM-002): propagate the abort signal so the fetch is
+      // cancelled when the caller aborts. Next.js's route handler
+      // picks this up via req.signal, which the route's inner
+      // AbortController is chained to.
+      // R165 (VLM-005): combined with a default 90s timeout so a hung
+      // request can't stall the capture loop forever.
+      signal: combineFetchSignal(signal, VLM_FETCH_TIMEOUT_MS),
     });
     if (vlmResponse.ok) {
       const result = (await vlmResponse.json()) as VlmResult;
+      // R165 (VLM-007): surface the parse-failed signal instead of
+      // swallowing it — the caller's logs can now distinguish "VLM chose
+      // #0" from "parse failure defaulted to #0".
+      if (result.vlmSignal === "parse-failed") {
+        console.warn(
+          "[vlm-client] Server failed to parse the VLM response as JSON — " +
+            "bestIndex fell back to a default (see [vlm/select-best] server log)."
+        );
+      }
       // R108.4: Cache the result
       setCachedVlm(cacheKey, result);
       return result;
     }
     return null;
-  } catch {
+  } catch (err) {
+    // If the abort signal fired, return null gracefully — caller
+    // will show the "未经视觉验证" badge instead of orphan results.
+    const errName = (err as { name?: string })?.name ?? "";
+    if (signal?.aborted) {
+      console.log("[vlm-client] fetch aborted — client disconnected");
+    } else if (errName === "AbortError" || errName === "TimeoutError") {
+      // R165 (VLM-005): the 90s default timeout fired (AbortSignal.timeout
+      // rejects with a TimeoutError DOMException, not an AbortError).
+      console.warn(
+        `[vlm-client] fetch timed out after ${VLM_FETCH_TIMEOUT_MS / 1000}s — returning null (caller may retry)`
+      );
+    }
     return null;
   }
 }
@@ -321,19 +414,53 @@ export function clearVlmCache(): void {
 }
 
 /**
- * Run VLM selection with retry. Calls selectBestScreenshot, retries once
- * after 5s if the first attempt fails.
+ * R163: Run VLM selection with exponential backoff (5s / 15s / 45s).
+ *
+ * The server route (/api/vlm/select-best) also retries 429s internally with
+ * the same schedule; these client-side retries cover HTTP-level failures
+ * (route 500s after its own retries, network drops, proxies timing out).
+ * Previously a single failure after one 5s retry aborted visual verification.
+ *
+ * R164 (VLM-002): optional AbortSignal — when aborted (e.g. user navigates
+ * away mid-VLM), the in-flight fetch is cancelled AND the backoff timer
+ * is interrupted, so the client stops paying attention instead of running
+ * the full 65s schedule against a disconnected UI.
  */
 export async function selectBestWithRetry(
   screenshots: ScreenshotData[],
   recipe: string,
   analysisSummary: string,
+  signal?: AbortSignal,
 ): Promise<VlmResult | null> {
-  let result = await selectBestScreenshot(screenshots, recipe, analysisSummary);
+  const BACKOFF_SCHEDULE_MS = [5_000, 15_000, 45_000];
+  let result = await selectBestScreenshot(screenshots, recipe, analysisSummary, signal);
+  for (let attempt = 0; attempt < BACKOFF_SCHEDULE_MS.length && !result; attempt++) {
+    // R164 (VLM-002): if aborted, return null immediately instead of
+    // continuing the retry schedule.
+    if (signal?.aborted) {
+      console.log('[vlm-client] retry schedule aborted — client disconnected');
+      return null;
+    }
+    const waitMs = BACKOFF_SCHEDULE_MS[attempt]!;
+    console.warn(`[vlm-client] attempt ${attempt + 1} failed — retrying in ${waitMs / 1000}s…`);
+    // R164 (VLM-002): interruptible sleep — rejects immediately if the
+    // abort signal fires during the wait.
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, waitMs);
+      const onAbort = () => {
+        clearTimeout(t);
+        reject(new DOMException('Client disconnected — retry aborted', 'AbortError'));
+      };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    }).catch(() => { /* treat abort as failure → exit loop */ });
+    if (signal?.aborted) return null;
+    result = await selectBestScreenshot(screenshots, recipe, analysisSummary, signal);
+  }
   if (!result) {
-    console.warn("[vlm-client] First attempt failed, retrying in 5s…");
-    await new Promise((r) => setTimeout(r, 5000));
-    result = await selectBestScreenshot(screenshots, recipe, analysisSummary);
+    console.warn('[vlm-client] All VLM attempts failed — caller should mark results as 未经视觉验证');
   }
   return result;
 }
@@ -347,6 +474,10 @@ export function applyVlmResultToImages(
   recipe: string,
   vlm: VlmResult,
 ): AnalysisImage[] {
+  // R165 (VLM-007): prefix comments when the server couldn't parse the VLM
+  // response — the UI then shows an explicit "parse failed" signal instead
+  // of presenting a defaulted bestIndex as a real VLM selection.
+  const parseFailedPrefix = vlm.vlmSignal === "parse-failed" ? "[VLM输出解析失败] " : "";
   return images.map((img) => {
     if (img.recipe !== recipe) return img;
     // Find the index of this image within the recipe's images
@@ -357,9 +488,9 @@ export function applyVlmResultToImages(
       best: idx === vlm.bestIndex,
       vlmComment:
         vlm.comments && idx < vlm.comments.length
-          ? vlm.comments[idx]
+          ? parseFailedPrefix + vlm.comments[idx]
           : idx === vlm.bestIndex
-            ? vlm.commentary
+            ? parseFailedPrefix + vlm.commentary
             : undefined,
       score: vlm.scores && idx < vlm.scores.length ? vlm.scores[idx] : undefined,
       confidence: vlm.confidence,

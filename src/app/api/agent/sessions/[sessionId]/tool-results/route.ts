@@ -12,7 +12,11 @@ import { getAgentManager } from '@/lib/agent/manager';
 import type { CallId } from '@/lib/agent/types';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// R164 (AGENT-005): raised from 60 to match the messages route —
+// submitResults calls loop.drive() which now retries on 429 with
+// 5s / 15s / 45s backoff, so a single submit can take up to 65s of
+// backoff + 60s+ of streaming per attempt.
+export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 interface ToolResultInput {
@@ -55,21 +59,36 @@ export async function POST(
   // Security gate: verify approval-required tools have a corresponding
   // approval/decided event before accepting the result. This prevents a
   // malicious client from bypassing approval by POSTing tool-results directly.
+  //
+  // R164 (AGENT-001): previously the gate only accepted
+  // `decision: 'allowed-once'` events, which meant a REJECTED approval
+  // couldn't submit a synthetic "rejected by user" tool result — the
+  // gate would 403 and the LLM history would be stuck with an orphan
+  // tool/call (the AGENT-004 recovery would later synthesize a generic
+  // error, but losing the user's explicit rejection reason). Now the
+  // gate also accepts `decision: 'rejected'` events when the submitted
+  // result is an error (ok: false) — this lets the rejection flow
+  // cleanly without bypassing approval for SUCCESS results.
   const { requiresApproval } = await import('@/lib/agent/pdb-tools');
   const events = manager.getEvents(sessionId);
-  const decidedCallIds = new Set<string>();
+  const allowedCallIds = new Set<string>();
+  const rejectedCallIds = new Set<string>();
   for (const ev of events) {
     if (ev.type === 'approval/decided') {
       const data = ev.data as { callId: string; decision: string };
       if (data.decision === 'allowed-once') {
-        decidedCallIds.add(data.callId);
+        allowedCallIds.add(data.callId);
+      } else if (data.decision === 'rejected' || data.decision === 'cancelled') {
+        rejectedCallIds.add(data.callId);
       }
     }
   }
   for (const r of body.results) {
-    if (requiresApproval(r.name) && !decidedCallIds.has(r.callId)) {
+    if (requiresApproval(r.name)) {
+      if (allowedCallIds.has(r.callId)) continue; // approved → any result OK
+      if (rejectedCallIds.has(r.callId) && !r.ok) continue; // rejected → only error results OK
       return NextResponse.json(
-        { error: `Tool "${r.name}" requires approval before results can be submitted` },
+        { error: `Tool "${r.name}" requires approval before results can be submitted (or, for a rejected approval, submit an error result)` },
         { status: 403 },
       );
     }

@@ -14,6 +14,7 @@
 /** Canonical recipe names recognized by the system. */
 export const CANONICAL_RECIPES = [
   "hbonds", "salt_bridges", "hydrophobic_contacts", "all_interactions",
+  "pairwise_interactions",
   "binding_pocket", "druggability", "virtual_screening", "druglike_screening",
   "ligand_interactions", "disulfide_bonds", "metal_coordination",
   "aromatic_stacking", "water_bridges", "sasa", "electrostatic",
@@ -36,6 +37,17 @@ const RECIPE_ALIASES: Record<string, string> = {
   "all_interactions": "all_interactions",
   "interface_residues": "interface_residues",
   "interface_residue": "interface_residues",
+  // R161: pairwise chain-pair analysis
+  "pairwise_interactions": "pairwise_interactions",
+  "pairwise": "pairwise_interactions",
+  "chain_pairs": "pairwise_interactions",
+  "chain_pair": "pairwise_interactions",
+  "all_pairs": "pairwise_interactions",
+  "all_chain_pairs": "pairwise_interactions",
+  "pairwise_chain_interactions": "pairwise_interactions",
+  "inter_chain": "pairwise_interactions",
+  "interchain": "pairwise_interactions",
+  "cross_chain": "pairwise_interactions",
   // Hydrogen bonds
   "hbond": "hbonds",
   "h_bonds": "hbonds",
@@ -163,6 +175,7 @@ export function isCanonicalRecipe(recipe: string): boolean {
 export function getVisualizableRecipes(): Set<string> {
   return new Set([
     "binding_pocket", "druggability", "all_interactions", "hbonds",
+    "pairwise_interactions",
     "salt_bridges", "hydrophobic_contacts", "ligand_interactions",
     "disulfide_bonds", "metal_coordination", "aromatic_stacking",
     "water_bridges", "sasa", "electrostatic", "apbs_electrostatic",

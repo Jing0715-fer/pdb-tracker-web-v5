@@ -13,14 +13,196 @@
  * select the one that best illustrates the analysis. Returns the index
  * of the best screenshot + a commentary explaining why.
  *
+ * R165 hardening: 10 req/min sliding-window rate limit (VLM-006), ≤8
+ * screenshots × ≤~3MB each (VLM-006), /tmp debug dump gated behind
+ * VLM_DEBUG_DUMP=1 (VLM-004), 55s per-attempt VLM timeout (VLM-005),
+ * robust fenced/balanced-brace JSON extraction + vlmSignal field (VLM-007).
+ *
  * Backend-only — z-ai-web-dev-sdk MUST NOT be used in client-side code.
  */
 import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// R163: raised from 60 — the 429 backoff schedule alone is 5+15+45=65s
+export const maxDuration = 300;
+
+/** R165 (VLM-006): max screenshots per request — bounds VLM token spend. */
+const MAX_SCREENSHOTS = 8;
+/** R165 (VLM-006): max base64 chars per screenshot dataUri (~3MB decoded). */
+const MAX_SCREENSHOT_BASE64_CHARS = 4_200_000;
+/** R165 (VLM-006): sliding-window rate limit — 10 req/min per client key. */
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+/**
+ * R165 (VLM-005): per-attempt timeout for a single createVision call.
+ * Budget math: 4 attempts × 55s + backoff 5+15+45s + ≤1s jitter ≈ 286s,
+ * safely inside maxDuration=300. (60s would make the worst case 305s+.)
+ */
+const VLM_SINGLE_CALL_TIMEOUT_MS = 55_000;
+
+/**
+ * R165 (VLM-005): combine multiple abort sources into one signal.
+ * Prefers AbortSignal.any (Node 20+ / modern browsers) and falls back to
+ * manual listener wiring so either source aborting aborts the combined one.
+ */
+function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
+  const anyFn = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyFn === 'function') {
+    return anyFn(signals);
+  }
+  const combined = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) {
+      combined.abort(s.reason);
+      break;
+    }
+    s.addEventListener('abort', () => combined.abort(s.reason), { once: true });
+  }
+  return combined.signal;
+}
+
+/**
+ * R165 (VLM-006): in-process sliding-window rate limiter state, stashed on
+ * globalThis (same pattern as getAgentManager in src/lib/agent/manager.ts —
+ * Next.js dev bundles routes separately, so a module-level variable is NOT
+ * reliably shared across route module instances).
+ * Key: client IP (or 'global' fallback). Value: request timestamps.
+ */
+type VlmRateLimiter = { hits: Map<string, number[]> };
+function getVlmRateLimiter(): VlmRateLimiter {
+  const g = globalThis as unknown as { __vlmRateLimiter?: VlmRateLimiter };
+  if (!g.__vlmRateLimiter) g.__vlmRateLimiter = { hits: new Map() };
+  return g.__vlmRateLimiter;
+}
+
+/** R165 (VLM-006): best-effort client key from proxy headers; 'global' fallback. */
+function getClientKey(req: NextRequest): string {
+  const first = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  if (first) return first;
+  return req.headers.get('x-real-ip')?.trim() || 'global';
+}
+
+/**
+ * R165 (VLM-006): sliding-window rate check. Timestamps older than the
+ * window are lazily pruned on every access; the key set itself is
+ * opportunistically pruned past 1000 entries so the Map can't leak.
+ */
+function checkRateLimit(key: string): { allowed: boolean; retryAfterSec: number } {
+  const limiter = getVlmRateLimiter();
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (limiter.hits.get(key) ?? []).filter((ts) => ts > windowStart);
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    limiter.hits.set(key, recent); // store pruned list even when rejecting
+    const oldest = recent[0] ?? now;
+    const retryAfterSec = Math.max(1, Math.ceil((oldest + RATE_LIMIT_WINDOW_MS - now) / 1000));
+    return { allowed: false, retryAfterSec };
+  }
+  recent.push(now);
+  limiter.hits.set(key, recent);
+  if (limiter.hits.size > 1000) {
+    for (const [k, stamps] of limiter.hits) {
+      if (!stamps.some((ts) => ts > windowStart)) limiter.hits.delete(k);
+    }
+  }
+  return { allowed: true, retryAfterSec: 0 };
+}
+
+/**
+ * R165 (VLM-007): balanced-brace scan — extracts the first complete,
+ * top-level JSON object starting at the first '{'. Handles braces and
+ * escaped quotes inside JSON string literals.
+ */
+function scanBalancedJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null; // no balanced object found
+}
+
+/**
+ * R167 (VLM-009): sanitize the analysisSummary before it is interpolated
+ * into the VLM prompt. The summary originates from tool results / LLM-shaped
+ * text, so it must be treated as untrusted input:
+ *   1. all whitespace runs (incl. newlines) flattened to single spaces —
+ *      injected text can no longer fake prompt structure by starting a
+ *      fresh line,
+ *   2. crude instruction-injection patterns scrubbed (case-insensitive
+ *      EN + 中文 variants of "ignore previous instructions") — replaced
+ *      with a neutral marker, not silently dropped, so tampering is visible,
+ *   3. truncated to 800 chars to bound prompt size.
+ * This is deliberately rough defense-in-depth — the numeric outputs are
+ * already constrained by JSON validation downstream; it does not need to
+ * be perfect, just to break obvious payload-crafting.
+ */
+const MAX_ANALYSIS_SUMMARY_CHARS = 800;
+const SUMMARY_INJECTION_PATTERNS: RegExp[] = [
+  /ignore\s+(?:all\s+)?(?:previous|prior|above|earlier|preceding)\s+(?:instructions?|prompts?|rules?|directives?|context)/gi,
+  /disregard\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier|preceding)\s+(?:instructions?|prompts?|rules?|directives?)/gi,
+  /(?:忽略|无视|忽略掉|不理会)(?:以上|之前|上述|前面|先前)(?:的)?(?:所有)?(?:指令|指示|规则|要求|提示)/g,
+  /system\s*prompt\s*:/gi,
+  /new\s+(?:instructions?|rules?)\s*:/gi,
+  /you\s+are\s+now\s+a/gi,
+  /must\s+(?:always\s+)?return\s+bestindex\s*=/gi,
+];
+function sanitizeAnalysisSummary(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0) return '';
+  let s = raw.replace(/\s+/g, ' ').trim();
+  for (const re of SUMMARY_INJECTION_PATTERNS) {
+    s = s.replace(re, '[已过滤]');
+  }
+  if (s.length > MAX_ANALYSIS_SUMMARY_CHARS) {
+    s = s.slice(0, MAX_ANALYSIS_SUMMARY_CHARS) + '…(截断)';
+  }
+  return s;
+}
+
+/**
+ * R165 (VLM-007): three-stage JSON extraction from a VLM response:
+ * 1. ```json fenced code block (+ balanced scan inside it),
+ * 2. failing that, a balanced-brace scan of the raw response.
+ * Replaces the old greedy regex /\{[\s\S]*\}/ which spanned the first '{'
+ * to the LAST '}' — markdown-wrapped or multi-block responses failed to
+ * parse and the route silently returned bestIndex=0 with no VLM signal.
+ */
+function extractFirstJsonObject(text: string): string | null {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    const obj = scanBalancedJsonObject(fenced[1]);
+    if (obj) return obj;
+  }
+  return scanBalancedJsonObject(text);
+}
 
 export async function POST(req: NextRequest) {
+  // R165 (VLM-006): rate limit BEFORE any expensive work (multi-MB body
+  // parse, VLM calls). No auth in this sandbox app — this is the only
+  // guard against a caller draining the ZAI VLM quota.
+  const rate = checkRateLimit(getClientKey(req));
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: `Too many VLM select-best requests — retry after ${rate.retryAfterSec}s` },
+      { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } },
+    );
+  }
+
   try {
     const body = await req.json();
     const { screenshots, recipe, analysisSummary, prompt } = body as {
@@ -34,12 +216,65 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'screenshots array is required' }, { status: 400 });
     }
 
+    // R165 (VLM-006): cap screenshot count + per-image size. Previously
+    // 8+ screenshots × 1MB each passed silently — VLM token spend was
+    // unbounded.
+    if (screenshots.length > MAX_SCREENSHOTS) {
+      return NextResponse.json(
+        { error: `screenshots array exceeds the maximum of ${MAX_SCREENSHOTS} entries (got ${screenshots.length})` },
+        { status: 400 },
+      );
+    }
+    for (let i = 0; i < screenshots.length; i++) {
+      const dataUri = typeof screenshots[i]?.dataUri === 'string' ? screenshots[i].dataUri : '';
+      if (!dataUri.startsWith('data:image/')) {
+        return NextResponse.json(
+          { error: `screenshots[${i}].dataUri must be a data:image/* URI` },
+          { status: 400 },
+        );
+      }
+      const b64Len = (dataUri.split(',')[1] ?? '').length;
+      if (b64Len > MAX_SCREENSHOT_BASE64_CHARS) {
+        return NextResponse.json(
+          { error: `screenshots[${i}] exceeds the per-image limit of ${MAX_SCREENSHOT_BASE64_CHARS} base64 chars (~3MB decoded)` },
+          { status: 400 },
+        );
+      }
+    }
+
+    // R165 (VLM-004): /tmp debug dump is now gated behind VLM_DEBUG_DUMP=1.
+    // Previously it wrote unconditionally on every request — concurrent
+    // requests stacked files and could be abused to fill /tmp. Default
+    // (env unset): zero filesystem writes.
+    let debugDumpPattern: string | null = null;
+    if (process.env.VLM_DEBUG_DUMP === '1') {
+      try {
+        const { writeFileSync, readdirSync, unlinkSync } = await import('node:fs');
+        // Keep only the newest batch (R162 bound — at most one batch exists).
+        for (const f of readdirSync('/tmp').filter(f => f.startsWith('qa_screenshot_'))) {
+          try { unlinkSync('/tmp/' + f); } catch { /* ignore */ }
+        }
+        const stamp = Date.now();
+        for (let i = 0; i < Math.min(screenshots.length, MAX_SCREENSHOTS); i++) {
+          const s = screenshots[i];
+          if (s?.dataUri?.startsWith('data:image/png;base64,')) {
+            const b64 = s.dataUri.split(',')[1] ?? '';
+            writeFileSync(`/tmp/qa_screenshot_${stamp}_${i}_${s.angle || 'x'}.png`, Buffer.from(b64, 'base64'));
+          }
+        }
+        writeFileSync(`/tmp/qa_screenshot_${stamp}_meta.json`, JSON.stringify({ recipe, n: screenshots.length }));
+        debugDumpPattern = `/tmp/qa_screenshot_${stamp}_*`;
+        console.log(`[vlm/select-best] VLM_DEBUG_DUMP=1 — dumped ${Math.min(screenshots.length, MAX_SCREENSHOTS)} screenshots to ${debugDumpPattern}`);
+      } catch { /* debug only */ }
+    }
+
     if (screenshots.length === 1) {
       // Only one screenshot — no need to call VLM, just return it
       return NextResponse.json({
         bestIndex: 0,
         commentary: 'Only one screenshot available — auto-selected.',
         recipe,
+        vlmSignal: 'skipped',
       });
     }
 
@@ -49,13 +284,17 @@ export async function POST(req: NextRequest) {
 
     // Build the VLM prompt based on the recipe type
     const recipeContext = getRecipeContext(recipe);
+    // R167 (VLM-009): sanitize the (untrusted, tool-result-shaped) summary
+    // BEFORE it touches the prompt or the residue extractor — flattened,
+    // injection-scrubbed, and truncated to 800 chars.
+    const safeSummary = sanitizeAnalysisSummary(analysisSummary);
     // Round 73: Extract key residues from analysis summary for VLM reference
-    const residueInfo = extractResidueInfo(analysisSummary || '');
+    const residueInfo = extractResidueInfo(safeSummary);
     const residueText = residueInfo ? `\n\n关键残基信息（请在评语中引用这些残基名称）：\n${residueInfo}` : '';
 
     const defaultPrompt = `你是一位结构生物学专家。请查看以下${screenshots.length}张蛋白质3D结构截图，它们分别从不同角度（${screenshots.map(s => s.angle).join('、')}）拍摄。
 
-分析背景：${analysisSummary || recipeContext}${residueText}
+分析背景：${safeSummary || recipeContext}${residueText}
 
 请选择最能清晰展示"${recipeContext}"的那张截图。考虑以下因素：
 1. 关键结构特征是否清晰可见
@@ -127,15 +366,121 @@ recaptureHints对象提供重新截图的建议（当quality为degraded或unacce
       });
     }
 
-    const response = await zai.chat.completions.createVision({
+    // R163: VLM rate-limit handling — on 429 (or transient network failure),
+    // retry with exponential backoff 5s / 15s / 45s instead of failing fast.
+    // Previously a single 429 aborted the whole visual-verification pass.
+    const isRateLimitError = (err: unknown): boolean => {
+      const e = err as { status?: number; statusCode?: number; message?: string; code?: number };
+      if (e?.status === 429 || e?.statusCode === 429 || e?.code === 429) return true;
+      const msg = String(e?.message ?? '');
+      return /429|rate.?limit|too many requests/i.test(msg);
+    };
+    const isTransientError = (err: unknown): boolean => {
+      // R165 (VLM-005): aborts from the per-attempt timeout surface as
+      // DOMExceptions whose name (not message) carries the signal — they
+      // must count as retryable or a single hung call exhausts the budget.
+      const name = String((err as { name?: string })?.name ?? '');
+      if (name === 'AbortError' || name === 'TimeoutError') return true;
+      const msg = String((err as { message?: string })?.message ?? '');
+      return /timeout|etimedout|econnreset|econnrefused|socket hang up|network|fetch failed|aborted/i.test(msg);
+    };
+
+    const VLM_BACKOFF_SCHEDULE_MS = [5_000, 15_000, 45_000]; // 5s / 15s / 45s
+    const vlmStartTime = Date.now();
+    let response: Awaited<ReturnType<typeof zai.chat.completions.createVision>> | null = null;
+    let lastError: unknown = null;
+    // Note: `model` is omitted so the backend picks its default vision model
+    // (same behavior as before R163) — hence the `as never` cast below.
+    const visionBody = {
       messages: [
         {
-          role: 'user',
+          role: 'user' as const,
           content,
         },
       ],
-      thinking: { type: 'disabled' },
-    });
+      thinking: { type: 'disabled' as const },
+    };
+    // R164 (VLM-002): build an inner AbortController chained to the
+    // request signal so a client disconnect propagates to BOTH the
+    // backoff timer (interruptible sleep) AND the underlying VLM call.
+    // Previously the backoff timer used `setTimeout` with no signal and
+    // the createVision() call had no AbortSignal — a client that
+    // navigated away 30s into the schedule still caused the server to
+    // fire up to 4 VLM calls, paying full token cost while the client
+    // showed a stale "未经视觉验证" badge.
+    const innerController = new AbortController();
+    const onReqAbort = () => innerController.abort();
+    req.signal.addEventListener('abort', onReqAbort);
+    try {
+      for (let attempt = 0; attempt <= VLM_BACKOFF_SCHEDULE_MS.length; attempt++) {
+        // Check abort BEFORE each attempt — short-circuits the whole
+        // retry schedule if the client disconnects mid-backoff.
+        if (req.signal.aborted || innerController.signal.aborted) {
+          throw new DOMException('Client disconnected — VLM call aborted', 'AbortError');
+        }
+        // R165 (VLM-005): per-attempt signal = request-level signal (R164
+        // innerController, covers client disconnect) + a 55s single-call
+        // timeout. Previously a createVision that hung ≥60s per attempt
+        // blew the maxDuration=300 budget on the 4th retry; the timeout
+        // abort is classified as transient → counts against the same
+        // backoff/retry sequence as 429s.
+        const attemptSignal = combineAbortSignals(
+          innerController.signal,
+          AbortSignal.timeout(VLM_SINGLE_CALL_TIMEOUT_MS),
+        );
+        try {
+          // R164 (VLM-002): pass signal to the SDK call. If the SDK
+          // respects it, the in-flight HTTP request is cancelled
+          // immediately on client disconnect (no token spend).
+          response = await (zai.chat.completions.createVision as unknown as (
+            (body: unknown, opts?: { signal?: AbortSignal }) => Promise<typeof response>
+          ))(visionBody, { signal: attemptSignal });
+          break;
+        } catch (err) {
+          // If the abort signal fired, stop retrying immediately.
+          if (innerController.signal.aborted || req.signal.aborted) {
+            throw new DOMException('Client disconnected — VLM call aborted', 'AbortError');
+          }
+          lastError = err;
+          const retryable = isRateLimitError(err) || isTransientError(err);
+          if (!retryable || attempt === VLM_BACKOFF_SCHEDULE_MS.length) {
+            // non-retryable, or backoff schedule exhausted
+            throw err;
+          }
+          const baseMs = VLM_BACKOFF_SCHEDULE_MS[attempt]!;
+          // R164 (VLM-008): jitter the backoff by 0-500ms so concurrent
+          // captures retrying in lockstep don't thundering-herd the VLM.
+          const waitMs = baseMs + Math.floor(Math.random() * 500);
+          console.warn(
+            `[vlm/select-best] attempt ${attempt + 1} failed (${isRateLimitError(err) ? '429 rate limit' : 'transient error'}) — ` +
+            `retrying in ${(waitMs / 1000).toFixed(1)}s (${VLM_BACKOFF_SCHEDULE_MS.length - attempt} retries left)`
+          );
+          // R164 (VLM-002): interruptible sleep — rejects immediately if
+          // the abort signal fires during the wait.
+          await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(() => {
+              innerController.signal.removeEventListener('abort', onTimeoutAbort);
+              resolve();
+            }, waitMs);
+            const onTimeoutAbort = () => {
+              clearTimeout(t);
+              reject(new DOMException('Client disconnected — backoff aborted', 'AbortError'));
+            };
+            innerController.signal.addEventListener('abort', onTimeoutAbort, { once: true });
+          });
+        }
+      }
+    } finally {
+      req.signal.removeEventListener('abort', onReqAbort);
+      // Don't abort the controller here if response succeeded — the
+      // call already completed.
+    }
+    if (!response) {
+      throw lastError ?? new Error('VLM call failed without response');
+    }
+    if (Date.now() - vlmStartTime > 30_000) {
+      console.log(`[vlm/select-best] VLM call took ${((Date.now() - vlmStartTime) / 1000).toFixed(1)}s (incl. backoff retries)`);
+    }
 
     const vlmResponse = response.choices?.[0]?.message?.content || '';
 
@@ -149,11 +494,20 @@ recaptureHints对象提供重新截图的建议（当quality为degraded或unacce
     let issues: string[] = [];
     let recaptureHints: { angles?: string[]; focus?: string; zoom?: 'in' | 'out' } = {};
 
-    // Try to extract JSON from the response
-    const jsonMatch = vlmResponse.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
+    // R165 (VLM-007): explicit signal distinguishing "the VLM chose this
+    // bestIndex" from "parsing failed and bestIndex defaulted" — previously
+    // both cases returned bestIndex=0 with no way for the caller to tell.
+    let vlmSignal: 'ok' | 'parse-failed' = 'ok';
+
+    // R165 (VLM-007): robust extraction — ```json fenced block first, then
+    // a balanced-brace scan (handles braces inside JSON strings). Replaces
+    // the old greedy regex /\{[\s\S]*\}/ which spanned the first '{' to
+    // the LAST '}' and broke on markdown-wrapped / multi-block responses.
+    const jsonText = extractFirstJsonObject(vlmResponse);
+    let parsedOk = false;
+    if (jsonText) {
       try {
-        const parsed = JSON.parse(jsonMatch[0]);
+        const parsed = JSON.parse(jsonText);
         if (typeof parsed.bestIndex === 'number' && parsed.bestIndex >= 0 && parsed.bestIndex < screenshots.length) {
           bestIndex = parsed.bestIndex;
         }
@@ -210,11 +564,20 @@ recaptureHints对象提供重新截图的建议（当quality为degraded或unacce
             recaptureHints.zoom = rh.zoom as 'in' | 'out';
           }
         }
+        parsedOk = true;
       } catch {
-        // JSON parse failed — use the raw response as commentary
+        // JSON.parse (or field extraction) failed — fall through to the
+        // parse-failed branch below (same defaults as the old silent catch,
+        // but now with an explicit signal + warn log instead of silence).
       }
-    } else {
-      // Try to find a number in the response that could be the index
+    }
+    if (!parsedOk) {
+      vlmSignal = 'parse-failed';
+      console.warn(
+        `[vlm/select-best] VLM response was not parseable JSON — bestIndex defaulted. ` +
+        `Raw response (truncated to 500 chars): ${vlmResponse.slice(0, 500)}`
+      );
+      // Legacy fallback: try to find a number in the response that could be the index
       const numMatch = vlmResponse.match(/(\d+)/);
       if (numMatch) {
         const num = parseInt(numMatch[1], 10);
@@ -271,6 +634,12 @@ recaptureHints对象提供重新截图的建议（当quality为degraded或unacce
       recaptureHints,
       recipe,
       vlmResponse,
+      // R165 (VLM-007): 'ok' = VLM chose bestIndex; 'parse-failed' = JSON
+      // extraction failed and bestIndex defaulted — callers can surface
+      // the difference instead of trusting a silent bestIndex=0.
+      vlmSignal,
+      // R165 (VLM-004): dump location when VLM_DEBUG_DUMP=1 is set (null otherwise).
+      debugDump: debugDumpPattern ?? undefined,
     });
   } catch (error: any) {
     console.error('[vlm/select-best] Error:', error);
@@ -338,11 +707,26 @@ function extractResidueInfo(summary: string): string | null {
     try {
       data = JSON.parse(summary);
     } catch {
-      // Not JSON — try to extract residue patterns from plain text
-      const residuePattern = /([A-Z]{3})(\d+)\(([A-Z])\)/g;
-      const matches = [...summary.matchAll(residuePattern)];
-      if (matches.length > 0) {
-        const residues = matches.slice(0, 10).map(m => `${m[1]}${m[2]}(${m[3]})`);
+      // Not JSON — try to extract residue patterns from plain text.
+      // R167 (VLM-010): the old `[A-Z]{3}\d+\([A-Z]\)` regex hard-required a
+      // single-character chain suffix, so outputs using other real-world
+      // shapes — multi-char auth chain ids like "LEU12(AB)", or bare
+      // "GLU35" with no suffix at all — silently fell through to null.
+      // Now: chain suffix optional, 1-4 alphanumerics, both
+      // "RES123(Chain)" and "RES123" match; results are de-duplicated
+      // and capped at 10.
+      const residuePattern = /([A-Z]{3})(\d+)(?:\(([A-Za-z0-9]{1,4})\))?/g;
+      const seenResidues = new Set<string>();
+      const residues: string[] = [];
+      for (const m of summary.matchAll(residuePattern)) {
+        const formatted = m[3] ? `${m[1]}${m[2]}(${m[3]})` : `${m[1]}${m[2]}`;
+        if (!seenResidues.has(formatted)) {
+          seenResidues.add(formatted);
+          residues.push(formatted);
+        }
+        if (residues.length >= 10) break;
+      }
+      if (residues.length > 0) {
         return `检测到的残基: ${residues.join(', ')}`;
       }
       return null;

@@ -23,6 +23,7 @@ import type { ToolDefinition } from "./tool-registry";
  */
 export const ANALYSIS_RECIPES = [
   "hbonds", "salt_bridges", "hydrophobic_contacts", "all_interactions",
+  "pairwise_interactions",
   "binding_pocket", "druggability", "virtual_screening", "druglike_screening",
   "ligand_interactions", "disulfide_bonds", "metal_coordination",
   "aromatic_stacking", "water_bridges", "sasa", "electrostatic",
@@ -105,7 +106,7 @@ export const LOAD_STRUCTURE_URL: ToolDefinition = {
 // ---- Analysis ----
 export const PDB_ANALYZE: ToolDefinition = {
   name: "pdb_analyze",
-  description: "Run a structure analysis recipe. Returns detailed interaction/pocket/structure data. For single-chain structures, set chain1=chain2. For binding pocket analysis, pass ligandCompId and radius.",
+  description: "Run a structure analysis recipe. Returns detailed interaction/pocket/structure data. For single-chain structures, set chain1=chain2. For binding pocket analysis, pass ligandCompId and radius. IMPORTANT: use recipe 'pairwise_interactions' for complete inter-chain analysis of multi-chain structures — it analyzes EVERY chain pair automatically (chain1/chain2 are then not needed). Multi-angle screenshots + VLM quality check run automatically after visualizable recipes; do not capture them yourself.",
   category: "analysis",
   parameters: {
     recipe: {
@@ -114,8 +115,8 @@ export const PDB_ANALYZE: ToolDefinition = {
       required: true,
       enum: [...ANALYSIS_RECIPES],
     },
-    chain1: { type: "string", description: "Chain 1 ID (e.g. A). For intra-chain analysis, set chain1=chain2.", required: true },
-    chain2: { type: "string", description: "Chain 2 ID (e.g. B, or same as chain1 for intra-chain)", required: true },
+    chain1: { type: "string", description: "Chain 1 ID (e.g. A). For intra-chain analysis, set chain1=chain2. Not needed for pairwise_interactions." },
+    chain2: { type: "string", description: "Chain 2 ID (e.g. B, or same as chain1 for intra-chain). Not needed for pairwise_interactions." },
     ligandCompId: { type: "string", description: "Ligand compId for pocket analysis (e.g. N3, HEM, PJE). Required for binding_pocket, druggability, ligand_interactions." },
     radius: { type: "number", description: "Pocket/interaction radius in Angstroms (default 5.0 for pocket, 8.0 for interactions)" },
   },
@@ -372,7 +373,7 @@ export const CLEAR_MEASUREMENTS: ToolDefinition = {
 // ---- Screenshot / capture ----
 export const CAPTURE_MULTI_ANGLE: ToolDefinition = {
   name: "capture_multi_angle",
-  description: "Capture screenshots from multiple angles (front, side, top, back). Returns image data URIs for VLM analysis. Pass interactions array from pdb_analyze to show side chains (ball-and-stick) and hydrogen bond lines (dashed). Pass labels for residue annotation.",
+  description: "Capture screenshots from multiple angles (front, side, top, back). Returns image data URIs for VLM analysis. NOTE: the harness ALREADY captures multi-angle screenshots automatically after every visualizable pdb_analyze — only call this tool when the user explicitly asks for extra screenshots or different angles, or to re-visualize a previous analysis. Pass interactions array from pdb_analyze to show side chains (ball-and-stick) and hydrogen bond lines (dashed). Pass labels for residue annotation.",
   category: "visualization",
   parameters: {
     recipe: { type: "string", description: "Recipe name for screenshot labeling and visualization (e.g. binding_pocket, hbonds, all_interactions)", required: true },
@@ -394,8 +395,8 @@ export const CAPTURE_MULTI_ANGLE: ToolDefinition = {
       description: "Residue labels to display on the screenshot. Each item: {text, chain, resno}. text is the label (e.g. C145 for Cys145).",
       items: { type: "object" },
     },
-    labelFontSize: { type: "number", description: "Font size for residue labels (default 24)" },
-    maxLabels: { type: "number", description: "Maximum number of labels to show (default 12)" },
+    labelFontSize: { type: "number", description: "Font size for residue labels (default 0.5). Labels are auto-placed with anti-overlap spiral layout and no background box" },
+    maxLabels: { type: "number", description: "Maximum number of labels to show (default 8)" },
   },
 };
 

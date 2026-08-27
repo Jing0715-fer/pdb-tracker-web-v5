@@ -724,7 +724,9 @@ export async function showResidueSidechain(
       if (unit.kind !== 0) continue; // atomic only
       const indices = [];
       for (let i = 0; i < unit.elements.length; i++) {
-        const loc = SE.Location.create(data, unit, i);
+        // R166 (multi-chain loci bug): Location.create's 3rd arg is the ELEMENT
+        // (unit.elements[i]), not the within-unit position — see recipe-viz.ts.
+        const loc = SE.Location.create(data, unit, unit.elements[i]);
         if (ref.chain) {
           const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
           if (chainId !== ref.chain) continue;

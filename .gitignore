@@ -57,6 +57,14 @@ server.log
 /tool-results/
 
 # Downloaded/generated images during QA
-/tmp/*.pngdb/*.db
+/tmp/*.png
+
+# SQLite runtime copies (main db stays tracked)
 db/*.db-*
 .hermes/
+
+# Sandbox runtime noise
+*.pid
+watchdog*.out
+restart-loop.out
+agent-ctx-tmp/

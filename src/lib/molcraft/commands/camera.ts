@@ -105,6 +105,59 @@ export function getCurrentCameraState(plugin: MolstarPlugin): CameraViewState | 
   }
 }
 
+// ============================================================
+// R163: User-camera save/restore — fixes "view stays locked at the
+// analysis-focused position after the LLM analysis finishes".
+//
+// capture_multi_angle focuses the interface (applyRecipeVisualization →
+// focusLoci) before rotating through capture angles. Previously the final
+// restoreCameraState() put the camera back at that FOCUSED view, so after
+// the analysis the user's original view was replaced ("视角被锁定").
+// Now we snapshot the user's camera BEFORE any recipe visualization and
+// restore it after the capture loop + cleanup complete.
+// ============================================================
+let savedUserCameraState: CameraViewState | null = null;
+
+/** R163: Snapshot the user's current camera (call before focusing). */
+export function saveUserCameraState(plugin: MolstarPlugin): void {
+  savedUserCameraState = getCurrentCameraState(plugin);
+  if (savedUserCameraState) {
+    console.log('[saveUserCameraState] user view snapshotted for post-analysis restore');
+  }
+}
+
+/**
+ * R163: Restore the user's pre-analysis camera. Idempotent — the snapshot
+ * is kept so multiple capture iterations (VLM recapture loop) can each
+ * restore the same user view at their end.
+ */
+export function restoreUserCameraState(plugin: MolstarPlugin): void {
+  if (!savedUserCameraState) return;
+  try {
+    restoreCameraViewState(plugin, savedUserCameraState);
+  } catch (err) {
+    console.warn('[restoreUserCameraState] failed:', err);
+  }
+}
+
+/**
+ * R164 (MOL-003 / UI-004): Reset all module-level camera state.
+ *
+ * Called from clearViewerStructures (use-agent-session.ts) BEFORE the
+ * structure is removed, so the next session's first capture_multi_angle
+ * doesn't try to restoreUserCameraState() onto a stale snapshot taken
+ * against a DIFFERENT structure's coordinate frame (which would leave
+ * the camera at a degenerate angle pointing at empty space).
+ *
+ * Also called from __drainCaptureQueue (commands.ts) so the mutex reset
+ * and the camera-state reset happen as a single atomic session-reset.
+ */
+export function __resetCameraState(): void {
+  savedCameraState = null;
+  savedUserCameraState = null;
+  console.log('[resetCameraState] cleared savedCameraState + savedUserCameraState');
+}
+
 /**
  * R144: Restore a specific camera view state.
  * Used by the "恢复视角" button in the screenshot carousel to restore

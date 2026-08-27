@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
-import { getRecipe, probeAllClis } from "@/lib/molcraft/cli-registry";
+import { getRecipe, probeAllClis, CHILD_ENV } from "@/lib/molcraft/cli-registry";
 import { normalizeRecipeName } from "@/lib/molcraft/recipe-aliases";
 
 const execFileAsync = promisify(execFile);
@@ -112,6 +112,100 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // R164 (PY-002 / MOL-001): Upstream param allow-list validation.
+    // The recipe scripts use pyStr()/pyNum() to safely interpolate params
+    // into Python source (JSON.stringify-quoted strings + finite-number
+    // checks), but defense-in-depth: reject obviously-malformed values
+    // here so a misbehaving LLM can't even reach the Python side with a
+    // 10KB chain id or a negative pH. Maps each known param name to its
+    // validator. Unknown params are stripped (don't pass them through).
+    const STRING_PARAM_RE = /^[A-Za-z0-9_.\- ]{0,16}$/; // chain ids, compIds, ff names, fragment sets
+    const POSITIVE_NUM = (n: unknown): boolean =>
+      typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 10000;
+    const SMALL_NUM = (n: unknown): boolean =>
+      typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1000;
+    const PH_RE = /^[0-9]+(\.[0-9]+)?$/; // pH 0..14 string-or-number
+    const isStringParam = (v: unknown): boolean =>
+      typeof v === 'string' && STRING_PARAM_RE.test(v);
+    const isStringArrayParam = (v: unknown): boolean =>
+      Array.isArray(v) && v.length <= 200 && v.every((x) => typeof x === 'string' && /^[A-Za-z0-9_.\- ]{0,32}$/.test(x));
+
+    const STRING_PARAMS = new Set([
+      'chain', 'chain1', 'chain2', 'chainFilter',
+      'ligandCompId', 'ligand_filter_id',
+      'ff', 'fragmentSet', 'fragment_set',
+      'pdbId1', 'pdbId2',
+    ]);
+    const POSITIVE_NUM_PARAMS = new Set([
+      'cutoff', 'radius', 'ligandRadius', 'ligand_cutoff',
+      'distTol', 'dist_tolerance', 'angleTol', 'angle_tolerance',
+      'windowSize', 'window',
+      'gridSpacing', 'grid_spacing', 'probeRadius', 'probe_radius',
+      'minVolume', 'min_volume',
+      'evalue', 'evalue_threshold',
+      'threshold', 'ionic', 'grid',
+      'pH', // 0..14, validated separately as a string-or-number
+    ]);
+
+    if (body.params) {
+      const cleaned: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(body.params)) {
+        if (key.startsWith('__')) {
+          // Reserved internal keys (__format__, __secondPath__) — pass through.
+          cleaned[key] = value;
+          continue;
+        }
+        if (STRING_PARAMS.has(key)) {
+          if (value === null || value === undefined || value === '') {
+            // Allow empty / null (recipe will use its own default).
+            continue;
+          }
+          if (!isStringParam(value)) {
+            return NextResponse.json(
+              { error: `Param "${key}" must be a short alphanumeric string (max 16 chars, [A-Za-z0-9_.- ]), got: ${JSON.stringify(value).slice(0, 80)}` },
+              { status: 400 },
+            );
+          }
+          cleaned[key] = value;
+          continue;
+        }
+        if (POSITIVE_NUM_PARAMS.has(key)) {
+          if (value === null || value === undefined || value === '') continue;
+          if (key === 'pH') {
+            if (typeof value === 'string' && PH_RE.test(value)) {
+              cleaned[key] = Number(value);
+              continue;
+            }
+          }
+          if (!SMALL_NUM(value)) {
+            return NextResponse.json(
+              { error: `Param "${key}" must be a finite number in [0, 1000], got: ${JSON.stringify(value).slice(0, 80)}` },
+              { status: 400 },
+            );
+          }
+          cleaned[key] = value;
+          continue;
+        }
+        if (key === 'pairs' || key === 'pdbIds') {
+          if (!isStringArrayParam(value)) {
+            return NextResponse.json(
+              { error: `Param "${key}" must be an array of short strings (max 200 entries, each ≤32 chars [A-Za-z0-9_.- ]), got: ${JSON.stringify(value).slice(0, 80)}` },
+              { status: 400 },
+            );
+          }
+          cleaned[key] = value;
+          continue;
+        }
+        if (key === 'intraChain' || key === 'intra_chain') {
+          cleaned[key] = value ? true : false;
+          continue;
+        }
+        // Unknown param — drop silently (defense-in-depth).
+        console.warn(`[/api/analyze/run] Dropping unknown param "${key}"`);
+      }
+      body.params = cleaned;
+    }
+
     // Check recipe dependencies are installed.
     const clis = await probeAllClis();
     const available = new Set(
@@ -188,23 +282,18 @@ export async function POST(req: NextRequest) {
 
     // Run it.
     try {
-      // Ensure the Python venv (biopython, numpy) AND local binaries are in PATH.
-      // The Next.js server process may inherit a PATH that doesn't include
-      // the venv where biopython/numpy are installed.
-      // Cross-platform: Windows uses ';' as PATH separator, Unix uses ':'
-      const VENV_BIN = '/home/z/.venv/bin';
-      const EXTRA_PATH = '/home/z/.local/bin';
-      const ENV_PATH = process.env.PATH || '';
-      const PATH_SEP = process.platform === 'win32' ? ';' : ':';
-      const pathParts = ENV_PATH.split(PATH_SEP).filter(Boolean);
-      const fullParts = [VENV_BIN, EXTRA_PATH, ...pathParts.filter(p => p !== VENV_BIN && p !== EXTRA_PATH)];
-      const childEnv = { ...process.env, PATH: fullParts.join(PATH_SEP) };
+      // R164 (PY-001): reuse the shared CHILD_ENV exported from cli-registry
+      // so this route's spawn and the recipe-runner's spawn agree on PATH
+      // (prepends /home/z/.venv/bin + /home/z/.local/bin for biopython +
+      // pdb2pqr/propka). Previously this route had its own duplicate env-
+      // building block; if the venv location ever changes, both spawn
+      // sites would silently diverge.
       // Cross-platform: Windows usually has "python" not "python3"
       const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
       const { stdout, stderr } = await execFileAsync(
         pythonBin,
         [scriptPath],
-        { timeout: 45_000, maxBuffer: 10 * 1024 * 1024, env: childEnv }
+        { timeout: 45_000, maxBuffer: 10 * 1024 * 1024, env: CHILD_ENV }
       );
 
       // Try to parse stdout as JSON; recipes print pretty-printed JSON.
