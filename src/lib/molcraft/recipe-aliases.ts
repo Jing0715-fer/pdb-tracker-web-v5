@@ -168,20 +168,3 @@ export function isCanonicalRecipe(recipe: string): boolean {
   return (CANONICAL_RECIPES as readonly string[]).includes(normalized);
 }
 
-/**
- * Get the list of recipes that produce visualizable results (suitable
- * for screenshot capture).
- */
-export function getVisualizableRecipes(): Set<string> {
-  return new Set([
-    "binding_pocket", "druggability", "all_interactions", "hbonds",
-    "pairwise_interactions",
-    "salt_bridges", "hydrophobic_contacts", "ligand_interactions",
-    "disulfide_bonds", "metal_coordination", "aromatic_stacking",
-    "water_bridges", "sasa", "electrostatic", "apbs_electrostatic",
-    "virtual_screening", "druglike_screening", "interface_residues",
-    "secondary_structure_simple", "bfactor_stats", "rmsd",
-    "detect_pockets", "oligomer_analysis", "surface_residues",
-    "conformational_changes", "protonation_states", "summary",
-  ]);
-}

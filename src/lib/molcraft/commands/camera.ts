@@ -37,10 +37,11 @@ export function saveCameraState(plugin: MolstarPlugin): void {
   } catch (err) { console.warn('[saveCameraState] failed to save camera state:', err); }
 }
 
-export function restoreCameraState(plugin: MolstarPlugin): void {
-  restoreCameraStateImpl(plugin, false);
-}
-
+/**
+ * R169 (MOL-L1): the one-shot `restoreCameraState` wrapper was deleted —
+ * zero callers (everything uses the Keep variant). The impl now defaults
+ * to keep=true semantics via restoreCameraStateKeep below.
+ */
 /**
  * R143: Restore camera state WITHOUT clearing it, so it can be called
  * multiple times in a loop (e.g., before each angle in capture_multi_angle).

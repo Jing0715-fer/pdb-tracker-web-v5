@@ -12,7 +12,6 @@
  *   5. On quality='degraded'|'unacceptable': trigger recapture feedback
  */
 
-import type { AnalysisImage } from "./store";
 
 /**
  * Normalize interaction data from different recipe schemas to a unified format.
@@ -409,11 +408,6 @@ export async function selectBestScreenshot(
   }
 }
 
-/** R108.4: Clear the VLM cache (for testing or when structure changes) */
-export function clearVlmCache(): void {
-  vlmCache.clear();
-}
-
 /**
  * R163: Run VLM selection with exponential backoff (5s / 15s / 45s).
  *
@@ -464,45 +458,6 @@ export async function selectBestWithRetry(
     console.warn('[vlm-client] All VLM attempts failed — caller should mark results as 未经视觉验证');
   }
   return result;
-}
-
-/**
- * Apply VLM result to a list of AnalysisImages for a specific recipe.
- * Returns the updated images (with best/score/confidence/comments/quality).
- */
-export function applyVlmResultToImages(
-  images: AnalysisImage[],
-  recipe: string,
-  vlm: VlmResult,
-): AnalysisImage[] {
-  // R165 (VLM-007): prefix comments when the server couldn't parse the VLM
-  // response — the UI then shows an explicit "parse failed" signal instead
-  // of presenting a defaulted bestIndex as a real VLM selection.
-  const parseFailedPrefix = vlm.vlmSignal === "parse-failed" ? "[VLM输出解析失败] " : "";
-  return images.map((img) => {
-    if (img.recipe !== recipe) return img;
-    // Find the index of this image within the recipe's images
-    const recipeImages = images.filter((i) => i.recipe === recipe);
-    const idx = recipeImages.indexOf(img);
-    return {
-      ...img,
-      best: idx === vlm.bestIndex,
-      vlmComment:
-        vlm.comments && idx < vlm.comments.length
-          ? parseFailedPrefix + vlm.comments[idx]
-          : idx === vlm.bestIndex
-            ? parseFailedPrefix + vlm.commentary
-            : undefined,
-      score: vlm.scores && idx < vlm.scores.length ? vlm.scores[idx] : undefined,
-      confidence: vlm.confidence,
-      // R100.3: Set quality + issues from VLM result
-      quality: vlm.quality,
-      issues:
-        vlm.issues && idx < vlm.issues.length
-          ? [vlm.issues[idx]]
-          : undefined,
-    };
-  });
 }
 
 /**

@@ -61,6 +61,15 @@ const AgentChatPanel = dynamic(
   }
 );
 
+// UI-021: defense-in-depth URL filter for markdown rendered from saved
+// reports / LLM output. react-markdown's default transform already drops
+// javascript: URLs — this makes the allowlist explicit: only absolute
+// http(s), site-relative, and fragment URLs survive.
+const safeUrlTransform = (url: string) =>
+  /^https?:\/\//i.test(url) || url.startsWith("/") || url.startsWith("#")
+    ? url
+    : "";
+
 interface StructureInfo {
   pdbId: string;
   title: string;
@@ -133,6 +142,12 @@ export function AnalysisRightPanel({ structureInfo }: { structureInfo?: Structur
   const handleLoadSession = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // UI-022: refuse oversized session files before reading them into memory.
+    if (file.size > 10 * 1024 * 1024) {
+      toast("文件过大：会话文件不能超过 10MB", "error");
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -400,7 +415,10 @@ function ReportsTab() {
                       </Button>
                     </div>
                     <div className="prose prose-sm max-w-none text-[11px] text-claude-text">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        urlTransform={safeUrlTransform}
+                      >
                         {r.markdown}
                       </ReactMarkdown>
                     </div>

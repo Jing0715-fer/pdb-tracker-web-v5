@@ -292,7 +292,7 @@ export interface AnalysisRecipe {
     required: boolean;
     description: string;
   }>;
-  /** Returns a Python script body. `inputPath` is the local file path, `params` includes `__format__`. */
+  /** Returns a Python script body. `inputPath` is the local file path; recipes sniff its extension for the parser choice (R169/MOL-L5: `__format__` removed — never consumed). */
   buildScript: (inputPath: string, params: Record<string, unknown>) => string;
 }
 

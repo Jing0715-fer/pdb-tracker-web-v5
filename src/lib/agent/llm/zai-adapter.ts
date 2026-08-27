@@ -124,6 +124,13 @@ export class ZaiLlmAdapter implements LlmAdapter {
         const ZAI = (mod as unknown as { default: { create: () => Promise<ZaiSdk> } }).default;
         return ZAI.create();
       })();
+      // R169 (AGENT-L4): a rejected init used to be cached FOREVER — one
+      // transient ZAI.create() error permanently poisoned every subsequent
+      // drive in this process. Reset the cache on failure so the next call
+      // retries init.
+      this.sdkPromise.catch(() => {
+        this.sdkPromise = null;
+      });
     }
     return this.sdkPromise;
   }

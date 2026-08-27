@@ -69,23 +69,30 @@ export function useAnalysisKeyboardShortcuts(enabled: boolean = true) {
           executeCommand(viewer, { type: "reset_camera" }).catch(() => {});
           break;
 
-        case "p":
+        case "p": {
           e.preventDefault();
-          try {
-            viewer.plugin.helpers.viewportScreenshot
-              ?.getImageDataUri()
-              .then((data: string) => {
-                if (data) {
-                  const a = document.createElement("a");
-                  a.href = data;
-                  a.download = `snapshot-${Date.now()}.png`;
-                  a.click();
-                  useAppStore.getState().toast("Snapshot saved", "success");
-                }
-              })
-              .catch(() => {});
-          } catch {}
+          // UI-020: the viewport-screenshot helper may be missing early in
+          // the viewer lifecycle — guard and tell the user instead of a
+          // silent no-op.
+          const helper = viewer.plugin?.helpers?.viewportScreenshot;
+          if (!helper) {
+            useAppStore.getState().toast("截图功能尚未就绪，未初始化完成", "error");
+            return;
+          }
+          helper
+            .getImageDataUri()
+            .then((data) => {
+              if (data) {
+                const a = document.createElement("a");
+                a.href = data;
+                a.download = `snapshot-${Date.now()}.png`;
+                a.click();
+                useAppStore.getState().toast("Snapshot saved", "success");
+              }
+            })
+            .catch(() => {});
           break;
+        }
 
         case "b":
           e.preventDefault();

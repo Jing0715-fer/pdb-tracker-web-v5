@@ -136,7 +136,7 @@ export function registerDomainTools(executeCommandFn: ExecuteCommandFn): void {
   toolRegistry.register(DETECT_POCKETS, async (args, ctx) =>
     executeCommandFn(ctx.viewer, {
       type: "detect_pockets",
-      minDepth: (args.minDepth as number) ?? 100,
+      minVolume: (args.minVolume as number) ?? 100, // R169 (MOL-L3)
     }),
   );
 

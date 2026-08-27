@@ -17,6 +17,7 @@
  */
 
 import { deepFreeze, newMessageId, type CallId, type Seq } from './types';
+import { truncateMarked } from './truncate';
 import { BlockAssembler } from './llm/assembler';
 import type {
   AssistantMessage,
@@ -35,7 +36,8 @@ import type { ToolDefinition } from './tools/types';
 // R164 (AGENT-001): used in drive() to emit approval/asked events for
 // approval-required tools so the client UI + tool-results gate both
 // see the approval decision.
-import { requiresApproval } from './pdb-tools';
+import { requiresApproval, SCREENSHOT_TOOLS } from './pdb-tools';
+import { extractSessionSettings } from './session/settings';
 
 export type AgentStatus = 'idle' | 'running';
 
@@ -69,6 +71,9 @@ export class AgentLoop {
   private turn = 0;
   private step = 0;
   private readonly controller = new AbortController();
+  // R169 (AGENT-L1): last logged provider/model — suppresses repeat logs.
+  private lastLoggedProvider: string | null = null;
+  private lastLoggedModel: string | null = null;
 
   constructor(ctx: AgentContext, session: Session, options: AgentOptions) {
     this.ctx = ctx;
@@ -99,7 +104,6 @@ export class AgentLoop {
         inboxKind: 'user',
       },
       'next-turn',
-      true,
     );
   }
 
@@ -117,7 +121,6 @@ export class AgentLoop {
         surfaceOp: { op: 'replace', start: replaceStart, end: replaceEnd },
       },
       'next-turn',
-      true,
     );
   }
 
@@ -129,7 +132,6 @@ export class AgentLoop {
         inboxKind: 'steering',
       },
       'next-step',
-      true,
     );
   }
 
@@ -141,7 +143,6 @@ export class AgentLoop {
         inboxKind: 'context',
       },
       'next-step',
-      false,
     );
   }
 
@@ -251,8 +252,14 @@ export class AgentLoop {
     // Priority: explicit providerId in settings → model-based lookup → default.
     const effectiveModel = settings.model ?? this.options.model;
     const effectiveProvider = settings.providerId ?? this.resolveProvider(effectiveModel);
-    // R117: Log the resolved provider for debugging
-    console.log(`[agent-loop] Provider: ${effectiveProvider} | Model: ${effectiveModel} | settings.providerId: ${settings.providerId ?? 'none'} | settings.model: ${settings.model ?? 'none'}`);
+    // R169 (AGENT-L1): the R117 provider log fired on EVERY step of EVERY
+    // session. Log only when the resolved provider/model pair CHANGES from
+    // the previous request — the useful signal, without the noise.
+    if (effectiveProvider !== this.lastLoggedProvider || effectiveModel !== this.lastLoggedModel) {
+      console.log(`[agent-loop] Provider: ${effectiveProvider} | Model: ${effectiveModel} | settings.providerId: ${settings.providerId ?? 'none'} | settings.model: ${settings.model ?? 'none'}`);
+      this.lastLoggedProvider = effectiveProvider;
+      this.lastLoggedModel = effectiveModel;
+    }
 
     // Log request header (initial on first step of the session).
     const header = {
@@ -513,7 +520,7 @@ export class AgentLoop {
       // after a resume). The LLM never sees the base64 payloads: the
       // SurfaceManager replaces long data URIs with placeholders when
       // projecting the model-visible history (session/surface.ts).
-      const isScreenshot = r.name === 'capture_multi_angle' || r.name === 'capture_snapshot' || r.name === 'recapture_screenshot';
+      const isScreenshot = SCREENSHOT_TOOLS.has(r.name); // R169 (AGENT-L7): single source of truth
       let resultToSend = r.result;
       let maxLen = 3000;
       // R126: For pdb_analyze, strip the raw interaction list to keep only summary
@@ -583,7 +590,9 @@ export class AgentLoop {
             // persisted event keeps the full image payload.
             text: isScreenshot
               ? JSON.stringify(resultToSend ?? {})
-              : JSON.stringify(resultToSend ?? {}).slice(0, maxLen),
+              // R169 (AGENT-L6): marked truncation — the LLM now sees an
+              // explicit …(truncated) suffix instead of silently cut JSON.
+              : truncateMarked(JSON.stringify(resultToSend ?? {}), maxLen),
           }]
         : [{ type: 'text', text: (r.error || 'Tool execution failed').slice(0, 500) }]; // R126: Truncate error too
       const toolResultBlock: ToolResultBlock = {
@@ -811,20 +820,9 @@ export class AgentLoop {
     maxStepsPerTurn?: number;
     systemPromptOverride?: string;
   } {
-    const events = this.session.events_;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i]!;
-      if (ev.type === ('session/settings' as string)) {
-        return ev.data as {
-          model?: string;
-          providerId?: string;
-          temperature?: number;
-          maxStepsPerTurn?: number;
-          systemPromptOverride?: string;
-        };
-      }
-    }
-    return {};
+    // R169 (AGENT-L8): delegate to the shared single source of truth
+    // (previously duplicated inline here + in the settings API route).
+    return extractSessionSettings(this.session.events_);
   }
 
   cancel(reason = 'cancelled'): void {

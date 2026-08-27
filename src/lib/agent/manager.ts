@@ -44,6 +44,8 @@ interface PendingApproval {
   resolve: (outcome: ApprovalOutcome) => void;
   reject: (err: Error) => void;
   signal: AbortSignal;
+  /** R169 (AGENT-L5): the 5-min auto-cancel timer — cleared on normal resolution. */
+  timer: ReturnType<typeof setTimeout>;
 }
 
 const AGENT_SYSTEM_PROMPT_SECTIONS = [
@@ -170,7 +172,6 @@ export class AgentManager {
     // through, so this path works if ever triggered.
     approval.setResolver(async (req) => {
       return await new Promise<ApprovalOutcome>((resolve, reject) => {
-        this.approvals.set(req.callId, { resolve, reject, signal: req.signal });
         // Auto-reject if the client never responds within 5 minutes.
         const timeout = setTimeout(() => {
           if (this.approvals.has(req.callId)) {
@@ -178,6 +179,7 @@ export class AgentManager {
             resolve('cancelled');
           }
         }, 5 * 60 * 1000);
+        this.approvals.set(req.callId, { resolve, reject, signal: req.signal, timer: timeout });
         // Also reject if the abort signal fires (session cancelled/deleted).
         req.signal.addEventListener('abort', () => {
           clearTimeout(timeout);
@@ -335,15 +337,6 @@ export class AgentManager {
     return this.sessions.get(sessionId);
   }
 
-  listSessions(): Array<{ id: string; title: string; createdAt: number; eventCount: number }> {
-    return [...this.sessions.values()].map((s) => ({
-      id: s.id,
-      title: s.title,
-      createdAt: s.createdAt,
-      eventCount: s.eventCount,
-    }));
-  }
-
   /** Ensure a session is in memory, auto-resuming from DB if needed. */
   async ensureSession(sessionId: string): Promise<Session | null> {
     const existing = this.getSession(sessionId);
@@ -432,6 +425,9 @@ export class AgentManager {
     const pending = this.approvals.get(callId);
     if (pending) {
       this.approvals.delete(callId);
+      // R169 (AGENT-L5): clear the 5-min auto-cancel timer — it previously
+      // stayed scheduled after normal resolution and fired later as a no-op.
+      clearTimeout(pending.timer);
       pending.resolve(outcome);
     }
     // R164 (AGENT-001): ALWAYS append the approval/decided event so the

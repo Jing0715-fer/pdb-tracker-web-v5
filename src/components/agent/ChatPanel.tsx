@@ -57,6 +57,15 @@ const SUGGESTIONS = [
   },
 ];
 
+/**
+ * UI-021: defense-in-depth URL filter for markdown rendered from LLM output.
+ * react-markdown's default urlTransform already drops javascript: URLs — this
+ * makes the allowlist explicit: only absolute http(s), site-relative, and
+ * fragment URLs survive; everything else is stripped.
+ */
+const safeUrlTransform = (url: string) =>
+  /^https?:\/\//i.test(url) || url.startsWith('/') || url.startsWith('#') ? url : '';
+
 export function AgentChatPanel() {
   const viewer = useAppStore((s) => s.viewer);
   const session = useAgentSession({ viewer });
@@ -80,9 +89,10 @@ export function AgentChatPanel() {
   }, [session.nodes, autoScroll]);
 
   // Keyboard shortcuts:
-  //   Cmd/Ctrl+K → focus the input
-  //   Esc        → close sidebar / blur input
-  //   Cmd/Ctrl+R → regenerate last response
+  //   Cmd/Ctrl+K       → focus the input
+  //   Esc              → close sidebar / blur input
+  //   Cmd/Ctrl+Shift+R → regenerate last response (plain Cmd/Ctrl+R keeps
+  //                      the browser's refresh behavior)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -92,8 +102,9 @@ export function AgentChatPanel() {
         inputRef.current?.focus();
         return;
       }
-      // Cmd/Ctrl+R → regenerate (prevent browser refresh)
-      if (mod && e.key === 'r' && !e.shiftKey) {
+      // UI-018: Cmd/Ctrl+Shift+R → regenerate; plain Cmd/Ctrl+R is left to
+      // the browser (page refresh) instead of being hijacked.
+      if (mod && e.shiftKey && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
         if (!session.driving) void session.regenerate();
         return;
@@ -145,6 +156,12 @@ export function AgentChatPanel() {
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // UI-022: refuse oversized session files before reading them into memory.
+    if (file.size > 10 * 1024 * 1024) {
+      useAppStore.getState().toast('文件过大：会话文件不能超过 10MB', 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
     try {
       const text = await file.text();
       const data = JSON.parse(text);
@@ -195,6 +212,7 @@ export function AgentChatPanel() {
             onClick={() => setHistoryOpen((v) => !v)}
             className="flex items-center justify-center h-6 w-6 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors shrink-0"
             title="会话历史"
+            aria-label="会话历史"
           >
             <History className="h-3.5 w-3.5" />
           </button>
@@ -249,6 +267,7 @@ export function AgentChatPanel() {
             disabled={session.driving}
             className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             title="新会话"
+            aria-label="新会话"
           >
             <Plus className="h-3 w-3" />
           </button>
@@ -257,6 +276,7 @@ export function AgentChatPanel() {
               onClick={() => setSettingsOpen(true)}
               className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
               title="会话设置"
+              aria-label="会话设置"
             >
               <Settings className="h-3 w-3" />
             </button>
@@ -265,6 +285,7 @@ export function AgentChatPanel() {
             onClick={() => setProvidersOpen(true)}
             className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
             title="供应商配置"
+            aria-label="供应商配置"
           >
             <Key className="h-3 w-3" />
           </button>
@@ -273,6 +294,7 @@ export function AgentChatPanel() {
               onClick={() => setToolStatsOpen(true)}
               className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
               title="工具执行统计"
+              aria-label="工具执行统计"
             >
               <BarChart3 className="h-3 w-3" />
             </button>
@@ -283,6 +305,7 @@ export function AgentChatPanel() {
               download
               className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors"
               title="导出为 Markdown"
+              aria-label="导出为 Markdown"
             >
               <Download className="h-3 w-3" />
             </a>
@@ -292,6 +315,7 @@ export function AgentChatPanel() {
             disabled={session.driving}
             className="flex items-center gap-0.5 h-5 px-1.5 rounded text-claude-text-muted hover:text-claude-accent hover:bg-claude-bg-elevated transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             title="导入会话 JSON"
+            aria-label="导入会话 JSON"
           >
             <Upload className="h-3 w-3" />
           </button>
@@ -383,7 +407,7 @@ export function AgentChatPanel() {
         <div className="mx-3 mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300 max-w-full overflow-hidden">
           <div className="flex items-start justify-between gap-2">
             <span className="break-all line-clamp-4 flex-1 min-w-0">{session.error}</span>
-            <button onClick={session.clearError} className="shrink-0 text-red-500 hover:text-red-700">
+            <button onClick={session.clearError} aria-label="关闭错误提示" className="shrink-0 text-red-500 hover:text-red-700">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -406,6 +430,7 @@ export function AgentChatPanel() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="向 DeepSeek Harness agent 提问…  (Enter 发送, Shift+Enter 换行)"
+              aria-label="向 DeepSeek Harness agent 提问"
               disabled={session.driving}
               className="min-h-[44px] max-h-32 resize-none text-sm bg-claude-bg-base border-claude-border focus-visible:ring-claude-accent/30"
               rows={1}
@@ -413,6 +438,7 @@ export function AgentChatPanel() {
             <Button
               size="icon"
               onClick={handleSend}
+              aria-label="发送"
               disabled={!input.trim() || session.driving}
               className="h-9 w-9 shrink-0 bg-claude-accent hover:bg-claude-accent/90 text-white"
             >
@@ -426,12 +452,13 @@ export function AgentChatPanel() {
             <div className="flex items-center gap-2 text-[10px] text-claude-text-muted">
               <kbd className="px-1 py-0.5 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px]">⌘K</kbd>
               <span className="opacity-60">聚焦</span>
-              <kbd className="px-1 py-0.5 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px]">⌘R</kbd>
+              <kbd className="px-1 py-0.5 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px]">⌘⇧R</kbd>
               <span className="opacity-60">重生成</span>
               <button
                 onClick={() => shortcutsDialog.setOpen(true)}
                 className="flex items-center justify-center h-4 w-4 rounded border border-claude-border bg-claude-bg-base font-mono text-[9px] hover:border-claude-accent/50 hover:text-claude-accent transition-colors"
                 title="快捷键帮助 (?)"
+                aria-label="快捷键帮助"
               >
                 ?
               </button>
@@ -582,6 +609,7 @@ function UserMessageNode({ seq, text, onResend, onFork }: { seq: number; text: s
         <div className="flex items-start gap-2 max-w-[85%]">
           <div className="rounded-2xl rounded-tr-sm bg-claude-bg-surface border-2 border-claude-accent/40 px-2 py-1.5 text-sm min-w-[200px]">
             <Textarea
+              aria-label="编辑消息"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -635,6 +663,7 @@ function UserMessageNode({ seq, text, onResend, onFork }: { seq: number; text: s
               onClick={() => onFork(seq)}
               className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors"
               title="从此处分叉对话"
+              aria-label="从此处分叉对话"
             >
               <GitFork className="h-3 w-3" />
             </button>
@@ -644,6 +673,7 @@ function UserMessageNode({ seq, text, onResend, onFork }: { seq: number; text: s
               onClick={() => setEditing(true)}
               className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors"
               title="编辑并重发"
+              aria-label="编辑并重发"
             >
               <Pencil className="h-3 w-3" />
             </button>
@@ -675,7 +705,7 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
         <div className="rounded-2xl rounded-tl-sm bg-claude-bg-elevated border border-claude-border px-3 py-2 text-sm text-claude-text">
           {text ? (
             <div className="prose-sm max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeUrlTransform}>{text}</ReactMarkdown>
             </div>
           ) : (
             <span className="text-claude-text-muted italic text-xs">(调用工具中…)</span>
@@ -705,6 +735,7 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
                     : 'text-claude-text-muted hover:text-emerald-600 hover:bg-emerald-500/10',
                 )}
                 title="有帮助"
+                aria-label="有帮助"
               >
                 <ThumbsUp className="h-3 w-3" />
               </button>
@@ -718,6 +749,7 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
                     : 'text-claude-text-muted hover:text-red-600 hover:bg-red-500/10',
                 )}
                 title="无帮助"
+                aria-label="无帮助"
               >
                 <ThumbsDown className="h-3 w-3" />
               </button>
@@ -729,7 +761,8 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
               onClick={onRegenerate}
               disabled={driving}
               className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title="重新生成"
+              title="重新生成 (⌘⇧R)"
+              aria-label="重新生成 (⌘⇧R)"
             >
               <RotateCw className="h-3 w-3" />
             </button>
@@ -738,6 +771,7 @@ function AssistantMessageNode({ seq, text, reasoning, onRegenerate, driving, fee
             onClick={handleCopy}
             className="flex items-center justify-center h-5 w-5 rounded-full text-claude-text-muted hover:text-claude-accent hover:bg-claude-accent/10 transition-colors"
             title="复制消息"
+            aria-label="复制消息"
           >
             {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
           </button>

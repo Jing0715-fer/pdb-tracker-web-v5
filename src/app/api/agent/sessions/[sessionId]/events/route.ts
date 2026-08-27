@@ -32,13 +32,33 @@ export async function GET(
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
+      let unsubscribe: (() => void) | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+      // R169 (AGENT-L9): single teardown path — previously the heartbeat
+      // interval + ctx listener were only torn down by the request-abort
+      // branch; when controller.enqueue threw (client vanished without an
+      // abort event), `closed` flipped but the timer kept firing and the
+      // listener stayed subscribed until the process ended.
+      const teardown = () => {
+        closed = true;
+        if (heartbeat !== null) clearInterval(heartbeat);
+        heartbeat = null;
+        unsubscribe?.();
+        unsubscribe = null;
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      };
       const send = (event: string, data: unknown) => {
         if (closed) return;
         const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
         try {
           controller.enqueue(encoder.encode(payload));
         } catch {
-          closed = true;
+          // R169 (AGENT-L9): enqueue failure now runs the FULL teardown.
+          teardown();
         }
       };
 
@@ -49,24 +69,17 @@ export async function GET(
       send('replay-done', { count: manager.getEvents(sessionId).length });
 
       // Subscribe to new appends.
-      const unsubscribe = manager.context.on('session/event', (payload) => {
+      unsubscribe = manager.context.on('session/event', (payload) => {
         if (payload.sessionId === sessionId) {
           send('event', payload.event as SessionEvent);
         }
       });
 
       // Heartbeat every 25s to keep the connection alive.
-      const heartbeat = setInterval(() => send('heartbeat', { time: Date.now() }), 25_000);
+      heartbeat = setInterval(() => send('heartbeat', { time: Date.now() }), 25_000);
 
       request.signal.addEventListener('abort', () => {
-        closed = true;
-        clearInterval(heartbeat);
-        unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
+        teardown();
       });
     },
   });

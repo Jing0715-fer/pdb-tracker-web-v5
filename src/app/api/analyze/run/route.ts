@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir, unlink } from "node:fs/promises";
+import { writeFile, mkdir, unlink, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -33,8 +33,42 @@ interface RunBody {
   params?: Record<string, unknown>;
 }
 
+/** R169 (PY-006): throttle — the cache GC sweep runs at most once per hour. */
+let lastCacheSweep = 0;
+
 async function ensureDirs() {
   await mkdir(PDB_CACHE_DIR, { recursive: true });
+  // R169 (PY-006): GC the PDB cache — files (downloaded structures + staged
+  // uploads) were NEVER garbage-collected and accumulated forever. Sweep at
+  // most hourly (fire-and-forget); delete files older than 7 days.
+  const now = Date.now();
+  if (now - lastCacheSweep > 60 * 60 * 1000) {
+    lastCacheSweep = now;
+    void (async () => {
+      try {
+        const entries = await readdir(PDB_CACHE_DIR);
+        const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+        let removed = 0;
+        for (const name of entries) {
+          const p = join(PDB_CACHE_DIR, name);
+          try {
+            const st = await stat(p);
+            if (st.isFile() && st.mtimeMs < cutoff) {
+              await unlink(p);
+              removed++;
+            }
+          } catch {
+            /* racing deletion — ignore */
+          }
+        }
+        if (removed > 0) {
+          console.log(`[analyze/run] cache GC: removed ${removed} files older than 7 days`);
+        }
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }
 }
 
 /**
@@ -151,7 +185,8 @@ export async function POST(req: NextRequest) {
       const cleaned: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(body.params)) {
         if (key.startsWith('__')) {
-          // Reserved internal keys (__format__, __secondPath__) — pass through.
+          // Reserved internal keys (__secondPath__) — pass through.
+          // (R169/MOL-L5: __format__ plumbing removed — never consumed.)
           cleaned[key] = value;
           continue;
         }
@@ -232,7 +267,10 @@ export async function POST(req: NextRequest) {
 
     let inputPath: string;
     let inputFormat: "pdb" | "cif" = body.fileFormat ?? "pdb";
-    if (NO_INPUT_RECIPES.has(body.recipe)) {
+    // R169 (MOL-L5): check the NORMALIZED recipe id (aliases like
+    // "cross-pdb-rmsd" previously missed the NO_INPUT branch and fell
+    // through to the "pdbId or fileContent required" error).
+    if (NO_INPUT_RECIPES.has(normalizedRecipe)) {
       // Use a placeholder path; the recipe script handles its own downloads.
       inputPath = "/dev/null";
     } else if (body.fileContent) {
@@ -261,15 +299,26 @@ export async function POST(req: NextRequest) {
     let secondPath: string | null = null;
     if (body.fileContent2) {
       const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      // R169 (PY-007): validate fileFormat2 — an arbitrary value flowed into
+      // the staged filename (path.join keeps it under PDB_CACHE_DIR, so no
+      // traversal, but defense-in-depth: only pdb/cif are meaningful).
       const secondFormat = body.fileFormat2 ?? "pdb";
+      if (secondFormat !== "pdb" && secondFormat !== "cif") {
+        return NextResponse.json(
+          { error: "`fileFormat2` must be 'pdb' or 'cif'" },
+          { status: 400 }
+        );
+      }
       secondPath = join(PDB_CACHE_DIR, `upload2-${uploadId}.${secondFormat}`);
       await writeFile(secondPath, body.fileContent2, "utf8");
     }
 
-    // Build the script, passing format info so the recipe can pick the right parser.
+    // Build the script. (R169/MOL-L5: the `__format__` param was removed —
+    // zero recipes ever consumed it; every recipe sniffs the input file
+    // extension instead. `__secondPath__` IS consumed by two-structure
+    // recipes' buildScript validation.)
     const script = recipe.buildScript(inputPath, {
       ...(body.params ?? {}),
-      __format__: inputFormat,
       __secondPath__: secondPath ?? "",
     });
     // Use a unique suffix (timestamp + random) to avoid collisions when

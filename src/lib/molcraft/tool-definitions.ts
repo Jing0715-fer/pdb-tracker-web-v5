@@ -477,7 +477,7 @@ export const DETECT_POCKETS: ToolDefinition = {
   description: "Detect all surface pockets on the structure using grid-based detection.",
   category: "analysis",
   parameters: {
-    minDepth: { type: "number", description: "Minimum pocket depth (default 100)" },
+    minVolume: { type: "number", description: "Minimum pocket volume in Å³ (default 100)" }, // R169 (MOL-L3)
   },
   timeoutMs: 120_000,
 };

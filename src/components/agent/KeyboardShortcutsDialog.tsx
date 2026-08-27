@@ -16,7 +16,7 @@ interface Shortcut {
 
 const SHORTCUTS: Shortcut[] = [
   { keys: '⌘K', description: '聚焦输入框' },
-  { keys: '⌘R', description: '重新生成最后响应' },
+  { keys: '⌘⇧R', description: '重新生成最后响应' },
   { keys: 'Esc', description: '关闭侧边栏 / 失焦输入' },
   { keys: 'Enter', description: '发送消息' },
   { keys: 'Shift+Enter', description: '输入换行' },

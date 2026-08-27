@@ -8,7 +8,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -38,6 +38,14 @@ function ApprovalRow({
   onResolve: (callId: string, decision: 'allowed-once' | 'rejected' | 'cancelled') => void;
 }) {
   const [decided, setDecided] = useState<'allowed-once' | 'rejected' | null>(null);
+  const allowRef = useRef<HTMLButtonElement>(null);
+
+  // UI-017: the approval prompt takes over the composer when it appears —
+  // autofocus the primary (Allow) action so keyboard users land on it
+  // instead of tabbing through the page to find the panel.
+  useEffect(() => {
+    allowRef.current?.focus();
+  }, []);
 
   const handle = (decision: 'allowed-once' | 'rejected') => {
     if (decided) return;
@@ -84,6 +92,7 @@ function ApprovalRow({
           拒绝
         </Button>
         <Button
+          ref={allowRef}
           size="sm"
           disabled={decided !== null}
           onClick={() => handle('allowed-once')}

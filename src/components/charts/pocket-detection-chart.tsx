@@ -70,7 +70,7 @@ export function PocketDetectionChart() {
   const activeStructure = useAppStore(selectActiveStructure);
   const viewer = useAppStore((s) => s.viewer);
   const toast = useAppStore((s) => s.toast);
-  const [minDepth, setMinDepth] = useState(100);
+  const [minVolume, setMinVolume] = useState(100); // R169 (MOL-L3): renamed from minDepth
   const [data, setData] = useState<PocketDetectionData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +92,7 @@ export function PocketDetectionChart() {
       const result = await executeCommand(viewer, {
         type: "detect_pockets",
         pdbId,
-        minDepth,
+        minVolume,
       });
       if (!result.ok) {
         setError(result.detail ?? "Pocket detection failed");
@@ -110,7 +110,7 @@ export function PocketDetectionChart() {
     } finally {
       setLoading(false);
     }
-  }, [activeStructure, viewer, pdbId, minDepth, toast]);
+  }, [activeStructure, viewer, pdbId, minVolume, toast]);
 
   // Sort pockets by druggability score (best first) — defensive
   const sortedPockets = useMemo(() => {
@@ -180,8 +180,8 @@ export function PocketDetectionChart() {
             <Label className="text-[10px] text-muted-foreground">Minimum volume (Å³)</Label>
             <Input
               type="number"
-              value={minDepth}
-              onChange={(e) => setMinDepth(Number(e.target.value) || 0)}
+              value={minVolume}
+              onChange={(e) => setMinVolume(Number(e.target.value) || 0)}
               step={50}
               min={0}
               max={2000}

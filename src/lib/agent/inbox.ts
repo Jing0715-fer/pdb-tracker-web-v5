@@ -7,10 +7,10 @@
  *   - nextStep[]: steering + injected context, drained at the next step
  *     boundary.
  *
- * send(message, target, wakeup):
- *   - followup(m)  = send(m, 'next-turn', true)   — user follow-up
- *   - steer(m)     = send(m, 'next-step', true)    — mid-turn steering (wakes)
- *   - inject(m)    = send(m, 'next-step', false)   — context injection (no wake)
+ * send(message, target):
+ *   - followup(m)  = send(m, 'next-turn')   — user follow-up
+ *   - steer(m)     = send(m, 'next-step')    — mid-turn steering
+ *   - inject(m)    = send(m, 'next-step')    — context injection
  *
  * A step claims: the next-step batch, plus (if target='next-turn') the first
  * queued turn-opening message.
@@ -51,7 +51,10 @@ export class Inbox {
     return this.nextStep.length;
   }
 
-  send(message: Omit<InboxMessage, 'id' | 'source' | 'role' | 'time'>, target: InboxTarget, _wakeup: boolean): void {
+  send(message: Omit<InboxMessage, 'id' | 'source' | 'role' | 'time'>, target: InboxTarget): void {
+    // R169 (AGENT-L2): dropped the unused `_wakeup` parameter — the module
+    // doc above documented wake semantics it never implemented; callers pass
+    // 2 args now. (Behavior unchanged: the loop polls hasPending on drive.)
     const full: InboxMessage = {
       id: newMessageId(),
       role: 'user',

@@ -57,10 +57,9 @@ export interface CaptureLoopOptions {
   acceptableQuality?: 'acceptable' | 'degraded' | 'unacceptable';
   /** Override the angles to capture (default: interface-aware). */
   angles?: string[];
-  /** Screenshot width. */
-  width?: number;
-  /** Screenshot height. */
-  height?: number;
+  // R169 (MOL-L1): unused `width`/`height` option fields removed — the only
+  // caller (use-agent-session.ts) never passed them and the loop never read
+  // them (screenshot sizing is decided by executeCommand's capture params).
   /** R146/R163: Per-VLM-call timeout in ms (default 150000 = 150s —
    * accommodates the server's 5s/15s/45s 429-backoff schedule plus inference). */
   vlmTimeoutMs?: number;

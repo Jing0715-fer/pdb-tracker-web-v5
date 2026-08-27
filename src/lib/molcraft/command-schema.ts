@@ -109,7 +109,10 @@ export type LlmCommand =
       action?: "set" | "add" | "remove";
     }
   | { type: "clear_selection" }
-  | { type: "toggle_component_visibility"; component: string; visible?: boolean; action?: "show" | "hide" | "toggle" }
+  // R169 (MOL-L4): the `visible` field was dropped — no caller ever set it and
+  // the implementation only reads `action` (the agent path now maps its
+  // LLM-facing {chain, visible} onto {component, action} in pdb-tools).
+  | { type: "toggle_component_visibility"; component: string; action?: "show" | "hide" | "toggle" }
   | {
       type: "load_volume_url";
       url: string;
@@ -161,7 +164,7 @@ export type LlmCommand =
   | {
       type: "detect_pockets";
       pdbId?: string;
-      minDepth?: number;
+      minVolume?: number;
     };
 
 export interface ResidueRef {

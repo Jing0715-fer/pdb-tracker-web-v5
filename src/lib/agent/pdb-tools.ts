@@ -18,6 +18,7 @@
 
 import type { ContentBlock } from './llm/types';
 import { newCallId, type CallId, type Json } from './types';
+import { truncateMarked } from './truncate';
 import type { ToolDefinition } from './tools/types';
 
 // ─── Shared constants ──────────────────────────────────────────────────────
@@ -45,6 +46,18 @@ export const CAMERA_ANGLES = ['front', 'side', 'top', 'back'] as const;
 
 /** The set of tools the agent loop will execute server-side. */
 export const SERVER_SIDE_TOOLS = new Set<string>(['fetch_metadata']);
+
+/**
+ * R169 (AGENT-L7): the single source of truth for tools whose results carry
+ * screenshot data URIs. Previously this list was hardcoded a THIRD time in
+ * loop.ts (isScreenshot) — the UI-003 recapture_screenshot miss proved this
+ * triplication is a maintenance trap.
+ */
+export const SCREENSHOT_TOOLS = new Set<string>([
+  'capture_multi_angle',
+  'capture_snapshot',
+  'recapture_screenshot',
+]);
 
 /**
  * Map an agent tool call to the Molstar command the client should execute.
@@ -119,7 +132,15 @@ export function toolToCommand(name: string, args: Record<string, unknown>): Reco
     case 'toggle_rock':
       return { type: 'toggle_rock', rock: args.rock ?? true };
     case 'toggle_component_visibility':
-      return { type: 'toggle_component_visibility', chain: args.chain, visible: args.visible };
+      // R169 (MOL-L4): map the LLM-facing {chain, visible} onto the command
+      // schema's {component, action} — previously the command carried
+      // chain/visible fields the implementation never read (cmd.component
+      // was undefined), so the agent path's visibility toggle never worked.
+      return {
+        type: 'toggle_component_visibility',
+        component: args.chain,
+        action: args.visible === false ? 'hide' : 'show',
+      };
     case 'select':
       return { type: 'select', chain: args.chain, resno: args.resno, entityType: args.entityType };
     case 'clear_selection':
@@ -235,7 +256,7 @@ function clientTool(
         const text = v.ok
           ? typeof v.result === 'string'
             ? v.result
-            : JSON.stringify(v.result ?? {}).slice(0, 6000)
+            : truncateMarked(JSON.stringify(v.result ?? {}), 6000) // R169 (AGENT-L6)
           : `Error: ${v.error ?? 'execution failed'}`;
         return textContent(text);
       },
@@ -247,7 +268,7 @@ function clientTool(
       const text = v.ok
         ? typeof v.result === 'string'
           ? v.result
-          : JSON.stringify(v.result ?? {}, null, 2).slice(0, 4000)
+          : truncateMarked(JSON.stringify(v.result ?? {}, null, 2), 4000) // R169 (AGENT-L6)
         : `Error: ${v.error ?? 'execution failed'}`;
       return {
         card,

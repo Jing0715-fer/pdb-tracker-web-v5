@@ -34,8 +34,9 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   const manager = getAgentManager();
-  // Merge in-memory + persisted sessions (persisted wins on overlap, since
-  // it carries the true updatedAt + eventCount).
+  // R169 (AGENT-L10): comment now matches the code — this returns ONLY the
+  // persisted sessions (the old comment claimed an in-memory merge that the
+  // implementation never performed).
   const persisted = await manager.listPersistedSessions();
   return NextResponse.json({
     sessions: persisted,

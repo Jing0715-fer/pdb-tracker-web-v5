@@ -1064,7 +1064,7 @@ export async function executeCommand(
       case "detect_pockets": {
         const pdbId = cmd.pdbId ?? useAppStore.getState().structures[0]?.id ?? "";
         const data = await runRecipe("detect_pockets", pdbId || undefined, {
-          min_volume: cmd.minDepth ?? 100,
+          min_volume: cmd.minVolume ?? 100, // R169 (MOL-L3): was cmd.minDepth — schema field now matches the semantic (volume, Å³)
         });
         const d = data?.data;
         if (!d || d.error) {

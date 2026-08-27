@@ -23,8 +23,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
-// R163: raised from 60 — the 429 backoff schedule alone is 5+15+45=65s
-export const maxDuration = 300;
+// R163: raised from 60 — the 429 backoff schedule alone is 5+15+45=65s.
+// R169 (VLM-013): lowered 300 → 180. The CLIENT gives up at vlmTimeoutMs
+// (default 150s, vlm-capture-loop.ts) and degrades to the unverified badge —
+// the old 300s budget meant the server kept retrying (and billing VLM tokens)
+// for another 2.5 minutes after the client had already moved on. 180s gives
+// the server a 30s grace past the client timeout for borderline calls.
+export const maxDuration = 180;
 
 /** R165 (VLM-006): max screenshots per request — bounds VLM token spend. */
 const MAX_SCREENSHOTS = 8;
@@ -35,8 +40,10 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 /**
  * R165 (VLM-005): per-attempt timeout for a single createVision call.
- * Budget math: 4 attempts × 55s + backoff 5+15+45s + ≤1s jitter ≈ 286s,
- * safely inside maxDuration=300. (60s would make the worst case 305s+.)
+ * Budget math: 4 attempts × 55s + backoff 5+15+45s + ≤1s jitter ≈ 286s worst
+ * case — attempts past the 180s maxDuration are cut short by the platform
+ * (R169/VLM-013 aligned maxDuration with the client's 150s timeout + grace),
+ * which is intentional: the client has already degraded by then.
  */
 const VLM_SINGLE_CALL_TIMEOUT_MS = 55_000;
 

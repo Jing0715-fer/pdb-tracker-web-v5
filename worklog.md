@@ -4191,3 +4191,58 @@ Stage Summary:
 - R168 修复 10/10 agent-loop Medium（会话恢复路径 turn/step/provider/seq 四类重 hydration 语义、内存无界增长、路由输入信任、LLM/工具双层超时与资源泄漏）。
 - 90 项审查发现累计：11/11 Critical + 22/22 High + 36/32 Medium（Task 7:14 + Task 8-c:12 + Task 8-d:10）；Low 进度 1/25（L3 顺带）。
 - 剩余：25 Low（R169：UI-016~022、VLM-013、PY-006/007/008、AGENT-L1~L10、MOL-L1~L5——其中 UI-019 随 chat-helpers 删除已失效、VLM-012 属固有非确定性拟记 won't-fix）。
+
+---
+Task ID: 9-b
+Agent: subagent (client-ui-low)
+Task: 修复 6 项客户端 UI Low 批次（UI-016/017/018/020/021/022）。
+
+Work Log:
+- UI-016（ChatPanel.tsx）：审计全文件图标按钮，为 16 个 icon-only 控件补 aria-label（镜像 title 文本）：会话历史/新会话/会话设置/供应商配置/工具执行统计/导出 Markdown 链接/导入会话 JSON/错误条关闭 X/发送按钮/快捷键帮助 "?"；消息操作行的分叉/编辑重发/有帮助/无帮助/重新生成/复制。两个无可见 label 的 Textarea（主输入框、编辑消息框）补 aria-label。
+- UI-017（ApprovalPanel.tsx）：ApprovalRow 增加 allowRef（HTMLButtonElement）+ useEffect 挂载时 focus() 到「批准一次」主按钮——审批面板接管输入区时键盘用户直接落位主操作，无需 Tab 搜索；无 focus-trap 库依赖。
+- UI-018（ChatPanel.tsx）：重生成快捷键从 Cmd/Ctrl+R 改为 Cmd/Ctrl+Shift+R（条件 `mod && e.shiftKey && (e.key==='r'||e.key==='R')` 兼容 Mac Cmd 下 shift 不改 key 值的差异），浏览器刷新快捷键不再被劫持；同步更新头注释、输入栏底部 kbd 提示（⌘R→⌘⇧R）与重生成按钮 title/aria-label（"重新生成 (⌘⇧R)"）。Esc-blur 行为保持不变。
+- UI-020（use-analysis-keyboard-shortcuts.ts）：case "p" 重写——先 `const helper = viewer.plugin?.helpers?.viewportScreenshot`（可选链顺带消灭了原代码一处 pre-existing TS18048），helper 缺失时 `toast("截图功能尚未就绪，未初始化完成", "error")` 后 return，不再静默吞掉；顺带去掉过时的 `(data: string)` 标注（消除另一处 pre-existing TS2345，getImageDataUri 实际返回 Promise<string|undefined>）。
+- UI-021（ChatPanel.tsx + analysis-right-panel.tsx）：确认 react-markdown v10.1.0 支持 urlTransform prop；两文件各新增模块级 safeUrlTransform（仅放行 http(s) 绝对 URL、/ 开头站内相对路径、# 锚点，其余清空），应用到渲染 LLM 内容的两处 ReactMarkdown（ChatPanel 助手消息 + ReportsTab 报告 markdown）。未加 rehype-sanitize（未安装，不引依赖）。
+- UI-022（ChatPanel.tsx + analysis-right-panel.tsx）：两处 Load session 处理器在读文件前增加 10MB 上限守卫——超限 toast「文件过大：会话文件不能超过 10MB」(error) 并复位 file input value 后 return；ChatPanel 用 useAppStore.getState().toast，analysis-right-panel 用已有的 toast hook。
+- 验证：4 个改动文件 eslint 零 error 零 warning；tsc 全量对比（git stash 前后）：改动文件从 4 个 pre-existing 类型错误降到 2 个（两处 analysis-right-panel 的旧错误原样存在、仅行号平移），零新增。已知遗留：KeyboardShortcutsDialog.tsx 第 19 行仍显示旧「⌘R」提示（不在本次允许改动的文件清单内，建议下批顺带更新）。
+
+Stage Summary:
+- UI-016 PASS — 16 个 icon-only 控件 + 2 个 Textarea 补齐 aria-label。
+- UI-017 PASS — 审批面板挂载即 focus「批准一次」按钮（ref + useEffect）。
+- UI-018 PASS — 重生成改 Cmd/Ctrl+Shift+R，浏览器刷新不再被劫持，UI 提示同步更新。
+- UI-020 PASS — 截图 helper 缺失时显式 toast 报错，不再静默失败（并顺带消除 2 处 pre-existing 类型错误）。
+- UI-021 PASS — 两处 LLM markdown ReactMarkdown 加 urlTransform 白名单（http(s)//相对/锚点）。
+- UI-022 PASS — 两处会话导入加 10MB 上限守卫 + 中文错误 toast + input 复位。
+
+---
+Task ID: 9-c
+Agent: main (R169 Low batch — coordination + agent-server + VLM/Python/molcraft Lows)
+Task: 修复全部剩余 Low 级审查发现（3-c/3-d 已记录项 + 8-a/8-b 重审项），含 Task 9-b 子代理的客户端 UI 批次。
+
+Work Log:
+- Task 9-b（子代理，客户端 UI）：UI-016（16 个 icon-only 控件 + 2 个 textarea 补 aria-label）、UI-017（ApprovalPanel 挂载时聚焦"批准一次"按钮）、UI-018（重新生成快捷键 ⌘R→⌘⇧R，footer 提示/按钮 title/aria 同步）、UI-020（"p" 截图快捷键 viewportScreenshot 空值守卫 + toast，顺带消除 2 个预存在 tsc 错误）、UI-021（react-markdown v10.1.0 的 urlTransform 白名单 https?:///，仅 ChatPanel 助手消息 + ReportsTab 两处 LLM 内容）、UI-022（会话文件上传 10MB 上限 + toast + input 重置）。
+- AGENT-L1（loop.ts）：Provider 日志从"每步必打"改为仅在 provider/model 组合变化时输出（lastLoggedProvider/Model 字段）；保留 R164 低频审计日志。
+- AGENT-L2（inbox.ts）：删除从未实现的 _wakeup 参数（模块文档同步），4 个调用点（followup/followupWithReplace/steer/inject）改为两参。
+- AGENT-L4（zai-adapter.ts）：sdkPromise 失败时重置缓存——此前一次瞬时 ZAI.create() 错误永久毒化进程内后续所有 drive。
+- AGENT-L5（manager.ts）：PendingApproval 增加 timer 字段，resolveApproval 正常路径 clearTimeout（原先 5 分钟定时器空转到期）。
+- AGENT-L6（truncate.ts 新文件 + loop.ts/pdb-tools.ts 3 处）：truncateMarked——LLM 可见的 JSON 截断追加 "…(truncated)" 标记 + 代理对保护，模型不再收到无信号的非法 JSON。
+- AGENT-L7（pdb-tools.ts + loop.ts）：SCREENSHOT_TOOLS 导出为单一事实源（capture_multi_angle/capture_snapshot/recapture_screenshot），loop.ts 的第三处硬编码删除。
+- AGENT-L8（session/settings.ts 新文件）：extractSessionSettings 共享实现，loop.ts 私有方法与 settings 路由的导出均委托之（防漂移）。
+- AGENT-L9（events/route.ts）：SSE teardown() 统一出口——enqueue 抛错时也清理 heartbeat 定时器 + ctx 监听器（原先仅 abort 分支清理）。
+- AGENT-L10（manager.ts + sessions/route.ts）：删除零调用的 listSessions()；GET /sessions 的"合并内存+持久化"过时注释改为如实描述。
+- VLM-013（select-best/route.ts）：maxDuration 300→180——客户端 150s 放弃后服务器不再多烧 2.5 分钟 VLM token（留 30s 宽限）；55s 单次预算注释同步。
+- PY-006（analyze/run/route.ts）：ensureDirs 内节流（≤1次/小时）fire-and-forget GC——删除 PDB 缓存目录中 >7 天的文件（原先永不回收）。
+- PY-007（analyze/run/route.ts）：fileFormat2 白名单校验（仅 pdb/cif，否则 400）。
+- PY-008：git rm biopython_server.ts（200 行零引用死代码）。
+- MOL-L1（camera.ts/vlm-client.ts/recipe-aliases.ts/vlm-capture-loop.ts）：删除死导出 restoreCameraState（保留 Keep 变体）、clearVlmCache、applyVlmResultToImages（含其 AnalysisImage 导入）、getVisualizableRecipes（27-recipe 发散列表，唯一调用方 use-agent-loop 已于 R167 删除）、RunVlmCaptureLoopOptions 的 width/height（唯一调用方从不传且循环从不读）。computeInterfaceAngles/extractInterfaceCenter 保留（测试引用/被 computeInterfaceAngles 依赖）。
+- MOL-L3（5 文件）：minDepth→minVolume 重命名（command-schema/commands/domain-tools/tool-definitions/pocket-detection-chart）——LLM 工具描述从"最小口袋深度"修正为"最小口袋体积 (Å³)"，与 Python 侧 min_volume 语义一致。过程插曲：终端输出管道吞字符（[mi 显示伪影）造成"语法错误"误判，hex dump 澄清后正确完成重命名。
+- MOL-L4（command-schema.ts + pdb-tools.ts）：命令 schema 删除无人设置的 visible 字段；同时发现并修复真实 bug——agent 路径 toolToCommand 映射用了错误字段名（chain/visible vs 实现期望的 component/action），导致 agent 的链可见性切换从未生效；现映射为 {component: args.chain, action: visible?'show':'hide'}。
+- MOL-L5（analyze/run/route.ts + cli-registry.ts）：NO_INPUT_RECIPES 检查改用 normalizedRecipe（别名如 "cross-pdb-rmsd" 此前漏判）；__format__ 死管道移除（零消费者，recipes 全部嗅探文件扩展名）——注入点、参数透传注释、cli-registry 文档三处清理。
+- 附加（9-b 跟进）：KeyboardShortcutsDialog.tsx 快捷键列表 ⌘R→⌘⇧R 同步。
+- 验证：① 26 个改动文件逐文件 eslint 零输出（0 error 0 warning）；② tsc 全项目 145 与 R168 结束态一致（tool-definitions 30/analysis-right-panel 2 均为基线预存在，我的改动 0 新增）；③ API 冒烟：POST /api/agent/sessions 正常创建；④ 浏览器验证：analysis 视图打开、Chat 面板 aria-label 生效（"向 DeepSeek Harness agent 提问"/"发送"）、快捷键对话框显示 ⌘⇧R、页面无 console error；⑤ dev.log 无错误。
+
+Stage Summary:
+- R169 修复 22/24 项 Low（含子代理 6 项 UI + 我方 16 项）：2 项不修——UI-019（chat-helpers 已随 legacy 路径删除而失效）、VLM-012（VLM 固有非确定性，记录为 won't-fix）。
+- 附带 2 项真实功能修复：MOL-L4 的 agent 路径 toggle_component_visibility 字段映射 bug（此前从不生效）、MOL-L3 的 LLM 参数语义误导（深度 vs 体积）。
+- 90 项审查发现最终进度：11/11 Critical + 22/22 High + 36/32 Medium + 23/25 Low（2 项失效/won't-fix）——**全部可行动项完成**。
+- 累计代码卫生收益：死代码删除 ~1,633 行（use-agent-loop 749 + agent-loop 282 + biopython_server 200 + 死导出/死管道若干），tsc 错误 163→145。

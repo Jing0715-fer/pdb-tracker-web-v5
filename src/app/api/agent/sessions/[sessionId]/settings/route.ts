@@ -11,18 +11,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAgentManager } from '@/lib/agent/manager';
 import { PROVIDER_CATALOG } from '@/lib/agent/providers';
+import { extractSessionSettings, type SessionSettings } from '@/lib/agent/session/settings';
 import type { SessionEvent } from '@/lib/agent/session/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export interface SessionSettings {
-  model?: string;
-  providerId?: string;
-  temperature?: number;
-  maxStepsPerTurn?: number;
-  systemPromptOverride?: string;
-}
+// R169 (AGENT-L8): SessionSettings + extraction now live in
+// lib/agent/session/settings.ts (single source of truth, shared with the
+// agent loop). Re-export for API-shape compatibility.
+export type { SessionSettings };
+export const extractSettings = (events: SessionEvent[]): SessionSettings =>
+  extractSessionSettings(events);
 
 /**
  * R168 (AGENT-M10): validate + clamp a partial settings body before it is
@@ -71,17 +71,8 @@ function validateSettingsBody(
   return { ok: true, value: out };
 }
 
-/** Extract the latest settings from a session event log. */
-export function extractSettings(events: SessionEvent[]): SessionSettings {
-  // Walk backwards to find the latest session/settings event.
-  for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i]!;
-    if (ev.type === 'session/settings' as string) {
-      return ev.data as SessionSettings;
-    }
-  }
-  return {};
-}
+/** Extract the latest settings from a session event log. (Delegates to the shared implementation.) */
+// (See extractSettings re-export above — R169/AGENT-L8.)
 
 export async function GET(
   _request: NextRequest,
