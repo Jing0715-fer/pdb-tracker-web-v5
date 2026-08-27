@@ -18,11 +18,26 @@
  */
 
 import type { MolstarViewer, MolstarPlugin } from "../types";
-import { getStructures, collectComponents, getFirstStructureData, isLociEmpty } from "./structure-helpers";
+import { getStructures, collectComponents, getFirstStructureData, isLociEmpty, buildNonPolymerLoci } from "./structure-helpers";
 import { lociFromResidue } from "./loci";
 import { normalizeColorTheme } from "./color-theme";
 import { nextFrame } from "./screenshot-utils";
 import { clearAllSelectionVisuals } from "./selection-utils";
+import { normalizeInteractions } from "../vlm-client";
+import {
+  snapshotMeasurementRefs,
+  diffMeasurementRefs,
+  removeMeasurementCells,
+} from "./measurement-utils";
+
+/**
+ * R167 (MOL-M4): measurement cells added by the interactions-family viz
+ * (draw_interaction_lines distances). Tracked so that (a) cleanupCapture can
+ * remove exactly what this analysis drew, and (b) the NEXT analysis's
+ * cleanup_previous removes leaked leftovers WITHOUT touching user-added
+ * measurements (the old unconditional measurement.clear() wiped both).
+ */
+let vizAddedMeasurementRefs: string[] = [];
 
 /**
  * R154: Build a StructureElement.Loci for a specific residue (and optionally atom)
@@ -258,17 +273,14 @@ export async function applyRecipeVisualization(
           }, "focus_ligand");
         } else {
           await safe(async () => {
-            const data = getFirstStructureData(plugin);
-            if (!data) return;
-            const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-            if (Q) {
-              const expr = Q.struct.generator.atomGroups({
-                'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.entityType(), 'non-polymer'])
-              });
-              const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
-              if (loci && !isLociEmpty(loci)) {
-                plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
-              }
+            // R167 (MOL-M3): `selection.getLociFromExpression` does NOT exist
+            // in the prebuilt bundle — the previous MolScript-expression code
+            // always threw a TypeError into safe() and never focused. Use the
+            // bundle-safe non-polymer traversal instead.
+            const loci = buildNonPolymerLoci(plugin);
+            if (loci && !isLociEmpty(loci)) {
+              plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
+              console.log('[viz:focus_all_ligands] Focused non-polymer entities via unit traversal');
             }
           }, "focus_all_ligands");
         }
@@ -320,11 +332,132 @@ export async function applyRecipeVisualization(
           }
         }
 
+        // R167 (MOL-M1/M2): normalize recipe-specific interaction shapes into
+        // the unified {chain1, resno1, atom1, chain2, resno2, atom2} list that
+        // the focus/sidechain/lines steps below expect.
+        //
+        // Before this, only all_interactions and pairwise payloads matched —
+        // standalone hbonds (donor_*/acceptor_* fields) and salt_bridges
+        // (pos_*/neg_*) never populated params.interactions, so their captures
+        // showed NO interface focus, NO ball-and-stick sidechains and NO
+        // dashed H-bond lines. `normalizeInteractions` existed for exactly
+        // this purpose but was only ever imported by the (now deleted) legacy
+        // use-agent-loop.
+        if (!Array.isArray((params as any).interactions) || (params as any).interactions.length === 0) {
+          // (1) interface_residues: contacts → cross-pairs. Previously this
+          // conversion was duplicated inside two safe() blocks, and the copy
+          // in show_sidechains referenced chain1/chain2 OUT OF SCOPE (MOL-M2,
+          // ReferenceError swallowed by safe()).
+          const c1Res = (params as any)?.chain1_interface_residues as Array<Record<string, unknown>> | undefined;
+          const c2Res = (params as any)?.chain2_interface_residues as Array<Record<string, unknown>> | undefined;
+          if (Array.isArray(c1Res) && Array.isArray(c2Res)) {
+            const pChain1 = (params as any)?.chain1 as string | undefined;
+            const pChain2 = (params as any)?.chain2 as string | undefined;
+            const converted: Array<Record<string, unknown>> = [];
+            if (pChain1 && pChain2) {
+              for (const r of c1Res) {
+                if (Array.isArray(r.contacts)) {
+                  for (const c of r.contacts) {
+                    converted.push({
+                      chain1: pChain1, resno1: r.resno, resname1: r.name,
+                      chain2: c.to_chain, resno2: c.to_res, resname2: c.to_name,
+                      atom1: c.atom, atom2: undefined,
+                    });
+                  }
+                }
+              }
+            }
+            if (converted.length > 0) {
+              (params as any).interactions = converted;
+              console.log(`[viz:${recipe}] Converted interface_residues data: ${converted.length} interactions`);
+            }
+          }
+
+          // (2) hbonds / salt_bridges / hydrophobic_contacts / nested
+          // allInteractions → unified shape via the shared normalizer.
+          if (!Array.isArray((params as any).interactions) || (params as any).interactions.length === 0) {
+            const normalized = normalizeInteractions(params);
+            if (normalized.length > 0) {
+              // R167 follow-up: tag the entries with their interaction type —
+              // normalizeInteractions preserves no type field, so draw_lines'
+              // filter (type === 'hbond' | 'salt_bridge') would otherwise
+              // match nothing and draw 0 dashed lines.
+              const typeTag = recipe === 'hbonds' ? 'hbond'
+                : recipe === 'salt_bridges' ? 'salt_bridge'
+                : undefined;
+              const tagged = typeTag
+                ? normalized.map((n) => ({ ...n, type: typeTag }))
+                : normalized;
+              (params as any).interactions = tagged;
+              console.log(`[viz:${recipe}] Normalized ${tagged.length} interactions (donor_*/pos_*/hydrophobic shape)`);
+            }
+          }
+
+          // (3) hydrophobic_contacts aggregate fallback: the recipe emits only
+          // top_residue_pairs strings like "A:VAL12 <-> B:LEU45" — parse those
+          // into residue pairs (atomless: sidechains + focus only, no lines).
+          if (!Array.isArray((params as any).interactions) || (params as any).interactions.length === 0) {
+            const topPairs = (params as any)?.top_residue_pairs as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(topPairs) && topPairs.length > 0) {
+              const parsed: Array<Record<string, unknown>> = [];
+              const pairRe = /^([A-Za-z0-9]):([A-Z]{3})(\d+)\s*<->\s*([A-Za-z0-9]):([A-Z]{3})(\d+)$/;
+              for (const tp of topPairs) {
+                const m = pairRe.exec(String(tp.pair ?? ""));
+                if (m) {
+                  parsed.push({
+                    chain1: m[1], resno1: parseInt(m[3], 10), resname1: m[2],
+                    chain2: m[4], resno2: parseInt(m[6], 10), resname2: m[5],
+                  });
+                }
+              }
+              if (parsed.length > 0) {
+                (params as any).interactions = parsed;
+                console.log(`[viz:${recipe}] Parsed ${parsed.length} hydrophobic residue pairs`);
+              }
+            }
+          }
+
+          // (4) Derive chain1/chain2 when the recipe output omits them (e.g.
+          // whole-structure hbonds without chain restriction) — the focus
+          // step requires both. Pick the most frequent interacting pair.
+          if (!(params as any)?.chain1 || !(params as any)?.chain2) {
+            const ints = (params as any).interactions as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(ints) && ints.length > 0) {
+              const counts = new Map<string, number>();
+              for (const i of ints) {
+                if (i.chain1 && i.chain2) {
+                  const k = `${i.chain1}|${i.chain2}`;
+                  counts.set(k, (counts.get(k) ?? 0) + 1);
+                }
+              }
+              let bestK = "";
+              let bestN = 0;
+              for (const [k, n] of counts) if (n > bestN) { bestK = k; bestN = n; }
+              if (bestK) {
+                const [c1, c2] = bestK.split("|");
+                if (!(params as any).chain1) (params as any).chain1 = c1;
+                if (!(params as any).chain2) (params as any).chain2 = c2;
+                console.log(`[viz:${recipe}] Derived focus chains ${c1}-${c2} (${bestN} interactions)`);
+              }
+            }
+          }
+        }
+
           // R157: Clean up ALL previous visualization artifacts before applying new one.
         // This prevents label/line/sidechain/water/ligand accumulation across analyses.
         await safe(async () => {
-          // Clear all measurements (distance lines, labels)
-          try { plugin.managers.structure.measurement.clear(); } catch (err) { console.warn('[viz:cleanup] measurement.clear failed:', err); }
+          // R167 (MOL-M4): remove only measurement cells WE added in a previous
+          // analysis (tracked in vizAddedMeasurementRefs) — NOT the user's own
+          // distances/labels. The old unconditional measurement.clear() here
+          // destroyed user measurements even when nothing had leaked.
+          // cleanupCapture normally removes our cells after each capture; this
+          // is the safety net for leaked leftovers (e.g. pre-R167 sessions or
+          // a failed cleanup).
+          if (vizAddedMeasurementRefs.length > 0) {
+            const removed = await removeMeasurementCells(plugin, vizAddedMeasurementRefs);
+            console.log(`[viz:cleanup] Removed ${removed} leaked measurement cells from a previous analysis`);
+            vizAddedMeasurementRefs = [];
+          }
           // R161: Clear selection + green boxes (deselectAll is the real API;
           // the old lociSelects.clearHighlights() was a silent no-op).
           clearAllSelectionVisuals(plugin);
@@ -359,7 +492,11 @@ export async function applyRecipeVisualization(
               }
             }
             for (const c of toRemove) {
-              try { plugin.managers.structure.component.remove(c); removedCount++; } catch (err) { console.warn('[viz:cleanup] remove failed:', err); }
+              // R167: `structure.component.remove` does NOT exist in the
+              // prebuilt bundle (silent TypeError each call → "Removed 0
+              // previous components"). hierarchy.remove([ref], true) is the
+              // bundle-verified API (same one the bundle itself uses).
+              try { plugin.managers.structure.hierarchy.remove([c], true); removedCount++; } catch (err) { console.warn('[viz:cleanup] remove failed:', err); }
             }
           }
           console.log(`[viz:cleanup] Removed ${removedCount} previous components`);
@@ -479,13 +616,20 @@ export async function applyRecipeVisualization(
         await safe(async () => {
           let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           if (!Array.isArray(interactions) || interactions.length === 0) {
+            // R167 (MOL-M2): fallback conversion — chain1/chain2 were previously
+            // referenced OUT OF SCOPE here (ReferenceError swallowed by safe()).
+            // The main normalization at case start now handles interface_residues,
+            // so this only runs as a last-resort fallback.
             const c1Res = params ? (params as any).chain1_interface_residues as Array<Record<string, unknown>> : undefined;
             const c2Res = params ? (params as any).chain2_interface_residues as Array<Record<string, unknown>> : undefined;
-            if (Array.isArray(c1Res) && Array.isArray(c2Res)) {
+            const fbChain1 = params?.chain1 as string | undefined;
+            const fbChain2 = params?.chain2 as string | undefined;
+            if (Array.isArray(c1Res) && Array.isArray(c2Res) && fbChain1 && fbChain2) {
               interactions = [];
-              for (const r of [...c1Res, ...c2Res]) {
-                interactions.push({ chain1: r.resno ? chain1 : chain2, resno1: r.resno, chain2: chain2, resno2: r.resno });
-              }
+              // Degenerate self-pairs are sufficient here: this block only
+              // consumes the residue SET (chain1/resno1 + chain2/resno2 keys).
+              for (const r of c1Res) interactions.push({ chain1: fbChain1, resno1: r.resno, chain2: fbChain2, resno2: r.resno });
+              for (const r of c2Res) interactions.push({ chain1: fbChain1, resno1: r.resno, chain2: fbChain2, resno2: r.resno });
             }
           }
           if (!Array.isArray(interactions) || interactions.length === 0) return;
@@ -515,10 +659,16 @@ export async function applyRecipeVisualization(
           // R154: Use buildResidueLoci (StructureElement-based, NOT MolScript Q)
           // to build loci for ALL interface residues at once, then create a
           // single component with ball-and-stick representation.
-          const refs = residueList.slice(0, 30).map(key => {
+          // R167 (MOL-M8): cap raised 30 → 60 and truncation is now LOGGED —
+          // large interfaces used to silently show partial sticks.
+          const MAX_SIDECHAIN_RESIDUES = 60;
+          const refs = residueList.slice(0, MAX_SIDECHAIN_RESIDUES).map(key => {
             const [chain, resnoStr] = key.split(":");
             return { chain, resno: parseInt(resnoStr, 10) };
           });
+          if (residueList.length > MAX_SIDECHAIN_RESIDUES) {
+            console.warn(`[viz:show_sidechains] ${residueList.length} interface residues exceed cap ${MAX_SIDECHAIN_RESIDUES} — showing first ${MAX_SIDECHAIN_RESIDUES}`);
+          }
 
           const result = buildResidueLoci(plugin, refs);
           if (result) {
@@ -562,10 +712,25 @@ export async function applyRecipeVisualization(
             return (type === 'hbond' || type === 'salt_bridge' || type === 'salt-bridge') && hasAtoms;
           });
 
-          console.log(`[viz:draw_lines] Drawing ${hbondInteractions.length} distance lines`);
+          // R167 (MOL-M8): cap interaction lines (was uncapped — a 100+ H-bond
+          // interface added 100+ distance measurements, cluttering the view
+          // and degrading perf). Distances sort by availability — keep input
+          // order (recipes already rank by significance).
+          const MAX_INTERACTION_LINES = 60;
+          const linesToDraw = hbondInteractions.slice(0, MAX_INTERACTION_LINES);
+          if (hbondInteractions.length > MAX_INTERACTION_LINES) {
+            console.warn(`[viz:draw_lines] ${hbondInteractions.length} H-bond/salt-bridge lines exceed cap ${MAX_INTERACTION_LINES} — drawing first ${MAX_INTERACTION_LINES}`);
+          }
+
+          console.log(`[viz:draw_lines] Drawing ${linesToDraw.length} distance lines`);
+
+          // R167 (MOL-M4b): snapshot measurement refs before/after so the
+          // capture cleanup (and the next analysis's cleanup_previous) can
+          // remove exactly the cells added here — user measurements survive.
+          const measBefore = snapshotMeasurementRefs(plugin);
 
           // R154: Use buildResidueLoci for atom-level loci (NOT MolScript Q)
-          for (const c of hbondInteractions) {
+          for (const c of linesToDraw) {
             try {
               const chain1 = c.chain1 as string;
               const resno1 = c.resno1 as number;
@@ -585,6 +750,15 @@ export async function applyRecipeVisualization(
                 console.warn(`[viz:draw_lines] Atoms not found: ${chain1}:${resno1}(${atom1}) or ${chain2}:${resno2}(${atom2})`);
               }
             } catch (err) { console.warn(`[viz:draw_lines] failed:`, err); }
+          }
+
+          // R167 (MOL-M4b): record the measurement cells this step added so
+          // cleanupCapture / cleanup_previous remove exactly these.
+          const measAfter = snapshotMeasurementRefs(plugin);
+          const added = diffMeasurementRefs(measBefore, measAfter);
+          if (added.length > 0) {
+            vizAddedMeasurementRefs.push(...added);
+            console.log(`[viz:draw_lines] Tracked ${added.length} measurement cells for selective cleanup`);
           }
         }, "draw_interaction_lines");
 

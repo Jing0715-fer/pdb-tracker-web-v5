@@ -383,13 +383,25 @@ export async function detectAllLigands(pdbId: string): Promise<string[]> {
  */
 async function ensurePdbCached(pdbId: string): Promise<string> {
   const id = pdbId.toLowerCase();
-  const pdbPath = join(PDB_CACHE_DIR, `pdb${id}.ent`);
+  // R167 (MOL-M6): unify cache filenames with /api/analyze/run (which writes
+  // `<id>.pdb`). The old `pdb<id>.ent` name never matched the route's file,
+  // so the two Python spawn paths re-downloaded the same structures and
+  // duplicated disk copies. Check the canonical name first, then the legacy
+  // .ent for backward compat, then CIF.
+  const pdbPath = join(PDB_CACHE_DIR, `${id}.pdb`);
+  const legacyEntPath = join(PDB_CACHE_DIR, `pdb${id}.ent`);
   const cifPath = join(PDB_CACHE_DIR, `${id}.cif`);
   try {
     await access(pdbPath);
-    return pdbPath; // PDB already cached
+    return pdbPath; // PDB already cached (canonical name)
   } catch {
-    // PDB not cached — try downloading
+    // Not cached under the canonical name — check legacy/alternates
+  }
+  try {
+    await access(legacyEntPath);
+    return legacyEntPath; // Legacy pre-R167 cache file
+  } catch {
+    // No legacy file either
   }
   // Also check if CIF is cached (from a previous fallback)
   try {

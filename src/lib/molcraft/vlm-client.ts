@@ -212,7 +212,8 @@ export function extractResidueLabels(
   }
 
   // slice(0, Infinity) returns the whole array — callers may still pass an
-  // explicit cap for special cases (legacy use-agent-loop passes none now).
+  // explicit cap for special cases (the legacy use-agent-loop that passed
+  // none was deleted in R167/MOL-M9).
   return labels.slice(0, maxLabels);
 }
 

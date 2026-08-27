@@ -134,7 +134,9 @@ export async function clearInteractions(plugin: MolstarPlugin): Promise<void> {
       }
       for (const c of toRemove) {
         try {
-          plugin.managers.structure.component.remove(c);
+          // R167: `structure.component.remove` does not exist in the prebuilt
+          // bundle — use hierarchy.remove (bundle-verified API).
+          plugin.managers.structure.hierarchy.remove([c], true);
         } catch (err) {
           console.warn('[clearInteractions] failed to remove neighborhood component:', err);
         }

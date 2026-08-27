@@ -38,7 +38,13 @@ import {
   collectComponents,
   getFirstStructureData,
   isLociEmpty,
+  buildNonPolymerLoci,
 } from "./commands/structure-helpers";
+import {
+  snapshotMeasurementRefs,
+  diffMeasurementRefs,
+  removeMeasurementCells,
+} from "./commands/measurement-utils";
 import {
   checkScreenshotQuality,
   checkIfBlackScreen,
@@ -443,18 +449,12 @@ export async function executeCommand(
           try {
             const data = getFirstStructureData(plugin);
             if (!data) return { ok: false, detail: "No structure data" };
-            const Q = (viewer as any)?.Q ?? (window as any).molstar?.lib?.molscript;
-            if (Q) {
-              const expr = Q.struct.generator.atomGroups({
-                'chain-test': Q.core.logic.in([Q.struct.atomProperty.macromolecular.entityType(), 'non-polymer'])
-              });
-              const loci = await plugin.managers.structure.selection.getLociFromExpression(expr, data);
-              if (loci && !isLociEmpty(loci)) {
-                plugin.managers.camera.focusLoci(loci, { minRadius: 15 });
-                return { ok: true, detail: `Focused all ligands` };
-              }
-            }
-            // Fallback: use the first non-polymer component in the hierarchy
+            // R167 (MOL-M3): `selection.getLociFromExpression` does NOT exist
+            // in the prebuilt bundle — the old MolScript-expression call threw
+            // a TypeError into this catch block, so the component-scan below
+            // was unreachable and focus_ligand always failed with a raw
+            // "TypeError" message. Order is now: (1) component-scan (bundle-
+            // safe), (2) non-polymer unit traversal (bundle-safe).
             const structs = getStructures(plugin);
             for (const s of structs) {
               const components = s.components ?? [];
@@ -469,6 +469,11 @@ export async function executeCommand(
                   }
                 }
               }
+            }
+            const nonPolymerLoci = buildNonPolymerLoci(plugin);
+            if (nonPolymerLoci && !isLociEmpty(nonPolymerLoci)) {
+              plugin.managers.camera.focusLoci(nonPolymerLoci, { minRadius: 15 });
+              return { ok: true, detail: `Focused all ligands (non-polymer traversal)` };
             }
             return { ok: false, detail: "No ligands found" };
           } catch (err) {
@@ -539,9 +544,12 @@ export async function executeCommand(
       case "label_residue": {
         const loci = await lociFromResidue(viewer, cmd.target);
         if (!loci) return { ok: false, detail: "Residue not found" };
+        // R167 (MOL-M5): the prebuilt bundle's addLabel only reads
+        // labelParams/visualParams — a flat {customText} was silently dropped
+        // (tool reported ok but the default loci text rendered instead).
         await plugin.managers.structure.measurement.addLabel(loci, {
-          customText: cmd.text ?? "",
-        });
+          labelParams: { customText: cmd.text ?? "" },
+        } as any);
         return { ok: true, detail: "Label added" };
       }
 
@@ -688,9 +696,10 @@ export async function executeCommand(
                   resno: lbl.resno,
                 });
                 if (loci) {
+                  // R167 (MOL-M5): labelParams wrapper — see label_residue.
                   await plugin.managers.structure.measurement.addLabel(loci, {
-                    customText: lbl.text ?? "",
-                  });
+                    labelParams: { customText: lbl.text ?? "" },
+                  } as any);
                 }
               }
             } catch (err) {
@@ -972,9 +981,10 @@ export async function executeCommand(
             const loci = await lociFromResidue(viewer, { chain: r.chain, resno: r.resno });
             if (loci) {
               const catLabel = categoryLabel(r.category);
+              // R167 (MOL-M5): labelParams wrapper — see label_residue.
               await plugin.managers.structure.measurement.addLabel(loci as any, {
-                customText: `${r.resname}${r.resno} (${catLabel})`,
-              });
+                labelParams: { customText: `${r.resname}${r.resno} (${catLabel})` },
+              } as any);
             }
           } catch (e) {
             console.warn("[show_druggable_pocket] label error:", e);
@@ -1134,15 +1144,21 @@ async function executeMultiAngleCapture(
   // restored by the previous iteration, so re-saving is still correct.)
   saveUserCameraState(plugin);
 
-  // R137 (code-review): measurement count BEFORE adding any labels so the
-  // cleanup later only removes the labels we add here — NOT user-added
-  // measurements. Hoisted out of the label block (MOL-004) so the
-  // finally-cleanup below can read it even when an early step throws.
-  let beforeMeasCount: number | undefined;
-  // R164 (MOL-004): set to true once the label-adding pass has actually
-  // started. The finally-cleanup only touches measurements when we know we
-  // may have added some — otherwise an early throw (before any label was
-  // added) would meas.clear() the USER's own measurements.
+  // R137→R167 (MOL-M4): measurement refs BEFORE any visualization/label is
+  // added, so the cleanup later removes exactly what THIS capture added —
+  // never user-added measurements. The old count-delta + removeLast strategy
+  // silently degraded to meas.clear() because `removeLast` does not exist on
+  // the prebuilt bundle's MeasurementManager (its only occurrence in
+  // molstar.js is an internal linked-list method), wiping USER measurements.
+  // Ref-based deletion also covers the recipe-viz draw_interaction_lines
+  // distances, which the old count-based approach (snapshot AFTER
+  // applyRecipeVisualization) missed entirely.
+  // Null = state shape unexpected → legacy clear() fallback.
+  const measBeforeRefs = snapshotMeasurementRefs(plugin);
+  // R164 (MOL-004): set to true once the visualization/label-adding pass has
+  // actually started. The finally-cleanup only touches measurements when we
+  // know we may have added some — otherwise an early throw (before any label
+  // was added) would meas.clear() the USER's own measurements.
   let labelsAdded = false;
 
   // R164 (MOL-004): ALL capture cleanup, extracted into a local function so
@@ -1154,34 +1170,22 @@ async function executeMultiAngleCapture(
   // cleanup step must neither mask the original capture error nor abort the
   // remaining cleanup steps.
   const cleanupCapture = async (): Promise<void> => {
-    // Step 1 — R99.4 selective measurement (label-delta) cleanup: only
-    // remove the measurements added during THIS capture, not user-added
-    // ones (compares the count before/after and removes the delta).
+    // Step 1 — R167 (MOL-M4): selective measurement cleanup by state-cell
+    // refs. Only the measurement cells added during THIS capture (viz
+    // distances + residue labels) are deleted; user measurements survive.
     try {
       if (labelsAdded) {
-        const meas = plugin.managers.structure.measurement as any;
-        // Get current measurements (after capture — includes our additions)
-        const currentMeas = meas?.state?.items;
-        if (currentMeas && beforeMeasCount !== undefined) {
-          const currentCount = Array.isArray(currentMeas)
-            ? currentMeas.length
-            : (typeof currentMeas === 'object' ? Object.keys(currentMeas).length : 0);
-          const added = currentCount - beforeMeasCount;
-          if (added > 0) {
-            // Remove the last N measurements (the ones we added)
-            // Molstar's measurement manager supports removeLast
-            if (typeof meas.removeLast === 'function') {
-              for (let i = 0; i < added; i++) {
-                try { meas.removeLast(); } catch (err) { console.warn('[capture_multi_angle] removeLast failed:', err); break; }
-              }
-            } else {
-              // Fallback: clear all if removeLast not available
-              meas.clear();
-            }
+        const measAfterRefs = snapshotMeasurementRefs(plugin);
+        if (measAfterRefs !== null && measBeforeRefs !== null) {
+          const delta = diffMeasurementRefs(measBeforeRefs, measAfterRefs);
+          if (delta.length > 0) {
+            const removed = await removeMeasurementCells(plugin, delta);
+            console.log(`[capture_multi_angle] removed ${removed}/${delta.length} capture-added measurement cells`);
           }
         } else {
-          // Fallback: clear all if state not accessible
-          meas.clear();
+          // Legacy fallback (unexpected state shape): conservative clear —
+          // only reached when the ref snapshot API is unavailable.
+          plugin.managers.structure.measurement.clear();
         }
       }
     } catch (err) {
@@ -1204,7 +1208,9 @@ async function executeMultiAngleCapture(
           }
         }
         for (const c of toRemove) {
-          try { plugin.managers.structure.component.remove(c); } catch (err) { console.warn('[capture_multi_angle] failed to remove interface component:', err); }
+          // R167: `structure.component.remove` does not exist in the prebuilt
+          // bundle — use hierarchy.remove (bundle-verified API).
+          try { plugin.managers.structure.hierarchy.remove([c], true); } catch (err) { console.warn('[capture_multi_angle] failed to remove interface component:', err); }
         }
       }
     } catch (err) { console.warn('[capture_multi_angle] interface component cleanup failed:', err); }
@@ -1235,6 +1241,10 @@ async function executeMultiAngleCapture(
   // cleanupCapture() executes on EVERY exit path — success, the
   // "All captures failed" early return, AND thrown errors.
   try {
+  // R167 (MOL-004): from here on we may add measurements (viz distances,
+  // residue labels) — the finally-cleanup is allowed to remove the
+  // measurement ref delta (measBeforeRefs was snapshotted above).
+  labelsAdded = true;
   if (!isRecapture) {
     await applyRecipeVisualization(viewer, cmd.recipe, vizParams);
     // Round 78: Reduced from 300ms to 150ms — visualization renders fast
@@ -1250,31 +1260,15 @@ async function executeMultiAngleCapture(
   }
 
         // Round 74: Add residue labels to the 3D view before capturing
-        // R137 (code-review): `beforeMeasCount` is hoisted above the try
-        // (MOL-004) — it is captured BEFORE adding any labels so the
-        // cleanup only removes the labels we add here — NOT user-added
-        // measurements. Previously `beforeMeasCount` was never assigned,
-        // so the cleanup fell through to `meas.clear()` which wiped every
-        // measurement in the scene (distances, angles, labels, etc.).
+        // R167 (MOL-004): the ref-based delta cleanup replaced the old
+        // beforeMeasCount count snapshot — measBeforeRefs was taken before
+        // applyRecipeVisualization above, so labels added here are covered.
         if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
-          try {
-            const meas = plugin.managers.structure.measurement as any;
-            const items = meas?.state?.items;
-            beforeMeasCount = Array.isArray(items)
-              ? items.length
-              : (typeof items === 'object' && items ? Object.keys(items).length : 0);
-          } catch (err) {
-            console.warn('[capture_multi_angle] beforeMeasCount read failed:', err);
-            beforeMeasCount = undefined;
-          }
           // R160: Use buildResidueLoci for labels to avoid selection side effects.
           // lociFromResidue's fallback path calls selection.clear() + structureInteractivity
           // which creates the green selection box visible in screenshots.
           // buildResidueLoci uses StructureElement directly (no selection).
           const { buildResidueLoci } = await import('./commands/recipe-viz');
-          // R164 (MOL-004): labels are about to be added — from here on the
-          // finally-cleanup is allowed to remove the measurement delta.
-          labelsAdded = true;
 
           // ----------------------------------------------------------------
           // R163: Anti-overlap label placement (based on Molstar source

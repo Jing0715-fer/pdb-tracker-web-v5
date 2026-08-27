@@ -344,7 +344,17 @@ export async function POST(req: NextRequest) {
       }
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    let msg = err instanceof Error ? err.message : String(err);
+    // R167 (MOL-M7): execFile's timeout/maxBuffer kills produce a generic
+    // "Command failed" message with `killed`/`signal`/`code` set — surface
+    // them so the LLM can distinguish "structure too large (45s timeout)"
+    // from a real crash and stop retrying the same over-budget recipe.
+    const execErr = err as { killed?: boolean; signal?: string; code?: string | number };
+    if (execErr?.killed) {
+      msg += ` (process killed: ${execErr.signal === 'SIGTERM' ? 'timeout 45s' : `signal ${execErr.signal ?? 'unknown'}`})`;
+    } else if (execErr?.code && typeof execErr.code === 'string') {
+      msg += ` (exit code ${execErr.code})`;
+    }
     console.error("[/api/analyze/run] error:", msg);
     return NextResponse.json(
       { error: "Analysis run failed", detail: msg },

@@ -41,3 +41,55 @@ export function isLociEmpty(loci: unknown): boolean {
   const l = loci as { elements?: unknown[] };
   return !l.elements || l.elements.length === 0;
 }
+
+/**
+ * R167 (MOL-M3): Build a StructureElement.Loci covering ALL non-polymer
+ * entities (ligands / HETATMs) of the first structure by direct unit
+ * traversal.
+ *
+ * Replaces the previous `selection.getLociFromExpression(...)` call — that
+ * method does NOT exist in the prebuilt bundle (verified by grep), so the
+ * old code always threw a TypeError straight into the catch block and the
+ * component-scan fallback below it was unreachable. This traversal is
+ * bundle-safe (uses only StructureElement/StructureProperties, same as
+ * buildLociByTraversal) and needs no MolScript builder.
+ *
+ * Note: Location.create's 3rd argument is the ELEMENT (unit.elements[i]),
+ * not the within-unit index — see the R166 multi-chain loci fix.
+ */
+export function buildNonPolymerLoci(plugin: MolstarPlugin): unknown | null {
+  try {
+    const bundle = (window as unknown as { molstar?: any }).molstar;
+    const SE = bundle?.lib?.structure?.StructureElement;
+    const SP = bundle?.lib?.structure?.StructureProperties;
+    if (!SE || !SP) return null;
+
+    const structs = plugin.managers.structure.hierarchy.current.structures;
+    if (!structs.length) return null;
+    const data = structs[0]?.cell?.obj?.data as { units?: Array<any> } | null;
+    if (!data?.units) return null;
+
+    const elementsByUnit = new Map<unknown, number[]>();
+    for (const unit of data.units) {
+      if (unit?.kind !== 0) continue; // atomic units only
+      const indices: number[] = [];
+      for (let i = 0; i < unit.elements.length; i++) {
+        const loc = SE.Location.create(data, unit, unit.elements[i]);
+        try {
+          if (SP.entity.type(loc) === "non-polymer") indices.push(i);
+        } catch {
+          /* entity props unavailable for this location — skip atom */
+        }
+      }
+      if (indices.length > 0) elementsByUnit.set(unit, indices);
+    }
+    if (elementsByUnit.size === 0) return null;
+
+    const elements: Array<{ unit: unknown; indices: number[] }> = [];
+    elementsByUnit.forEach((indices, unit) => elements.push({ unit, indices }));
+    return new SE.Loci(data, elements);
+  } catch (err) {
+    console.warn("[structure-helpers] buildNonPolymerLoci failed:", err);
+    return null;
+  }
+}
