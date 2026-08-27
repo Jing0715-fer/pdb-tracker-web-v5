@@ -4246,3 +4246,23 @@ Stage Summary:
 - 附带 2 项真实功能修复：MOL-L4 的 agent 路径 toggle_component_visibility 字段映射 bug（此前从不生效）、MOL-L3 的 LLM 参数语义误导（深度 vs 体积）。
 - 90 项审查发现最终进度：11/11 Critical + 22/22 High + 36/32 Medium + 23/25 Low（2 项失效/won't-fix）——**全部可行动项完成**。
 - 累计代码卫生收益：死代码删除 ~1,633 行（use-agent-loop 749 + agent-loop 282 + biopython_server 200 + 死导出/死管道若干），tsc 错误 163→145。
+
+---
+Task ID: 9-d
+Agent: main (R167-R169 final verification + wrap-up)
+Task: 最终浏览器 E2E 自验证与环境约束记录。
+
+Work Log:
+- 平台 kill 周期实测：dev server 每 ~2-2.5 分钟被平台以 exit 0 终止（watchdog.out 连续记录），restart-loop.sh 3 秒内拉起但 dev.log 轮转清空 + SPA 状态重置。
+- 共 5 次完整流程尝试（导航→加载/直接聊天→LLM→工具→捕获）：R167 期间一次完成关键 viz 路径（Normalized 21 interactions + focus A-B + ball-and-stick 21 residues，console 实证）；R168/R169 后的 4 次均被 kill 窗口截断（消息未持久化或中途重置）。
+- 分层验证汇总（最终代码状态）：
+  1. 纯逻辑测试：normalizeInteractions 全形状（hbonds/salt_bridges/hydrophobic）+ type-tag 画线 2/2 + 链推导 + seq 无撞号 + turn/step 重 hydrate 全 PASS。
+  2. API 冒烟：settings 非法值 400×3 + 合法 200；伪造 callId 409；真实 pdb_load 工具流 200 继续 + 重复 409；中文对话正常驱动；会话创建正常。
+  3. 浏览器探针：aria-label 生效（聊天输入/发送按钮）、快捷键对话框 ⌘⇧R、analysis+chat 面板正常打开、无 console error。
+  4. lint：26+ 改动文件逐文件 0/0；tsc 145 与基线一致。
+- 未能在浏览器完整重跑的环节：R168/R169 最终代码上的 capture+VLM 尾段——但该管线的代码自 R167 浏览器验证后未再变更（R168 全部在 agent 服务端、R169 均为 Low/外围），风险可控。
+
+Stage Summary:
+- R166-R169 四轮全部推送 GitHub（8e36cbc → e0a2024 → 57c49ee → f5db1a4）。
+- 90 项审查发现全部可行动项完成（11C+22H+36M+23L；2 项失效/won't-fix）。
+- 诚实声明：完整 capture+VLM 浏览器闭环受沙箱 kill 周期限制未在最终代码上重跑，待环境稳定后可补跑 e2e/agent-flow.ts + 浏览器验证。
