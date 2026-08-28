@@ -4668,3 +4668,31 @@ Stage Summary:
 - 两项用户需求闭环：①恢复视角 = 完整分析视图恢复（该截图所属 pair 的可视化+标签+相机，按钮改"恢复分析视图"）；②互作氨基酸以 stick 显示——捕获管线、分析后持久化（show_analysis_viz，top pair 全套留在实时视图）、恢复视图三处均有 stick，且显示前一律先隐藏全部其他 ball-and-stick（用户明确要求，含 set_representation applyPreset 回退产生的 Ligand/Water/Ion stick 场景）。
 - 新增 analysis-view.ts（AnalysisViewSpec/persistAnalysisLabels/restoreAnalysisView）+ stick-qa.html harness；recipe-viz 增 hideAllBallAndStick 家族 + _skipFocus + removeTrackedVizMeasurements；命令 show_analysis_viz；cleanupCapture 增 stick 恢复 + 持久化距离线兜底清除；use-agent-session 截图携带 analysisView；ToolCallCard 恢复按钮升级。
 - 改动 6 文件 +2 新文件（+339/-91）；lint/tsc 零新增（净减 1）；hide/restore/排除机制经真实浏览器 harness 全实证；完整 agent E2E 因 OOM 周期未跑完（环境限制，与前两轮记录一致）。
+
+---
+Task ID: R177
+Agent: main (RangeError "Array buffer allocation failed" — molstar 字体缓存泄漏根治)
+
+Task: 用户控制台报错 `RangeError: Array buffer allocation failed at new Uint8Array ← refreshAgentLabelSizes (label-lifecycle.ts) await b.commit()`——定位并根治。
+
+Work Log:
+- 栈帧定位（dev.log 完整链）：refreshAgentLabelSizes:379 `await b.commit()` → molstar `_updateTree` → Structure Label createOrUpdate → 文本网格构建 → `YCe(g)` → `new F9` → `Mo(350*lineHeight*maxWidth, 1, Uint8Array)` 分配失败。
+- 根因（bundle 源码级，public/molstar.js 逐帧反解）：
+  1. `YCe(e)`（getFont）缓存键 = `JSON.stringify(整个 label params)`——customText/textSize/sizeFactor/tetherLength/attachment 全部参与键值；
+  2. `F9`（Font）构造器只读 5 个字体属性（fontFamily/fontQuality/fontStyle/fontVariant/fontWeight），但每次键未命中都新建 Font：43MB Uint8Array SDF atlas（fontQuality=3 时 6565×6564）+ scratch canvas + 双 Float64 SDF 网格 ≈ 45MB，且缓存 v9 永不驱逐；
+  3. 推论：每个不同文字的标签泄漏一个 45MB Font（R170 起 per-residue 标签即触发）；R175 live-resize 每次相机移动改 textSize → 每个不同尺寸值再泄漏一个 → 数百个 45MB 分配 → 堆耗尽 → RangeError。
+- 修复 1（bundle 补丁 r177）：`YCe` 缓存键改为仅 5 个字体属性子集（F9 实际读取的全部字段）——所有标签共享一个 Font，atlas 按 F9.get() 增量光栅化（append-only，已有字形位置永不变），与上游 molstar 共享字体设计一致。
+- 修复 2（bundle 补丁 r177b）：文本几何 update 路径 `D.update(x.fontTexture,d)` 改 `D.updateIfChanged`——共享字体下纹理对象引用不变，跳过每次几何重建的 43MB 纹理重上传（20 标签 × 每次相机提交 ≈ 860MB/次 的上传churn归零；正确性：每个标签的字形在其几何创建前已全部光栅化进 atlas，创建时上传一次即完备；字体属性变化时纹理对象更换 → updateIfChanged 仍会重上传）。
+- 缓存穿透：use-molstar-loader.ts 及 4 个 QA harness 的 `/molstar.js` 引用统一加 `?v=r177b` 查询串强制取新。
+- 验证（agent-browser + VLM + 新 harness public/font-cache-qa.html——用 document.createElement('canvas') 计数作为 Font 构造直接探针，因 F9 构造器必建 scratch canvas）：
+  1. font-cache-qa 终判 PASS：Phase A（20 个不同文字标签）新 Font=1（76×101，共享）；Phase B（24 轨道 × 360 次标签参数更新）新 Font=0、heap 74MB→63MB（反降）、零 "Array buffer allocation failed"、零 commit 失败、20/20 标签完成距离补偿 resize——旧 bundle 同负载为最多 360 × 45MB ≈ 16GB 泄漏（必然崩溃）；
+  2. 补丁后渲染正确性：单标签（PATCHED1）✓、共享字体双标签（PATCHED1+SHARED2 同框）✓、经 23 次 live-resize 更新后 UPD1（特写）+ UPD2（全景）均可见且尺寸距离补偿生效（0.655/1.145）✓；
+  3. 更新性能：resize commit 2-6ms/轮（修复 2 前每标签每次更新重传 43MB 纹理）；
+  4. A/B 对照（临时 molstar-old.js = git HEAD 原始 bundle，已清理）：原 bundle 在本环境同样不渲染 fontQuality=3 标签（6565² 纹理超出 SwiftShader 软渲染能力，静默失败）——证实"标签不可见"是本 headless 环境限制而非补丁回归（用户真实浏览器一直正常渲染 fq3 标签：历轮用户均在看标签提意见；R175 真实应用 E2E 亦实证）；
+  5. lint：改动 TS 文件 0 error 0 warning；tsc 全项目 124 errors 与 R176 基线完全一致（零新增）；主页面 / 冒烟渲染正常零报错。
+- 环境备注：本轮 headless Chrome（SwiftShader 软渲染）无法渲染 fontQuality=3 的 6565² 字体纹理（新旧 bundle 一致），harness 用 fontQuality=0 做可视验证；真实用户浏览器不受影响（保留应用默认 fq=3 不变，截图清晰度优先）。
+
+Stage Summary:
+- 用户报错根治：RangeError 根因 = molstar bundle 字体缓存按全量 label params 为键 → 每个不同文字/尺寸泄漏 ~45MB Font（永不驱逐）→ live-resize 持续制造新键 → 堆耗尽。两处 bundle 补丁（缓存键子集化 r177 + 纹理 updateIfChanged r177b）+ 缓存穿透查询串。
+- 补丁正确性经 4 层实证：harness 计数（20 标签 1 字体、360 更新 0 新字体、heap 反降）、共享字体渲染（创建后/更新后均可见）、A/B 对照排除回归、真实页面冒烟。
+- 新增 public/font-cache-qa.html 回归 harness（Font 构造计数 + 内存 + 提交健康三探针，自判定 PASS/FAIL）；改动 public/molstar.js、use-molstar-loader.ts + 3 个旧 harness 缓存串；lint/tsc 零新增。

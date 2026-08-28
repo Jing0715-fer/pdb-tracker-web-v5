@@ -89,7 +89,9 @@ export function useMolstarLoader() {
 
     window.__molstarScriptLoading = true;
     const script = document.createElement("script");
-    script.src = "/molstar.js";
+    // r177: cache-buster — the bundle was patched (font cache key fix), and the
+    // bare URL is heuristic-cached by browsers; the query forces a fresh fetch.
+    script.src = "/molstar.js?v=r177b";
     script.async = true;
     script.onload = () => {
       // Give the IIFE a tick to assign the global.

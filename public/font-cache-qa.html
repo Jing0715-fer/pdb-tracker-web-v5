@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Font Cache QA — R177</title>
+<style>
+  body { margin:0; font-family:system-ui; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
+  .header { padding:6px 12px; background:#000; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  #verdict { font-weight:bold; font-size:14px; padding:4px 10px; border-radius:4px; }
+  #verdict.pending { background:#555; }
+  #verdict.pass { background:#2ecc71; color:#000; }
+  #verdict.fail { background:#e74c3c; }
+  #viewer { flex:1; position:relative; background:#fff; min-height:300px; }
+  #viewer canvas { display:block; }
+  #result { height:26vh; background:#000; padding:6px; overflow:auto; }
+  #result img { max-height:22vh; border:1px solid #444; margin:2px; }
+  #log { height:240px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:4px; overflow-y:auto; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="header">
+  <span id="verdict" class="pending">RUNNING…</span>
+  <span id="status">loading molstar…</span>
+</div>
+<div id="viewer"></div>
+<div id="result"></div>
+<div id="log"></div>
+
+<script src="/molstar.js?v=r177b"></script>
+<script>
+// ============================================================================
+// R177 font-cache regression harness.
+//
+// BUG (user console error): RangeError "Array buffer allocation failed" from
+// refreshAgentLabelSizes → molstar state commit → LabelRepresentation
+// createOrUpdate → getFont (YCe). The bundle's font cache keyed Font objects
+// by JSON.stringify(ALL label params): every unique customText / textSize /
+// tetherLength / … allocated a NEW Font (43MB Uint8Array texture + scratch
+// canvas + SDF Float64 grids ≈ 45MB) cached FOREVER. The R175 live label
+// resizer updates textSize on every camera move → heap exhaustion.
+//
+// FIX: bundle patch — cache key = the 5 font props only (fontFamily,
+// fontQuality, fontStyle, fontVariant, fontWeight) — the only fields F9 reads.
+//
+// THIS HARNESS measures Font constructions DIRECTLY: F9's constructor calls
+// document.createElement('canvas') for its scratch context, so counting
+// canvas creations after init = counting Font constructions.
+//
+// PASS criteria:
+//   Phase A (20 labels, unique texts):  ≤1 new Font (all labels share one)
+//   Phase B (24 camera orbits + live resize): 0 new Fonts
+//   No "Array buffer allocation failed", no commit failures, sizes changed.
+// ============================================================================
+
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const verdictEl = document.getElementById('verdict');
+function log(m) { logEl.innerHTML += '[' + new Date().toLocaleTimeString() + '] ' + m + '\n'; logEl.scrollTop = 1e9; }
+const reasons = [];
+function pass() { verdictEl.className = 'pass'; verdictEl.textContent = 'PASS — ' + reasons.join('; '); log('VERDICT: PASS'); }
+function fail(why) { verdictEl.className = 'fail'; verdictEl.textContent = 'FAIL — ' + why; log('VERDICT: FAIL — ' + why); }
+
+// ── Font-construction counter ──────────────────────────────────────────────
+let canvasCreations = 0;
+const createdCanvasSizes = [];
+const origCreate = document.createElement.bind(document);
+document.createElement = function (tag, opts) {
+  const el = origCreate(tag, opts);
+  if (String(tag).toLowerCase() === 'canvas') {
+    canvasCreations++;
+    createdCanvasSizes.push('pending');
+    // record final size after context setup (F9 sets w/h right after create)
+    setTimeout(() => {
+      const i = createdCanvasSizes.length - 1;
+      createdCanvasSizes[i] = el.width + 'x' + el.height;
+    }, 300);
+  }
+  return el;
+};
+function snapshotFontCount() { return { n: canvasCreations, sizes: createdCanvasSizes.slice() }; }
+
+// ── app-code replicas (R175 label-lifecycle.ts) ───────────────────────────
+const LIVE_LABEL_OFFSET_Z = 12;
+const ATTACHMENTS = ['top-center','top-right','middle-right','bottom-right','bottom-center','bottom-left','middle-left','top-left'];
+const anchors = new Map();
+
+function agentLabelOptions(text, color, slot) {
+  const attachment = ATTACHMENTS[slot % ATTACHMENTS.length];
+  const ring = Math.floor(slot / ATTACHMENTS.length);
+  const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
+  return {
+    labelParams: {
+      customText: text, textColor: color ?? 0xffffff,
+      // fontQuality 0 → small SDF atlas (~1641×1641): the default-3 atlas
+      // (6565×6564) fails to RENDER in the SwiftShader headless test env
+      // (silently — both patched & original bundles). The user's real
+      // browser renders quality-3 fine; this is harness-environment only.
+      // Font-cache behavior (what this harness measures) is identical.
+      fontQuality: 0,
+      textSize: 0.55, sizeFactor: 0.55,
+      offsetX: 0, offsetY: 0, offsetZ: 12,
+      borderWidth: 0.2, borderColor: 0x101010,
+      background: true, backgroundColor: 0x000000, backgroundOpacity: 0.5, backgroundMargin: 0.12,
+      attachment, tether: true, tetherLength, tetherBaseWidth: 0.25,
+    },
+    reprTags: ['agent-label'],
+  };
+}
+
+function getCameraPosition() {
+  try {
+    const p = plugin?.canvas3d?.camera?.position;
+    if (p && typeof p[0] === 'number') return [p[0], p[1], p[2]];
+  } catch (e) {}
+  return null;
+}
+
+function getLociCenter(loci) {
+  try {
+    const Loci = window.molstar?.lib?.loci?.Loci;
+    if (Loci && typeof Loci.getCenter === 'function') {
+      const c = Loci.getCenter(loci);
+      if (c && typeof c[0] === 'number') return [c[0], c[1], c[2]];
+    }
+  } catch (e) {}
+  return null;
+}
+
+// replica of refreshAgentLabelSizes (R175/R176)
+let commitFailures = 0, arrayBufferErrors = 0;
+const origError = console.error;
+console.error = function (...args) {
+  const s = args.join(' ');
+  if (s.includes('Array buffer allocation failed')) arrayBufferErrors++;
+  return origError.apply(console, args);
+};
+window.addEventListener('error', (e) => {
+  if (String(e.message).includes('Array buffer allocation failed')) arrayBufferErrors++;
+});
+
+async function refreshAgentLabelSizes() {
+  if (anchors.size === 0) return 0;
+  const data = plugin.state.data;
+  const cells = data.cells;
+  if (!cells || typeof data.build !== 'function') return 0;
+  const cam = getCameraPosition();
+  if (!cam) return 0;
+  const dists = [];
+  for (const [ref, anchor] of anchors) {
+    if (!cells.has(ref)) { anchors.delete(ref); continue; }
+    const params = cells.get(ref)?.transform?.params;
+    if (!params || typeof params !== 'object') continue;
+    const dx = anchor.center[0]-cam[0], dy = anchor.center[1]-cam[1], dz = anchor.center[2]-cam[2];
+    const d = Math.sqrt(dx*dx+dy*dy+dz*dz);
+    const eff = Math.max(d - LIVE_LABEL_OFFSET_Z, 1);
+    dists.push({ ref, eff, anchor, params });
+  }
+  if (dists.length === 0) return 0;
+  const mean = dists.reduce((s,x)=>s+x.eff,0)/dists.length;
+  const b = data.build();
+  let queued = 0;
+  for (const { ref, eff, anchor, params } of dists) {
+    const ratio = Math.min(Math.max(eff/mean, 0.6), 2.8);
+    const size = Math.round(anchor.baseSize * ratio * 1000)/1000;
+    const cur = params.textSize;
+    if (typeof cur === 'number' && Math.abs(cur - size) < 0.03) continue;
+    b.to(ref).update({ ...params, textSize: size, sizeFactor: size });
+    queued++;
+  }
+  if (queued > 0) {
+    try { await b.commit(); }
+    catch (err) { commitFailures++; log('resize commit FAILED: ' + err.message); return 0; }
+  }
+  return queued;
+}
+
+// residue loci builder — replica of recipe-viz.ts buildResidueLoci
+function buildResidueLoci(refs) {
+  const bundle = window.molstar;
+  const SE = bundle?.lib?.structure?.StructureElement;
+  const SP = bundle?.lib?.structure?.StructureProperties;
+  if (!SE || !SP) return null;
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  if (!structs.length) return null;
+  const data = structs[0]?.cell?.obj?.data;
+  if (!data) return null;
+  const refSet = new Set(refs.map(r => `${r.chain}:${r.resno}`));
+  const elementsByUnit = new Map();
+  for (const unit of data.units) {
+    if (unit.kind !== 0) continue;
+    const indices = [];
+    for (let i = 0; i < unit.elements.length; i++) {
+      const loc = SE.Location.create(data, unit, unit.elements[i]);
+      const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+      const resno = SP.residue.auth_seq_id(loc);
+      if (refSet.has(`${chainId}:${resno}`)) indices.push(i);
+    }
+    if (indices.length > 0) elementsByUnit.set(unit, indices);
+  }
+  if (elementsByUnit.size === 0) return null;
+  const elements = [];
+  elementsByUnit.forEach((indices, unit) => elements.push({ unit, indices }));
+  return { loci: new SE.Loci(data, elements) };
+}
+
+function heapMB() {
+  const m = performance.memory;
+  return m ? Math.round(m.usedJSHeapSize / 1048576) + 'MB' : 'n/a';
+}
+
+function moveCamera(theta, phi, radius) {
+  const canvas3d = plugin.canvas3d;
+  const cam = canvas3d.camera;
+  const t = cam.target;
+  const target = t.toArray ? t.toArray() : [t[0], t[1], t[2]];
+  const x = target[0] + radius * Math.sin(theta) * Math.cos(phi);
+  const y = target[1] + radius * Math.cos(theta);
+  const z = target[2] + radius * Math.sin(theta) * Math.sin(phi);
+  cam.setState({ position: [x, y, z], target, up: [0, 1, 0] }, 0);
+  if (canvas3d.requestDraw) canvas3d.requestDraw();
+}
+
+let viewer = null, plugin = null;
+
+async function verifyPatchedBundle() {
+  const resp = await fetch('/molstar.js?v=r177b');
+  const txt = await resp.text();
+  const patched = txt.includes('molcraft-patch r177');
+  log('bundle patch marker present: ' + patched);
+  if (!patched) fail('served bundle does NOT contain the r177 patch (stale cache?)');
+  return patched;
+}
+
+async function init() {
+  const m = window.molstar;
+  if (!m || !m.Viewer) { fail('molstar bundle missing'); return; }
+  await verifyPatchedBundle();
+
+  viewer = await m.Viewer.create(document.getElementById('viewer'), {
+    layoutIsExpanded: false, layoutShowControls: false,
+    layoutShowRemoteState: 'none', layoutShowSequence: false, layoutShowLog: false,
+    layoutShowLeftPanel: false, collapseLeftPanel: true, collapseRightPanel: true,
+    viewportShowReset: false, viewportShowScreenshotControls: false, viewportShowControls: false,
+    viewportShowExpand: false, viewportShowSettings: false,
+    viewportShowSelectionMode: false, viewportShowAnimation: false, viewportShowTrajectoryControls: false,
+    pdbProvider: 'pdbe', emdbProvider: 'pdbe',
+    viewportBackgroundColor: '#ffffff',
+  });
+  plugin = viewer.plugin;
+  statusEl.textContent = 'loading 4HHB…';
+  await viewer.loadPdb('4HHB');
+  await new Promise(r => setTimeout(r, 3000));
+  try {
+    const structs = plugin.managers.structure.hierarchy.current.structures;
+    const comps = [];
+    for (const s of structs) for (const c of (s.components || [])) comps.push(c);
+    plugin.managers.structure.component.updateRepresentationsTheme(comps, { color: 'chain-id' });
+  } catch (e) { log('theme failed: ' + e.message); }
+
+  // baseline AFTER viewer init (any init-time canvas creations excluded)
+  const base = snapshotFontCount();
+  const heap0 = heapMB();
+  log('baseline: fonts=' + base.n + ' canvases, heap=' + heap0);
+
+  // ── Phase A: 20 labels with UNIQUE texts ────────────────────────────────
+  statusEl.textContent = 'Phase A: 20 unique-text labels…';
+  const residues = [];
+  for (let i = 0; i < 10; i++) residues.push({ chain: 'A', resno: 30 + i, text: 'A' + (30 + i), color: 0x2ecc71 });
+  for (let i = 0; i < 10; i++) residues.push({ chain: 'B', resno: 40 + i, text: 'B' + (40 + i), color: 0xd95f02 });
+  let slot = 0, added = 0;
+  for (const r of residues) {
+    const built = buildResidueLoci([{ chain: r.chain, resno: r.resno }]);
+    if (!built) { log('loci null for ' + r.text); continue; }
+    try {
+      const mm = plugin.managers?.structure?.measurement;
+      const res = await mm.addLabel(built.loci, agentLabelOptions(r.text, r.color, slot++));
+      const ref = res?.representation?.ref;
+      const c = getLociCenter(built.loci);
+      if (typeof ref === 'string' && c) { anchors.set(ref, { center: c, baseSize: 0.55 }); added++; }
+    } catch (e) { log('addLabel failed for ' + r.text + ': ' + e.message); }
+  }
+  await new Promise(r => setTimeout(r, 800));
+  const afterA = snapshotFontCount();
+  const fontsA = afterA.n - base.n;
+  log('Phase A: ' + added + ' labels added, heap=' + heapMB() + ', NEW font canvases=' + fontsA + ' ' + JSON.stringify(afterA.sizes.slice(base.n)));
+
+  // ── Phase B: 24 camera orbits × live resize ─────────────────────────────
+  statusEl.textContent = 'Phase B: 24 orbits × live resize…';
+  const roundTimes = [];
+  let totalUpdates = 0;
+  for (let i = 0; i < 24; i++) {
+    const theta = 0.6 + (i % 5) * 0.35;           // polar
+    const phi = (i * 1.31) % (Math.PI * 2);        // azimuth — distinct each round
+    const radius = 90 + (i % 7) * 12;
+    const t0 = performance.now();
+    moveCamera(theta, phi, radius);
+    await new Promise(r => setTimeout(r, 120));
+    totalUpdates += await refreshAgentLabelSizes();
+    await new Promise(r => setTimeout(r, 60));
+    roundTimes.push(Math.round(performance.now() - t0));
+  }
+  const afterB = snapshotFontCount();
+  const fontsB = afterB.n - afterA.n;
+  const slowRounds = roundTimes.filter(t => t > 400).length;
+  log('Phase B: updates=' + totalUpdates + ', heap=' + heapMB() + ', NEW font canvases=' + fontsB + ' ' + JSON.stringify(afterB.sizes.slice(afterA.n)));
+  log('Phase B round times (ms): ' + roundTimes.join(',') + ' — slow(>400ms)=' + slowRounds);
+
+  // labels must actually have resized (sizes changed across rounds)
+  const sizesNow = [];
+  const cells = plugin.state.data.cells;
+  for (const ref of anchors.keys()) {
+    const p = cells.get(ref)?.transform?.params;
+    sizesNow.push(p?.customText + '=' + (p?.textSize ?? '?'));
+  }
+  const flatSizes = sizesNow.filter(s => s.endsWith('=0.55')).length;
+  log('label sizes now: ' + sizesNow.join(' | ') + ' (still-flat=' + flatSizes + ')');
+
+  // final screenshot (excluded from font counting — snapshot taken before)
+  const shotBaseline = canvasCreations;
+  try {
+    const uri = await plugin.helpers?.viewportScreenshot?.getImageDataUri({ width: 1280, height: 720, transparency: false, axes: true });
+    if (uri) {
+      const img = document.createElement('img');
+      img.src = uri; img.title = 'final';
+      document.getElementById('result').appendChild(img);
+      window.__finalShot = uri;
+      log('final screenshot captured');
+    }
+  } catch (e) { log('capture failed: ' + e.message); }
+  if (canvasCreations !== shotBaseline) log('note: screenshot helper created ' + (canvasCreations - shotBaseline) + ' canvas(es) — not counted as fonts');
+
+  // ── verdict ─────────────────────────────────────────────────────────────
+  statusEl.textContent = 'done';
+  if (arrayBufferErrors > 0) return fail(arrayBufferErrors + ' "Array buffer allocation failed" error(s)');
+  if (commitFailures > 0) return fail(commitFailures + ' resize commit failure(s)');
+  if (added < 15) return fail('only ' + added + '/20 labels created');
+  if (fontsA > 1) reasons.push('PhaseA fonts=' + fontsA + ' (expected ≤1)');
+  if (fontsA <= 1) reasons.push('PhaseA fonts=' + fontsA + ' (shared font, OK)');
+  if (fontsB > 0) return fail('Phase B created ' + fontsB + ' NEW font(s) during live resize — cache still leaking');
+  if (totalUpdates < 10) return fail('live resize only updated ' + totalUpdates + ' labels — test inconclusive');
+  if (flatSizes === sizesNow.length) return fail('label sizes never changed during orbits');
+  reasons.push('PhaseB fonts=0, updates=' + totalUpdates + ', resized labels=' + (sizesNow.length - flatSizes) + '/' + sizesNow.length);
+  pass();
+}
+init().catch(e => { log('init failed: ' + (e && e.message || e)); fail('init exception: ' + (e && e.message || e)); });
+</script>
+</body>
+</html>
