@@ -4580,3 +4580,25 @@ Stage Summary:
 - 用户两项需求闭环：①"标签偏移"根因定位为默认放置标签（无 tether/offsetZ→深度遮挡半埋）而非锚定数学错误——三处调用点统一改用 R170 浮动放置 + 修复 flat 参数文本丢失 bug；②"显示/隐藏开关"落地——所有 agent 标签打 agent-label tag，MeasureToolbar Labels 眼睛按钮用 updateCellState isHidden 原地切换（不删除），分析结束后标签经 show_analysis_labels 持久化，新分析自动替换。
 - 新增 label-lifecycle.ts（tag 查找/显隐/计数/删除/放置工厂）；show_analysis_labels 命令；客户端两处持久化接线；store+toolbar UI；recipe-viz 清理替换语义。
 - 改动 8 文件 +1 新文件，+238/-10；lint/tsc 零新增；bundle API（reprTags/updateCellState）浏览器实证有效。
+
+---
+Task ID: R174
+Agent: main (IM-chat 4HHB chain-chain interaction analysis — environment recovery + completion)
+
+Task: 用户经 IM 网关请求「Load 4HHB, analyze all chain-chain interactions, cartoon + chain coloring」——前次 IM 会话中 pdb_analyze 全部失败（"Recipe requires biopython but not available"），本 session 排查并完成被阻断的分析。
+
+Work Log:
+- 排查 /api/analyze/run 的 "Recipe requires ..." 分支（route.ts:273）：probeAllClis() 用 CHILD_ENV（PATH 前置 /home/z/.venv/bin）探测 biopython。
+- 环境核验：venv 现已具备 biopython 1.86 + numpy 2.1.3 + scipy 1.14.1（python3 = /home/z/.venv/bin/python3, Python 3.12.14）——前次 IM 会话时缺失的 biopython 已在环境中恢复（环境级修复，无需代码变更）；/api/cli/list 实测 biopython/numpy/scipy 全部 available=True。freesasa/pdb-tools/pymol/dssp 仍缺（不影响本任务所需 recipe）。
+- 复跑用户请求的完整分析（全部经 /api/analyze/run，与 agent 客户端桥接同一后端，9 次调用全部 200 无错误，~300ms/次）：
+  1. summary：4 链（A/C=α 各 141 残基，B/D=β 各 146 残基），801 残基/4779 原子，HEM×4 + PO4×2，无氢。
+  2. pairwise_interactions：6 链对全部分析完成（5 对接触、B–D 零直接接触）。
+  3. interface_residues ×6（5Å 口径）：每对界面残基数/原子对数/潜在 H-bond 数。
+- 检测口径核实（cli-registry.ts）：盐桥 ≤4.0Å、H-bond ≤3.5Å 且 D-H…A 角 >120°、疏水 ≤4.5Å——报告按此口径描述。
+- RCSB 元数据交叉验证：人脱氧血红蛋白、X-ray、1.74Å、2 个 polymer entity，与应用返回一致。
+- 无代码改动（纯环境验证 + 分析执行），lint/tsc 不适用；dev server 全程健康（dev.log 无 error）。
+
+Stage Summary:
+- IM 会话被阻断的根因（biopython 缺失）已消除：探测与配方执行全部恢复，pdb_analyze 管线对 4HHB 实测可用。
+- 用户请求完整交付：结构已加载（cartoon + chain-id 着色，前次会话已成功设置）+ 全部 6 链对互作分析（α1β1/α2β2 紧密界面、α1β2/β1α2 滑动界面、α1α2 Asp126↔Arg141 T 态盐桥簇、β1β2 中央空腔零直接接触——与脱氧 Hb T 态结构生物学完全一致）。
+- 后续注意：freesasa/pdb-tools/pymol/dssp 仍未安装——涉及 SASA/DSSP/二硫键等 recipe 时需先补装；探测缓存 TTL 60s，装包后最多 1 分钟生效。
