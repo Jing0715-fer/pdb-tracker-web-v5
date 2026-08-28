@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stick Hide/Restore QA — R176</title>
+<style>
+  body { margin:0; font-family:system-ui; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
+  .header { padding:6px 12px; background:#000; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .header button { padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
+  .header button.primary { background:#2ecc71; color:#000; font-weight:bold; }
+  #viewer { flex:1; position:relative; background:#fff; min-height:300px; }
+  #viewer canvas { display:block; }
+  #result { height:30vh; background:#000; padding:6px; overflow:auto; }
+  #result img { max-height:26vh; border:1px solid #444; margin:2px; }
+  #log { height:200px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:4px; overflow-y:auto; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="header">
+  <button id="btnBaseline" class="primary">1. Baseline (ligand sticks visible)</button>
+  <button id="btnHide" class="primary">2. hideAllBallAndStick</button>
+  <button id="btnRestore" class="primary">3. restoreHiddenBallAndStick</button>
+  <button id="btnInterface" class="primary">4. Interface sticks + hide (exclusion test)</button>
+  <button id="btnInventory">Log repr inventory</button>
+  <span id="status">loading molstar…</span>
+</div>
+<div id="viewer"></div>
+<div id="result"></div>
+<div id="log"></div>
+
+<script src="/molstar.js"></script>
+<script>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+function log(m) { logEl.innerHTML += '[' + new Date().toLocaleTimeString() + '] ' + m + '\n'; logEl.scrollTop = 1e9; }
+window.__qa = { log: log };
+
+let viewer = null, plugin = null;
+
+// ── exact replica of R176 recipe-viz.ts stick hiding ──
+let vizHiddenSticks = [];
+
+function isBallAndStickType(typeName) {
+  const n = (typeName || '').toLowerCase();
+  return n.includes('ball-and-stick') || n.includes('ball+stick') || n.includes('ballandstick');
+}
+
+function requestCanvasDraw() {
+  try { plugin.canvas3d?.requestDraw?.(); } catch (e) {}
+}
+
+function hideAllBallAndStick() {
+  let hidden = 0;
+  const state = plugin.state.data;
+  if (typeof state?.updateCellState !== 'function') { log('updateCellState unavailable!'); return 0; }
+  for (const s of plugin.managers.structure.hierarchy.current.structures) {
+    for (const c of (s.components || [])) {
+      const compTags = c?.cell?.transform?.tags;
+      if (Array.isArray(compTags) && compTags.includes('interface-sidechain')) continue;
+      for (const r of (c.representations || [])) {
+        try {
+          const typeName = r?.cell?.transform?.params?.type?.name ?? '';
+          if (!isBallAndStickType(typeName)) continue;
+          const ref = r?.cell?.transform?.ref;
+          if (typeof ref !== 'string' || ref.length === 0) continue;
+          const alreadyHidden = !!(r?.cell?.state?.isHidden);
+          if (alreadyHidden) continue;
+          state.updateCellState(ref, { isHidden: true });
+          vizHiddenSticks.push({ ref, wasHidden: false });
+          hidden++;
+          log('  hid ' + typeName + ' (' + (c?.cell?.obj?.label || 'component') + ') ref=' + ref);
+        } catch (e) { log('  one repr failed: ' + e.message); }
+      }
+    }
+  }
+  if (hidden > 0) requestCanvasDraw();
+  return hidden;
+}
+
+function restoreHiddenBallAndStick() {
+  if (vizHiddenSticks.length === 0) return 0;
+  const tracked = vizHiddenSticks;
+  vizHiddenSticks = [];
+  let restored = 0;
+  const data = plugin.state.data;
+  if (typeof data?.updateCellState !== 'function') return 0;
+  for (const { ref, wasHidden } of tracked) {
+    try {
+      if (data.cells && typeof data.cells.has === 'function' && !data.cells.has(ref)) continue;
+      if (wasHidden) continue;
+      data.updateCellState(ref, { isHidden: false });
+      restored++;
+    } catch (e) { /* dead ref */ }
+  }
+  if (restored > 0) requestCanvasDraw();
+  return restored;
+}
+
+// ── buildResidueLoci (recipe-viz replica, incl. toExpression) ──
+function buildResidueLoci(refs) {
+  const bundle = window.molstar;
+  const SE = bundle?.lib?.structure?.StructureElement;
+  const SP = bundle?.lib?.structure?.StructureProperties;
+  if (!SE || !SP) return null;
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  if (!structs.length) return null;
+  const data = structs[0]?.cell?.obj?.data;
+  if (!data) return null;
+  const refSet = new Set();
+  for (const r of refs) refSet.add(r.chain + ':' + r.resno);
+  const elementsByUnit = new Map();
+  for (const unit of data.units) {
+    if (unit.kind !== 0) continue;
+    const indices = [];
+    for (let i = 0; i < unit.elements.length; i++) {
+      const loc = SE.Location.create(data, unit, unit.elements[i]);
+      const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+      const resno = SP.residue.auth_seq_id(loc);
+      if (!refSet.has(chainId + ':' + resno)) continue;
+      indices.push(i);
+    }
+    if (indices.length > 0) elementsByUnit.set(unit, indices);
+  }
+  if (elementsByUnit.size === 0) return null;
+  const elements = [];
+  elementsByUnit.forEach((indices, unit) => elements.push({ unit, indices }));
+  const loci = new SE.Loci(data, elements);
+  const expr = SE.Loci.toExpression(loci);
+  return { loci, expr };
+}
+
+// ── screenshots + pixel diff ──
+window.__shots = {};
+async function capture(tag) {
+  try {
+    const uri = await plugin.helpers?.viewportScreenshot?.getImageDataUri({ width: 960, height: 540, transparency: false, axes: true });
+    if (!uri) { log('capture ' + tag + ' → no uri'); return null; }
+    window.__shots[tag] = uri;
+    const img = document.createElement('img');
+    img.src = uri; img.title = tag;
+    document.getElementById('result').appendChild(img);
+    log('captured ' + tag);
+    return uri;
+  } catch (e) { log('capture failed: ' + e.message); return null; }
+}
+
+function loadImg(uri) {
+  return new Promise((res) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = uri;
+  });
+}
+
+async function pixelDiff(a, b) {
+  const ia = await loadImg(a), ib = await loadImg(b);
+  if (!ia || !ib) return -1;
+  const w = Math.min(ia.width, ib.width), h = Math.min(ia.height, ib.height);
+  const ca = document.createElement('canvas'); ca.width = w; ca.height = h;
+  const ctxa = ca.getContext('2d'); ctxa.drawImage(ia, 0, 0, w, h);
+  const cb = document.createElement('canvas'); cb.width = w; cb.height = h;
+  const ctxb = cb.getContext('2d'); ctxb.drawImage(ib, 0, 0, w, h);
+  const da = ctxa.getImageData(0, 0, w, h).data;
+  const db = ctxb.getImageData(0, 0, w, h).data;
+  let sum = 0, changed = 0;
+  for (let i = 0; i < da.length; i += 4) {
+    const d = Math.abs(da[i] - db[i]) + Math.abs(da[i+1] - db[i+1]) + Math.abs(da[i+2] - db[i+2]);
+    sum += d;
+    if (d > 30) changed++;
+  }
+  const n = da.length / 4;
+  return { meanDiff: +(sum / n / 3).toFixed(2), changedPct: +(100 * changed / n).toFixed(2) };
+}
+
+function logInventory(title) {
+  const out = [];
+  for (const s of plugin.managers.structure.hierarchy.current.structures) {
+    for (const c of (s.components || [])) {
+      const compTags = (c?.cell?.transform?.tags || []).join(',');
+      for (const r of (c.representations || [])) {
+        out.push(
+          (c?.cell?.obj?.label || '?') +
+          ' [tags=' + compTags + '] type=' + (r?.cell?.transform?.params?.type?.name || '?') +
+          ' isHidden=' + (!!r?.cell?.state?.isHidden)
+        );
+      }
+    }
+  }
+  log(title + ' inventory (' + out.length + ' representations):\n  ' + out.join('\n  '));
+  return out;
+}
+
+async function init() {
+  const m = window.molstar;
+  if (!m || !m.Viewer) { statusEl.textContent = 'molstar bundle missing'; return; }
+  viewer = await m.Viewer.create(document.getElementById('viewer'), {
+    layoutIsExpanded: false, layoutShowControls: false,
+    layoutShowRemoteState: 'none', layoutShowSequence: false, layoutShowLog: false,
+    layoutShowLeftPanel: false, collapseLeftPanel: true, collapseRightPanel: true,
+    viewportShowReset: false, viewportShowScreenshotControls: false, viewportShowControls: false,
+    viewportShowExpand: false, viewportShowSettings: false,
+    viewportShowSelectionMode: false, viewportShowAnimation: false, viewportShowTrajectoryControls: false,
+    pdbProvider: 'pdbe', emdbProvider: 'pdbe',
+    viewportBackgroundColor: '#ffffff',
+  });
+  plugin = viewer.plugin;
+  statusEl.textContent = 'loading 4HHB…';
+  await viewer.loadPdb('4HHB');
+  await new Promise(r => setTimeout(r, 3000));
+  try {
+    const structs = plugin.managers.structure.hierarchy.current.structures;
+    const comps = [];
+    for (const s of structs) for (const c of (s.components || [])) comps.push(c);
+    plugin.managers.structure.component.updateRepresentationsTheme(comps, { color: 'chain-id' });
+  } catch (e) { log('theme failed: ' + e.message); }
+  statusEl.textContent = 'ready';
+  log('4HHB loaded (polymer-and-ligand preset: cartoon + ligand ball-and-stick)');
+
+  document.getElementById('btnBaseline').onclick = async () => {
+    logInventory('BASELINE');
+    await capture('baseline');
+  };
+
+  document.getElementById('btnHide').onclick = async () => {
+    const n = hideAllBallAndStick();
+    log('hideAllBallAndStick → hid ' + n + ' representation(s)');
+    await new Promise(r => setTimeout(r, 800));
+    await capture('hidden');
+    if (window.__shots.baseline) {
+      const d = await pixelDiff(window.__shots.baseline, window.__shots.hidden);
+      log('PIXEL DIFF baseline→hidden: ' + JSON.stringify(d) + ' (must be > 0 — ligand sticks disappeared)');
+      window.__qa.hideDiff = d;
+    }
+  };
+
+  document.getElementById('btnRestore').onclick = async () => {
+    const n = restoreHiddenBallAndStick();
+    log('restoreHiddenBallAndStick → restored ' + n + ' representation(s)');
+    await new Promise(r => setTimeout(r, 800));
+    await capture('restored');
+    if (window.__shots.hidden) {
+      const d = await pixelDiff(window.__shots.hidden, window.__shots.restored);
+      log('PIXEL DIFF hidden→restored: ' + JSON.stringify(d) + ' (must be > 0 — sticks back)');
+      window.__qa.restoreDiff = d;
+    }
+  };
+
+  document.getElementById('btnInterface').onclick = async () => {
+    // exact replica of recipe-viz show_sidechains: hide all sticks, then
+    // create the interface-sidechain ball-and-stick component — its repr
+    // must stay VISIBLE (excluded by tag).
+    const refs = [
+      { chain: 'A', resno: 114 }, { chain: 'B', resno: 116 },
+      { chain: 'A', resno: 34 }, { chain: 'B', resno: 127 },
+    ];
+    const built = buildResidueLoci(refs);
+    if (!built) { log('buildResidueLoci → null'); return; }
+    const structs = plugin.managers.structure.hierarchy.current.structures;
+    const sr = structs[0];
+    const hid = hideAllBallAndStick();
+    log('hideAllBallAndStick → hid ' + hid + ' (before creating interface component)');
+    try {
+      const component = await plugin.builders.structure.tryCreateComponentFromExpression(
+        sr.cell, built.expr, 'interface-sidechains-' + Date.now(),
+        { tags: ['interface-sidechain'] }
+      );
+      if (!component) { log('tryCreateComponentFromExpression → undefined'); return; }
+      await plugin.builders.structure.representation.addRepresentation(component, {
+        type: 'ball-and-stick',
+        typeParams: { sizeFactor: 0.2, bondScale: 0.15, bondSpacing: 0.05, aromaticBonds: true, multipleBonds: true, ignoreHydrogens: true },
+        color: 'element-symbol',
+      });
+      log('interface-sidechain component created + ball-and-stick added');
+    } catch (e) { log('interface component failed: ' + e.message); return; }
+    await new Promise(r => setTimeout(r, 800));
+    const inv = logInventory('INTERFACE');
+    const ifaceRepr = inv.find(l => l.includes('interface-sidechain'));
+    const ifaceVisible = ifaceRepr && ifaceRepr.includes('isHidden=false');
+    log('INTERFACE EXCLUSION: ' + (ifaceVisible ? 'PASS — interface sticks stay visible' : 'FAIL — ' + (ifaceRepr || 'no interface repr found')));
+    window.__qa.ifaceExclusion = ifaceVisible;
+    // hide AGAIN post-creation: must not hide the interface repr (tag excluded)
+    const hid2 = hideAllBallAndStick();
+    log('hideAllBallAndStick AFTER interface creation → hid ' + hid2 + ' (must be 0 — already all hidden / interface excluded)');
+    window.__qa.secondHide = hid2;
+    await capture('interface-only');
+    if (window.__shots.baseline) {
+      const d = await pixelDiff(window.__shots.baseline, window.__shots['interface-only']);
+      log('PIXEL DIFF baseline→interface-only: ' + JSON.stringify(d));
+    }
+  };
+
+  document.getElementById('btnInventory').onclick = () => logInventory('MANUAL');
+}
+init().catch(e => { log('init failed: ' + e.message); statusEl.textContent = 'init failed'; });
+</script>
+</body>
+</html>

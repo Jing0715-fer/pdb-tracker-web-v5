@@ -22,6 +22,7 @@ import type { CommandResult } from '@/lib/molcraft/commands';
 import { clearAllMeasurements } from '@/lib/molcraft/commands/measurement-utils';
 import type { VlmResult } from '@/lib/molcraft/vlm-client';
 import type { MolstarViewer } from '@/lib/molcraft/types';
+import type { AnalysisViewSpec } from '@/lib/molcraft/commands/analysis-view';
 import { toolToCommand, requiresApproval, SERVER_SIDE_TOOLS } from '@/lib/agent/pdb-tools';
 import type { SessionEvent } from '@/lib/agent/session/types';
 import type { ContentBlock, StreamChunk } from '@/lib/agent/llm/types';
@@ -76,12 +77,17 @@ export type ConversationNode =
  * UI-012 (minimal hardening): screenshot payload shared by every capture
  * path (capture_multi_angle / pdb_analyze auto-capture / recapture).
  * Structurally compatible with vlm-client's ScreenshotData.
+ *
+ * R176: `analysisView` carries everything the 恢复视角 button needs to
+ * re-create the screenshot's FULL analysis state (viz + labels + camera)
+ * — attached by the pairwise per-pair capture loop.
  */
 export interface CaptureScreenshot {
   dataUri: string;
   angle: string;
   label: string;
   cameraState?: unknown;
+  analysisView?: AnalysisViewSpec;
 }
 
 /** UI-012: progress payload written by the VLM-controlled capture loop. */
@@ -1159,6 +1165,21 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                           ...s,
                           angle: `${pairTag} ${s.angle}`,
                           label: `界面 ${pairTag} — ${s.angle}`,
+                          // R176: full-state restore spec for the 恢复视角
+                          // button — the camera alone is not enough (user:
+                          // "点击图片上的恢复视角，没有恢复label等信息");
+                          // this re-creates THIS pair's viz + labels too.
+                          analysisView: {
+                            recipe: recipeName,
+                            chain1: pair.chain1 != null ? String(pair.chain1) : undefined,
+                            chain2: pair.chain2 != null ? String(pair.chain2) : undefined,
+                            interactions: Array.isArray(pair.interactions)
+                              ? (pair.interactions as Array<Record<string, unknown>>)
+                              : undefined,
+                            labels: pairLabels,
+                            labelFontSize: 0.5,
+                            cameraState: (s.cameraState ?? undefined) as AnalysisViewSpec['cameraState'],
+                          },
                         });
                       }
                       // R175: show what we have so far — the carousel renders
@@ -1245,23 +1266,32 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   }
 
                   const captureDuration = Date.now() - captureStartTime;
-                  // R173: persist the TOP pair's residue labels in the live
-                  // viewer (tagged agent-label → toolbar Labels toggle).
-                  // The capture cleanup already restored the user's chains /
-                  // camera — the labels float at their residues with tethers,
-                  // so rotating keeps them anchored and the Labels button
-                  // can hide/show them freely.
-                  if (!localController.signal.aborted && v && topPairLabels && topPairLabels.length > 0) {
+                  // R173→R176: persist the TOP pair's FULL analysis view in the
+                  // live viewer — interface residues as ball-and-stick (after
+                  // hiding every other ball-and-stick), H-bond distance lines,
+                  // 0.4 cartoon transparency, hidden non-interface chains, and
+                  // the pair's residue labels (tagged agent-label → toolbar
+                  // Labels toggle). The user's CAMERA is untouched (R163:
+                  // restoreUserCameraState already ran in cleanupCapture).
+                  // (User report: "互作的氨基酸还是没有以stick形式显示".)
+                  if (!localController.signal.aborted && v && topPairs.length > 0) {
+                    const topPair = topPairs[0]!;
                     // R175: wrapped in withTimeout — cosmetic persistence must
                     // never wedge the completion path (see helper comment above).
-                    const labelCmd = executeCommand(v, {
-                      type: 'show_analysis_labels',
-                      labels: topPairLabels,
+                    const vizCmd = executeCommand(v, {
+                      type: 'show_analysis_viz',
+                      recipe: recipeName,
+                      chain1: topPair.chain1 != null ? String(topPair.chain1) : undefined,
+                      chain2: topPair.chain2 != null ? String(topPair.chain2) : undefined,
+                      interactions: Array.isArray(topPair.interactions)
+                        ? (topPair.interactions as Array<Record<string, unknown>>)
+                        : undefined,
+                      labels: topPairLabels ?? [],
                       labelFontSize: 0.5,
-                    } as never).catch((labelErr: unknown) => {
-                      console.warn('[agent] persisting pairwise labels failed (non-blocking):', labelErr);
+                    } as never).catch((vizErr: unknown) => {
+                      console.warn('[agent] persisting pairwise analysis view failed (non-blocking):', vizErr);
                     });
-                    await withTimeout(labelCmd, 30_000, 'persisting pairwise labels');
+                    await withTimeout(vizCmd, 30_000, 'persisting pairwise analysis view');
                   }
                   // FE-03 (R172): clear autoCapturePending on EVERY terminal
                   // path of the pairwise branch — success, empty capture, and

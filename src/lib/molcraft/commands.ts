@@ -46,7 +46,7 @@ import {
   removeMeasurementCells,
   clearAllMeasurements,
 } from "./commands/measurement-utils";
-import { restoreHiddenChains, restoreHiddenNonPolymer, __resetVizMeasurementRefs, buildResidueLoci } from "./commands/recipe-viz";
+import { restoreHiddenChains, restoreHiddenNonPolymer, restoreHiddenBallAndStick, __resetVizMeasurementRefs, __resetVizStickHiding, removeTrackedVizMeasurements, buildResidueLoci } from "./commands/recipe-viz";
 import { getChainColorMap, getChainLabelColor } from "./commands/chain-colors";
 import { getLociCenter, getLabelSizeRatios } from "./commands/label-sizing";
 import { clearVizTransparency } from "./commands/cartoon-transparency";
@@ -84,10 +84,10 @@ import {
   ensureAgentLabelResizeWatcher,
   refreshAgentLabelSizes,
   registerAgentLabelAnchor,
-  removeAgentLabels,
   AGENT_LABEL_TAG,
 } from "./commands/label-lifecycle";
 import { applyRecipeVisualization } from "./commands/recipe-viz";
+import { persistAnalysisLabels } from "./commands/analysis-view";
 import { alignStructures } from "./commands/alignment";
 import {
   clearAllSelectionVisuals,
@@ -159,6 +159,13 @@ export function __drainCaptureQueue(): void {
     __resetVizMeasurementRefs();
   } catch (err) {
     console.warn('[__drainCaptureQueue] could not reset viz measurement refs:', err);
+  }
+  // R176: also reset the stick-hiding tracking — the hidden representation
+  // cells belonged to the removed structure's state tree.
+  try {
+    __resetVizStickHiding();
+  } catch (err) {
+    console.warn('[__drainCaptureQueue] could not reset stick hiding:', err);
   }
   console.log('[__drainCaptureQueue] capture chain drained + camera state reset');
 }
@@ -594,68 +601,45 @@ export async function executeCommand(
       case "show_analysis_labels": {
         const labels = cmd.labels ?? [];
         if (labels.length === 0) return { ok: false, detail: "No labels provided" };
-        // Replace any previous agent labels (this is the single source of
-        // truth for what the post-analysis view shows).
-        await removeAgentLabels(plugin);
-        const chainColorMap = getChainColorMap(plugin);
-        // R175: distance-compensated sizing — the persisted labels previously
-        // used flat 0.55 text (no compensation at all), so near-camera
-        // residues got big labels while back-of-interface residues got tiny
-        // ones ("标签还是存在由于视觉远近看起来差异过大"). Resolve every
-        // loci first, measure anchor-camera distances, then create with
-        // per-label ratios (same pipeline as the capture-time labels).
-        const {
-          getLabelSizeRatios,
-        } = await import("./commands/label-sizing");
-        type PreparedLabel = { lbl: NonNullable<typeof cmd.labels>[number]; loci: unknown; center: [number, number, number] | null };
-        const preparedLabels: PreparedLabel[] = [];
-        for (const lbl of labels) {
+        // R176: the label-persistence core lives in analysis-view.ts
+        // (persistAnalysisLabels) so show_analysis_viz and the 恢复视角
+        // restore path share the exact same pipeline (tag + placement +
+        // live distance-compensated sizing + anchor registration).
+        const added = await persistAnalysisLabels(viewer, labels, cmd.labelFontSize ?? 0.55);
+        return { ok: added > 0, detail: `Persisted ${added}/${labels.length} residue labels (toggle with the Labels toolbar button)` };
+      }
+
+      // R176: persist the FULL analysis visualization in the live viewer
+      // after the capture pipeline cleaned it up — the interacting residues
+      // stay visible as ball-and-stick (with distance lines, transparency,
+      // hidden non-interface chains and the pair's labels), while the
+      // user's camera is NOT moved (_skipFocus, R163 semantics).
+      case "show_analysis_viz": {
+        const recipe = cmd.recipe ?? "pairwise_interactions";
+        const vizParams: Record<string, unknown> = { _skipFocus: true };
+        if (cmd.chain1 !== undefined) vizParams.chain1 = cmd.chain1;
+        if (cmd.chain2 !== undefined) vizParams.chain2 = cmd.chain2;
+        if (Array.isArray(cmd.interactions)) vizParams.interactions = cmd.interactions;
+        try {
+          await applyRecipeVisualization(viewer, recipe, vizParams);
+        } catch (err) {
+          console.warn("[show_analysis_viz] applyRecipeVisualization failed:", err);
+        }
+        let added = 0;
+        if (Array.isArray(cmd.labels) && cmd.labels.length > 0) {
           try {
-            if (lbl.chain === undefined || lbl.resno === undefined) continue;
-            let loci: unknown = null;
-            const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
-            if (singleResult) loci = singleResult.loci;
-            if (!loci) loci = await lociFromResidue(viewer, { chain: lbl.chain, resno: lbl.resno });
-            if (loci) preparedLabels.push({ lbl, loci, center: getLociCenter(loci) });
+            added = await persistAnalysisLabels(viewer, cmd.labels, cmd.labelFontSize ?? 0.5);
           } catch (err) {
-            console.warn(`[show_analysis_labels] label "${lbl.text}" failed:`, err);
+            console.warn("[show_analysis_viz] persistAnalysisLabels failed:", err);
           }
         }
-        const ratios = getLabelSizeRatios(plugin, preparedLabels.map((p) => p.center), 12);
-        let added = 0;
-        let slot = 0;
-        for (let idx = 0; idx < preparedLabels.length; idx++) {
-          const { lbl, loci, center } = preparedLabels[idx]!;
-          const color = getChainLabelColor(plugin, lbl.chain, chainColorMap);
-          // R175: addAgentLabel registers the anchor → live re-sizing keeps
-          // every label the same screen size while the user rotates/zooms.
-          const created = await addAgentLabel(plugin, loci, {
-            text: lbl.text ?? "",
-            color,
-            slot: slot++,
-            fontSize: cmd.labelFontSize ?? 0.55,
-            sizeRatio: ratios[idx] ?? 1,
-            center,
-          });
-          if (created) added++;
-        }
-        // R175: normalize sizes for the CURRENT camera right away (the
-        // creation ratios above were measured against this same camera, but
-        // the refresh also validates the registry + watcher state).
-        try {
-          await refreshAgentLabelSizes(plugin);
-        } catch {
-          /* non-blocking */
-        }
-        // R173: force a redraw so the freshly persisted labels render
-        // immediately (the animation loop covers this in normal browsers;
-        // the explicit draw makes throttled/background tabs reliable too).
-        try {
-          plugin.canvas3d?.requestDraw?.();
-        } catch {
-          /* ignore */
-        }
-        return { ok: added > 0, detail: `Persisted ${added}/${labels.length} residue labels (toggle with the Labels toolbar button)` };
+        const pair = cmd.chain1 && cmd.chain2 ? ` ${cmd.chain1}-${cmd.chain2}` : "";
+        return {
+          ok: true,
+          detail: `Persisted analysis view${pair}: interface residues as ball-and-stick` +
+            (added > 0 ? ` + ${added} residue labels` : "") +
+            " (visible in the live viewer; hide via the Labels toggle or a new representation)",
+        };
       }
 
       case "clear_measurements":
@@ -1321,6 +1305,18 @@ async function executeMultiAngleCapture(
         // the NEXT analysis's cleanup_previous doesn't re-count the dead
         // refs as "leaked" cells. Only done when this step succeeded: on a
         // thrown error the tracking stays intact as the leak safety net.
+        //
+        // R176 leak fix: BEFORE resetting, also remove any tracked refs that
+        // were NOT part of this capture's delta — those are distance lines
+        // persisted by a previous show_analysis_viz / restoreAnalysisView
+        // (snapshotMeasurementRefs above already saw them, so the delta
+        // excluded them and they would leak past this capture forever).
+        // removeMeasurementCells is existence-checked, so refs already gone
+        // are skipped silently.
+        const removedTracked = await removeTrackedVizMeasurements(plugin);
+        if (removedTracked > 0) {
+          console.log(`[capture_multi_angle] removed ${removedTracked} persisted viz measurement cell(s) (pre-capture analysis view)`);
+        }
         __resetVizMeasurementRefs();
       }
     } catch (err) {
@@ -1354,6 +1350,14 @@ async function executeMultiAngleCapture(
     // (hide_other_chains in recipe-viz hides the polymer + creates per-chain
     // components; restore un-hides the polymer and removes the stand-ins).
     try { await restoreHiddenChains(plugin); } catch (err) { console.warn('[capture_multi_angle] chain visibility restore failed:', err); }
+
+    // Step 2b' — R176: restore the ball-and-stick representations hidden by
+    // the viz's hide-all-sticks step (show_sidechains) so the user's own
+    // stick representations come back after the capture.
+    try {
+      const restoredSticks = restoreHiddenBallAndStick(plugin);
+      if (restoredSticks > 0) console.log(`[capture_multi_angle] restored ${restoredSticks} ball-and-stick representation(s)`);
+    } catch (err) { console.warn('[capture_multi_angle] ball-and-stick restore failed:', err); }
 
     // Step 2c — R171: remove the viz-added cartoon transparency layers
     // (applied by the interactions-family recipe viz). The user's live view

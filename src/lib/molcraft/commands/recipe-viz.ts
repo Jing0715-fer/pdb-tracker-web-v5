@@ -385,6 +385,154 @@ export function __resetVizMeasurementRefs(): void {
 }
 
 /**
+ * R176: remove the tracked viz-added measurement cells (existence-checked)
+ * and clear the tracking list. Used by cleanupCapture's belt-and-suspenders
+ * step so distance lines persisted by show_analysis_viz / restoreAnalysisView
+ * (which snapshotMeasurementRefs already saw as "pre-existing") cannot leak
+ * past a later capture.
+ */
+export async function removeTrackedVizMeasurements(plugin: MolstarPlugin): Promise<number> {
+  if (vizAddedMeasurementRefs.length === 0) return 0;
+  const refs = vizAddedMeasurementRefs;
+  vizAddedMeasurementRefs = [];
+  try {
+    return await removeMeasurementCells(plugin, refs);
+  } catch (err) {
+    console.warn("[viz:cleanup] removeTrackedVizMeasurements failed:", err);
+    return 0;
+  }
+}
+
+// ============================================================================
+// R176: global ball-and-stick hiding.
+//
+// User report: "互作的氨基酸还是没有以stick形式显示（且执行该操作前需要
+// 执行隐藏全部stick）" — when the interface residues are shown as
+// ball-and-stick, EVERY other ball-and-stick representation must be hidden
+// first. Otherwise the interface sticks are indistinguishable: with a
+// ball-and-stick representation preset (or ligand/water stick components)
+// every atom is already a stick, and the highlighted interface reads as
+// "not shown".
+//
+// Mechanism (bundle-verified — the same code path the eye-icon toggle uses):
+// representation cells expose `cell.transform.params.type.name`, and
+// visibility is `state.updateCellState(ref, { isHidden })` on the
+// representation cell's transform ref (molstar.js:
+// toggleRepresentationVisibility → Tm → updateCellState; rendering filters
+// `!o.state.isHidden` for isRepresentation3D cells). Components tagged
+// `interface-sidechain` are EXCLUDED — they ARE the point of the view.
+//
+// Every hidden ref is tracked (with its previous isHidden) so
+// restoreHiddenBallAndStick — called from cleanupCapture and the next
+// analysis's cleanup_previous — returns the exact pre-analysis state.
+// ============================================================================
+interface HiddenStickEntry {
+  /** State-tree ref of the representation cell we hid. */
+  ref: string;
+  /** Whether the representation was already hidden BEFORE we touched it. */
+  wasHidden: boolean;
+}
+let vizHiddenSticks: HiddenStickEntry[] = [];
+
+/** Whether `typeName` is a ball-and-stick representation type name. */
+function isBallAndStickType(typeName: string): boolean {
+  const n = typeName.toLowerCase();
+  return n.includes('ball-and-stick') || n.includes('ball+stick') || n.includes('ballandstick');
+}
+
+/** R176: request a canvas redraw without tripping the (incomplete) canvas3d type. */
+function requestCanvasDraw(plugin: MolstarPlugin): void {
+  try {
+    (plugin.canvas3d as unknown as { requestDraw?: () => void } | undefined)?.requestDraw?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * R176: hide every ball-and-stick representation in the current view except
+ * those on `interface-sidechain` components. Already-hidden representations
+ * are left alone (and not tracked). Returns the number hidden.
+ */
+export function hideAllBallAndStick(plugin: MolstarPlugin): number {
+  let hidden = 0;
+  try {
+    const state = (plugin as unknown as {
+      state?: { data?: { updateCellState?: (ref: string, s: { isHidden: boolean }) => void } };
+    }).state?.data;
+    if (typeof state?.updateCellState !== "function") {
+      console.warn("[viz:hide_sticks] state.updateCellState unavailable — skipping");
+      return 0;
+    }
+    for (const s of getStructures(plugin, undefined)) {
+      for (const c of ((s as any).components ?? [])) {
+        const compTags = c?.cell?.transform?.tags;
+        if (Array.isArray(compTags) && compTags.includes("interface-sidechain")) continue;
+        for (const r of ((c as any).representations ?? [])) {
+          try {
+            const typeName: string = r?.cell?.transform?.params?.type?.name ?? "";
+            if (!isBallAndStickType(typeName)) continue;
+            const ref: string | undefined = r?.cell?.transform?.ref;
+            if (typeof ref !== "string" || ref.length === 0) continue;
+            const alreadyHidden = !!(r?.cell?.state?.isHidden);
+            if (alreadyHidden) continue;
+            state.updateCellState(ref, { isHidden: true });
+            vizHiddenSticks.push({ ref, wasHidden: false });
+            hidden++;
+          } catch (err) {
+            console.warn("[viz:hide_sticks] one representation failed:", err);
+          }
+        }
+      }
+    }
+    if (hidden > 0) {
+      requestCanvasDraw(plugin);
+    }
+  } catch (err) {
+    console.warn("[viz:hide_sticks] hideAllBallAndStick failed:", err);
+  }
+  return hidden;
+}
+
+/**
+ * R176: restore the ball-and-stick representations hidden by
+ * hideAllBallAndStick (safe no-op when nothing is tracked; drains the list
+ * so dead refs never accumulate across structures/sessions). Returns the
+ * number restored.
+ */
+export function restoreHiddenBallAndStick(plugin: MolstarPlugin): number {
+  if (vizHiddenSticks.length === 0) return 0;
+  const tracked = vizHiddenSticks;
+  vizHiddenSticks = [];
+  let restored = 0;
+  try {
+    const data = (plugin as unknown as {
+      state?: { data?: { updateCellState?: (ref: string, s: { isHidden: boolean }) => void; cells?: { has?: (ref: string) => boolean } } };
+    }).state?.data;
+    if (typeof data?.updateCellState !== "function") return 0;
+    for (const { ref, wasHidden } of tracked) {
+      try {
+        if (data.cells && typeof data.cells.has === "function" && !data.cells.has(ref)) continue;
+        if (wasHidden) continue; // was hidden before us — leave it hidden
+        data.updateCellState(ref, { isHidden: false });
+        restored++;
+      } catch { /* dead ref — skip */ }
+    }
+    if (restored > 0) {
+      requestCanvasDraw(plugin);
+    }
+  } catch (err) {
+    console.warn("[viz:hide_sticks] restoreHiddenBallAndStick failed:", err);
+  }
+  return restored;
+}
+
+/** R176: drop all stick-hiding tracking (structure cleared / session reset). */
+export function __resetVizStickHiding(): void {
+  vizHiddenSticks = [];
+}
+
+/**
  * R164 (MOL-005): deep-clone viz params before use.
  *
  * applyRecipeVisualization mutates its `params` argument in two places:
@@ -753,6 +901,13 @@ export async function applyRecipeVisualization(
           // R170: also restore chains left hidden by a previous interrupted
           // run (cleanupCapture is the normal restore path).
           await restoreHiddenChains(plugin);
+          // R176: restore ball-and-stick representations hidden by a previous
+          // interrupted run / persisted analysis view (cleanupCapture is the
+          // normal restore path) — then show_sidechains re-hides them below.
+          const restoredSticks = restoreHiddenBallAndStick(plugin);
+          if (restoredSticks > 0) {
+            console.log(`[viz:cleanup] Restored ${restoredSticks} ball-and-stick representation(s) hidden by a previous analysis`);
+          }
           // MOL2-01: restore water/ligand components left hidden by a previous
           // interrupted run (unhide the preset's own components, remove our
           // stand-ins). This REPLACES the old tag/label-based DELETION of
@@ -878,6 +1033,14 @@ export async function applyRecipeVisualization(
           let interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
           const chain1 = params?.chain1 as string | undefined;
           const chain2 = params?.chain2 as string | undefined;
+          // R176: `_skipFocus` (show_analysis_viz / restore_analysis_view) —
+          // apply every visual element but leave the camera untouched: the
+          // post-analysis persistence must not move the user's view (R163),
+          // and the screenshot restore sets its own camera state afterwards.
+          const skipFocus = (params as any)?._skipFocus === true;
+          if (skipFocus) {
+            console.log('[viz:focus] _skipFocus set — leaving the camera untouched');
+          }
           // R132: Normalize interface_residues data format
           if (!Array.isArray(interactions) || interactions.length === 0) {
             const c1Res = params ? (params as any).chain1_interface_residues as Array<Record<string, unknown>> : undefined;
@@ -942,16 +1105,20 @@ export async function applyRecipeVisualization(
                 // on the label-qa harness with real 4HHB A-B data).
                 const baseMinRadius = 20;
                 const minRadius = vlmZoomMultiplier ? baseMinRadius * vlmZoomMultiplier : baseMinRadius;
-                plugin.managers.camera.focusLoci(focusResult.loci, { minRadius });
-                console.log(`[viz:focus] focusLoci called with minRadius=${minRadius}`);
-                await new Promise(r => setTimeout(r, 500)); // R158: wait for camera animation
-              } else {
+                if (skipFocus) {
+                  console.log('[viz:focus] _skipFocus — camera left untouched');
+                } else {
+                  plugin.managers.camera.focusLoci(focusResult.loci, { minRadius });
+                  console.log(`[viz:focus] focusLoci called with minRadius=${minRadius}`);
+                  await new Promise(r => setTimeout(r, 500)); // R158: wait for camera animation
+                }
+              } else if (!skipFocus) {
                 console.warn('[viz:focus] buildResidueLoci returned null, falling back to camera.reset');
                 plugin.managers.camera.reset();
                 await new Promise(r => setTimeout(r, 200));
               }
             }
-          } else if (chain1 && chain2) {
+          } else if (chain1 && chain2 && !skipFocus) {
             plugin.managers.camera.reset();
             await new Promise(r => setTimeout(r, 100));
           }
@@ -999,6 +1166,16 @@ export async function applyRecipeVisualization(
 
           const residueList = Array.from(residueSet);
           console.log(`[viz:show_sidechains] Showing ${residueList.length} interface residue side chains`);
+
+          // R176: hide ALL other ball-and-stick representations FIRST (user:
+          // "且执行该操作前需要执行隐藏全部stick") — with a ball-and-stick
+          // representation (or ligand stick components) the interface
+          // highlighting is indistinguishable from the background sticks.
+          // Restored by cleanupCapture / the next analysis's cleanup_previous.
+          const hiddenSticks = hideAllBallAndStick(plugin);
+          if (hiddenSticks > 0) {
+            console.log(`[viz:show_sidechains] Hid ${hiddenSticks} existing ball-and-stick representation(s) so only the interface sticks remain`);
+          }
 
           // R154: Use buildResidueLoci (StructureElement-based, NOT MolScript Q)
           // to build loci for ALL interface residues at once, then create a

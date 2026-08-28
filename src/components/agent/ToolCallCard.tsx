@@ -13,6 +13,7 @@ import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircl
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/molcraft/store';
 import type { ConversationNode } from './use-agent-session';
+import type { AnalysisViewSpec } from '@/lib/molcraft/commands/analysis-view';
 
 const CARD_META: Record<
   string,
@@ -338,7 +339,7 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
 }
 
 /** Extract screenshot data URIs from tool results. */
-function extractScreenshots(name: string, result: unknown): Array<{ dataUri: string; angle?: string; label?: string; cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } }> {
+function extractScreenshots(name: string, result: unknown): Array<{ dataUri: string; angle?: string; label?: string; cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] }; analysisView?: AnalysisViewSpec }> {
   if (!result || typeof result !== 'object') return [];
   const r = result as Record<string, unknown>;
   // capture_snapshot: { ok: true, data: { dataUri, label, angle } }
@@ -350,6 +351,7 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
         angle: String(data.angle || ''),
         label: String(data.label || ''),
         cameraState: data.cameraState as { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } | undefined,
+        analysisView: data.analysisView as AnalysisViewSpec | undefined,
       }];
     }
   }
@@ -367,6 +369,7 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
         angle: String(s.angle || ''),
         label: String(s.label || ''),
         cameraState: s.cameraState as { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } | undefined,
+        analysisView: s.analysisView as AnalysisViewSpec | undefined,
       })).filter((s) => s.dataUri);
     }
   }
@@ -377,7 +380,7 @@ function extractScreenshots(name: string, result: unknown): Array<{ dataUri: str
 // R113.4: Carousel with VLM commentary, quality badges, best highlight
 function ScreenshotResult({ name, screenshots, result }: {
   name: string;
-  screenshots: Array<{ dataUri: string; angle?: string; label?: string; cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] } }>;
+  screenshots: Array<{ dataUri: string; angle?: string; label?: string; cameraState?: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number] }; analysisView?: AnalysisViewSpec }>;
   result: unknown;
 }) {
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -657,35 +660,46 @@ function ScreenshotResult({ name, screenshots, result }: {
         </div>
       )}
 
-      {/* R144: Restore camera view button — restores the view that was active
-          when this screenshot was captured, so the user can explore that angle
-          interactively in the 3D viewer. */}
-      {current?.cameraState && (
+      {/* R144→R176: Restore-view button — restores the view that was active
+          when this screenshot was captured so the user can explore that angle
+          interactively in the 3D viewer. With an `analysisView` spec
+          (pairwise auto-capture) the FULL analysis state is restored —
+          hidden chains, ball-and-stick interface residues, distance lines,
+          transparency, this pair's labels AND the camera (user:
+          "点击图片上的恢复视角，没有恢复label等信息"); older/non-analysis
+          screenshots fall back to camera-only restore. */}
+      {(current?.cameraState || current?.analysisView) && (
         <button
           onClick={async () => {
             const viewer = useAppStore.getState().viewer;
-            if (!viewer?.plugin || !current.cameraState) return;
+            if (!viewer?.plugin) return;
             setRestoringView(true);
             try {
-              const { restoreCameraViewState } = await import('@/lib/molcraft/commands/camera');
-              restoreCameraViewState(viewer.plugin, current.cameraState);
-              console.log(`[R144] Restored camera view for angle "${current.angle}"`);
+              if (current?.analysisView) {
+                const { restoreAnalysisView } = await import('@/lib/molcraft/commands/analysis-view');
+                const res = await restoreAnalysisView(viewer, current.analysisView);
+                console.log(`[R176] Restored full analysis view for angle "${current.angle}": ${res.detail}`);
+              } else if (current.cameraState) {
+                const { restoreCameraViewState } = await import('@/lib/molcraft/commands/camera');
+                restoreCameraViewState(viewer.plugin, current.cameraState);
+                console.log(`[R144] Restored camera view for angle "${current.angle}"`);
+              }
             } catch (err) {
-              console.warn('[R144] Failed to restore camera view:', err);
+              console.warn('[R176] Failed to restore analysis view:', err);
             } finally {
               setTimeout(() => setRestoringView(false), 500);
             }
           }}
           disabled={restoringView}
           className="mt-1.5 flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-claude-accent/10 border border-claude-accent/30 text-claude-accent hover:bg-claude-accent/20 transition-colors disabled:opacity-50"
-          title="恢复此截图对应的相机视角到3D查看器"
+          title={current?.analysisView ? '恢复此截图对应的完整分析视图（相机 + 标签 + 互作可视化）到3D查看器' : '恢复此截图对应的相机视角到3D查看器'}
         >
           {restoringView ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : (
             <Crosshair className="h-3 w-3" />
           )}
-          恢复视角
+          {current?.analysisView ? '恢复分析视图' : '恢复视角'}
         </button>
       )}
 

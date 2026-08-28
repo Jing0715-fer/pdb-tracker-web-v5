@@ -4640,3 +4640,31 @@ Stage Summary:
 - 4 项用户问题全部修复：①截图即时显示（capture 后立刻挂到卡片，不再等 VLM）+ VLM 150s 硬超时 + show_analysis_labels 30s 超时——spinner 不可能永久卡死；②互作对金色标签整体移除；③标签远近差异：全调用点 anchor 注册 + didDraw/轮询双触发 live re-sizing（同一屏幕尺寸，随相机实时再归一化，旋转/缩放/截图各角度均生效）；④附带修复 toggle_rock/toggle_spin 参数不完整导致的每帧崩溃。
 - 新机制经静态 harness 全链路实证（bundle StateBuilder update 路径 + 旋转中连续 resize + 无异常）；真实应用管线在 OOM 周期内验证了标签渲染与互作对标签移除。
 - 改动 9 文件（use-agent-session/ToolCallCard/vlm-capture-loop/recipe-viz/label-lifecycle/label-sizing/commands/animation/use-atom-picking）+ 新增 public/label-live-qa.html harness；lint/tsc 零新增。
+
+---
+Task ID: R176
+Agent: main (恢复视角完整状态 + 互作氨基酸 stick 显示)
+Task: 用户报告「点击图片上的恢复视角，没有恢复label等信息。互作的氨基酸还是没有以stick形式显示（且执行该操作前需要执行隐藏全部stick）」——恢复视角只还原相机不还原标签等分析可视化状态；互作残基应以 ball-and-stick 显示且显示前需先隐藏全部已有 stick。
+
+Work Log:
+- 诊断：
+  1. 恢复视角按钮（R144）只调 restoreCameraViewState（position/target/up），而截图产生于完整分析可视化（隐藏非界面链 + 0.4 透明 cartoon + 界面残基 ball-and-stick + H-bond 距离线 + 残基标签）之中——cleanupCapture 在捕获后全部清除（仅 R173 的 top-pair 标签经 show_analysis_labels 重建）→ 恢复后视图与截图毫无相似：无标签（pair-2 截图连标签都是错对的）、无 stick、四链全显、cartoon 不透明。
+  2. 互作残基 stick 在捕获期间有渲染（R171/R172 console 实证），但捕获结束即被 cleanupCapture Step 2 删除 → 分析后/恢复后"还是没有以stick形式显示"。且 set_representation 在预构建 bundle 走 applyPreset('polymer-and-ligand') 回退 → Ligand/Water/Ion 组件带 ball-and-stick 表示（本次 E2E dev.log [browser] 行实证），用户会话若为 ball-and-stick 表示则全原子皆 stick，界面 stick 不可分辨——即"执行该操作前需要执行隐藏全部stick"。
+- 修复 1（hide-all-sticks，recipe-viz.ts）：新 hideAllBallAndStick/restoreHiddenBallAndStick/__resetVizStickHiding——遍历 structures→components→representations，按 params.type.name 匹配 ball-and-stick、跳过 interface-sidechain 组件，state.updateCellState(ref,{isHidden:true})（bundle 源码级核实：molstar.js toggleRepresentationVisibility→Tm→updateCellState 即眼睛图标同机制；渲染过滤 !o.state.isHidden 的 isRepresentation3D cells）；隐藏 ref+原 isHidden 追踪（vizHiddenSticks）。接线：show_sidechains 创建界面组件前隐藏（用户明确要求）；cleanup_previous 恢复（上轮残留安全网）；cleanupCapture 新增 Step 2b' 恢复；__drainCaptureQueue 重置追踪。
+- 修复 2（新模块 analysis-view.ts）：AnalysisViewSpec（recipe/chain1/chain2/interactions/labels/labelFontSize/cameraState）+ persistAnalysisLabels（从 show_analysis_labels handler 抽出的共享管线：removeAgentLabels→逐残基 loci→链色→距离补偿→addAgentLabel 注册 anchor→refreshAgentLabelSizes）+ restoreAnalysisView（applyRecipeVisualization(_skipFocus)→persistAnalysisLabels→restoreCameraViewState→requestDraw，逐段 best-effort）。
+- 修复 3（恢复视角完整状态）：use-agent-session pairwise 捕获循环给每张截图附加 analysisView（该 pair 的 chain1/chain2/interactions/labels/labelFontSize + 相机）；ToolCallCard extractScreenshots/ScreenshotResult 透传 analysisView；恢复按钮有 analysisView 时调 restoreAnalysisView（按钮文案"恢复分析视图"、title 注明完整状态），否则回退 R144 纯相机恢复。
+- 修复 4（分析后可视化持久化）：新命令 show_analysis_viz（command-schema + commands.ts）= applyRecipeVisualization(_skipFocus=true，相机不动 R163 语义) + persistAnalysisLabels；pairwise 分支把原 show_analysis_labels 调用升级为 show_analysis_viz（top pair 的 stick+距离线+透明度+隐藏链+标签全部留在实时视图）。applyRecipeVisualization focus 步新增 _skipFocus 支持（跳过 focusLoci/camera.reset）。
+- 修复 5（泄漏防护）：cleanupCapture Step 1 在 delta 清除后追加 removeTrackedVizMeasurements（recipe-viz 新导出）——持久化距离线被下一轮 measBeforeRefs 视为"已存在"而躲过 delta 清除，按 tracked refs 兜底删除（存在性检查，user measurements 永不受影响）。
+- 验证：
+  1. 静态 harness（public/stick-qa.html，真实 4HHB + polymer-and-ligand preset，agent-browser 实测）：
+     - 基线 inventory：Polymer[cartoon] + Ligand/Water/Ion[ball-and-stick] ×3；
+     - hideAllBallAndStick → 恰好隐藏 3 个 ball-and-stick 表示（逐条 ref 日志），像素 diff baseline→hidden meanDiff 0.81 / 1.97% 像素变化（配体 stick 消失）✓；
+     - restoreHiddenBallAndStick → 恢复 3 个（inventory isHidden=false + 像素 diff 0.3/0.44% 变回）✓；
+     - 界面排除测试：hide(3)→创建 interface-sidechain 组件（A:P114/B:H116/A:L34/B:Q127 ball-and-stick）→ 其表示 isHidden=false（PASS）→ 再次 hideAllBallAndStick = 0（正确排除）✓。
+  2. lint：7 个改动文件 eslint 0 error 0 warning；tsc 全项目 124 errors vs 改动前基线 125（零新增、净减 1——show_analysis_labels 重构消掉一个旧错误）；新模块 analysis-view.ts 0 错误。
+  3. 真实应用 E2E（agent 会话完整链路）：session 创建→LLM(glm-4.6) 响应→pdb_load→set_representation（新 commands.ts 代码在真实应用执行，[browser] 镜像行实证 applyPreset 回退路径）→pdb_analyze pairwise_interactions 200→捕获阶段被 dev server OOM-kill 中断（watchdog restart #4~#9，4 次完整尝试均死于同一阶段；内存 4GB 沙盒 + 编译峰值 ~3GB，R173/R175 记录的同一环境限制）。截图 attach/VLM/恢复按钮点击未能完整跑完——机制已由 harness 全覆盖 + 组成原语（applyRecipeVisualization R170/R171、persistAnalysisLabels R173/R175、restoreCameraViewState R144、hideAllBallAndStick 本轮）分别实证。
+
+Stage Summary:
+- 两项用户需求闭环：①恢复视角 = 完整分析视图恢复（该截图所属 pair 的可视化+标签+相机，按钮改"恢复分析视图"）；②互作氨基酸以 stick 显示——捕获管线、分析后持久化（show_analysis_viz，top pair 全套留在实时视图）、恢复视图三处均有 stick，且显示前一律先隐藏全部其他 ball-and-stick（用户明确要求，含 set_representation applyPreset 回退产生的 Ligand/Water/Ion stick 场景）。
+- 新增 analysis-view.ts（AnalysisViewSpec/persistAnalysisLabels/restoreAnalysisView）+ stick-qa.html harness；recipe-viz 增 hideAllBallAndStick 家族 + _skipFocus + removeTrackedVizMeasurements；命令 show_analysis_viz；cleanupCapture 增 stick 恢复 + 持久化距离线兜底清除；use-agent-session 截图携带 analysisView；ToolCallCard 恢复按钮升级。
+- 改动 6 文件 +2 新文件（+339/-91）；lint/tsc 零新增（净减 1）；hide/restore/排除机制经真实浏览器 harness 全实证；完整 agent E2E 因 OOM 周期未跑完（环境限制，与前两轮记录一致）。

@@ -69,6 +69,29 @@ export type LlmCommand =
       }>;
       labelFontSize?: number;
     }
+  // R176: persist the FULL analysis visualization (ball-and-stick interface
+  // residues — after hiding every other ball-and-stick — plus distance
+  // lines, cartoon transparency, hidden non-interface chains and the pair's
+  // labels) in the live viewer after the capture pipeline cleaned it up.
+  // The user's camera is NOT moved (user report: "互作的氨基酸还是没有以
+  // stick形式显示"). The 恢复视角 button restores per-screenshot views via
+  // restoreAnalysisView (analysis-view.ts) with the same pipeline.
+  | {
+      type: "show_analysis_viz";
+      /** The recipe whose visualization to persist (default pairwise_interactions). */
+      recipe?: string;
+      chain1?: string;
+      chain2?: string;
+      /** The pair's interaction list — drives sticks/lines. */
+      interactions?: Array<Record<string, unknown>>;
+      labels?: Array<{
+        text: string;
+        chain?: string;
+        resno?: number;
+        compId?: string;
+      }>;
+      labelFontSize?: number;
+    }
   | {
       type: "show_interactions";
       target?: ResidueRef | "selection" | "ligand";
