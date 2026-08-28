@@ -30,7 +30,8 @@ import {
   type AtomInfo,
 } from "@/lib/molcraft/measure";
 import { setPendingAtoms } from "@/components/molcraft-molstar/measure-overlay";
-import { agentLabelOptions, countAgentLabels } from "@/lib/molcraft/commands/label-lifecycle";
+import { addAgentLabel, countAgentLabels } from "@/lib/molcraft/commands/label-lifecycle";
+import { getLociCenter } from "@/lib/molcraft/commands/label-sizing";
 
 const DIST_COLOR = "#f59e0b"; // amber-500 — matches Molcraft distance lines
 const ANGLE_COLOR = "#8b5cf6"; // violet-500 — matches Molcraft angle lines
@@ -286,12 +287,14 @@ export function useAtomPicking() {
         // tether, offsetZ 0) rendered the text half-buried in the cartoon,
         // which read as "label 偏移" while rotating. Floating placement + the
         // agent tag (toolbar show/hide toggle) fixes both.
+        // R175: addAgentLabel also registers the anchor for live
+        // distance-compensated resizing (same screen size at every angle).
         try {
-          if (typeof mm.addLabel === "function") {
-            mm.addLabel(a0.loci, {
-              ...agentLabelOptions({ text: fmtLabel(a0), slot: countAgentLabels(plugin) }),
-            } as any);
-          }
+          void addAgentLabel(plugin, a0.loci, {
+            text: fmtLabel(a0),
+            slot: countAgentLabels(plugin),
+            center: getLociCenter(a0.loci),
+          });
         } catch { /* ignore */ }
         addMeasurement({
           mode: "label",

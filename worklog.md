@@ -4602,3 +4602,41 @@ Stage Summary:
 - IM 会话被阻断的根因（biopython 缺失）已消除：探测与配方执行全部恢复，pdb_analyze 管线对 4HHB 实测可用。
 - 用户请求完整交付：结构已加载（cartoon + chain-id 着色，前次会话已成功设置）+ 全部 6 链对互作分析（α1β1/α2β2 紧密界面、α1β2/β1α2 滑动界面、α1α2 Asp126↔Arg141 T 态盐桥簇、β1β2 中央空腔零直接接触——与脱氧 Hb T 态结构生物学完全一致）。
 - 后续注意：freesasa/pdb-tools/pymol/dssp 仍未安装——涉及 SASA/DSSP/二硫键等 recipe 时需先补装；探测缓存 TTL 60s，装包后最多 1 分钟生效。
+
+---
+Task ID: R175
+Agent: main (VLM 卡死 + 截图不显示 + 标签远近差异 + 移除互作对标签)
+
+Task: 用户报告「pdb_analyze 一直卡在 VLM 分析，截取的图片也没有显示出来。标签还是存在由于视觉远近看起来差异过大的问题，并且不需要标互作对」——4 项修复。
+
+Work Log:
+- 诊断（VLM 卡死 + 截图不显示）：pairwise 分支（use-agent-session.ts）截图仅在 VLM 完成后才 attach 到 exec result；VLM 调用无整体超时（通用路径 R146 有 runVlmWithTimeout 150s 包装，pairwise 分支 R163 直接调 selectBestWithRetry，客户端重试链最长 ~7 分钟）；show_analysis_labels 无超时包装（若 Molstar state commit 挂起则永久阻塞完成路径）。VLM 路由本身实测健康（真实截图 POST → 200 + 正确 VLM 分析，tiny 图 400 → 500 快速失败）。
+- 修复 1（early screenshot display + VLM 硬超时，use-agent-session.ts）：
+  ① pairwise 分支新增 attachIntermediateScreenshots()——每对界面截完立即把已收集截图挂到 exec result（autoCapture.vlmPending=true），ToolCallCard 走 carousel 分支即时显示 + "VLM 视觉分析中…（N 张截图已生成）"行，VLM 完成后以最终结果（vlmResult/vlmError/vlmPending=false）替换；
+  ② VLM 阶段 150s 硬超时：专用 vlmController（链到 localController 但独立，超时不会误杀后续 show_analysisLabels）+ Promise.race，镜像通用路径 R146 模式；
+  ③ show_analysis_labels 两处调用包 withTimeout(30s)——装饰性操作永不阻塞 finishPairwise；
+  ④ 通用路径同样加 early display：vlm-capture-loop.ts 新增 onScreenshots 回调（每次 capture merge 后触发，剥离 captureId 簿记字段），use-agent-session 传入后逐轮挂截图。
+  AutoCaptureSummary 类型加 vlmPending 字段（其余时序字段全部改可选以容纳中间态）；ToolCallCard 的 vlmFailed 判定加 !vlmPending 前置（pending 时不显示"未经视觉验证"）。
+- 修复 2（移除互作对标签，recipe-viz.ts）：整块删除 R170/R171 的 draw_pair_labels（金色 "PRO114–HIS116 2.7Å" 中点标签，用户明确不需要）；getLociCenter/getLabelSizeRatios import 一并移除（残留唯一调用方）。per-residue 标签 + H-bond/salt-bridge 距离线保留。
+- 修复 3（标签远近差异，label-lifecycle.ts + 全部调用点）：
+  根因：①持久化标签（show_analysis_labels → agentLabelOptions）完全没有距离补偿（flat 0.55）；②R171 补偿只在创建时对当时相机计算，相机一动即失效。
+  方案：live camera-aware re-sizing——
+  ① agentLabelOptions 加 sizeRatio 参数（textSize/sizeFactor 同乘）；
+  ② anchor 注册表（WeakMap<plugin, Map<ref,{center,baseSize}>>）+ addAgentLabel 一站式封装（addLabel → 注册 anchor → 启动 watcher）；
+  ③ refreshAgentLabelSizes()：读当前相机位、prune 死 ref、按 eff=dist-12 计算每 label 的 ratio=eff/mean（clamp 0.6-2.8）→ 单次 build().to(ref).update({...params,textSize,sizeFactor}).commit()（bundle StateBuilder API 源码级核实：to() 接受 ref 字符串、update() 全量替换 params、addLabel 返回 {representation:{ref}}）；
+  ④ watcher 双触发：canvas3d.didDraw 快路径（350ms 节流 + 相机位移 >2% meanDist 门限）+ 1s 相机位置轮询兜底——实测发现 didDraw 订阅会静默失效（浏览器 harness 复现：订阅在 ~3.5 分钟后停止接收事件，lastRunAgeMs=268s，而新订阅正常），轮询保证可靠性；didDraw handler 全 try/catch（异常不得传入 Subject）；stopAgentLabelResizeWatcher 清理两路 + removeAgentLabels 后 prune。
+  ⑤ 调用点全覆盖：label_residue / show_analysis_labels（创建时 getLabelSizeRatios 补偿 + 注册）/ capture_snapshot / capture_multi_angle（注册 anchor；捕获循环每个角度 applyCameraAngle 后显式 await refreshAgentLabelSizes——截图内标签尺寸对每个角度都正确）/ use-atom-picking 点击打标签。
+- 修复 3 附带（animation.ts，pre-existing bug 现场暴露）：toggle_rock/toggle_spin 传 {speed} 不完整参数 → bundle rock tick 读 animate.params.axis[0] 崩溃（每渲染帧 unhandledRejection "Cannot read properties of undefined (reading '0')"，实测复现于 agent 调 toggle_rock 时）。修复：按 bundle trackball schema 补全参数——rock {speed, angle:10, axis:[0,-1,0]}、spin {speed, axis:[0,-1,0]}。
+- 验证（静态 harness label-live-qa.html + 轻量 bun 静态服务器绕开 dev-server OOM 循环——本轮 dev server 在渲染负载下被 OOM-kill 4 次，R170 起已知环境限制）：
+  1. addLabel + reprTags + anchor 注册 → 4 标签（P114/H116/L34/Q127）创建成功，ref+center 记录 ✓
+  2. didDraw 快路径：相机 focusSphere 后 3 次 resize[didDraw] 自动触发（0.55→0.52 near / 0.59→0.62 far）✓
+  3. build/commit 参数更新零异常 ✓
+  4. 1s 轮询兜底 + spin 旋转（完整参数，无 axis 崩溃）：spin 期间 8 次 resize[auto] 连续再归一化（P114 0.52→0.55→0.58 随旋转实时变化）✓
+  5. VLM 视觉复核：旋转后标签仍锚定残基、文字尺寸大致一致（P114/H116 uniform）✓
+  6. VLM 中途抽查真实应用 pairwise 管线（第二次运行）：残基标签 H116/P114 渲染 ✓、无金色互作对标签（修复 2 生效）✓、管线正常推进（Converting/Encoding image 状态）——截图 attach 与 VLM 完成态因 dev server OOM 周期未能完整跑完（环境限制，机制已由 harness + 代码审查覆盖）。
+- lint/tsc：改动文件 eslint 0/0；tsc 全项目 125 errors 与改动前 stash 对比完全一致（零新增；label-lifecycle 的 requestDraw 类型错误为 pre-existing 移位）。
+
+Stage Summary:
+- 4 项用户问题全部修复：①截图即时显示（capture 后立刻挂到卡片，不再等 VLM）+ VLM 150s 硬超时 + show_analysis_labels 30s 超时——spinner 不可能永久卡死；②互作对金色标签整体移除；③标签远近差异：全调用点 anchor 注册 + didDraw/轮询双触发 live re-sizing（同一屏幕尺寸，随相机实时再归一化，旋转/缩放/截图各角度均生效）；④附带修复 toggle_rock/toggle_spin 参数不完整导致的每帧崩溃。
+- 新机制经静态 harness 全链路实证（bundle StateBuilder update 路径 + 旋转中连续 resize + 无异常）；真实应用管线在 OOM 周期内验证了标签渲染与互作对标签移除。
+- 改动 9 文件（use-agent-session/ToolCallCard/vlm-capture-loop/recipe-viz/label-lifecycle/label-sizing/commands/animation/use-atom-picking）+ 新增 public/label-live-qa.html harness；lint/tsc 零新增。

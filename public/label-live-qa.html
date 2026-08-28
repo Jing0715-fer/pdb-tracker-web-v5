@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Label Live Resize QA — R175</title>
+<style>
+  body { margin:0; font-family:system-ui; background:#111; color:#eee; display:flex; flex-direction:column; height:100vh; }
+  .header { padding:6px 12px; background:#000; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .header button { padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px; }
+  .header button.primary { background:#2ecc71; color:#000; font-weight:bold; }
+  #viewer { flex:1; position:relative; background:#fff; min-height:300px; }
+  #viewer canvas { display:block; }
+  #result { height:34vh; background:#000; padding:6px; overflow:auto; }
+  #result img { max-height:30vh; border:1px solid #444; margin:2px; }
+  #log { height:160px; background:#000; color:#0f0; font-family:monospace; font-size:11px; padding:4px; overflow-y:auto; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="header">
+  <button id="btnFlat" class="primary">1. Flat labels (NO compensation)</button>
+  <button id="btnResize" class="primary">2. refreshAgentLabelSizes (live resize)</button>
+  <button id="btnSpin">3. Spin 8s (didDraw watcher)</button>
+  <button id="btnSpinOff">Stop spin</button>
+  <button id="btnSizes">Log current label sizes</button>
+  <span id="status">loading molstar…</span>
+</div>
+<div id="viewer"></div>
+<div id="result"></div>
+<div id="log"></div>
+
+<script src="/molstar.js"></script>
+<script>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+function log(m) { logEl.innerHTML += '[' + new Date().toLocaleTimeString() + '] ' + m + '\n'; logEl.scrollTop = 1e9; }
+
+let viewer = null, plugin = null;
+
+// ── exact replica of R175 label-lifecycle.ts live-resize machinery ──
+const AGENT_LABEL_TAG = 'agent-label';
+const LIVE_LABEL_OFFSET_Z = 12;
+const anchors = new Map(); // ref -> { center, baseSize }
+let didDrawSub = null;
+let pollTimer = null;
+let lastCam = null, lastMean = 0, lastRun = 0, pending = false;
+const RESIZE_THROTTLE_MS = 350;
+const RESIZE_POLL_MS = 1000;
+const RESIZE_MOVE_REL = 0.02;
+
+const ATTACHMENTS = ['top-center','top-right','middle-right','bottom-right','bottom-center','bottom-left','middle-left','top-left'];
+
+function agentLabelOptions(text, color, slot, fontSize, sizeRatio) {
+  const attachment = ATTACHMENTS[slot % ATTACHMENTS.length];
+  const ring = Math.floor(slot / ATTACHMENTS.length);
+  const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
+  const base = fontSize ?? 0.55;
+  const ratio = sizeRatio ?? 1;
+  return {
+    labelParams: {
+      customText: text, textColor: color ?? 0xffffff,
+      textSize: base * ratio, sizeFactor: base * ratio,
+      offsetX: 0, offsetY: 0, offsetZ: 12,
+      borderWidth: 0.2, borderColor: 0x101010,
+      background: true, backgroundColor: 0x000000, backgroundOpacity: 0.5, backgroundMargin: 0.12,
+      attachment, tether: true, tetherLength, tetherBaseWidth: 0.25,
+    },
+    reprTags: [AGENT_LABEL_TAG],
+  };
+}
+
+function getCameraPosition() {
+  try {
+    const p = plugin?.canvas3d?.camera?.position;
+    if (p && typeof p[0] === 'number') return [p[0], p[1], p[2]];
+  } catch (e) {}
+  return null;
+}
+
+function getLociCenter(loci) {
+  try {
+    const Loci = window.molstar?.lib?.loci?.Loci;
+    if (Loci && typeof Loci.getCenter === 'function') {
+      const c = Loci.getCenter(loci);
+      if (c && typeof c[0] === 'number') return [c[0], c[1], c[2]];
+    }
+  } catch (e) {}
+  return null;
+}
+
+function findRefsByTag(tag) {
+  const refs = [];
+  try {
+    plugin.state.data.cells.forEach((cell, ref) => {
+      const tags = cell?.transform?.tags;
+      if (Array.isArray(tags) && tags.includes(tag)) refs.push(ref);
+    });
+  } catch (e) { log('findRefsByTag failed: ' + e.message); }
+  return refs;
+}
+
+// EXACT replica of refreshAgentLabelSizes
+async function refreshAgentLabelSizes(reason) {
+  if (anchors.size === 0) return 0;
+  const data = plugin.state.data;
+  const cells = data.cells;
+  if (!cells || typeof data.build !== 'function') return 0;
+  const cam = getCameraPosition();
+  if (!cam) return 0;
+  lastCam = cam;
+  const dists = [];
+  for (const [ref, anchor] of anchors) {
+    if (!cells.has(ref)) { anchors.delete(ref); continue; }
+    const cell = cells.get(ref);
+    const params = cell?.transform?.params;
+    if (!params || typeof params !== 'object') continue;
+    const dx = anchor.center[0]-cam[0], dy = anchor.center[1]-cam[1], dz = anchor.center[2]-cam[2];
+    const d = Math.sqrt(dx*dx+dy*dy+dz*dz);
+    const eff = Math.max(d - LIVE_LABEL_OFFSET_Z, 1);
+    dists.push({ ref, eff, anchor, params });
+  }
+  if (dists.length === 0) return 0;
+  const mean = dists.reduce((s,x)=>s+x.eff,0)/dists.length;
+  lastMean = mean;
+  const b = data.build();
+  let queued = 0;
+  const detail = [];
+  for (const { ref, eff, anchor, params } of dists) {
+    const ratio = Math.min(Math.max(eff/mean, 0.6), 2.8);
+    const size = Math.round(anchor.baseSize * ratio * 1000)/1000;
+    const cur = params.textSize;
+    if (typeof cur === 'number' && Math.abs(cur - size) < 0.03) continue;
+    b.to(ref).update({ ...params, textSize: size, sizeFactor: size });
+    queued++;
+    detail.push(ref.slice(-8) + ':' + (typeof cur === 'number' ? cur.toFixed(2) : '?') + '→' + size.toFixed(2) + '(r=' + ratio.toFixed(2) + ')');
+  }
+  if (queued > 0) {
+    try {
+      await b.commit();
+      log('resize[' + (reason||'manual') + '] updated ' + queued + '/' + dists.length + ' labels — ' + detail.join(', '));
+    } catch (err) {
+      log('resize commit FAILED: ' + err.message);
+      return 0;
+    }
+  }
+  return queued;
+}
+
+// EXACT replica of ensureAgentLabelResizeWatcher (R175 final: didDraw fast
+// path + 1s camera poll reliability net, both fully guarded)
+function ensureWatcher() {
+  if (didDrawSub) return;
+  const maybeRefresh = () => {
+    let cam = null;
+    try { cam = getCameraPosition(); } catch (e) { return; }
+    if (!cam) return;
+    if (lastCam && lastMean > 0) {
+      const dx = cam[0]-lastCam[0], dy = cam[1]-lastCam[1], dz = cam[2]-lastCam[2];
+      const moved = Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if (moved < Math.max(1, lastMean * RESIZE_MOVE_REL)) return;
+    }
+    pending = true;
+    refreshAgentLabelSizes('auto').catch(()=>{}).finally(() => { pending = false; });
+  };
+  try {
+    const didDraw = plugin.canvas3d?.didDraw;
+    if (didDraw && typeof didDraw.subscribe === 'function') {
+      const sub = didDraw.subscribe(() => {
+        try {
+          if (pending) return;
+          const now = Date.now();
+          if (now - lastRun < RESIZE_THROTTLE_MS) return;
+          lastRun = now;
+          maybeRefresh();
+        } catch (e) { /* guarded */ }
+      });
+      didDrawSub = { unsubscribe: () => { try { sub.unsubscribe(); } catch(e){} } };
+      log('didDraw watcher STARTED');
+    } else {
+      didDrawSub = { unsubscribe: () => {} };
+      log('didDraw unavailable — poll only');
+    }
+  } catch (e) {
+    didDrawSub = { unsubscribe: () => {} };
+    log('didDraw subscribe failed — poll only');
+  }
+  if (pollTimer == null) {
+    pollTimer = setInterval(() => {
+      try { if (!pending) maybeRefresh(); } catch (e) { /* ignore */ }
+    }, RESIZE_POLL_MS);
+    log('camera poll STARTED (1s)');
+  }
+}
+
+async function addAgentLabel(loci, text, color, slot, center, sizeRatio) {
+  const mm = plugin.managers?.structure?.measurement;
+  const added = await mm.addLabel(loci, agentLabelOptions(text, color, slot, 0.55, sizeRatio));
+  const ref = added?.representation?.ref;
+  if (center && typeof ref === 'string') {
+    anchors.set(ref, { center, baseSize: 0.55 });
+    log('label "' + text + '" created ref=' + ref.slice(-8) + ' center=' + center.map(v=>v.toFixed(1)).join(','));
+  }
+  return ref;
+}
+
+// residue loci builder — EXACT replica of recipe-viz.ts buildResidueLoci
+// (the R166 unit.elements[i] fix — proven in the R173 harness)
+function buildResidueLoci(refs) {
+  const bundle = window.molstar;
+  const SE = bundle?.lib?.structure?.StructureElement;
+  const SP = bundle?.lib?.structure?.StructureProperties;
+  if (!SE || !SP) return null;
+  const structs = plugin.managers.structure.hierarchy.current.structures;
+  if (!structs.length) return null;
+  const data = structs[0]?.cell?.obj?.data;
+  if (!data) return null;
+  const refSet = new Set(refs.map(r => `${r.chain}:${r.resno}`));
+  const atomMap = new Map();
+  for (const ref of refs) if (ref.atomName) atomMap.set(`${ref.chain}:${ref.resno}`, ref.atomName);
+  const elementsByUnit = new Map();
+  for (const unit of data.units) {
+    if (unit.kind !== 0) continue;
+    const indices = [];
+    for (let i = 0; i < unit.elements.length; i++) {
+      const loc = SE.Location.create(data, unit, unit.elements[i]); // R166 fix
+      const chainId = SP.chain.auth_asym_id(loc) || SP.chain.label_asym_id(loc);
+      const resno = SP.residue.auth_seq_id(loc);
+      const key = `${chainId}:${resno}`;
+      if (!refSet.has(key)) continue;
+      const atomName = atomMap.get(key);
+      if (atomName) {
+        const atomId = SP.atom.label_atom_id(loc);
+        if (atomId !== atomName) continue;
+      }
+      indices.push(i);
+    }
+    if (indices.length > 0) elementsByUnit.set(unit, indices);
+  }
+  if (elementsByUnit.size === 0) return null;
+  const elements = [];
+  elementsByUnit.forEach((indices, unit) => elements.push({ unit, indices }));
+  const loci = new SE.Loci(data, elements);
+  return { loci };
+}
+
+async function capture(tag) {
+  try {
+    const uri = await plugin.helpers?.viewportScreenshot?.getImageDataUri({ width: 1280, height: 720, transparency: false, axes: true });
+    if (uri) {
+      const img = document.createElement('img');
+      img.src = uri; img.title = tag; img.id = 'shot-' + tag;
+      document.getElementById('result').appendChild(img);
+      window.__shots = window.__shots || {};
+      window.__shots[tag] = uri;
+      log('captured ' + tag);
+    }
+  } catch (e) { log('capture failed: ' + e.message); }
+}
+
+function setSpin(on) {
+  const canvas3d = plugin.canvas3d;
+  canvas3d.setProps((p) => {
+    p.trackball = p.trackball || {};
+    if (on) {
+      // COMPLETE params (the R175 animation fix — axis + speed)
+      p.trackball.animate = { name: 'spin', params: { speed: 0.15, axis: [0, -1, 0] } };
+    } else {
+      p.trackball.animate = undefined;
+    }
+  });
+  log('spin ' + (on ? 'ON (complete params)' : 'OFF'));
+}
+
+async function init() {
+  const m = window.molstar;
+  if (!m || !m.Viewer) { statusEl.textContent = 'molstar bundle missing'; return; }
+  viewer = await m.Viewer.create(document.getElementById('viewer'), {
+    layoutIsExpanded: false, layoutShowControls: false,
+    layoutShowRemoteState: 'none', layoutShowSequence: false, layoutShowLog: false,
+    layoutShowLeftPanel: false, collapseLeftPanel: true, collapseRightPanel: true,
+    viewportShowReset: false, viewportShowScreenshotControls: false, viewportShowControls: false,
+    viewportShowExpand: false, viewportShowSettings: false,
+    viewportShowSelectionMode: false, viewportShowAnimation: false, viewportShowTrajectoryControls: false,
+    pdbProvider: 'pdbe', emdbProvider: 'pdbe',
+    viewportBackgroundColor: '#ffffff',
+  });
+  plugin = viewer.plugin;
+  statusEl.textContent = 'loading 4HHB…';
+  await viewer.loadPdb('4HHB');
+  await new Promise(r => setTimeout(r, 3000));
+  try {
+    const structs = plugin.managers.structure.hierarchy.current.structures;
+    const comps = [];
+    for (const s of structs) for (const c of (s.components || [])) comps.push(c);
+    plugin.managers.structure.component.updateRepresentationsTheme(comps, { color: 'chain-id' });
+  } catch (e) { log('theme failed: ' + e.message); }
+  statusEl.textContent = 'ready';
+  log('4HHB loaded — click button 1');
+
+  // Test residues at clearly different depths in the A-B interface
+  window.__TEST_RESIDUES = [
+    { chain: 'A', resno: 114, text: 'P114', color: 0x2ecc71 },
+    { chain: 'B', resno: 116, text: 'H116', color: 0xd95f02 },
+    { chain: 'A', resno: 34,  text: 'L34',  color: 0x2ecc71 },
+    { chain: 'B', resno: 127, text: 'Q127', color: 0xd95f02 },
+  ];
+
+  document.getElementById('btnFlat').onclick = async () => {
+    // 1. add labels with FLAT size (no compensation) — the old behavior
+    let slot = 0;
+    for (const r of window.__TEST_RESIDUES) {
+      const built = buildResidueLoci([{ chain: r.chain, resno: r.resno }]);
+      if (!built) { log('buildResidueLoci(' + r.chain + r.resno + ') → null'); continue; }
+      await addAgentLabel(built.loci, r.text, r.color, slot++, getLociCenter(built.loci), 1);
+    }
+    await new Promise(r => setTimeout(r, 600));
+    ensureWatcher();
+    await capture('flat');
+  };
+
+  document.getElementById('btnResize').onclick = async () => {
+    // 2. run the live resize once — equalizes screen sizes for the current camera
+    const n = await refreshAgentLabelSizes('manual');
+    log('manual resize updated ' + n + ' labels');
+    await new Promise(r => setTimeout(r, 600));
+    await capture('resized');
+  };
+
+  document.getElementById('btnSpin').onclick = async () => {
+    // 3. spin for 8s — didDraw watcher must keep re-normalizing during motion
+    setSpin(true);
+    await new Promise(r => setTimeout(r, 4000));
+    await capture('spin-mid');
+    await new Promise(r => setTimeout(r, 4000));
+    setSpin(false);
+    await new Promise(r => setTimeout(r, 500));
+    await capture('spin-end');
+    log('spin test complete — screenshots: flat(1) vs resized(2) vs spin-mid(3) vs spin-end(4)');
+  };
+
+  document.getElementById('btnSpinOff').onclick = () => setSpin(false);
+
+  document.getElementById('btnSizes').onclick = () => {
+    const cells = plugin.state.data.cells;
+    const out = [];
+    for (const ref of anchors.keys()) {
+      const p = cells.get(ref)?.transform?.params;
+      out.push((p?.customText || '?') + ' textSize=' + (p?.textSize ?? '?'));
+    }
+    log('current sizes: ' + out.join(' | '));
+  };
+}
+init().catch(e => { log('init failed: ' + e.message); statusEl.textContent = 'init failed'; });
+</script>
+</body>
+</html>

@@ -30,7 +30,6 @@ import {
   removeMeasurementCells,
 } from "./measurement-utils";
 import { applyCartoonTransparency, clearVizTransparency } from "./cartoon-transparency";
-import { getLociCenter, getLabelSizeRatios } from "./label-sizing";
 import { AGENT_LABEL_TAG, removeAgentLabels } from "./label-lifecycle";
 
 /**
@@ -1114,84 +1113,13 @@ export async function applyRecipeVisualization(
           }
         }, "draw_interaction_lines");
 
-        // R170: residue-PAIR labels — "PRO114–HIS116 2.7Å" anchored at the
-        // midpoint of the two interacting atoms. This is what lets the VLM
-        // (and the user) verify the specific interactions the analysis
-        // reported, e.g. "PRO114-HIS116" on 4HHB A-B. Top-6 only (recipes
-        // pre-sort by significance/distance); gold text distinguishes them
-        // from the per-residue labels drawn by capture_multi_angle.
-        await safe(async () => {
-          const interactions = params?.interactions as Array<Record<string, unknown>> | undefined;
-          if (!Array.isArray(interactions) || interactions.length === 0) return;
-          const pairCandidates = interactions.filter(
-            (c) => c.chain1 && c.resno1 && c.chain2 && c.resno2 &&
-              (c.resname1 || c.resname2) &&
-              (c.type === 'hbond' || c.type === 'salt_bridge' || c.type === 'salt-bridge' || c.type === 'hydrophobic')
-          );
-          const top = pairCandidates.slice(0, 6);
-          if (top.length === 0) return;
-
-          const measBefore = snapshotMeasurementRefs(plugin);
-
-          // R171: pass 1 — resolve each pair's loci and anchor center. The
-          // camera is already at the focused-interface view, so the anchor
-          // distances measured NOW drive per-label size compensation below
-          // ("有一些比较远的氨基酸的label很小看不清楚" — text is true 3D
-          // geometry whose screen size shrinks ~1/distance).
-          const prepared: Array<{ it: Record<string, unknown>; result: { loci: unknown } }> = [];
-          for (const it of top) {
-            try {
-              // Loci spanning BOTH endpoints (atom-level when the recipe
-              // reports atoms) → the label anchors at their midpoint.
-              const refs = [
-                { chain: it.chain1 as string, resno: it.resno1 as number, atomName: it.atom1 as string | undefined },
-                { chain: it.chain2 as string, resno: it.resno2 as number, atomName: it.atom2 as string | undefined },
-              ];
-              const result = buildResidueLoci(plugin, refs);
-              if (result) prepared.push({ it, result });
-            } catch (err) { console.warn('[viz:pair_labels] one pair failed:', err); }
-          }
-          if (prepared.length === 0) return;
-
-          const ratios = getLabelSizeRatios(
-            plugin,
-            prepared.map((p) => getLociCenter(p.result.loci)),
-            14 // offsetZ used below — the depth labels actually render at
-          );
-
-          let drawn = 0;
-          for (let idx = 0; idx < prepared.length; idx++) {
-            const { it, result } = prepared[idx];
-            try {
-              const ratio = ratios[idx] ?? 1;
-              const d = it.distance_A != null ? ` ${Number(it.distance_A).toFixed(1)}Å` : "";
-              await plugin.managers.structure.measurement.addLabel(result.loci, {
-                labelParams: {
-                  customText: `${it.resname1 ?? ''}${it.resno1}–${it.resname2 ?? ''}${it.resno2}${d}`,
-                  textColor: 0xffd700, // gold — distinct from per-residue chain colors
-                  // R171: distance-compensated sizing (far pairs render as
-                  // large as near ones; clamped so outliers stay sane).
-                  textSize: 0.48 * ratio,
-                  sizeFactor: 0.48 * ratio,
-                  offsetX: 0, offsetY: 0,
-                  offsetZ: 14,          // clear the cartoon toward the camera (Å)
-                  borderWidth: 0.16, borderColor: 0x101010,
-                  background: true, backgroundColor: 0x000000, backgroundOpacity: 0.55,
-                  backgroundMargin: 0.1,
-                  attachment: (drawn % 2 === 0) ? 'top-center' : 'bottom-center',
-                  tether: true, tetherLength: 0.9, tetherBaseWidth: 0.16,
-                },
-                // R173: agent tag — covered by the toolbar show/hide toggle.
-                reprTags: [AGENT_LABEL_TAG],
-              } as any);
-              drawn++;
-            } catch (err) { console.warn('[viz:pair_labels] one pair failed:', err); }
-          }
-          const measAfter = snapshotMeasurementRefs(plugin);
-          const addedRefs = diffMeasurementRefs(measBefore, measAfter);
-          if (addedRefs.length > 0) vizAddedMeasurementRefs.push(...addedRefs);
-          console.log(`[viz:pair_labels] Drew ${drawn} residue-pair labels (${addedRefs.length} tracked for cleanup)`);
-        }, "draw_pair_labels");
+        // R175: residue-PAIR labels REMOVED by user request ("不需要标互作对").
+        // The gold "PRO114–HIS116 2.7Å" midpoint labels (R170/R171) cluttered
+        // the interface view — the per-residue labels drawn by
+        // capture_multi_angle plus the H-bond/salt-bridge distance lines
+        // already identify every interaction. The block also carried the
+        // only remaining getLabelSizeRatios/getLociCenter usage here, so
+        // those imports went with it.
 
         // R171: semi-transparent cartoon — the interface sidechain sticks sit
         // IN/BEHIND the cartoon surface; at full opacity they are hard to make

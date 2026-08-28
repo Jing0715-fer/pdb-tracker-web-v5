@@ -79,8 +79,11 @@ import {
 import { showInteractionsAround, clearInteractions } from "./commands/interactions";
 import { setTrackballAnimate } from "./commands/animation";
 import {
-  agentLabelOptions,
+  addAgentLabel,
   countAgentLabels,
+  ensureAgentLabelResizeWatcher,
+  refreshAgentLabelSizes,
+  registerAgentLabelAnchor,
   removeAgentLabels,
   AGENT_LABEL_TAG,
 } from "./commands/label-lifecycle";
@@ -571,11 +574,17 @@ export async function executeCommand(
         // reads as "label 偏移 / 没有重新定位". Use the R170 floating
         // placement (tether + offsetZ + background) + the agent tag so the
         // toolbar show/hide toggle covers these labels too.
+        // R175: addAgentLabel also registers the anchor for live
+        // distance-compensated resizing while the camera moves.
         const slot = countAgentLabels(plugin);
-        await plugin.managers.structure.measurement.addLabel(loci, {
-          ...agentLabelOptions({ text: cmd.text ?? "", slot }),
-        } as any);
-        return { ok: true, detail: "Label added" };
+        const created = await addAgentLabel(plugin, loci, {
+          text: cmd.text ?? "",
+          slot,
+          center: getLociCenter(loci),
+        });
+        return created
+          ? { ok: true, detail: "Label added" }
+          : { ok: false, detail: "Label creation failed" };
       }
 
       // R173: re-add (and persist) the analysis residue labels after a
@@ -589,8 +598,17 @@ export async function executeCommand(
         // truth for what the post-analysis view shows).
         await removeAgentLabels(plugin);
         const chainColorMap = getChainColorMap(plugin);
-        let added = 0;
-        let slot = 0;
+        // R175: distance-compensated sizing — the persisted labels previously
+        // used flat 0.55 text (no compensation at all), so near-camera
+        // residues got big labels while back-of-interface residues got tiny
+        // ones ("标签还是存在由于视觉远近看起来差异过大"). Resolve every
+        // loci first, measure anchor-camera distances, then create with
+        // per-label ratios (same pipeline as the capture-time labels).
+        const {
+          getLabelSizeRatios,
+        } = await import("./commands/label-sizing");
+        type PreparedLabel = { lbl: NonNullable<typeof cmd.labels>[number]; loci: unknown; center: [number, number, number] | null };
+        const preparedLabels: PreparedLabel[] = [];
         for (const lbl of labels) {
           try {
             if (lbl.chain === undefined || lbl.resno === undefined) continue;
@@ -598,15 +616,36 @@ export async function executeCommand(
             const singleResult = buildResidueLoci(plugin, [{ chain: lbl.chain, resno: lbl.resno }]);
             if (singleResult) loci = singleResult.loci;
             if (!loci) loci = await lociFromResidue(viewer, { chain: lbl.chain, resno: lbl.resno });
-            if (!loci) continue;
-            const color = getChainLabelColor(plugin, lbl.chain, chainColorMap);
-            await plugin.managers.structure.measurement.addLabel(loci, {
-              ...agentLabelOptions({ text: lbl.text ?? "", color, slot: slot++, fontSize: cmd.labelFontSize ?? 0.55 }),
-            } as any);
-            added++;
+            if (loci) preparedLabels.push({ lbl, loci, center: getLociCenter(loci) });
           } catch (err) {
             console.warn(`[show_analysis_labels] label "${lbl.text}" failed:`, err);
           }
+        }
+        const ratios = getLabelSizeRatios(plugin, preparedLabels.map((p) => p.center), 12);
+        let added = 0;
+        let slot = 0;
+        for (let idx = 0; idx < preparedLabels.length; idx++) {
+          const { lbl, loci, center } = preparedLabels[idx]!;
+          const color = getChainLabelColor(plugin, lbl.chain, chainColorMap);
+          // R175: addAgentLabel registers the anchor → live re-sizing keeps
+          // every label the same screen size while the user rotates/zooms.
+          const created = await addAgentLabel(plugin, loci, {
+            text: lbl.text ?? "",
+            color,
+            slot: slot++,
+            fontSize: cmd.labelFontSize ?? 0.55,
+            sizeRatio: ratios[idx] ?? 1,
+            center,
+          });
+          if (created) added++;
+        }
+        // R175: normalize sizes for the CURRENT camera right away (the
+        // creation ratios above were measured against this same camera, but
+        // the refresh also validates the registry + watcher state).
+        try {
+          await refreshAgentLabelSizes(plugin);
+        } catch {
+          /* non-blocking */
         }
         // R173: force a redraw so the freshly persisted labels render
         // immediately (the animation loop covers this in normal browsers;
@@ -778,9 +817,13 @@ export async function executeCommand(
                   // R173: floating placement + agent tag (see label_residue —
                   // the old flat/default placement rendered half-buried,
                   // depth-occluded text that looked detached while rotating).
-                  await plugin.managers.structure.measurement.addLabel(loci, {
-                    ...agentLabelOptions({ text: lbl.text ?? "", slot: slot++ }),
-                  } as any);
+                  // R175: addAgentLabel registers the anchor for live
+                  // distance-compensated resizing.
+                  await addAgentLabel(plugin, loci, {
+                    text: lbl.text ?? "",
+                    slot: slot++,
+                    center: getLociCenter(loci),
+                  });
                 }
               }
             } catch (err) {
@@ -1477,16 +1520,18 @@ async function executeMultiAngleCapture(
                 const ring = Math.floor(i / ATTACHMENTS.length);
                 const tetherLength = Math.min(1.6 + ring * 1.1, 4.9);
                 const ratio = ratios[idx] ?? 1;
+                const center = getLociCenter(loci);
+                const baseSize = (cmd.labelFontSize as number | undefined) ?? 0.55;
 
-                await plugin.managers.structure.measurement.addLabel(loci, {
+                const addedLabel = await plugin.managers.structure.measurement.addLabel(loci, {
                   labelParams: {
                     customText: lbl.text ?? "",
                     textColor: labelColor,
                     // Molstar's own measurement labels use textSize 0.5 ×
                     // sizeFactor 1.0; 0.55 keeps them compact but legible.
                     // R171: × ratio — far labels render as large as near ones.
-                    textSize: (cmd.labelFontSize ?? 0.55) * ratio,
-                    sizeFactor: 0.55 * ratio,
+                    textSize: baseSize * ratio,
+                    sizeFactor: baseSize * ratio,
                     offsetX: 0,               // R170: anchor stays at the residue
                     offsetY: 0,
                     offsetZ: 12,              // R170: clear the cartoon toward the camera (Å)
@@ -1505,7 +1550,17 @@ async function executeMultiAngleCapture(
                   // and the next analysis's label replacement can find these
                   // cells by tag (the bundle's addLabel forwards reprTags).
                   reprTags: [AGENT_LABEL_TAG],
-                } as any);
+                } as any) as { representation?: { ref?: string } } | undefined;
+                // R175: register the anchor so the per-angle refresh below
+                // (and any later camera move) can re-normalize the label's
+                // screen size — the creation ratios above only hold for the
+                // camera position at THIS moment, but the capture loop then
+                // rotates to side/top/back angles.
+                const labelRef = addedLabel?.representation?.ref;
+                if (center && typeof labelRef === "string") {
+                  registerAgentLabelAnchor(plugin, labelRef, center, baseSize);
+                  ensureAgentLabelResizeWatcher(plugin);
+                }
               } catch (err) {
                 console.warn(
                   `[capture_multi_angle] label "${lbl.text}" failed:`,
@@ -1557,6 +1612,16 @@ async function executeMultiAngleCapture(
             // R130: Wait for render to settle (500ms total in applyCameraAngle)
             await nextFrame();
             await nextFrame();
+            // R175: re-normalize label sizes for THIS angle's camera before
+            // the screenshot — the labels were created with ratios measured
+            // at the focused/front view; side/top/back views put different
+            // anchors near/far, and the refresh guarantees every label the
+            // same screen size in each captured angle.
+            try {
+              await refreshAgentLabelSizes(plugin);
+            } catch {
+              /* non-blocking — screenshot proceeds with creation-time ratios */
+            }
             // Capture
             const dataUri =
               await plugin.helpers?.viewportScreenshot?.getImageDataUri({

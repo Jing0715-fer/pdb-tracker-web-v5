@@ -35,6 +35,20 @@ export function getLociCenter(loci: unknown): [number, number, number] | null {
   return null;
 }
 
+/** Live camera position (Vec3) — null when the camera is unavailable. */
+export function getCameraPosition(plugin: MolstarPlugin): [number, number, number] | null {
+  try {
+    const p = (plugin as unknown as { canvas3d?: { camera?: { position?: unknown } } })
+      ?.canvas3d?.camera?.position as unknown;
+    if (p && typeof (p as ArrayLike<number>)[0] === "number") {
+      return [(p as ArrayLike<number>)[0], (p as ArrayLike<number>)[1], (p as ArrayLike<number>)[2]];
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 /**
  * Per-label size ratio (dimensionless multiplier for textSize AND sizeFactor).
  *
@@ -53,16 +67,7 @@ export function getLabelSizeRatios(
   if (n === 0) return [];
   const ones = centers.map(() => 1);
 
-  let camPos: [number, number, number] | null = null;
-  try {
-    const p = (plugin as unknown as { canvas3d?: { camera?: { position?: unknown } } })
-      ?.canvas3d?.camera?.position as unknown;
-    if (p && typeof (p as ArrayLike<number>)[0] === "number") {
-      camPos = [(p as ArrayLike<number>)[0], (p as ArrayLike<number>)[1], (p as ArrayLike<number>)[2]];
-    }
-  } catch {
-    /* ignore */
-  }
+  const camPos = getCameraPosition(plugin);
   if (!camPos) return ones;
 
   const dists: Array<number | null> = centers.map((c) => {

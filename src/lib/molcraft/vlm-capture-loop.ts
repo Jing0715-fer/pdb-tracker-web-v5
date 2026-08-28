@@ -72,6 +72,13 @@ export interface CaptureLoopOptions {
     quality?: string;
   }) => void;
   /**
+   * R175: early-display callback — invoked after each capture merge (initial
+   * angles and re-captures) with the screenshots collected so far, so the
+   * caller can render the carousel while the VLM analysis is still running
+   * (user report: "截取的图片也没有显示出来" while VLM was pending).
+   */
+  onScreenshots?: (screenshots: ScreenshotData[]) => void;
+  /**
    * R164 (VLM-002): optional AbortSignal — when aborted (user navigates
    * away mid-VLM), the in-flight fetch is cancelled AND the server-side
    * req.signal fires so the server stops retrying the VLM call instead
@@ -407,6 +414,17 @@ export async function runVlmControlledCaptureLoop(
       // feedback back by identity (never inherited from the screenshot of
       // the same angle they just replaced).
       currentScreenshots = [...currentScreenshots, ...captureResult.screenshots.map(track)];
+    }
+
+    // R175: early display — hand the screenshots collected so far to the
+    // caller (strip the loop-local captureId bookkeeping fields) so the
+    // carousel renders while the VLM analysis is still running.
+    if (currentScreenshots.length > 0 && options.onScreenshots) {
+      options.onScreenshots(currentScreenshots.map(s => ({
+        dataUri: s.dataUri, angle: s.angle, label: s.label,
+        ...(s.vlmScore != null ? { vlmScore: s.vlmScore } : {}),
+        ...(s.vlmIssue ? { vlmIssue: s.vlmIssue } : {}),
+      })));
     }
 
     // R146: Run VLM with timeout (prevents "stuck on VLM analyzing" bug)

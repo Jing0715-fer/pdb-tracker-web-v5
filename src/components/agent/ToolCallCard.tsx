@@ -249,14 +249,25 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
         const vlmMs = r.autoCapture.vlmDurationMs;
         const vlmIterations = r.autoCapture.vlmIterations;
         const vlmAcceptable = r.autoCapture.vlmAcceptable;
+        // R175: the VLM pass is still running — screenshots are already
+        // visible (attached right after capture); show a live "VLM 分析中"
+        // line instead of the final badges and suppress the "未经视觉验证"
+        // failure badge until the phase actually completes.
+        const vlmPending = Boolean(r.autoCapture.vlmPending);
         // R163: VLM failure marker — when the VLM pass failed (after the
         // 5s/15s/45s backoff schedule), explicitly flag the screenshots as
         // NOT visually verified so the user knows the analysis text is
         // based on the numeric Python results alone.
-        const vlmFailed = Boolean(r.autoCapture.vlmError) || (!r.autoCapture.vlmResult && !r.autoCapture.vlmPending);
+        const vlmFailed = !vlmPending && (Boolean(r.autoCapture.vlmError) || (!r.autoCapture.vlmResult && !r.autoCapture.vlmPending));
         const vlmErrorText = typeof r.autoCapture.vlmError === 'string' ? r.autoCapture.vlmError : '';
         return (
           <div className="text-xs">
+            {vlmPending && (
+              <div className="flex items-center gap-1.5 text-[10px] text-claude-text-muted mb-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>VLM 视觉分析中…（{autoScreenshots.length} 张截图已生成）</span>
+              </div>
+            )}
             {/* R116.2: Show timing for auto-capture + VLM */}
             {/* R142: Show VLM iteration count + acceptable status */}
             {(captureMs != null || vlmMs != null || vlmIterations != null) && (

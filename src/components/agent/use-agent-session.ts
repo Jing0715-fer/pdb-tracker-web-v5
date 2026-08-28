@@ -97,10 +97,17 @@ export interface AutoCaptureSummary {
   ok: boolean;
   detail: string;
   data: { recipe: string; label: string; screenshots: CaptureScreenshot[] };
-  captureDurationMs: number;
+  /**
+   * R175: true while the VLM pass is still running — the intermediate object
+   * attached right after capture (early screenshot display). ToolCallCard
+   * shows a subtle "VLM 分析中" line instead of the final badges, and the
+   * final object (vlmPending unset) replaces it when the phase completes.
+   */
+  vlmPending?: boolean;
+  captureDurationMs?: number;
   vlmResult?: VlmResult;
-  vlmDurationMs: number;
-  vlmIterations: number;
+  vlmDurationMs?: number;
+  vlmIterations?: number;
   vlmAcceptable?: boolean;
   vlmError?: string;
   pairwisePairs?: Array<{ chain1: unknown; chain2: unknown; total: unknown }>;
@@ -1014,6 +1021,27 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
               // fires and the VLM backoff loop stops retrying.
               const localController = new AbortController();
               vlmAbortRef.current = localController;
+              // R175: cosmetic viewer commands (label persistence) must never
+              // block the capture cycle's completion — a wedged Molstar state
+              // commit here would keep the progress UI spinning forever even
+              // though the screenshots are already in hand. Race anything
+              // non-critical against a hard timeout.
+              const withTimeout = async (p: Promise<unknown>, ms: number, label: string): Promise<void> => {
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                try {
+                  await Promise.race([
+                    p,
+                    new Promise<null>((resolve) => {
+                      timer = setTimeout(() => {
+                        console.warn(`[agent] ${label} timed out after ${ms}ms — continuing without it`);
+                        resolve(null);
+                      }, ms);
+                    }),
+                  ]);
+                } finally {
+                  if (timer) clearTimeout(timer);
+                }
+              };
               try {
                 // R140: Extract interface residue labels from the analysis data
                 const residueLabels = extractResidueLabels(recipeName, analysisData);
@@ -1042,6 +1070,28 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   const topPairs = (significant.length > 0 ? significant : pairs.filter(p => p.in_contact !== false)).slice(0, 2);
 
                   const allScreenshots: CaptureScreenshot[] = [];
+                  // R175 (user report: "pdb_analyze 一直卡在 VLM 分析，截取的图片
+                  // 也没有显示出来"): attach the screenshots to the tool result
+                  // AS THEY ARE CAPTURED — the carousel now renders immediately
+                  // while the VLM pass is still running, and a `vlmPending` flag
+                  // shows a subtle "VLM 分析中" line instead of the final
+                  // badges. Previously screenshots only appeared after the VLM
+                  // call completed, so a hung/slow VLM request left the card on
+                  // the bare "VLM 分析中" spinner with zero visible output.
+                  const attachIntermediateScreenshots = () => {
+                    if (allScreenshots.length === 0) return;
+                    const progExec = executionsRef.current.get(call.callId);
+                    if (progExec?.result != null) {
+                      (progExec.result as AnnotatedCaptureResult).autoCapture = {
+                        ok: true,
+                        detail: `Captured ${allScreenshots.length} screenshot(s) — VLM 分析中...`,
+                        data: { recipe: recipeName, label: recipeName, screenshots: [...allScreenshots] },
+                        vlmPending: true,
+                        pairwisePairs: topPairs.map(p => ({ chain1: p.chain1, chain2: p.chain2, total: p.total })),
+                      };
+                      requestProgressRefresh();
+                    }
+                  };
                   // R173: remember the TOP pair's residue labels so they can be
                   // re-added (persisted) after the capture loop finishes — the
                   // capture pipeline removes its labels in cleanup, but the
@@ -1111,6 +1161,10 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                           label: `界面 ${pairTag} — ${s.angle}`,
                         });
                       }
+                      // R175: show what we have so far — the carousel renders
+                      // while the remaining pairs / VLM analysis are still in
+                      // flight.
+                      attachIntermediateScreenshots();
                     }
                   }
 
@@ -1145,7 +1199,40 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                       // MOL2-05 (R172): forward the abort signal so a session
                       // switch also cancels the in-flight VLM call (previously
                       // only the 90s fetch timeout bounded it).
-                      vlmResult = await selectBestWithRetry(allScreenshots, recipeName, analysisSummary, localController.signal);
+                      //
+                      // R175: HARD 150s timeout around the whole VLM phase —
+                      // the generic path has had this wrapper since R146
+                      // (runVlmWithTimeout, "prevents stuck on VLM analyzing
+                      // bug"), but the pairwise branch called
+                      // selectBestWithRetry DIRECTLY. The client retry schedule
+                      // (fetch 90s timeout ×4 + 5/15/45s backoff) can stretch
+                      // ~7 minutes on a wedged request — far beyond what a
+                      // user will wait — and any pathological hang past that
+                      // left the card spinning forever with the screenshots
+                      // hidden. A dedicated controller (chained to
+                      // localController for session changes, NOT identical to
+                      // it, so the timeout doesn't kill the later
+                      // show_analysis_labels persistence) guarantees
+                      // finishPairwise() always runs.
+                      const VLM_PHASE_TIMEOUT_MS = 150_000;
+                      const vlmController = new AbortController();
+                      const onLocalAbort = () => vlmController.abort();
+                      localController.signal.addEventListener('abort', onLocalAbort, { once: true });
+                      const vlmTimer = setTimeout(() => {
+                        console.warn(`[agent] pairwise VLM phase timed out after ${VLM_PHASE_TIMEOUT_MS / 1000}s — proceeding without VLM analysis`);
+                        vlmController.abort();
+                      }, VLM_PHASE_TIMEOUT_MS);
+                      try {
+                        vlmResult = await Promise.race([
+                          selectBestWithRetry(allScreenshots, recipeName, analysisSummary, vlmController.signal),
+                          new Promise<null>((resolve) => {
+                            vlmController.signal.addEventListener('abort', () => resolve(null), { once: true });
+                          }),
+                        ]);
+                      } finally {
+                        clearTimeout(vlmTimer);
+                        localController.signal.removeEventListener('abort', onLocalAbort);
+                      }
                       if (!vlmResult) {
                         // R163: VLM unavailable — mark the result explicitly so
                         // the chat UI can flag "未经视觉验证"
@@ -1165,15 +1252,16 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                   // so rotating keeps them anchored and the Labels button
                   // can hide/show them freely.
                   if (!localController.signal.aborted && v && topPairLabels && topPairLabels.length > 0) {
-                    try {
-                      await executeCommand(v, {
-                        type: 'show_analysis_labels',
-                        labels: topPairLabels,
-                        labelFontSize: 0.5,
-                      } as never);
-                    } catch (labelErr) {
+                    // R175: wrapped in withTimeout — cosmetic persistence must
+                    // never wedge the completion path (see helper comment above).
+                    const labelCmd = executeCommand(v, {
+                      type: 'show_analysis_labels',
+                      labels: topPairLabels,
+                      labelFontSize: 0.5,
+                    } as never).catch((labelErr: unknown) => {
                       console.warn('[agent] persisting pairwise labels failed (non-blocking):', labelErr);
-                    }
+                    });
+                    await withTimeout(labelCmd, 30_000, 'persisting pairwise labels');
                   }
                   // FE-03 (R172): clear autoCapturePending on EVERY terminal
                   // path of the pairwise branch — success, empty capture, and
@@ -1254,6 +1342,23 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                         requestProgressRefresh();
                       }
                     },
+                    // R175: stream screenshots into the tool card as soon as
+                    // each capture lands (same early-display fix as the
+                    // pairwise branch) — the carousel renders while the VLM
+                    // analysis is still running instead of only at the end.
+                    onScreenshots: (shots) => {
+                      if (!shots || shots.length === 0) return;
+                      const exec = executionsRef.current.get(call.callId);
+                      if (exec?.result != null) {
+                        (exec.result as AnnotatedCaptureResult).autoCapture = {
+                          ok: true,
+                          detail: `Captured ${shots.length} screenshot(s) — VLM 分析中...`,
+                          data: { recipe: recipeName, label: recipeName, screenshots: [...shots] },
+                          vlmPending: true,
+                        };
+                        requestProgressRefresh();
+                      }
+                    },
                   }
                 );
 
@@ -1264,15 +1369,16 @@ export function useAgentSession(options: UseAgentSessionOptions): AgentSessionSt
                 // user keeps an annotated view, toggleable via the toolbar's
                 // Labels button, that stays anchored while rotating).
                 if (!localController.signal.aborted && v && residueLabels && residueLabels.length > 0) {
-                  try {
-                    await executeCommand(v, {
-                      type: 'show_analysis_labels',
-                      labels: residueLabels,
-                      labelFontSize: 0.5,
-                    } as never);
-                  } catch (labelErr) {
+                  // R175: wrapped in withTimeout — cosmetic persistence must
+                  // never wedge the completion path (see helper comment above).
+                  const labelCmd = executeCommand(v, {
+                    type: 'show_analysis_labels',
+                    labels: residueLabels,
+                    labelFontSize: 0.5,
+                  } as never).catch((labelErr: unknown) => {
                     console.warn('[agent] persisting analysis labels failed (non-blocking):', labelErr);
-                  }
+                  });
+                  await withTimeout(labelCmd, 30_000, 'persisting analysis labels');
                 }
 
                 if (loopResult.screenshots.length > 0) {
