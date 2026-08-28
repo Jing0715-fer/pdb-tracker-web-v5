@@ -4696,3 +4696,18 @@ Stage Summary:
 - 用户报错根治：RangeError 根因 = molstar bundle 字体缓存按全量 label params 为键 → 每个不同文字/尺寸泄漏 ~45MB Font（永不驱逐）→ live-resize 持续制造新键 → 堆耗尽。两处 bundle 补丁（缓存键子集化 r177 + 纹理 updateIfChanged r177b）+ 缓存穿透查询串。
 - 补丁正确性经 4 层实证：harness 计数（20 标签 1 字体、360 更新 0 新字体、heap 反降）、共享字体渲染（创建后/更新后均可见）、A/B 对照排除回归、真实页面冒烟。
 - 新增 public/font-cache-qa.html 回归 harness（Font 构造计数 + 内存 + 提交健康三探针，自判定 PASS/FAIL）；改动 public/molstar.js、use-molstar-loader.ts + 3 个旧 harness 缓存串；lint/tsc 零新增。
+
+---
+Task ID: R178
+Agent: main
+Task: Push R175–R177 work to GitHub
+
+Work Log:
+- Verified clean working tree; fetched origin (remote not ahead)
+- Inspected 3 unpushed commits: 2b2a696 (db snapshot), 3e336fa (R177 RangeError/font-cache fix), adb7ed2 (db snapshot)
+- Pushed main: 8f08428..adb7ed2 → https://github.com/Jing0715-fer/pdb-tracker-web-v5
+- Appended this worklog entry and pushed it
+
+Stage Summary:
+- GitHub main now includes: R175 (VLM hang fix, pair-label removal, live camera-aware label resizing), R176 (full view-state restore + persistent interface-residue sticks with hide-all-first), R177 (molstar font-cache leak fix resolving RangeError: Array buffer allocation failed in refreshAgentLabelSizes)
+- Remote and local in sync at R178
