@@ -12,6 +12,8 @@ import {
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
   Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark, RotateCcw,
+  // R179 (Task 2-b): DSH 报告大纲/配图画廊图标
+  ListTree, Image as ImageIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -527,6 +529,146 @@ function MiniSparkline({ data, width = 60, height = 20, globalMin, globalMax }: 
   );
 }
 
+// ─── R179 (Task 2-b): DSH 模式评估报告元信息渲染 ────────────────────────────────
+// /api/eval-report-file/[uniprotId] now returns `mode` / `outline` / `figures`
+// for DSH-generated reports (null/absent for classic rows). These lightweight
+// presentational components render the outline summary + verified-figure
+// gallery above the ReportMarkdown body in the eval report tab.
+
+interface DshReportOutlineSection {
+  id: string;
+  title: string;
+  focus?: string;
+}
+
+interface DshReportFigure {
+  kind: string;
+  url: string;
+  caption: string;
+  pdbId?: string;
+  source?: string;
+  sectionId?: string;
+  status: string;
+}
+
+interface EvalReportDshMeta {
+  mode: 'classic' | 'dsh';
+  outline: { sections: DshReportOutlineSection[] } | null;
+  figures: DshReportFigure[] | null;
+}
+
+/** Narrow the fetch payload's DSH extras into EvalReportDshMeta (null-safe). */
+function parseEvalReportDshMeta(data: unknown): EvalReportDshMeta | null {
+  if (!data || typeof data !== 'object') return null;
+  const o = data as Record<string, unknown>;
+  if (o.mode !== 'dsh') return null;
+  // R179 (Task 2-b): outline contract — the DSH agent persists the outline as
+  // a BARE array `[{id,title,focus},…]` (agent.ts Phase F: JSON.stringify of
+  // the planned section list), while the SSE stream wraps it as
+  // `{sections:[…]}`. Accept both shapes; anything else → null.
+  const outlineRaw = o.outline as unknown;
+  const outlineArr: unknown[] = Array.isArray(outlineRaw)
+    ? outlineRaw
+    : Array.isArray((outlineRaw as { sections?: unknown } | null)?.sections)
+      ? (outlineRaw as { sections: unknown[] }).sections
+      : [];
+  const sections = outlineArr.filter(
+    (s): s is DshReportOutlineSection =>
+      !!s && typeof (s as DshReportOutlineSection).id === 'string' && typeof (s as DshReportOutlineSection).title === 'string',
+  );
+  const figures = Array.isArray(o.figures)
+    ? (o.figures as unknown[]).filter(
+        (f): f is DshReportFigure =>
+          !!f && typeof (f as DshReportFigure).url === 'string' && typeof (f as DshReportFigure).caption === 'string',
+      )
+    : null;
+  return {
+    mode: 'dsh',
+    outline: sections.length > 0 ? { sections } : null,
+    figures,
+  };
+}
+
+/** DSH outline summary card — numbered titles + muted focus sub-lines. */
+function EvalDshOutlineCard({ outline }: { outline: { sections: DshReportOutlineSection[] } }) {
+  const { t } = useI18n();
+  return (
+    <div className="p-3 rounded-lg bg-claude-border-light/50 dark:bg-[#1a1917]/50 border border-claude-border/50 dark:border-[#3d3832]/50">
+      <div className="flex items-center gap-1.5 mb-2">
+        <ListTree className="h-3.5 w-3.5 text-claude-accent shrink-0" />
+        <span className="text-xs font-semibold text-claude-text dark:text-[#e8e4dd]">{t.evalDshOutline}</span>
+        <Badge variant="outline" className="text-[9px] font-medium px-1.5 h-4 rounded shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
+          {outline.sections.length}
+        </Badge>
+        <span className="text-[9px] text-claude-text-muted dark:text-[#9b9590] uppercase font-mono">DSH</span>
+      </div>
+      <ol className="space-y-1 list-none" aria-label={t.evalDshOutline}>
+        {outline.sections.map((s, i) => (
+          <li key={s.id || i} className="flex items-start gap-2">
+            <span className="text-xs font-mono font-semibold text-claude-accent shrink-0 mt-0.5 tabular-nums">{i + 1}.</span>
+            <div className="min-w-0">
+              <span className="text-xs font-medium text-claude-text/90 dark:text-[#e8e4dd]/90 leading-snug break-words">{s.title}</span>
+              {s.focus && (
+                <span className="block text-[10px] text-claude-text-muted dark:text-[#9b9590] leading-relaxed break-words">{s.focus}</span>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** DSH figures gallery — verified figures only, each links to the source URL
+ *  in a new tab (rel=noopener). https-only (mirrors the renderer allowlist). */
+function EvalDshFiguresGallery({ figures }: { figures: DshReportFigure[] }) {
+  const { t } = useI18n();
+  // R179 (Task 2-b): persisted figures are always verified (the agent only
+  // saves `verifiedFigures`), so a missing `status` field counts as verified;
+  // live-stream figures carry explicit statuses.
+  const verified = figures.filter((f) => /^https:\/\//i.test(f.url) && (f.status ?? 'verified') === 'verified');
+  if (verified.length === 0) {
+    return (
+      <div className="p-3 rounded-lg bg-claude-border-light/50 dark:bg-[#1a1917]/50 border border-dashed border-claude-border/50 dark:border-[#3d3832]/50 flex items-center gap-2">
+        <Info className="h-3.5 w-3.5 text-claude-text-muted/60 dark:text-[#9b9590]/60 shrink-0" />
+        <p className="text-xs text-claude-text-muted dark:text-[#9b9590]">{t.evalDshFiguresEmpty}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="p-3 rounded-lg bg-claude-border-light/50 dark:bg-[#1a1917]/50 border border-claude-border/50 dark:border-[#3d3832]/50">
+      <div className="flex items-center gap-1.5 mb-2">
+        <ImageIcon className="h-3.5 w-3.5 text-claude-accent shrink-0" />
+        <span className="text-xs font-semibold text-claude-text dark:text-[#e8e4dd]">{t.evalDshFigures}</span>
+        <Badge variant="outline" className="text-[9px] font-medium px-1.5 h-4 rounded shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+          {verified.length}
+        </Badge>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {verified.map((f, i) => (
+          <a
+            key={`${f.url}-${i}`}
+            href={f.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden hover:border-claude-accent/40 transition-colors"
+            title={f.caption}
+          >
+            {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
+            <img src={f.url} alt={f.caption} loading="lazy" className="h-28 w-full object-cover bg-muted/30" />
+            <div className="p-1.5 space-y-0.5">
+              <p className="text-[10px] text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
+              <p className="text-[9px] font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
+                {t.evalDshFigureVerified} · {f.kind}{f.pdbId ? ` · ${f.pdbId}` : ''}
+              </p>
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── AI Analysis Types ────────────────────────────────────────────────────────
 
 /** State machine for the first-run DB check.
@@ -787,6 +929,9 @@ export default function PdbTracker() {
   const [weeklyDetailTab, setWeeklyDetailTab] = useState<'overview' | 'structure' | 'analysis' | 'notes'>('overview');
   const [selectedEvalStructure, setSelectedEvalStructure] = useState<EvalRow | null>(null);
   const [evalReportContent, setEvalReportContent] = useState<string>('');
+  // R179 (Task 2-b): DSH 模式报告元信息（mode/outline/figures）——来自
+  // /api/eval-report-file/[uniprotId] 的新增字段；classic 行为 null。
+  const [evalReportDsh, setEvalReportDsh] = useState<EvalReportDshMeta | null>(null);
 
   // Evaluation sub-view state (default / compare / dashboard / timeline)
   const [evalSubView, setEvalSubView] = useState<'default' | 'compare' | 'dashboard' | 'timeline' | 'batch'>('default');
@@ -1642,9 +1787,11 @@ export default function PdbTracker() {
       if (selectedEvalId) {
         fetchEvalDetail(selectedEvalId);
         setEvalReportContent('');
+        setEvalReportDsh(null); // R179 (Task 2-b): reset DSH meta with the report content
       } else {
         setSelectedEval(null);
         setEvalReportContent('');
+        setEvalReportDsh(null);
       }
     }, 0);
     return () => clearTimeout(timer);
@@ -1698,6 +1845,12 @@ export default function PdbTracker() {
             if (firstAnchor && (firstAnchor.index ?? 0) > 0) {
               raw = raw.slice(firstAnchor.index ?? 0);
             }
+            // R179 (Task 2-b): DSH 报告头部带 `> 科学问题：…` 引用行 —— 上面的
+            // chapter-anchor 裁剪（本意是剥掉 CLI 泄漏 preamble）会把它一起切掉。
+            // 这里从原始内容取回该行（classic 报告没有 → null，行为完全不变）；
+            // 裁剪结果中缺失时重新前置，markdown-renderer 会将其渲染成
+            // <blockquote>，报告标签页因此自含问题语境。
+            const dshQuestionQuote = /^>[^\n]*?科学问题：[^\n]*$/m.exec(data.content as string)?.[0] ?? null;
             const stripped = raw
               .replace(/^---[\s\S]*?---\s*/m, '')
               .replace(/^#\s+.+\n/, '')
@@ -1705,8 +1858,15 @@ export default function PdbTracker() {
               .replace(/^\*\*[^*]+\*\*:\s*/gm, '')
               .replace(/^(created|updated|type|tags|sources):\s*[^\n]+\n/gim, '')
               .trim();
-            setEvalReportContent(stripped);
+            setEvalReportContent(
+              dshQuestionQuote && !stripped.includes(dshQuestionQuote)
+                ? `${dshQuestionQuote}\n\n${stripped}`
+                : stripped,
+            );
           }
+          // R179 (Task 2-b): DSH 模式 — 解析 /api/eval-report-file 新增的
+          // mode/outline/figures 字段（classic 行缺失这些字段 → null）。
+          setEvalReportDsh(parseEvalReportDshMeta(data));
         })
         .catch(() => {});
     }
@@ -4021,7 +4181,10 @@ export default function PdbTracker() {
 
     // Evaluation detail — tabbed panel
     if (mode === 'evaluation' && selectedEval) {
-      const evalTabNames = ['Summary', 'Structures', 'BLAST', 'Analysis', 'Breakdown', 'Provenance'] as const;
+      // R179 (Task 2-b): 'Report' tab — in-page full report view (DSH rows
+      // additionally render the outline card + verified-figures gallery above
+      // the markdown body; classic rows render the plain ReportMarkdown).
+      const evalTabNames = ['Summary', 'Report', 'Structures', 'BLAST', 'Analysis', 'Breakdown', 'Provenance'] as const;
 
       // Inline Structures tab content
       const evalStructuresTab = (() => {
@@ -4156,8 +4319,16 @@ export default function PdbTracker() {
 
       // Inline Report tab content — no max-h cap so it fills the available
       // detail panel height (parent flex-1 overflow-y-auto handles scroll).
+      // R179 (Task 2-b): DSH 模式 — ReportMarkdown 之上渲染大纲摘要卡 + 已验证
+      // 配图画廊（classic 行 evalReportDsh 为 null，渲染不变）。
       const evalReportTab = (
         <div className="space-y-3">
+          {evalReportDsh?.mode === 'dsh' && evalReportDsh.outline && (
+            <EvalDshOutlineCard outline={evalReportDsh.outline} />
+          )}
+          {evalReportDsh?.mode === 'dsh' && evalReportDsh.figures && evalReportDsh.figures.length > 0 && (
+            <EvalDshFiguresGallery figures={evalReportDsh.figures} />
+          )}
           {evalReportContent ? (
             <div className="text-xs text-claude-text-secondary leading-relaxed p-3 rounded-lg bg-claude-border-light/50 dark:bg-[#1a1917]/50 border border-claude-border/50 dark:border-[#3d3832]/50">
               <ReportMarkdown>{evalReportContent}</ReportMarkdown>
@@ -4234,7 +4405,7 @@ export default function PdbTracker() {
           {/* Tab buttons */}
           <div className="flex border-b border-claude-border dark:border-[#3d3832]">
             {evalTabNames.map(tab => {
-              const tabLabel = tab === 'Summary' ? t.tabSummary : tab === 'Structures' ? t.tabStructures : tab === 'BLAST' ? t.tabBLAST : tab === 'Analysis' ? t.tabAnalysis : tab === 'Breakdown' ? t.tabBreakdown : '溯源';
+              const tabLabel = tab === 'Summary' ? t.tabSummary : tab === 'Report' ? (locale === 'zh' ? '报告' : 'Report') : tab === 'Structures' ? t.tabStructures : tab === 'BLAST' ? t.tabBLAST : tab === 'Analysis' ? t.tabAnalysis : tab === 'Breakdown' ? t.tabBreakdown : '溯源';
               return (
               <button
                 key={tab}
@@ -4272,6 +4443,15 @@ export default function PdbTracker() {
                     <Maximize2 className="h-3.5 w-3.5 ml-auto opacity-70 group-hover:opacity-100 transition-opacity" />
                   </button>
                 )}
+                {/* R179 (Task 2-b): DSH 模式 — Summary 页在大纲卡上方显示报告
+                    元信息（大纲摘要 + 已验证配图画廊），让 DSH 报告结构无需
+                    打开全文即可浏览。classic 行不渲染（evalReportDsh 为 null）。 */}
+                {evalReportDsh?.mode === 'dsh' && evalReportDsh.outline && (
+                  <EvalDshOutlineCard outline={evalReportDsh.outline} />
+                )}
+                {evalReportDsh?.mode === 'dsh' && evalReportDsh.figures && evalReportDsh.figures.length > 0 && (
+                  <EvalDshFiguresGallery figures={evalReportDsh.figures} />
+                )}
                 {/* Score radar — primary target only. Previously this passed
                     ALL other evaluations as comparisonEvaluations, which
                     overlaid every target's polygon on every other target's
@@ -4282,6 +4462,9 @@ export default function PdbTracker() {
                 <EvalSummary evaluation={selectedEval} />
               </div>
             )}
+            {/* R179 (Task 2-b): Report 标签页 —— 页内全文浏览（DSH 行在大纲卡 +
+                配图画廊之下渲染 ReportMarkdown 正文；classic 行纯正文）。 */}
+            {evalDetailTab === 'Report' && evalReportTab}
             {evalDetailTab === 'Structures' && evalStructuresTab}
             {evalDetailTab === 'BLAST' && evalBlastTab}
             {evalDetailTab === 'Analysis' && (

@@ -4711,3 +4711,46 @@ Work Log:
 Stage Summary:
 - GitHub main now includes: R175 (VLM hang fix, pair-label removal, live camera-aware label resizing), R176 (full view-state restore + persistent interface-residue sticks with hide-all-first), R177 (molstar font-cache leak fix resolving RangeError: Array buffer allocation failed in refreshAgentLabelSizes)
 - Remote and local in sync at R178
+
+---
+Task ID: 2-a
+Agent: full-stack-developer
+Task: target-evaluation 模块新增「DSH 模式」后端 —— 问题驱动的 agent 评估管线（相关性分析 → 动态大纲 → 配图 → 逐章撰写），SSE 路由 /api/evaluations/run-dsh，与经典固定 8 章管线并行共存（经典 route 零改动）。
+
+Work Log:
+- 交接核验：发现前一会话已写入全部骨架文件（eval-dsh/ 4 文件 + run-dsh route + schema-compat/prisma/eval-report-file 改动）但未验证未记账；本轮逐文件对照 spec 代码审查后补齐 4 处偏差并完成端到端验证。
+- `src/lib/eval-dsh/section-library.ts`（363 行）：19 章节库（id/中文标题/英文标题/purpose/contentSpec 3-5 条/dataHints/figureHint/fixed 位/250-500 字）；`getSection()` + `outlineRules()`（5-9 章；summary 固定首章、question_focus 固定第 2 章、references 倒数第二、conclusion 末章；中间按相关性 2-6 个；无重复）。references 列表章字数豁免（40-2000）。
+- `src/lib/eval-dsh/collect.ts`（424 行）：`collectEvaluationData()` 镜像经典收集（复用共享 lib：fetchUniprotMeta/fetchPdbIdsForUniprot/fetchPdbEntryDetails/fetchUniprotSequence+runBlast/efetch，不重复实现 HTTP 客户端）；进度 4-56%（uniprot-meta 4-10 → rcsb-pdbs 12-28 → blast 30-44 → score 45-46 → pubmed 46-56）；启发式 coverage=min(100, n*5)；BLAST 自动判定 directPdbCount<5 || coverage<50（forceBlast/skipBlast 覆盖）；评分 min(10, round(sqrt(n)*2)) 同经典公式；文献按 IF 降序 top-N + 200 字摘要（backfillPubMedArticles/IF 补齐复刻经典 Round 49 语义，本地实现因经典版未导出）；持久化 raw-SQL upsert Evaluation（report 留 null 由 Phase F 回写）+ delete/insert EvaluationPdbStructure + EvaluationBlastResult（by pdbId 去重、isParalog ≥95%）。上限 PDB≤200/BLAST≤100/lit≤200。
+- `src/lib/eval-dsh/figures.ts`（343 行）：`ReportFigure` 接口；`collectRcsbFigures` 选 ≤3 代表结构（配体优先 + 分辨率升序）→ HEAD 10s 预检 CDN `structures/<id>_assembly-1.jpeg`；配图挂靠章节按内容挑最匹配（本轮修正：配体结构→ligand_binding、complex 标题→interactions、否则 structure_quality、兜底 pdb_analysis）；`searchWebFigures` ≤2 query，z-ai CLI execFile（150s、无 shell 注入面）→ 每 query ≤4 张候选 → 下载（≤6MB image/* 20s）→ base64 dataUri → createVision 55s + 1 重试（严格中文 JSON 判官：原理图/通路图/机制图才算 relevant）→ 全报告最多 2 张 web 图通过（宁缺毋滥）；CLI/SDK/下载任一失败只 emit warn 绝不 throw。
+- `src/lib/eval-dsh/agent.ts`（747 行）：`runDshEvaluation` 六阶段编排（全部 LLM 走 generateText，sessionId `dsh-<uniprot>-<ts>`；JSON 一律鲁棒提取：剥 ```json 围栏 + 平衡花括号扫描 + 1 次「只输出 JSON」修复重试）——A 收集（→56%）；B 相关性（58-62%，system=严谨生物信息数据分析师，user=问题+紧凑摘要 → `{questionRestated, findings[], keyInsights[], dataGaps[], figureQueries[0-2 英文]}`，emit dshRelevance）；C 大纲（62-64%，system=格式稳定规则+全章节库清单 → `{sections:[{id,focus}]}`，本地修复器丢未知 id/去重/强制位/clamp 9，emit dshOutline）；D 配图（64-72%）；E 逐章撰写（72-96% 均匀铺开：writer persona system + 全局格式约束（H2=精确中文标题、开头 1-2 句小结、250-500 字、§N.M 三级小节、禁 emoji、只用给定数据、引用 PDB/PMID、配图单独一行嵌入）；user=按 dataHints 过滤的数据上下文+问题+contentSpec+focus+可用配图；校验 ≥150 字符+含标题+非占位符（本轮加宽：任何 `_(…)_` 失败占位符都拒）+标题层级规范化；≤2 重试 + 1 次 rescue 简化 prompt；事件 chapter-<id> / chapter_done（本轮修正：done 事件 stage 统一 `chapter_done` 对齐经典管线与客户端 StreamEvent.chapter 契约，补 chapter/chapterError/chapterDurationMs 字段）；失败章节记录不致命；F 组装（96-100%：报告头 `# 蛋白名（uniprot）靶点评估报告 — DSH 模式` + `> 科学问题：…` + 各章 + `## 附：报告配图` gallery；`db.skillEvaluationReport.create`（mode:'dsh' + outline/figures JSON）+ raw-SQL UPDATE Evaluation.report+provenance-lite）。
+- `src/app/api/evaluations/run-dsh/route.ts`（150 行）：POST、nodejs runtime、force-dynamic；入参校验（uniprot /^[A-Z0-9_]{3,10}$/i、question 8-1000 字 → 400 早退）；clamp（maxPdb 80/200、maxBlastHits 50/100、maxLitCount 20/200）；applySchemaCompat 幂等迁移；sseStream+withLog NDJSON；done 载荷含 mode/relevance/outline/figures/report{ok,provider,model,durationMs,contentChars,content,chapters,chaptersOk,chaptersFailed}/scores/dbSaved/durationMs；SkillRunRecord raw-SQL（module 'eval'、summary `DSH：…`、details+resultJson、log NDJSON）best-effort；req.signal 全程透传。
+- Schema：schema-compat.ts 幂等 guarded ALTER（mode TEXT NOT NULL DEFAULT 'classic'、outline TEXT、figures TEXT，含 CREATE TABLE IF NOT EXISTS 新库路径同步）+ prisma/schema.prisma 三字段 + `bun run db:push`（输出 "already in sync"，Prisma Client v6.19.3 已含新列——create 持久化实证）。
+- `/api/eval-report-file/[uniprotId]`：GET 返回 mode/outline/figures（JSON.parse 容错、旧 Prisma client 或 NULL 时回退 'classic'/省略键，向后兼容）。
+- 验证（dev server 3000 已在跑，未另启）：
+  1. lint：scoped eslint（eval-dsh/ + run-dsh route + eval-report-file + schema-compat）0 error 0 warning；tsc 全项目 124 errors 与 R176/R177 基线完全一致（零新增、任务文件零错误）。
+  2. 冒烟（P69905 血红蛋白 α，问题「该蛋白作为小分子药物靶点的成药性如何？现有结构覆盖哪些状态？」，provider zai）：POST 200，2.7 分钟，54 progress + 1 done 帧；数据收集 80 PDB（BLAST 正确自动跳过：80≥5 且 coverage 100%）/overall 7/10/20 篇文献；relevance JSON 解析成功（dshRelevance：4 发现/3 洞察/4 缺口）；大纲 9 章（summary→question_focus→function→structure_quality→ligand_binding→druggability→risks→references→conclusion，question_focus 正确第 2 位）；配图 3 张 RCSB（7DY4 1.3Å/7DY3 1.4Å/6KA9 1.4Å，HEAD 验证过）+ 2 张 web VLM 通过（另 2 张被 VLM 以科学理由拒绝：β 亚基 2,3-BPG 图、波尔效应机制图 —— 判官严格性实证）+ web 上限 2 张正确生效；9/9 章全部生成（glm-4.6，报告 8814 chars），references 格式 `- [PMID] 标题 — 期刊 (年)` 精确匹配，structure_quality/druggability 章内正确内嵌配图。
+  3. DB（active = db/my-pdb-tracker.db，经 .hermes/db-config.json）：SkillEvaluationReport 新行 mode='dsh'、report 8814、outline 768（9 节 JSON 有效）、figures 1364（3 rcsb+2 web JSON 有效）、llmProvider zai/glm-4.6；Evaluation.report 8814 回写；EvaluationPdbStructure 80 行；SkillRunRecord module=eval、summary「DSH：Hemoglobin subunit alpha · 80 PDB · overall=7/10 · 9/9 章 · LLM ✓」、log 21818 chars NDJSON。
+  4. eval-report-file/P69905 → 200，mode 'dsh' + outline/figures 解析返回；非法 uniprot/question 各得 400。
+- 环境备注：sandbox 无 sqlite3 CLI → 用 bun:sqlite 等价验证；`db:push` 目标是 .env 的 custom.db，而运行时 active DB（my-pdb-tracker.db）经 route 入口 applySchemaCompat 拿到同样三列（两库均已验证含 mode/outline/figures）。
+
+Stage Summary:
+- DSH 模式后端全链路交付并实证：问题驱动的 agent 评估（相关性分析 → 动态 5-9 章大纲 → RCSB+web 配图 VLM 校验 → 逐章流式撰写 → 组装持久化），SSE 契约（dshRelevance/dshOutline/dshFigure/chapter-<id>/chapter_done/done 载荷）与客户端 useRunStream 兼容；经典 /api/evaluations/run 零改动并行共存。
+- 新增 5 文件（section-library 363 / collect 424 / figures 343 / agent 747 / route 150 行）+ 修改 3 文件（schema-compat +18、prisma schema +5、eval-report-file +34）；lint/tsc 零新增；真实冒烟 9/9 章、5 配图、DB 三表 + SkillRunRecord 全部落库。
+- 对 Task 2-b（前端）：SSE 事件契约与 done 载荷结构已记录于 agent-ctx/2-a-full-stack-developer.md；round-tag `// R179 (Task 2-a):` 贯穿注释。
+
+---
+Task ID: R179-main
+Agent: main
+Task: DSH 模式（问题驱动 agent 评估）全链路交付 + git 历史核查 + 集成验证
+
+Work Log:
+- Git 历史核查：远程 origin/main 无丢失（R173-R178 完整）；本地 .git 被沙箱快照回退到 R173-amend（867ec87），与已推送 7ec2e56 仅差 mode 位+1 行，无实质丢失 → git reset --hard origin/main 恢复到 f4e1fb9 (R178)。远程 feat/tool-calling-agent 为旧分支（8/14），已完全包含于 main。
+- Task 2-a（后端子代理）：src/lib/eval-dsh/（section-library 363 行 19 章节库 / collect 424 行镜像经典采集 / figures 343 行 RCSB CDN 图 + z-ai CLI image-search + VLM 严格判官 / agent 747 行六阶段编排）+ /api/evaluations/run-dsh SSE 路由 + SkillEvaluationReport 新增 mode/outline/figures 列（schema-compat 幂等 ALTER + prisma + db:push）+ eval-report-file 返回 DSH 元数据。
+- Task 2-b（前端子代理）：settings-run-panel 评估 Tab 模式切换（经典/DSH 药丸）+ 科学问题输入（必填校验/字数计数）+ DshRelevanceCard/DshOutlineCard/DshFiguresStrip 三卡片 + StageTimeline 双语新阶段标签 + ChapterStream 适配 DSH 章节 + LLMPreview 配图画廊；markdown-renderer 支持 ![alt](https) 内嵌图（https-only 白名单 + stash/restore 防 autolink 破坏）；lazy-markdown img 组件覆写；pdb-tracker 评估详情 Report/Summary Tab 渲染大纲卡+画廊；i18n zh/en 各 19 键。
+- 主线修复：figures.ts 内存加固（4GB 沙箱 OOM 实测修复）——图片上限 6MB→3MB、下载前 content-length 预检、VLM 候选 4→3 张/query；dev server 在浏览器+编译高 RSS 时被 OOM 杀死的运行改为 curl 直连验证。
+- 集成验证：scoped eslint 全部改动文件 0 error 0 warning；curl 完整跑通两次新问题运行（变异问题：9/9 章 8593 字符、3 张 RCSB 图、web 图 0 张通过=宁缺毋滥生效）；浏览器 E2E：Run Center DSH 药丸切换/空问题校验（role=alert）/运行历史 4 条 DSH 记录/日志回放完整 NDJSON；评估详情 Report Tab：9 章大纲卡 + 12 张 img.dsh-report-figure 全部加载 + 画廊 6 缩略图；浏览器 0 错误、dev.log 干净。
+- 关键特性实证：大纲随科学问题变化——成药性问题选出 summary/question_focus/function/structure_quality/ligand_binding/druggability/risks/references/conclusion，变异问题选出 summary/question_focus/function/topology/structure_quality/variants/ligand_binding/references/conclusion（中间章节按相关性从 19 章节库选取）。
+
+Stage Summary:
+- DSH 模式端到端交付：输入 UniProt ID + 科学问题 → 数据收集（方式不变）→ agent 相关性分析（dshRelevance）→ 从 19 章节库规划 5-9 章大纲（dshOutline，格式约束防漂移）→ RCSB 结构图 + web 原理/通路图（z-ai image-search + VLM 验证，宁缺毋滥，上限 2 张）→ 逐章流式撰写（chapter/chapter_done SSE）→ 报告含内嵌配图持久化（SkillEvaluationReport mode='dsh' + outline/figures JSON）。
+- 经典管线零改动并行共存；新增 5 文件 + 修改 11 文件；lint 零新增；4 次真实全链路运行全部成功（3 次后端冒烟 + 1 次变异问题验证）。

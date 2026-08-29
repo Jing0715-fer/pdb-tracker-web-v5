@@ -60,6 +60,18 @@ function renderInline(text: string): string {
   // Escape first, then apply inline markdown on the safe string. Order matters:
   // bold/italic/code replacements should not be re-escaped.
   let s = escapeHtml(text);
+  // R179 (Task 2-b): images `![alt](url)` — DSH reports embed figures inline.
+  // SECURITY: only absolute https:// URLs survive; anything else is dropped
+  // (keeping the alt text as italic). The tag is stashed behind a \u0002
+  // placeholder so the auto-link pass below cannot corrupt the src attribute.
+  const imgStash: string[] = [];
+  s = s.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
+    (_m, alt: string, url: string) => {
+      imgStash.push(renderImageHtml(alt, url));
+      return `\u0002${imgStash.length - 1}\u0002`;
+    }
+  );
   // Inline code: `code`
   s = s.replace(
     /`([^`]+)`/g,
@@ -74,8 +86,34 @@ function renderInline(text: string): string {
     /(https?:\/\/[^\s<]+)/g,
     '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#c96442;text-decoration:underline;">$1</a>'
   );
+  // R179 (Task 2-b): restore stashed image tags (post auto-link, so their
+  // src URLs were never exposed to the linker).
+  s = s.replace(/\u0002(\d+)\u0002/g, (_m, i: string) => imgStash[parseInt(i, 10)] ?? '');
   return s;
 }
+
+/**
+ * R179 (Task 2-b): build a figure <img> tag from (already-escaped) alt + url.
+ *
+ * SECURITY allowlist: only `https://` URLs are emitted; http:/data:/javascript:
+ * etc. are dropped and the alt text is kept as a muted italic instead (so the
+ * reader at least sees the intended caption). Both inputs MUST already be
+ * HTML-escaped (via escapeHtml) — attribute injection is impossible because
+ * `"` / `<` / `>` / `&` are all entity-encoded by then.
+ */
+function renderImageHtml(escapedAlt: string, escapedUrl: string): string {
+  if (/^https:\/\//i.test(escapedUrl)) {
+    return `<img src="${escapedUrl}" alt="${escapedAlt}" loading="lazy" class="dsh-report-figure" style="${FIGURE_IMG_STYLE}" />`;
+  }
+  return escapedAlt
+    ? `<em style="font-size:13px;color:#6b5d4f;">${escapedAlt}</em>`
+    : '';
+}
+
+// R179 (Task 2-b): DSH report figure styling — mirrors the in-app thumbnail
+// card look (rounded, hairline border, block layout, responsive width).
+const FIGURE_IMG_STYLE =
+  'max-width:100%;height:auto;border-radius:0.5rem;border:1px solid rgba(128,128,128,0.25);margin:0.75rem 0;display:block;';
 
 const TABLE_TH_STYLE =
   'background:#f5f0ea;font-weight:600;text-align:left;padding:8px 12px;border-bottom:2px solid #e8e4dd;word-break:break-word;overflow-wrap:anywhere;';
@@ -281,6 +319,35 @@ export function renderMarkdownToHtml(md: string): MarkdownRenderResult {
     // Horizontal rule
     if (/^---+\s*$/.test(line)) {
       out.push('<hr style="border:0;border-top:1px solid #e8e4dd;margin:20px 0;"/>');
+      i++;
+      continue;
+    }
+    // R179 (Task 2-b): blockquote `> …` lines — DSH reports open with a
+    // `> 科学问题：…` quote under the title. Previously these rendered as a
+    // literal "&gt;" paragraph; now consecutive `>` lines collapse into a
+    // proper styled <blockquote>. Lines that merely CONTAIN `>` (e.g. the
+    // auto-link pass) are unaffected — only line-start markers match.
+    const bq = line.match(/^>\s?(.*)$/);
+    if (bq) {
+      const bqLines: string[] = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^>\s?(.*)$/);
+        if (!m) break;
+        bqLines.push(m[1]);
+        i++;
+      }
+      out.push(
+        `<blockquote style="margin:10px 0;padding:8px 14px;border-left:3px solid #d4c4b0;background:#f8f5f1;border-radius:0 6px 6px 0;color:#6b5d4f;font-size:13px;line-height:1.65;">${renderInline(bqLines.join(' ').trim())}</blockquote>`
+      );
+      continue;
+    }
+    // R179 (Task 2-b): standalone image line `![alt](url)` — DSH reports emit
+    // one figure per line between chapter paragraphs. renderInline also
+    // handles inline occurrences, but the block pass gives clean block-level
+    // <img> markup (no surrounding <p>) for the common case.
+    const imgBlock = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$/);
+    if (imgBlock) {
+      out.push(renderImageHtml(escapeHtml(imgBlock[1]), escapeHtml(imgBlock[2])));
       i++;
       continue;
     }
@@ -568,14 +635,20 @@ export function sanitizeReport(md: string): string {
     } else {
       // Find the last sentence-terminal punctuation. If the cut would
       // discard more than half the document, just append `…` instead.
-      const lastPeriod = sClean.lastIndexOf('。');
-      const lastExcl = sClean.lastIndexOf('！');
-      const lastQ = sClean.lastIndexOf('？');
-      const lastEn = sClean.lastIndexOf('!');
-      const lastQn = sClean.lastIndexOf('?');
-      const lastClose = sClean.lastIndexOf('】');
-      const candidates = [lastPeriod, lastExcl, lastQ, lastEn, lastQn, lastClose]
-        .filter((p) => p > 0);
+      // R179 (Task 2-b): image-aware scan — `![` opens a markdown image and
+      // its ASCII `!` must NOT count as a sentence terminator, otherwise a
+      // truncated trailing paragraph cuts the report back to the last
+      // embedded figure, silently deleting everything after it.
+      const lastTerminator = (() => {
+        for (let p = sClean.length - 1; p > 0; p--) {
+          const ch = sClean[p];
+          if (ch === '。' || ch === '！' || ch === '？' || ch === '】') return p;
+          if (ch === '!' && sClean[p + 1] !== '[') return p;
+          if (ch === '?') return p;
+        }
+        return -1;
+      })();
+      const candidates = lastTerminator > 0 ? [lastTerminator] : [];
       if (candidates.length === 0) {
         s = sClean.trimEnd() + '…\n';
       } else {
@@ -756,6 +829,16 @@ export function renderMarkdownToFullPage(
       font-size: 13px;
     }
     hr { border: 0; border-top: 1px solid #e8e4dd; margin: 20px 0; }
+    /* R179 (Task 2-b): DSH report figures — inline-style twins of the in-app
+       .dsh-report-figure look (kept here for the standalone HTML export). */
+    img.dsh-report-figure {
+      max-width: 100%;
+      height: auto;
+      border-radius: 0.5rem;
+      border: 1px solid rgba(128, 128, 128, 0.25);
+      margin: 0.75rem 0;
+      display: block;
+    }
     code {
       background: #f5f0ea;
       padding: 1px 4px;

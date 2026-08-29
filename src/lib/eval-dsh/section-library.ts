@@ -1,0 +1,363 @@
+// src/lib/eval-dsh/section-library.ts
+//
+// R179 (Task 2-a): DSH 模式（DeepSeek-Harness-inspired agent mode）章节库。
+//
+// 经典管线（/api/evaluations/run）使用固定 8 章报告模板；DSH 模式改为
+// 「agent 先分析所有数据源 → 按相关性规划 5-9 章大纲 → 逐章撰写」。
+// 本文件是章节的唯一事实来源（single source of truth）：
+//   - 大纲规划器（agent.ts Phase C）读取 id/中文标题/purpose 来选章节；
+//   - 逐章撰写器（agent.ts Phase E）读取 contentSpec/min-max words 来约束
+//     每章内容与字数；
+//   - 前端（Task 2-b）通过 SSE dshOutline 事件拿到同样的 id/title。
+//
+// 与经典模板的 REPORT_OUTLINE_ZH 不同，这里 fixed:'first'/'last-1'/'last'
+// 标记了强制位置章节（summary 永远第一、references 永远倒数第二、
+// conclusion 永远最后），中间章节按与科学问题的相关性选取。
+
+/** 数据源提示 —— 决定逐章撰写时把哪些数据块放进该章的 user prompt。 */
+export type DataHint = 'uniprot' | 'rcsb' | 'blast' | 'literature' | 'scores';
+
+export interface SectionTemplate {
+  /** 章节库内唯一 id（大纲规划器只允许输出这些 id）。 */
+  id: string;
+  /** 章节中文标题 —— H2 标题必须精确使用该字符串（格式稳定性约束）。 */
+  titleZh: string;
+  /** 英文标题（供日志 / 调试 / 前端 fallback）。 */
+  titleEn: string;
+  /** 一句话写作目的（给大纲规划器看，帮助它判断相关性）。 */
+  purpose: string;
+  /** 3-5 条内容要求（给逐章撰写器看的 bullet 清单）。 */
+  contentSpec: string;
+  /** 该章允许引用的数据源（过滤共享数据上下文）。 */
+  dataHints: Array<DataHint>;
+  /** 配图建议（提示大纲规划器 / 配图阶段该章适合什么图）。 */
+  figureHint?: string;
+  /** 强制位置：首章 / 倒数第二章 / 末章。未标记的章节为可选中间章节。 */
+  fixed?: 'first' | 'last-1' | 'last';
+  /** 正文最少字数（references 章豁免）。 */
+  minWords: number;
+  /** 正文最多字数（references 章豁免）。 */
+  maxWords: number;
+}
+
+/**
+ * R179 (Task 2-a): 精选章节库 —— 19 个章节。
+ * id 必须保持稳定（持久化在 SkillEvaluationReport.outline JSON 里，
+ * 前端也依赖这些 id 渲染），新增章节只能 append，不能改名。
+ */
+export const SECTION_LIBRARY: SectionTemplate[] = [
+  {
+    id: 'summary',
+    titleZh: '执行摘要',
+    titleEn: 'Executive Summary',
+    purpose: '用 2-3 句话直接回答用户提出的科学问题，并给出关键数字与总体结论。',
+    contentSpec: [
+      '- 第一句：重述问题并给出明确结论（可回答 / 部分可回答 / 数据不足）',
+      '- 引用关键数字：直接 PDB 数、最高分辨率、Overall 评分、最高 IF 文献',
+      '- 结尾一句话给出推荐的下一步方向',
+    ].join('\n'),
+    dataHints: ['uniprot', 'rcsb', 'blast', 'literature', 'scores'],
+    fixed: 'first',
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'question_focus',
+    titleZh: '问题聚焦与评估范围',
+    titleEn: 'Question Focus & Evaluation Scope',
+    purpose: '重述科学问题，界定本次评估 consulted 了哪些数据、哪些在/不在范围内、问题可回答度如何。',
+    contentSpec: [
+      '- 逐字重述用户的科学问题，并解释其中关键术语的评估口径',
+      '- 列出本次实际查询的数据源（UniProt / RCSB / BLAST / PubMed / 评分）与各自规模',
+      '- 明确说明哪些问题超出本次数据范围（如临床数据、专利、竞品管线）',
+      '- 给出可回答度评级（高/中/低）及理由',
+    ].join('\n'),
+    dataHints: ['uniprot', 'rcsb', 'blast', 'literature', 'scores'],
+    // R179 (Task 2-a): DSH 模式强制章节 —— 永远位于第 2 位（大纲修复器 force-insert）。
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'function',
+    titleZh: '靶点功能与生物学背景',
+    titleEn: 'Target Function & Biological Background',
+    purpose: '概述靶点的核心生物学功能、调控机制与疾病关联。',
+    contentSpec: [
+      '- 基于蛋白名 / 基因名 / 物种描述核心功能与所属蛋白家族',
+      '- 说明已知的调控机制（翻译后修饰、剪接变体、激活/失活开关）',
+      '- 关联的疾病与生理过程（引用文献标题/摘要中的证据）',
+    ].join('\n'),
+    dataHints: ['uniprot', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'pathway',
+    titleZh: '信号通路与调控网络',
+    titleEn: 'Signaling Pathway & Regulatory Network',
+    purpose: '描述靶点所在的信号通路、上下游调控关系与网络位置。',
+    contentSpec: [
+      '- 描述靶点所在的主要信号通路及其在通路中的位置（上游/下游/枢纽）',
+      '- 列出已知的上游激活因子与下游效应分子',
+      '- 讨论通路层面的代偿/冗余对成药性的影响',
+    ].join('\n'),
+    dataHints: ['uniprot', 'literature'],
+    figureHint: '信号通路示意图',
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'topology',
+    titleZh: '序列特征与拓扑结构',
+    titleEn: 'Sequence Features & Topology',
+    purpose: '分析序列长度、跨膜区/信号肽等拓扑特征与二级结构倾向。',
+    contentSpec: [
+      '- 基于序列长度与已知结构推断整体拓扑（球状/膜蛋白/纤维状）',
+      '- 说明信号肽、跨膜螺旋、二硫键、无序区等关键序列特征',
+      '- 讨论拓扑对可表达性/可结晶性的影响',
+    ].join('\n'),
+    dataHints: ['uniprot', 'rcsb'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'domains',
+    titleZh: '结构域与关键位点',
+    titleEn: 'Domains & Key Sites',
+    purpose: '解析结构域划分、催化/结合位点等关键功能位点。',
+    contentSpec: [
+      '- 列出主要结构域及其大致边界与功能',
+      '- 标注催化残基、结合口袋、翻译后修饰位点等关键位点',
+      '- 结合 PDB 结构说明哪些位点已有结构证据覆盖',
+    ].join('\n'),
+    dataHints: ['uniprot', 'rcsb', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'pdb_analysis',
+    titleZh: '现有 PDB 结构资源',
+    titleEn: 'Existing PDB Structure Resources',
+    purpose: '盘点 RCSB 直接命中的 PDB 结构资源：方法学分布、代表性结构与配体覆盖。',
+    contentSpec: [
+      '- 统计 X-ray / Cryo-EM / NMR 结构数量与占比（引用具体数字）',
+      '- 列出 3-5 个代表性结构（PDB ID + 方法 + 分辨率 + 配体）',
+      '- 指出尚未覆盖的构象状态/区域（研究空白）',
+    ].join('\n'),
+    dataHints: ['rcsb', 'scores'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'structure_quality',
+    titleZh: '代表性结构质量评估',
+    titleEn: 'Representative Structure Quality',
+    purpose: '评估代表性结构的分辨率、方法学质量与适用场景。',
+    contentSpec: [
+      '- 按分辨率排序评述最佳结构（PDB ID + 分辨率 + 方法）',
+      '- 讨论配体结合态 vs apo 态结构对药物设计的可用性差异',
+      '- 给出「该用哪个结构做什么」的具体建议',
+    ].join('\n'),
+    dataHints: ['rcsb', 'scores'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'ligand_binding',
+    titleZh: '配体结合与口袋特征',
+    titleEn: 'Ligand Binding & Pocket Features',
+    purpose: '分析已解析的配体、结合口袋特征与可药性线索。',
+    contentSpec: [
+      '- 列出 PDB 结构中出现的配体（引用数据表中 ligands 字段）',
+      '- 讨论配体结合位点的保守性与口袋特征（深/浅、疏水/极性）',
+      '- 评估内源性配体/辅因子对抑制剂设计的启示',
+    ].join('\n'),
+    dataHints: ['rcsb', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'interactions',
+    titleZh: '分子相互作用与复合物',
+    titleEn: 'Molecular Interactions & Complexes',
+    purpose: '描述蛋白-蛋白/蛋白-核酸相互作用与已解析复合物。',
+    contentSpec: [
+      '- 列出已解析的复合物结构（同源二聚/异源复合/蛋白-核酸）',
+      '- 讨论关键互作界面与热点残基（引用文献证据）',
+      '- 评估互作界面作为药物靶点的可行性',
+    ].join('\n'),
+    dataHints: ['rcsb', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'variants',
+    titleZh: '变异、突变与疾病关联',
+    titleEn: 'Variants, Mutations & Disease Associations',
+    purpose: '综合已知突变/变异及其功能与疾病关联证据。',
+    contentSpec: [
+      '- 列出文献与结构中出现的疾病相关突变（引用 PMID）',
+      '- 讨论突变对结构/功能/结合的影响机制',
+      '- 说明变异证据对靶点选择的启示',
+    ].join('\n'),
+    dataHints: ['uniprot', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'expression',
+    titleZh: '组织表达与亚细胞定位',
+    titleEn: 'Tissue Expression & Subcellular Localization',
+    purpose: '总结组织表达谱与亚细胞定位对成药性与给药策略的影响。',
+    contentSpec: [
+      '- 描述靶点的亚细胞定位（膜表面/胞内/分泌）与可达性',
+      '- 综述组织表达谱证据（引用文献）',
+      '- 讨论表达模式对适应症选择与毒性的影响',
+    ].join('\n'),
+    dataHints: ['uniprot', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'homology',
+    titleZh: '同源蛋白与进化保守性',
+    titleEn: 'Homologs & Evolutionary Conservation',
+    purpose: '基于 BLAST 同源结果分析直系/旁系同源与保守性。',
+    contentSpec: [
+      '- 统计 BLAST 同源命中（总数、identity 分布、≥95% 的近缘同源数）',
+      '- 讨论关键残基/口袋的跨物种保守性（引用 identity 数据）',
+      '- 评估旁系同源选择性抑制的风险（脱靶可能性）',
+    ].join('\n'),
+    dataHints: ['blast'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'druggability',
+    titleZh: '成药性评估',
+    titleEn: 'Druggability Assessment',
+    purpose: '综合评估靶点作为小分子/生物药靶点的成药性。',
+    contentSpec: [
+      '- 给出成药性总评（适合小分子 / 适合生物药 / 困难靶点）及理由',
+      '- 结合口袋特征、配体证据与评分数据论证',
+      '- 对标同类已上市/在研药物的先例（仅引用给定文献，不编造）',
+    ].join('\n'),
+    dataHints: ['rcsb', 'scores', 'literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'experimental',
+    titleZh: '实验策略建议',
+    titleEn: 'Experimental Strategy Recommendations',
+    purpose: '针对用户的科学问题给出下一步实验策略建议。',
+    contentSpec: [
+      '- 推荐结构生物学实验路线（表达构建 / 方法选择 / 时间预估）',
+      '- 推荐验证实验（结合/活性/细胞实验）与关键读出',
+      '- 指出最关键的实验风险与规避方案',
+    ].join('\n'),
+    dataHints: ['rcsb', 'scores', 'blast'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'literature',
+    titleZh: '关键文献证据综合',
+    titleEn: 'Key Literature Evidence Synthesis',
+    purpose: '按主题综合最高证据等级的文献（高 IF 优先），而非逐篇罗列。',
+    contentSpec: [
+      '- 按主题（机制/结构/药理/疾病）归类综合文献证据',
+      '- 每条证据引用 PMID 与期刊（含 IF）',
+      '- 指出文献证据之间的矛盾或空白',
+    ].join('\n'),
+    dataHints: ['literature'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'risks',
+    titleZh: '风险与不确定性',
+    titleEn: 'Risks & Uncertainties',
+    purpose: '如实列出本次评估的数据局限、结论不确定性与主要风险。',
+    contentSpec: [
+      '- 列出数据层面的局限（结构覆盖空白、文献偏倚、评分启发式）',
+      '- 说明哪些结论是推断而非直接证据',
+      '- 给出降低不确定性的建议动作',
+    ].join('\n'),
+    dataHints: ['uniprot', 'rcsb', 'blast', 'literature', 'scores'],
+    minWords: 250,
+    maxWords: 500,
+  },
+  {
+    id: 'references',
+    titleZh: '参考文献',
+    titleEn: 'References',
+    purpose: '以固定列表格式给出本报告引用的文献。',
+    contentSpec: [
+      '- 列表格式：`- [PMID] 标题 — 期刊 (年)`，每行一条',
+      '- 只引用数据上下文中真实存在的 PMID',
+      '- 按重要性排序（与用户问题最相关 / IF 最高优先）',
+    ].join('\n'),
+    dataHints: ['literature'],
+    fixed: 'last-1',
+    // R179 (Task 2-a): references 是列表章，字数约束豁免（允许更短/更长）。
+    minWords: 40,
+    maxWords: 2000,
+  },
+  {
+    id: 'conclusion',
+    titleZh: '总结与展望',
+    titleEn: 'Conclusion & Outlook',
+    purpose: '收束全报告：核心结论、对用户问题的最终回答与展望。',
+    contentSpec: [
+      '- 2-3 句核心结论（直接回答科学问题）',
+      '- 一句话概括最大优势与最大风险',
+      '- 展望 6-12 个月内最有价值的一个行动',
+    ].join('\n'),
+    dataHints: ['uniprot', 'rcsb', 'blast', 'literature', 'scores'],
+    fixed: 'last',
+    minWords: 250,
+    maxWords: 500,
+  },
+];
+
+/** 按 id 查章节模板；未知 id 返回 undefined。 */
+export function getSection(id: string): SectionTemplate | undefined {
+  return SECTION_LIBRARY.find((s) => s.id === id);
+}
+
+/**
+ * 大纲规则（给大纲规划 LLM 的 system prompt 片段 + 本地修复器的依据）。
+ * R179 (Task 2-a): question_focus 在 DSH 模式下为强制章节（位置 2）。
+ */
+export interface OutlineRules {
+  totalMin: number;
+  totalMax: number;
+  mandatoryFirst: string;
+  mandatorySecond: string;
+  mandatoryTail: string[];
+  /** 可选中间章节池（19 - 4 个强制位）。 */
+  optionalIds: string[];
+  formatStability: string[];
+}
+
+export function outlineRules(): OutlineRules {
+  return {
+    totalMin: 5,
+    totalMax: 9,
+    mandatoryFirst: 'summary',
+    // DSH 模式特有：问题聚焦章强制第 2 位。
+    mandatorySecond: 'question_focus',
+    mandatoryTail: ['references', 'conclusion'],
+    optionalIds: SECTION_LIBRARY
+      .filter((s) => !s.fixed && s.id !== 'question_focus')
+      .map((s) => s.id),
+    formatStability: [
+      '总章节数 5-9：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion',
+      '中间章节只能从章节库的 optional id 中按与科学问题的相关性选取 2-6 个',
+      '同一章节不得重复出现；章节顺序一经确定不再改变',
+      '每章 H2 标题必须精确使用章节库的中文章节名（一字不差）',
+      '不得发明章节库之外的章节 id 或标题',
+    ],
+  };
+}

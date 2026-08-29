@@ -46,10 +46,11 @@ export interface CompatColumnDef {
   column: string
   /** SQLite type clause (`INTEGER`, `TEXT`, `REAL`, …). */
   type: 'INTEGER' | 'TEXT' | 'REAL' | 'BLOB' | 'BOOLEAN'
-  /** Whether the column may be NULL. Always `true` for compat adds —
-   *  we never introduce a `NOT NULL` column without a default on an
-   *  existing table (would force a rewrite / table copy). */
-  nullable: true
+  /** Whether the column may be NULL. Normally `true` for compat adds —
+   *  the only exception is a NOT NULL column WITH a non-null DEFAULT
+   *  (e.g. R179's `mode TEXT NOT NULL DEFAULT 'classic'`), which SQLite
+   *  accepts on existing tables without a table copy. */
+  nullable: boolean
   /**
    * Produces the exact ALTER TABLE statement for this column. Parameterised
    * by the table name (we accept either the unquoted or already-quoted
@@ -162,6 +163,13 @@ export const COMPAT_COLUMNS: CompatColumnDef[] = [
   { table: 'SkillEvaluationReport', column: 'llmDurationMs',  type: 'INTEGER', nullable: true, alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "llmDurationMs" INTEGER` },
   { table: 'SkillEvaluationReport', column: 'filePath',       type: 'TEXT',    nullable: true, alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "filePath" TEXT` },
   { table: 'SkillEvaluationReport', column: 'createdAt',      type: 'TEXT',    nullable: true, alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "createdAt" TEXT` },
+  // R179 (Task 2-a): DSH 模式新增列 —— mode（'classic' | 'dsh'，非空带默认
+  // 值故可安全 ALTER）、outline（大纲 JSON）、figures（已验证配图 JSON）。
+  // 重复列错误不会发生：迁移循环先 PRAGMA table_info 检查再 ALTER（本文件
+  // 的既有守卫式 alter 惯用法）。
+  { table: 'SkillEvaluationReport', column: 'mode',    type: 'TEXT', nullable: false, alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "mode" TEXT NOT NULL DEFAULT 'classic'` },
+  { table: 'SkillEvaluationReport', column: 'outline', type: 'TEXT', nullable: true,  alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "outline" TEXT` },
+  { table: 'SkillEvaluationReport', column: 'figures', type: 'TEXT', nullable: true,  alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "figures" TEXT` },
   // ── WeeklyReportRun ──
   { table: 'WeeklyReportRun', column: 'weekId',       type: 'TEXT',    nullable: true, alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "weekId" TEXT` },
   { table: 'WeeklyReportRun', column: 'cycles',       type: 'INTEGER', nullable: true, alterSql: (t) => `ALTER TABLE ${t} ADD COLUMN "cycles" INTEGER` },
@@ -326,7 +334,7 @@ export async function applySchemaCompat(dbPath: string): Promise<SchemaCompatRes
     await ensureTableExists('LiteratureDigest',
       `CREATE TABLE IF NOT EXISTS "LiteratureDigest" ("id" TEXT NOT NULL PRIMARY KEY, "date" TEXT NOT NULL, "paperCount" INTEGER NOT NULL, "methodStats" TEXT, "digest" TEXT NOT NULL, "llmOk" INTEGER NOT NULL, "llmProvider" TEXT, "llmModel" TEXT, "llmDurationMs" INTEGER, "filePath" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
     await ensureTableExists('SkillEvaluationReport',
-      `CREATE TABLE IF NOT EXISTS "SkillEvaluationReport" ("id" TEXT NOT NULL PRIMARY KEY, "uniprotId" TEXT NOT NULL, "proteinName" TEXT, "overallScore" INTEGER NOT NULL, "directPdbCount" INTEGER NOT NULL, "coverage" INTEGER NOT NULL, "report" TEXT NOT NULL, "llmOk" INTEGER NOT NULL, "llmProvider" TEXT, "llmModel" TEXT, "llmDurationMs" INTEGER, "filePath" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
+      `CREATE TABLE IF NOT EXISTS "SkillEvaluationReport" ("id" TEXT NOT NULL PRIMARY KEY, "uniprotId" TEXT NOT NULL, "proteinName" TEXT, "overallScore" INTEGER NOT NULL, "directPdbCount" INTEGER NOT NULL, "coverage" INTEGER NOT NULL, "report" TEXT NOT NULL, "llmOk" INTEGER NOT NULL, "llmProvider" TEXT, "llmModel" TEXT, "llmDurationMs" INTEGER, "filePath" TEXT, "mode" TEXT NOT NULL DEFAULT 'classic', "outline" TEXT, "figures" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
     await ensureTableExists('WeeklyReportRun',
       `CREATE TABLE IF NOT EXISTS "WeeklyReportRun" ("id" TEXT NOT NULL PRIMARY KEY, "weekId" TEXT NOT NULL, "cycles" INTEGER NOT NULL, "reportTypes" TEXT NOT NULL, "providers" TEXT, "filesWritten" TEXT, "durationMs" INTEGER, "cyclesJson" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
     // Also ensure EvaluationBatch exists (added with batch mode; legacy DBs

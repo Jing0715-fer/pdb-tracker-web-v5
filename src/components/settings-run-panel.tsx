@@ -85,6 +85,12 @@ import {
   FolderOpen,
   Code,
   Columns2,
+  // R179 (Task 2-b): DSH 模式 — relevance / outline / figure card icons
+  ScanSearch,
+  ListTree,
+  Lightbulb,
+  Info,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DbSetupWizard, type DbStatus } from '@/components/db-setup-wizard';
@@ -131,6 +137,91 @@ interface RunLog {
   summary: string;
   details?: string;
   durationMs?: number;
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  R179 (Task 2-b): DSH 模式（问题驱动智能体）SSE 载荷类型                     */
+/*  Aligned with the /api/evaluations/run-dsh contract — progress events    */
+/*  carry `dshRelevance` / `dshOutline` / `dshFigure` extras that the       */
+/*  useRunStream hook forwards into state.log entries.                      */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+interface DshRelevanceFinding {
+  source: 'uniprot' | 'rcsb' | 'blast' | 'literature' | 'scores';
+  relevance: 'high' | 'medium' | 'low';
+  note: string;
+}
+
+interface DshRelevancePayload {
+  questionRestated: string;
+  findings: DshRelevanceFinding[];
+  keyInsights: string[];
+  dataGaps: string[];
+}
+
+interface DshOutlineSection {
+  id: string;
+  title: string;
+  focus: string;
+}
+
+interface DshOutlinePayload {
+  sections: DshOutlineSection[];
+  total: number;
+}
+
+interface DshFigurePayload {
+  kind: 'rcsb' | 'web';
+  url: string;
+  caption: string;
+  pdbId?: string;
+  source?: string;
+  sectionId: string;
+  status: 'searching' | 'verified' | 'rejected' | 'failed';
+  vlmReason?: string;
+}
+
+/** Extract + narrow a `dshRelevance` extra from a stream event (null-safe). */
+function asDshRelevance(v: unknown): DshRelevancePayload | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Partial<DshRelevancePayload>;
+  if (typeof o.questionRestated !== 'string' || !Array.isArray(o.findings)) return null;
+  return {
+    questionRestated: o.questionRestated,
+    findings: o.findings.filter((f) => f && typeof f.note === 'string'),
+    keyInsights: Array.isArray(o.keyInsights) ? o.keyInsights.filter((k) => typeof k === 'string') : [],
+    dataGaps: Array.isArray(o.dataGaps) ? o.dataGaps.filter((g) => typeof g === 'string') : [],
+  };
+}
+
+/** Extract + narrow a `dshOutline` extra from a stream event (null-safe). */
+function asDshOutline(v: unknown): DshOutlinePayload | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Partial<DshOutlinePayload>;
+  if (!Array.isArray(o.sections)) return null;
+  return {
+    sections: o.sections.filter((s) => s && typeof s.id === 'string' && typeof s.title === 'string'),
+    total: typeof o.total === 'number' ? o.total : o.sections.length,
+  };
+}
+
+/** Extract + narrow a `dshFigure` extra from a stream event (null-safe). */
+function asDshFigure(v: unknown): DshFigurePayload | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Partial<DshFigurePayload>;
+  if (typeof o.url !== 'string' || typeof o.caption !== 'string') return null;
+  return {
+    kind: o.kind === 'web' ? 'web' : 'rcsb',
+    url: o.url,
+    caption: o.caption,
+    pdbId: typeof o.pdbId === 'string' ? o.pdbId : undefined,
+    source: typeof o.source === 'string' ? o.source : undefined,
+    sectionId: typeof o.sectionId === 'string' ? o.sectionId : '',
+    status: o.status === 'verified' || o.status === 'rejected' || o.status === 'failed' || o.status === 'searching'
+      ? o.status
+      : 'searching',
+    vlmReason: typeof o.vlmReason === 'string' ? o.vlmReason : undefined,
+  };
 }
 
 const DEFAULT_LLM_CFG: LlmUserConfig = {
@@ -335,16 +426,45 @@ function StreamFeed({
 }
 
 /**
+ * R179 (Task 2-b): bilingual display labels for DSH-mode stages (and the
+ * shared `chapter` / `chapter_done` milestones). Unknown stages fall through
+ * unchanged — the timeline stays forward-compatible for future pipelines.
+ */
+function dshStageLabel(stage: string, locale: string): string {
+  const zh = locale === 'zh';
+  switch (stage) {
+    case 'relevance': return zh ? '相关性分析' : 'Relevance';
+    case 'outline': return zh ? '大纲规划' : 'Outline';
+    case 'figure-rcsb': return zh ? '配图·RCSB' : 'Figures·RCSB';
+    case 'figure-web': return zh ? '配图·Web' : 'Figures·Web';
+    case 'figures': return zh ? '配图检索' : 'Figures';
+    case 'assemble': return zh ? '报告组装' : 'Assemble';
+    case 'write-db': return zh ? '写入数据库' : 'Write DB';
+    case 'chapter': return zh ? '章节' : 'Chapters';
+    case 'chapter_done': return zh ? '章节完成' : 'Chapters done';
+    default: return stage;
+  }
+}
+
+/**
  * StageTimeline — a horizontal strip of milestone "chips" derived from the SSE
  * event stream. Collapses repeated stages (e.g. multiple `llm-digest` events)
  * into a single chip, colour-coding by the latest level seen for that stage.
  */
 function StageTimeline({ events }: { events: StreamEvent[] }) {
+  const { locale } = useI18n();
   // Build an ordered list of unique stages with their latest level + progress.
+  // R179 (Task 2-b): no stage whitelist here — unknown stages render as plain
+  // chips (forward-compatible). DSH-specific stages get bilingual display
+  // labels via dshStageLabel(), and DSH per-chapter stages (`chapter-<id>`, one
+  // per outline section) collapse into a single `chapter` chip so a 9-chapter
+  // DSH run doesn't spam 9 near-identical chips (mirrors classic, whose running
+  // events all use the literal stage `chapter`).
   const stageMap = new Map<string, { level?: string; progress?: number; count: number }>();
   const order: string[] = [];
   for (const e of events) {
-    const stage = e.stage || e.level || 'info';
+    const rawStage = e.stage || e.level || 'info';
+    const stage = /^chapter-.+/.test(rawStage) ? 'chapter' : rawStage;
     if (!stageMap.has(stage)) {
       stageMap.set(stage, { level: e.level, progress: e.progress, count: 1 });
       order.push(stage);
@@ -368,7 +488,7 @@ function StageTimeline({ events }: { events: StreamEvent[] }) {
             <div key={stage} className="flex items-center shrink-0">
               <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-claude-surface/80 dark:bg-[#242220]/80 border border-claude-border/40 dark:border-[#3d3832]/40">
                 <span className={`h-1.5 w-1.5 rounded-full ${dotColor} ${isLast && !info.level ? 'animate-pulse' : ''}`} />
-                <span className="text-3xs font-mono text-claude-text-muted dark:text-[#9b9590] whitespace-nowrap">{stage}</span>
+                <span className="text-3xs font-mono text-claude-text-muted dark:text-[#9b9590] whitespace-nowrap">{dshStageLabel(stage, locale)}</span>
                 {info.count > 1 && <span className="text-3xs text-muted-foreground/50">×{info.count}</span>}
               </div>
               {!isLast && <span className="text-muted-foreground/30 mx-0.5">→</span>}
@@ -397,6 +517,7 @@ function LLMPreview({
   dbSaved,
   chars,
   accent = 'cryoem',
+  figures,
 }: {
   content?: string;
   title: string;
@@ -409,10 +530,12 @@ function LLMPreview({
   dbSaved?: boolean;
   chars?: number;
   accent?: 'cryoem' | 'nmr' | 'xray' | 'accent' | 'emerald' | 'sky' | 'violet' | 'amber';
+  /** R179 (Task 2-b): DSH 模式 — 最终配图画廊（done 后渲染于 Markdown 正文之下）。 */
+  figures?: DshFigurePayload[];
 }) {
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
 
   // Failure case: no content but we have an error — show a failure card.
   const isFailure = ok === false || (fallback && !content);
@@ -536,6 +659,47 @@ function LLMPreview({
                 <LazyMarkdown>{content}</LazyMarkdown>
               </div>
             ) : null}
+            {/* R179 (Task 2-b): DSH 模式 — done 后的最终配图画廊（正文下方），
+                每张卡：缩略图 + 说明 + 来源/类型行。rejected 配图降透明度。 */}
+            {figures && figures.length > 0 && (
+              <div className="px-3 py-2 border-t border-claude-border/40 dark:border-[#3d3832]/40">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <ImageIcon className="h-3 w-3 text-claude-cryoem shrink-0" />
+                  <span className="text-3xs font-semibold uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">{t.evalDshFigures}</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {figures.map((f, i) => {
+                    const rejected = f.status === 'rejected' || f.status === 'failed';
+                    return (
+                      <div
+                        key={`${f.url}-${i}`}
+                        className={`rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
+                        title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
+                      >
+                        {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
+                        {/^https:\/\//i.test(f.url) ? (
+                          <img src={f.url} alt={f.caption} loading="lazy" className="h-28 w-full object-cover bg-muted/30" />
+                        ) : (
+                          <div className="h-28 w-full flex items-center justify-center bg-muted/30" aria-hidden="true">
+                            <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
+                          </div>
+                        )}
+                        <div className="p-1.5 space-y-0.5">
+                          <DshFigureStatusBadge
+                            status={f.status}
+                            label={{ searching: t.evalDshFigureSearching, verified: t.evalDshFigureVerified, rejected: t.evalDshFigureRejected }}
+                          />
+                          <p className="text-3xs text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
+                          <p className="text-4xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
+                            {f.kind}{f.source ? ` · ${f.source}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -1047,6 +1211,20 @@ function ChapterStream({
     experimental: 'Experimental Plan',
     references: 'Key References',
     conclusion: 'Conclusion',
+    // R179 (Task 2-b): DSH 章节库 id — 事件携带 chapterTitle（中文标题）时
+    // 优先用事件标题，这里仅作兜底（事件缺 chapterTitle 的旧流）。
+    question_focus: 'Question Focus（问题聚焦）',
+    pathway: 'Pathway Context（通路背景）',
+    domains: 'Domain Architecture（结构域）',
+    structure_quality: 'Structure Quality（结构质量）',
+    ligand_binding: 'Ligand Binding（配体结合）',
+    interactions: 'Interactions（相互作用）',
+    variants: 'Variants & Mutations（变异）',
+    expression: 'Expression & Purification（表达纯化）',
+    homology: 'Homology & Orthologs（同源）',
+    druggability: 'Druggability（成药性）',
+    literature: 'Literature（文献）',
+    risks: 'Risks & Caveats（风险）',
     // Weekly report chapters (A-H)
     A: 'A. 期刊趋势分析',
     B: 'B. 技术突破',
@@ -1089,6 +1267,14 @@ function ChapterStream({
         isDone = !!m[2];
       }
     }
+    // ── R179 (Task 2-b): DSH 逐章运行事件 ──
+    // DSH 管线以 `chapter-<sectionId>`（如 chapter-ligand_binding）标记章节
+    // 开始（完成事件仍是 chapter_done）。归入 primary 组，显示 running 行。
+    // 注意 chapter_done 用下划线，不会被该分支误匹配。
+    if (!groupKey && /^chapter-.+/.test(stage)) {
+      groupKey = 'primary';
+      isDone = false;
+    }
     // ── Weekly report method-specific chapters ──
     // The weekly route emits 'cryoem-chapter'/'cryoem-chapter_done' and
     // 'xray-chapter'/'xray-chapter_done'. Group them under method labels.
@@ -1116,6 +1302,10 @@ function ChapterStream({
     }
     const k = e.chapter as string;
     const cur = group.chapters.get(k) || { key: k, label: labels[k] || k, index: 0, total: 0, status: 'running' as const };
+    // R179 (Task 2-b): DSH 章节事件携带 chapterTitle（章节库中文标题）——
+    // 优先于 labels 兜底映射，让行标题与报告大纲一致。
+    const evTitle = (e as { chapterTitle?: unknown }).chapterTitle;
+    if (typeof evTitle === 'string' && evTitle.trim()) cur.label = evTitle.trim();
     if (!isDone) {
       cur.status = 'running';
       cur.index = (e.chapterIndex as number) ?? cur.index;
@@ -1268,6 +1458,253 @@ function ChapterStream({
         })}
       </div>
       )}
+    </motion.div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  R179 (Task 2-b): DSH 模式卡片 — 数据相关性 / 报告大纲 / 配图条              */
+/*  Styling mirrors ChapterStream: collapsible card, muted header, text-xs.  */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+/** Relevance level → Tailwind text color (high=emerald / medium=amber / low=muted). */
+function dshRelevanceColor(relevance: string): string {
+  if (relevance === 'high') return 'text-emerald-600 dark:text-emerald-400';
+  if (relevance === 'medium') return 'text-amber-600 dark:text-amber-400';
+  return 'text-muted-foreground';
+}
+
+/** 数据相关性分析卡 — renders the agent's question-restatement, per-source
+ *  relevance findings, key insights and data gaps from the `relevance` stage. */
+function DshRelevanceCard({ data }: { data: DshRelevancePayload }) {
+  const { t } = useI18n();
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-3 rounded-lg border border-claude-cryoem/40 bg-gradient-to-br from-claude-cryoem/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setCollapsed((v) => !v)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
+        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
+        aria-expanded={!collapsed}
+        aria-label="Collapse/Expand DSH relevance analysis card"
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <ChevronRight className={`h-3 w-3 text-claude-cryoem shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+          <ScanSearch className="h-3.5 w-3.5 text-claude-cryoem shrink-0" />
+          <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{t.evalDshRelevance}</span>
+          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem/10 text-claude-cryoem">
+            {data.findings.length} sources
+          </Badge>
+        </div>
+        <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
+      </div>
+      {!collapsed && (
+        <div className="p-3 space-y-2.5">
+          {/* Question restatement — italic quote */}
+          {data.questionRestated && (
+            <blockquote className="border-l-2 border-claude-cryoem/50 pl-2.5 text-xs italic text-claude-text-secondary dark:text-[#9b9590] leading-relaxed">
+              <span className="sr-only">{t.evalDshQuestionRestated}: </span>
+              {data.questionRestated}
+            </blockquote>
+          )}
+          {/* Per-source findings */}
+          {data.findings.length > 0 && (
+            <ul className="space-y-1" aria-label={t.evalDshRelevance}>
+              {data.findings.map((f, i) => (
+                <li key={`${f.source}-${i}`} className="flex items-start gap-1.5 text-xs leading-relaxed">
+                  <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 mt-0.5 uppercase border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-surface/60 dark:bg-[#242220]/60 text-claude-text-muted dark:text-[#9b9590]">
+                    {f.source}
+                  </Badge>
+                  <span className={`font-semibold shrink-0 mt-0.5 ${dshRelevanceColor(f.relevance)}`} title={f.relevance}>
+                    {f.relevance === 'high' ? '●●●' : f.relevance === 'medium' ? '●●○' : '●○○'}
+                  </span>
+                  <span className="text-claude-text/80 dark:text-[#e8e4dd]/80 min-w-0 break-words">{f.note}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Key insights */}
+          {data.keyInsights.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1 mb-1">
+                <Lightbulb className="h-3 w-3 text-claude-cryoem shrink-0" />
+                <span className="text-3xs font-semibold uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">{t.evalDshKeyInsights}</span>
+              </div>
+              <ul className="space-y-0.5">
+                {data.keyInsights.map((k, i) => (
+                  <li key={i} className="text-xs text-claude-text/80 dark:text-[#e8e4dd]/80 leading-relaxed flex gap-1.5">
+                    <span className="text-claude-cryoem shrink-0">·</span>
+                    <span className="min-w-0 break-words">{k}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {/* Data gaps */}
+          {data.dataGaps.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1 mb-1">
+                <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
+                <span className="text-3xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">{t.evalDshDataGaps}</span>
+              </div>
+              <ul className="space-y-0.5">
+                {data.dataGaps.map((g, i) => (
+                  <li key={i} className="text-xs text-claude-text/70 dark:text-[#e8e4dd]/70 leading-relaxed flex gap-1.5">
+                    <span className="text-amber-500 shrink-0">·</span>
+                    <span className="min-w-0 break-words">{g}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+/** 报告大纲卡 — numbered outline sections selected by the agent from the
+ *  section library (id + title + focus per section, total count badge). */
+function DshOutlineCard({ data }: { data: DshOutlinePayload }) {
+  const { t } = useI18n();
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-3 rounded-lg border border-claude-accent/40 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setCollapsed((v) => !v)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
+        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
+        aria-expanded={!collapsed}
+        aria-label="Collapse/Expand DSH outline card"
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <ChevronRight className={`h-3 w-3 text-claude-accent shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+          <ListTree className="h-3.5 w-3.5 text-claude-accent shrink-0" />
+          <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{t.evalDshOutline}</span>
+          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
+            {data.sections.length}/{data.total || data.sections.length}
+          </Badge>
+        </div>
+        <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
+      </div>
+      {!collapsed && (
+        <ol className="p-3 space-y-1.5 list-none" aria-label={t.evalDshOutline}>
+          {data.sections.map((s, i) => (
+            <li key={s.id || i} className="flex items-start gap-2">
+              <span className="text-xs font-mono font-semibold text-claude-accent shrink-0 mt-0.5 tabular-nums">{i + 1}.</span>
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-claude-text/90 dark:text-[#e8e4dd]/90 leading-snug break-words">{s.title}</div>
+                {s.focus && (
+                  <div className="text-3xs text-claude-text-muted dark:text-[#9b9590] leading-relaxed mt-0.5 break-words">{s.focus}</div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </motion.div>
+  );
+}
+
+/** 配图状态角标 — searching (spinner+amber) / verified (emerald) / rejected+failed (muted). */
+function DshFigureStatusBadge({ status, label }: { status: DshFigurePayload['status']; label: { searching: string; verified: string; rejected: string } }) {
+  if (status === 'searching') {
+    return (
+      <Badge variant="outline" className="text-4xs font-medium px-1.5 h-4 gap-1 rounded shrink-0 border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+        <Loader2 className="h-2 w-2 animate-spin" /> {label.searching}
+      </Badge>
+    );
+  }
+  if (status === 'verified') {
+    return (
+      <Badge variant="outline" className="text-4xs font-medium px-1.5 h-4 gap-1 rounded shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+        <CheckCircle2 className="h-2 w-2" /> {label.verified}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-4xs font-medium px-1.5 h-4 gap-1 rounded shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/40 dark:bg-[#2b2926]/40 text-claude-text-muted dark:text-[#9b9590]">
+      <XCircle className="h-2 w-2" /> {label.rejected}
+    </Badge>
+  );
+}
+
+/** 报告配图条 — horizontally-scrollable strip of figure thumbnails. Multiple
+ *  events per figure (searching → verified/rejected) are deduped by url with
+ *  latest status winning before reaching this component. */
+function DshFiguresStrip({ figures, done }: { figures: DshFigurePayload[]; done: boolean }) {
+  const { t } = useI18n();
+  const labels = { searching: t.evalDshFigureSearching, verified: t.evalDshFigureVerified, rejected: t.evalDshFigureRejected };
+  // Empty state only after the run finished with zero verified-or-pending figures.
+  if (figures.length === 0) {
+    if (!done) return null;
+    return (
+      <div className="mt-3 rounded-lg border border-dashed border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-3 py-3 flex items-center gap-2">
+        <Info className="h-3.5 w-3.5 text-claude-text-muted/60 dark:text-[#9b9590]/60 shrink-0" />
+        <p className="text-xs text-claude-text-muted dark:text-[#9b9590]">{t.evalDshFiguresEmpty}</p>
+      </div>
+    );
+  }
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-3 rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-bg/40 dark:bg-[#1a1917]/40 overflow-hidden"
+      aria-label={t.evalDshFigures}
+    >
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60">
+        <ImageIcon className="h-3.5 w-3.5 text-claude-cryoem shrink-0" />
+        <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{t.evalDshFigures}</span>
+        <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem/10 text-claude-cryoem">
+          {figures.filter((f) => f.status === 'verified').length}/{figures.length}
+        </Badge>
+      </div>
+      <div className="flex gap-2 overflow-x-auto thin-scroll p-2" role="list">
+        {figures.map((f, i) => {
+          const rejected = f.status === 'rejected' || f.status === 'failed';
+          return (
+            <div
+              key={`${f.url}-${i}`}
+              role="listitem"
+              className={`w-40 shrink-0 rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
+              title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
+            >
+              {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
+              {/^https:\/\//i.test(f.url) ? (
+                <img
+                  src={f.url}
+                  alt={f.caption}
+                  loading="lazy"
+                  className="h-24 w-full object-cover bg-muted/30"
+                />
+              ) : (
+                <div className="h-24 w-full flex items-center justify-center bg-muted/30" aria-hidden="true">
+                  <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
+                </div>
+              )}
+              <div className="p-1.5 space-y-1">
+                <DshFigureStatusBadge status={f.status} label={labels} />
+                <p className="text-3xs text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
+                <p className="text-4xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
+                  {f.kind}{f.pdbId ? ` · ${f.pdbId}` : ''}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </motion.div>
   );
 }
@@ -1499,6 +1936,42 @@ export function SettingsRunPanel({
   const updateEvalTarget = useCallback((idx: number, key: keyof EvalTarget, value: any) => {
     setEvalTargets(prev => prev.map((t, i) => i === idx ? { ...t, [key]: value } : t));
   }, []);
+
+  // R179 (Task 2-b): 评估流水线模式 — 'classic'（经典多靶点/序列评估）vs
+  // 'dsh'（问题驱动智能体：相关性分析 → 大纲规划 → 逐章撰写 + 配图）。
+  // Persisted like the other eval settings (default 'classic').
+  const [evalPipeline, setEvalPipeline] = useState<'classic' | 'dsh'>(() => {
+    if (typeof window === 'undefined') return 'classic';
+    return window.localStorage.getItem('evalPipeline') === 'dsh' ? 'dsh' : 'classic';
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem('evalPipeline', evalPipeline); } catch {}
+  }, [evalPipeline]);
+  // DSH 科学问题（必填，≤1000 字符）。切换模式不清空，方便用户对比两种流水线。
+  const [evalDshQuestion, setEvalDshQuestion] = useState('');
+  // Inline validation hint under the question textarea (set on failed run attempt).
+  const [dshQuestionError, setDshQuestionError] = useState(false);
+  // Pipeline of the CURRENT/LAST eval stream run — DSH cards render off this
+  // (not off evalPipeline) so toggling the UI mode doesn't hide a finished
+  // DSH run's results until the next run resets the stream.
+  const [evalRunPipeline, setEvalRunPipeline] = useState<'classic' | 'dsh' | null>(null);
+  // Remembers the input mode the user was in before DSH forced 'uniprot', so
+  // switching back to classic restores it (DSH mode only supports UniProt input).
+  const prevEvalInputModeRef = useRef<'uniprot' | 'sequence'>('uniprot');
+  /** Pipeline toggle handler — forces/ restores the input mode around DSH. */
+  const switchEvalPipeline = useCallback((p: 'classic' | 'dsh') => {
+    if (p === evalPipeline) return;
+    if (p === 'dsh') {
+      // Entering DSH: remember the current input mode, force UniProt UI.
+      prevEvalInputModeRef.current = evalInputMode;
+      setEvalInputMode('uniprot');
+    } else {
+      // Leaving DSH: restore the input mode the user had before.
+      setEvalInputMode(prevEvalInputModeRef.current);
+    }
+    setDshQuestionError(false);
+    setEvalPipeline(p);
+  }, [evalPipeline, evalInputMode]);
   // Database path config
   const [dbPath, setDbPath] = useState('file:./db/custom.db');
   /** Full DB status object from `/api/db-config` GET — surfaces active
@@ -1604,6 +2077,57 @@ export function SettingsRunPanel({
     if (weeklyStream.state.done) Promise.resolve().then(() => setWeeklyRunCount(c => c + 1));
   }, [weeklyStream.state.done]);
 
+  // ── R179 (Task 2-b): DSH derived state from evalStream.state.log ──────
+  // Progress events carry `dshRelevance` / `dshOutline` / `dshFigure`
+  // extras (useRunStream forwards unknown payload fields into log entries).
+  //   • dshRelevance — LAST event carrying it wins (single payload).
+  //   • dshOutline   — LAST event carrying it wins (may be re-planned).
+  //   • dshFigures   — accumulated map keyed by url, latest status wins
+  //     (figures emit multiple events: searching → verified/rejected).
+  const dshRelevance = useMemo(() => {
+    for (let i = evalStream.state.log.length - 1; i >= 0; i--) {
+      const r = asDshRelevance(evalStream.state.log[i].dshRelevance);
+      if (r) return r;
+    }
+    return null;
+  }, [evalStream.state.log]);
+
+  const dshOutline = useMemo(() => {
+    for (let i = evalStream.state.log.length - 1; i >= 0; i--) {
+      const o = asDshOutline(evalStream.state.log[i].dshOutline);
+      if (o) return o;
+    }
+    return null;
+  }, [evalStream.state.log]);
+
+  const dshFiguresFromLog = useMemo(() => {
+    const byUrl = new Map<string, DshFigurePayload>();
+    for (const e of evalStream.state.log) {
+      const f = asDshFigure(e.dshFigure);
+      if (f) byUrl.set(f.url, f); // latest event for a url wins
+    }
+    return Array.from(byUrl.values());
+  }, [evalStream.state.log]);
+
+  // ── Effective DSH figures: MERGE the log-derived accumulation (searching →
+  // verified/rejected, per-url latest-wins — keeps rejected figures visible
+  // with their VLM verdicts after done) with the final `done` payload's list
+  // (authoritative + status-final, and immune to the 300-event log cap on
+  // very long runs). Done-payload entries win per url.
+  const effectiveDshFigures = useMemo(() => {
+    if (evalStream.state.done && Array.isArray(evalStream.state.result?.figures)) {
+      const narrowed = (evalStream.state.result.figures as unknown[])
+        .map((f) => asDshFigure(f))
+        .filter((f): f is DshFigurePayload => !!f);
+      if (narrowed.length > 0 || dshFiguresFromLog.length === 0) {
+        const byUrl = new Map<string, DshFigurePayload>(dshFiguresFromLog.map((f) => [f.url, f]));
+        for (const f of narrowed) byUrl.set(f.url, f);
+        return Array.from(byUrl.values());
+      }
+    }
+    return dshFiguresFromLog;
+  }, [evalStream.state.done, evalStream.state.result, dshFiguresFromLog]);
+
   // ── Synthetic primary report derived from chapter_done SSE events ──────
   // The actual SSE `done` event is only sent at the very end of the run —
   // AFTER batch mode finishes (which can take minutes for multi-target
@@ -1619,14 +2143,34 @@ export function SettingsRunPanel({
     if (chapterDones.length === 0) return null;
     const canonical = ['summary', 'function', 'topology', 'pdb_analysis', 'feasibility', 'experimental', 'references', 'conclusion'];
     const chapters: Record<string, string> = {};
+    const chapterOrder: string[] = []; // first-seen order (DSH outline ids are arbitrary)
     let totalMs = 0;
     let allOk = true;
     for (const e of chapterDones) {
-      chapters[e.chapter as string] = e.chapterContent as string;
+      const key = e.chapter as string;
+      if (!(key in chapters)) chapterOrder.push(key);
+      chapters[key] = e.chapterContent as string;
       if (e.chapterDurationMs) totalMs += e.chapterDurationMs as number;
       if (e.level !== 'success') allOk = false;
     }
-    const content = canonical.map((ck) => chapters[ck] ?? '').filter(Boolean).join('\n\n');
+    // R179 (Task 2-b): DSH 模式 — chapter ids come from the agent-planned
+    // outline (arbitrary section-library ids), so order chapters by the
+    // dshOutline event when present (unknown/extra chapters append after,
+    // in first-seen order). Classic mode keeps the canonical 8-chapter order.
+    let orderedKeys: string[];
+    if (dshOutline && dshOutline.sections.length > 0) {
+      const known = new Set(dshOutline.sections.map((s) => s.id));
+      orderedKeys = [
+        ...dshOutline.sections.map((s) => s.id).filter((k) => k in chapters),
+        ...chapterOrder.filter((k) => !known.has(k)),
+      ];
+    } else {
+      orderedKeys = canonical.filter((ck) => ck in chapters);
+      // Keep non-canonical chapters (sequence-mode / future section ids) too.
+      const canonicalSet = new Set(canonical);
+      orderedKeys.push(...chapterOrder.filter((k) => !canonicalSet.has(k)));
+    }
+    const content = orderedKeys.map((k) => chapters[k] ?? '').filter(Boolean).join('\n\n');
     if (!content) return null;
     return {
       ok: allOk,
@@ -1637,7 +2181,7 @@ export function SettingsRunPanel({
       contentChars: content.length,
       fallback: false,
     };
-  }, [evalStream.state.log]);
+  }, [evalStream.state.log, dshOutline]);
 
   // ── Effective primary report: prefer the final result once the stream is
   // done; otherwise fall back to the streaming-derived synthetic report so
@@ -1832,6 +2376,54 @@ export function SettingsRunPanel({
   }, []);
 
   const runEvaluation = () => {
+    // R179 (Task 2-b): DSH 模式 — 问题驱动智能体流水线（单靶点 + 必填科学问题）。
+    // Posts to /api/evaluations/run-dsh with the same SSE frame contract as
+    // classic; progress events additionally carry dshRelevance/dshOutline/
+    // dshFigure extras that the derived-state memos above consume.
+    if (evalPipeline === 'dsh') {
+      const uniprot = (evalTargets[0]?.uniprot || '').trim().toUpperCase();
+      if (!uniprot) {
+        toast.error(locale === 'zh' ? '请输入至少一个 UniProt ID' : 'Please enter a UniProt ID');
+        return;
+      }
+      const question = evalDshQuestion.trim();
+      if (!question) {
+        setDshQuestionError(true);
+        toast.error(t.evalDshQuestionRequired);
+        return;
+      }
+      // Mirror the backend contract (8–1000 chars after trim) for early UX feedback.
+      if (question.length < 8) {
+        setDshQuestionError(true);
+        toast.error(locale === 'zh' ? '科学问题至少需要 8 个字符' : 'Scientific question must be at least 8 characters');
+        return;
+      }
+      setDshQuestionError(false);
+      markRunning('eval');
+      evalStream.reset();
+      setEvalRunPipeline('dsh');
+      const t0 = evalTargets[0] || { maxPdb: 80, maxBlastHits: 50, forceBlast: false, skipBlast: false };
+      log({
+        ts: new Date().toISOString(),
+        module: 'eval',
+        status: 'running',
+        summary: locale === 'zh'
+          ? `DSH 模式评估 ${uniprot} — 相关性分析 → 大纲 → 逐章撰写 + 配图 — SSE streaming…`
+          : `DSH-mode eval ${uniprot} — relevance → outline → chapter-by-chapter + figures — SSE streaming…`,
+      });
+      evalStream.start('/api/evaluations/run-dsh', {
+        uniprot,
+        question,
+        maxPdb: t0.maxPdb,
+        maxBlastHits: t0.maxBlastHits,
+        maxLitCount: evalMaxLitCount,
+        forceBlast: t0.forceBlast,
+        skipBlast: t0.skipBlast,
+        llm: llmBody(),
+      });
+      return;
+    }
+    setEvalRunPipeline('classic');
     if (evalInputMode === 'sequence') {
       // Sequence-based evaluation: no UniProt ID, use sequence(s) directly for BLAST.
       // Multi-sequence mode: split by blank line (one or more empty lines between
@@ -2457,15 +3049,49 @@ export function SettingsRunPanel({
                 accent="cryoem"
                 index="①"
                 title={t.moduleEvalTitle}
-                endpoint="POST /api/evaluations/run"
+                endpoint={evalPipeline === 'dsh' ? 'POST /api/evaluations/run-dsh' : 'POST /api/evaluations/run'}
                 description={locale === 'zh' ? 'UniProt → 元数据 + 序列 → RCSB 直接 PDB → SIFTS 覆盖度 → NCBI BLASTp 同源 → 评分 → 原子任务包含 LLM 报告生成（写入 Evaluation.report + EvaluationReport 表 + 可选 LLM-Wiki）。支持多个 UniProt ID 批量评估，含跨靶点结构与关联分析。' : 'UniProt → metadata + sequence → RCSB direct PDB → SIFTS coverage → NCBI BLASTp homology → scoring → atomic tasks include LLM report generation (writes to Evaluation.report + EvaluationReport table + optional LLM-Wiki). Supports multiple UniProt IDs for batch evaluation with cross-target structure and correlation analysis.'}
-                headerBadge={evalTargets.length > 1 ? (
+                headerBadge={evalPipeline !== 'dsh' && evalTargets.length > 1 ? (
                   <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-xray/40 bg-claude-xray-bg text-claude-xray" title={locale === 'zh' ? '多靶点批量评估 + 关联分析' : 'Multi-target batch evaluation + correlation analysis'}>
                     <Layers className="h-2 w-2" /> {locale === 'zh' ? '批量' : 'Batch'} · {evalTargets.length} {locale === 'zh' ? '靶点' : 'targets'}
                   </Badge>
                 ) : null}
               >
-                {/* Input mode toggle: UniProt ID vs Sequence */}
+                {/* R179 (Task 2-b): Pipeline mode toggle — 经典模式 vs DSH 模式
+                    （问题驱动智能体）。 Same pill idiom as the input-mode toggle
+                    below; DSH pill uses the claude-cryoem accent + Sparkles icon. */}
+                <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                  <div className="flex items-center gap-0.5 rounded-md bg-muted/40 border border-border/40 p-0.5" role="group" aria-label={locale === 'zh' ? '评估流水线模式' : 'Evaluation pipeline mode'}>
+                    <button
+                      type="button"
+                      onClick={() => switchEvalPipeline('classic')}
+                      aria-pressed={evalPipeline === 'classic'}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${evalPipeline === 'classic' ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      {t.evalModeClassic}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchEvalPipeline('dsh')}
+                      aria-pressed={evalPipeline === 'dsh'}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${evalPipeline === 'dsh' ? 'bg-claude-cryoem/10 text-claude-cryoem' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      <Sparkles className="h-3 w-3" /> {t.evalModeDsh}
+                    </button>
+                  </div>
+                  {evalPipeline === 'dsh' && evalTargets.length > 1 && (
+                    <span className="text-3xs text-amber-600 dark:text-amber-400" title={t.evalDshSingleOnly}>
+                      {t.evalDshSingleOnly}
+                    </span>
+                  )}
+                </div>
+                {evalPipeline === 'dsh' && (
+                  <p className="text-xs text-muted-foreground mb-3 leading-relaxed">{t.evalModeDshHint}</p>
+                )}
+
+                {/* Input mode toggle: UniProt ID vs Sequence — hidden in DSH mode
+                    (DSH only supports UniProt input for now). */}
+                {evalPipeline !== 'dsh' && (
                 <div className="flex items-center gap-1.5 mb-3">
                   <div className="flex items-center gap-0.5 rounded-md bg-muted/40 border border-border/40 p-0.5">
                     <button type="button" onClick={() => setEvalInputMode('uniprot')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalInputMode === 'uniprot' ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{locale === 'zh' ? 'UniProt ID' : 'UniProt ID'}</button>
@@ -2478,8 +3104,9 @@ export function SettingsRunPanel({
                     </div>
                   )}
                 </div>
+                )}
 
-                {evalInputMode === 'sequence' ? (
+                {evalInputMode === 'sequence' && evalPipeline !== 'dsh' ? (
                   /* Sequence input mode */
                   <div className="space-y-2 mb-3">
                     <div>
@@ -2528,12 +3155,17 @@ export function SettingsRunPanel({
                     </div>
                   </div>
                 ) : (
-                /* UniProt ID input mode (original) */
+                /* UniProt ID input mode (original). In DSH mode only the FIRST
+                    target row renders (single-target pipeline) and the add /
+                    remove buttons are hidden. */
                 <div className="space-y-2 mb-3">
-                  {evalTargets.map((t, i) => (
-                    <div key={i} className="flex items-end gap-1.5">
-                      {/* Left slot: + (add) on row 1, remove (×) on rows 2+, placeholder on row 1 if single */}
-                      {i === 0 ? (
+                  {(evalPipeline === 'dsh' ? evalTargets.slice(0, 1) : evalTargets).map((t, i) => (
+                    <div key={i} className="flex items-end gap-1.5 flex-wrap">
+                      {/* Left slot: + (add) on row 1, remove (×) on rows 2+ — both
+                          hidden in DSH mode (single target only, kept as spacer). */}
+                      {evalPipeline === 'dsh' ? (
+                        <span className="h-8 w-8 shrink-0" aria-hidden="true" />
+                      ) : i === 0 ? (
                         <Button variant="outline" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={addEvalTarget} title={locale === 'zh' ? '新增靶点' : 'Add target'}>
                           <Plus className="h-3.5 w-3.5" />
                         </Button>
@@ -2585,6 +3217,43 @@ export function SettingsRunPanel({
                       )}
                     </div>
                   ))}
+                  {/* R179 (Task 2-b): DSH 科学问题输入（必填，≤1000 字符）。
+                      Styling matches the sequence textarea idiom; char counter
+                      warns (amber) near the limit; failed validation leaves an
+                      inline red hint (plus a sonner toast from runEvaluation). */}
+                  {evalPipeline === 'dsh' && (
+                    <div>
+                      <Label htmlFor="dsh-question-input" className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                        <Sparkles className="h-3 w-3 text-claude-cryoem" />
+                        {t.evalDshQuestion}
+                        <span className="text-red-500" aria-hidden="true">*</span>
+                      </Label>
+                      <textarea
+                        id="dsh-question-input"
+                        value={evalDshQuestion}
+                        onChange={e => { setEvalDshQuestion(e.target.value.slice(0, 1000)); if (dshQuestionError && e.target.value.trim()) setDshQuestionError(false); }}
+                        placeholder={t.evalDshQuestionPlaceholder}
+                        rows={3}
+                        maxLength={1000}
+                        aria-required="true"
+                        aria-invalid={dshQuestionError}
+                        aria-describedby={dshQuestionError ? 'dsh-question-error' : undefined}
+                        className={`mt-1 w-full px-2 py-1.5 rounded-md border bg-background text-xs resize-y thin-scroll ${dshQuestionError ? 'border-red-500/60' : 'border-border/60'}`}
+                      />
+                      <div className="flex items-center justify-between gap-2 mt-0.5">
+                        {dshQuestionError ? (
+                          <p id="dsh-question-error" className="text-3xs text-red-500" role="alert">{t.evalDshQuestionRequired}</p>
+                        ) : (
+                          /* R179 (Task 2-b): compact phase-flow helper (avoids duplicating
+                             the long evalModeDshHint shown under the pipeline pill). */
+                          <span className="text-3xs text-muted-foreground/80 truncate">{t.evalDshRelevance} → {t.evalDshOutline} → {t.evalDshChapterProgress}</span>
+                        )}
+                        <span className={`text-3xs font-mono tabular-nums shrink-0 ${evalDshQuestion.length > 900 ? 'text-amber-500 dark:text-amber-400' : 'text-muted-foreground/70'}`}>
+                          {evalDshQuestion.length}/1000
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 ) /* end UniProt ID mode */}
 
@@ -2595,6 +3264,16 @@ export function SettingsRunPanel({
                   ok={evalStream.state.ok}
                   emptyHint={locale === 'zh' ? '输入 UniProt ID 并点击 “执行” 启动评估流水线' : 'Enter a UniProt ID and click Run to start the evaluation pipeline'}
                 />
+
+                {/* R179 (Task 2-b): DSH 模式进度卡 — 相关性分析 → 报告大纲 →
+                    配图条（ChapterStream / LLMPreview 之前）。仅在当前/最近一次
+                    评估流为 DSH 且数据已到时渲染；配图条在 done 且零配图时
+                    显示「宁缺毋滥」空态。 */}
+                {evalRunPipeline === 'dsh' && dshRelevance && <DshRelevanceCard data={dshRelevance} />}
+                {evalRunPipeline === 'dsh' && dshOutline && <DshOutlineCard data={dshOutline} />}
+                {evalRunPipeline === 'dsh' && (effectiveDshFigures.length > 0 || evalStream.state.done) && (
+                  <DshFiguresStrip figures={effectiveDshFigures} done={evalStream.state.done} />
+                )}
 
                 {/* Per-chapter streamed LLM output (collapsible "thinking process") */}
                 <ChapterStream
@@ -2613,7 +3292,9 @@ export function SettingsRunPanel({
                 {effectivePrimaryReport && (
                   <LLMPreview
                     content={effectivePrimaryReport.content}
-                    title={`${locale === 'zh' ? 'LLM 可行性报告' : 'LLM Feasibility Report'} · ${evalStream.state.result?.uniprotInfo?.proteinName || evalStream.state.result?.uniprot || (evalStream.state.running ? (locale === 'zh' ? '生成中…' : 'Generating…') : (locale === 'zh' ? '主靶点' : 'Primary target'))}`}
+                    title={`${(evalRunPipeline === 'dsh' || dshOutline)
+                      ? (locale === 'zh' ? 'DSH 模式 · LLM 评估报告' : 'DSH Mode · LLM Report')
+                      : (locale === 'zh' ? 'LLM 可行性报告' : 'LLM Feasibility Report')} · ${evalStream.state.result?.uniprotInfo?.proteinName || evalStream.state.result?.uniprot || (evalStream.state.running ? (locale === 'zh' ? '生成中…' : 'Generating…') : (locale === 'zh' ? '主靶点' : 'Primary target'))}`}
                     provider={effectivePrimaryReport.provider}
                     model={effectivePrimaryReport.model}
                     durationMs={effectivePrimaryReport.durationMs}
@@ -2623,6 +3304,12 @@ export function SettingsRunPanel({
                     dbSaved={evalStream.state.done ? evalStream.state.result?.dbSaved : undefined}
                     chars={effectivePrimaryReport.contentChars}
                     accent="cryoem"
+                    /* R179 (Task 2-b): done 后在正文下方渲染最终配图画廊（仅已验证
+                       配图 —— 与报告正文内嵌的配图一致；被拒配图保留在上方检索条
+                       中以 VLM 判定理由呈现）。 */
+                    figures={evalRunPipeline === 'dsh' && evalStream.state.done && effectiveDshFigures.some((f) => f.status === 'verified')
+                      ? effectiveDshFigures.filter((f) => f.status === 'verified')
+                      : undefined}
                   />
                 )}
 
@@ -2678,6 +3365,11 @@ export function SettingsRunPanel({
                   />
                 )}
 
+                {/* Classic-pipeline report switches — hidden in DSH mode (the
+                    DSH agent ALWAYS generates + persists a report; these flags
+                    are not part of the /api/evaluations/run-dsh contract, so
+                    showing them there would be dead controls). */}
+                {evalPipeline !== 'dsh' && (
                 <div className="mt-3 flex items-center gap-3 flex-wrap">
                   <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                     <Switch checked={evalGenerateReport} onCheckedChange={setEvalGenerateReport} className="scale-90" />
@@ -2692,6 +3384,7 @@ export function SettingsRunPanel({
                     {locale === 'zh' ? '跳过结构分析' : 'Skip structure analysis'}
                   </label>
                 </div>
+                )}
                 <RunHistoryPanel moduleKey="eval" refreshKey={evalRunCount} limit={5} />
               </ModuleCard>
             </TabsContent>

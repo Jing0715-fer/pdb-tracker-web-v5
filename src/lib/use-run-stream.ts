@@ -153,19 +153,25 @@ export function useRunStream() {
 
             if (eventName === 'progress' || eventName === 'log' || eventName === 'message') {
               // Strip the noise (ts is generated server-side; everything else from payload).
+              // R179 (Task 2-b): spread the raw payload FIRST so caller-defined
+              // extras (dshRelevance / dshOutline / dshFigure on DSH-mode eval
+              // progress events) survive into state.log entries — the explicit
+              // field list below used to silently drop them.
+              const base = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
               const ev: StreamEvent = {
-                ts: payload?.ts || new Date().toISOString(),
-                stage: payload?.stage,
-                level: payload?.level,
-                message: payload?.message,
-                detail: payload?.detail,
-                progress: typeof payload?.progress === 'number' ? payload.progress : undefined,
-                chapter: payload?.chapter,
-                chapterIndex: payload?.chapterIndex,
-                chapterTotal: payload?.chapterTotal,
-                chapterContent: payload?.chapterContent,
-                chapterError: payload?.chapterError,
-                chapterDurationMs: payload?.chapterDurationMs,
+                ...base,
+                ts: (base.ts as string | undefined) || new Date().toISOString(),
+                stage: base.stage as string | undefined,
+                level: base.level as StreamEvent['level'],
+                message: base.message as string | undefined,
+                detail: base.detail as string | undefined,
+                progress: typeof base.progress === 'number' ? base.progress : undefined,
+                chapter: base.chapter as string | undefined,
+                chapterIndex: base.chapterIndex as number | undefined,
+                chapterTotal: base.chapterTotal as number | undefined,
+                chapterContent: base.chapterContent as string | undefined,
+                chapterError: base.chapterError as string | undefined,
+                chapterDurationMs: base.chapterDurationMs as number | undefined,
               };
               // Buffer — flushed by interval to avoid per-event re-renders.
               logBufRef.current.push(ev);

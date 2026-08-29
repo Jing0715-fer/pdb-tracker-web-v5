@@ -262,6 +262,11 @@ model SkillEvaluationReport {
   llmModel      String?
   llmDurationMs Int?
   filePath      String?
+  // R179 (Task 2-a): DSH 模式新增 —— classic 行默认 'classic'；DSH 行带
+  // 大纲 JSON（[{id,title,focus}]) 与已验证配图 JSON（ReportFigure[]）。
+  mode          String   @default("classic")
+  outline       String?
+  figures       String?
   createdAt     DateTime @default(now())
 
   @@index([uniprotId])
