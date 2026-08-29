@@ -14,14 +14,28 @@
  *   - "manage API keys" opens the SAME ProvidersPanel modal the Agent chat
  *     uses (add key / test / set default / delete).
  *
- * Changing the default here also changes what the chat uses for NEW sessions
- * — that's the "sharing" contract.
+ * R181 — agent 检测 restored as a usable option:
+ *   - a "Local CLI Agents" section lists locally DETECTED agent CLIs
+ *     (hermes / claude code / codex / gemini / openclaw / codebuddy / aider);
+ *     picking one stores a Run-Center-scoped override (.hermes/run-provider.json)
+ *     and the four Run Center routes run their LLM calls through the local
+ *     CLI subprocess (same executor the pre-R180 UI used). It does NOT
+ *     affect the Agent chat.
+ *
+ * R181 — memory: the mount fetch now hits the ultra-light
+ * /api/agent/run-llm-status endpoint (leaf modules only) so that merely
+ * opening Run Center no longer compiles the heavy providers/agent-manager
+ * graph; the full /api/agent/providers route compiles when the popover is
+ * actually opened.
+ *
+ * Changing the shared default here also changes what the chat uses for NEW
+ * sessions — that's the "sharing" contract.
  */
 
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Cpu, ChevronDown, Loader2, KeyRound, RefreshCw, Check, AlertTriangle } from 'lucide-react';
+import { Cpu, ChevronDown, KeyRound, RefreshCw, Check, AlertTriangle, Terminal, ScanSearch, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -52,6 +66,30 @@ interface ProviderInfo {
   effectiveModel: string;
 }
 
+/** R181: one detected CLI agent row (binary-presence scan, server-side). */
+interface CliAgentInfo {
+  provider: string; // 'cli:hermes'
+  id: string;       // 'hermes'
+  label: string;    // 'Hermes CLI'
+  icon: string;     // '🪶'
+  available: boolean;
+  bin: string | null;
+  reason: string;
+}
+
+interface RunProviderOverride {
+  provider: string; // 'cli:hermes'
+  model?: string;
+  setAt?: string;
+}
+
+/** R181: the ultra-light mount payload from /api/agent/run-llm-status. */
+interface RunLlmStatus {
+  effective: { provider: string; model: string; displayName: string; source: 'run-override' | 'shared' };
+  shared: { provider: string; model: string; displayName: string };
+  runDefault: RunProviderOverride | null;
+}
+
 interface Props {
   className?: string;
 }
@@ -59,23 +97,54 @@ interface Props {
 export function SharedLlmButton({ className }: Props) {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
+  // R181: light label state (mount fetch) + full settings state (popover fetch).
+  const [label, setLabel] = useState<RunLlmStatus['effective'] | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [defaultProvider, setDefaultProvider] = useState<string>('zai');
+  const [cliAgents, setCliAgents] = useState<CliAgentInfo[]>([]);
+  const [runDefault, setRunDefault] = useState<RunProviderOverride | null>(null);
   const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [saved, setSaved] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
   // Custom model entry (per-provider, resets when the popover reopens).
   const [customModel, setCustomModel] = useState('');
   const [useCustomModel, setUseCustomModel] = useState(false);
 
+  const isZh = locale === 'zh';
+  const flashSaved = useCallback(() => {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1200);
+  }, []);
+
+  /** R181: ultra-light mount fetch — only what the pill label needs. */
+  const refreshLabel = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent/run-llm-status');
+      if (!res.ok) return;
+      const data = (await res.json()) as RunLlmStatus;
+      setLabel(data.effective);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  /** Full settings fetch (popover open) — catalog + CLI-agent scan + override. */
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/agent/providers');
       if (!res.ok) return;
-      const data = (await res.json()) as { providers?: ProviderInfo[]; defaultProvider?: string };
+      const data = (await res.json()) as {
+        providers?: ProviderInfo[];
+        defaultProvider?: string;
+        cliAgents?: CliAgentInfo[];
+        runDefault?: RunProviderOverride | null;
+      };
       setProviders(data.providers ?? []);
       setDefaultProvider(data.defaultProvider ?? 'zai');
+      setCliAgents(data.cliAgents ?? []);
+      setRunDefault(data.runDefault ?? null);
     } catch {
       /* ignore */
     } finally {
@@ -91,11 +160,11 @@ export function SharedLlmButton({ className }: Props) {
     }
   }, [open, refresh]);
 
-  // Fetch once on mount so the pill label shows the real provider/model
-  // before the popover is ever opened.
+  // R181: light fetch on mount so the pill label is correct before the
+  // popover is ever opened — without compiling the heavy providers route.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void refreshLabel();
+  }, [refreshLabel]);
 
   // Re-read the shared store after the ProvidersPanel modal closes (the user
   // may have added a key or switched the default provider in there).
@@ -109,6 +178,7 @@ export function SharedLlmButton({ className }: Props) {
     ? customModel
     : current?.effectiveModel || current?.defaultModel || '';
   const providerModels = current?.models ?? [];
+  const activeOverrideId = runDefault?.provider ?? null;
 
   /** Switch the shared default provider (chat new sessions follow too). */
   const pickProvider = async (providerId: string) => {
@@ -121,9 +191,9 @@ export function SharedLlmButton({ className }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ providerId, setDefault: true }),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1200);
+      flashSaved();
       void refresh();
+      void refreshLabel();
     } catch {
       /* ignore */
     }
@@ -138,15 +208,46 @@ export function SharedLlmButton({ className }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ providerId: current.id, defaultModel: model.trim() }),
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1200);
+      flashSaved();
       void refresh();
+      void refreshLabel();
     } catch {
       /* ignore */
     }
   };
 
-  const isZh = locale === 'zh';
+  /** R181: set a detected CLI agent as the Run Center provider override. */
+  const pickCliAgent = async (agent: CliAgentInfo) => {
+    if (!agent.available) return;
+    try {
+      await fetch('/api/agent/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setRunDefault: true, providerId: agent.provider }),
+      });
+      flashSaved();
+      void refresh();
+      void refreshLabel();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  /** R181: clear the override — Run Center follows the shared default again. */
+  const clearCliAgent = async () => {
+    try {
+      await fetch('/api/agent/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clearRunDefault: true }),
+      });
+      flashSaved();
+      void refresh();
+      void refreshLabel();
+    } catch {
+      /* ignore */
+    }
+  };
 
   return (
     <>
@@ -161,19 +262,26 @@ export function SharedLlmButton({ className }: Props) {
             )}
             title={t.llmSettingsTitle}
           >
-            <Cpu className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590] shrink-0" />
+            {label?.source === 'run-override' ? (
+              <Terminal className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            ) : (
+              <Cpu className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590] shrink-0" />
+            )}
             <span className="font-medium text-claude-text dark:text-[#e8e4dd]">LLM</span>
-            <span className="font-mono text-muted-foreground max-w-[220px] truncate">
-              {loading && providers.length === 0
-                ? (isZh ? '…' : '…')
-                : `${current?.displayName ?? defaultProvider}${modelValue ? ` · ${modelValue}` : ''}`}
+            <span className={cn(
+              'font-mono max-w-[220px] truncate',
+              label?.source === 'run-override' ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground',
+            )}>
+              {label
+                ? `${label.displayName}${label.model ? ` · ${label.model}` : ''}`
+                : '…'}
             </span>
             <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 p-0 gap-0 overflow-hidden">
+        <PopoverContent align="end" className="w-96 p-0 gap-0 overflow-hidden max-h-[80vh] overflow-y-auto">
           {/* Header */}
-          <div className="px-3.5 py-2.5 border-b border-claude-border/50 bg-claude-bg-elevated/30">
+          <div className="px-3.5 py-2.5 border-b border-claude-border/50 bg-claude-bg-elevated sticky top-0 z-10">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 min-w-0">
                 <Cpu className="h-3.5 w-3.5 text-claude-accent shrink-0" />
@@ -202,7 +310,29 @@ export function SharedLlmButton({ className }: Props) {
 
           {/* Body */}
           <div className="px-3.5 py-3 space-y-3">
-            {/* Provider select */}
+            {/* R181: active CLI-agent override banner — the effective provider
+                differs from the shared default; make that unmissable. */}
+            {activeOverrideId && (
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-2 space-y-1.5">
+                <div className="flex items-start gap-1.5">
+                  <Terminal className="h-3 w-3 text-emerald-600 dark:text-emerald-300 mt-0.5 shrink-0" />
+                  <span className="text-[10px] leading-relaxed text-emerald-700 dark:text-emerald-300">
+                    {t.llmSettingsCliAgentActive}: <span className="font-mono">{activeOverrideId}</span>
+                    {runDefault?.model ? ` · ${runDefault.model}` : ''}
+                  </span>
+                </div>
+                <button
+                  onClick={() => void clearCliAgent()}
+                  className="inline-flex items-center gap-1 text-[10px] text-claude-accent hover:underline"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  {t.llmSettingsCliFollowShared}
+                </button>
+              </div>
+            )}
+
+            {/* Provider select (shared default — used by chat + Run Center
+                unless a CLI-agent override is active) */}
             <div className="space-y-1">
               <Label className="text-[10px] uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">
                 {t.llmSettingsProvider}
@@ -300,6 +430,85 @@ export function SharedLlmButton({ className }: Props) {
                   </Button>
                 </div>
               )}
+            </div>
+
+            {/* ── R181: Local CLI Agents (agent detection) ─────────────────── */}
+            <div className="space-y-1.5 rounded-md border border-claude-border/60 dark:border-[#3d3832]/60 px-2.5 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <ScanSearch className="h-3 w-3 text-claude-accent shrink-0" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-claude-text dark:text-[#e8e4dd] truncate">
+                    {t.llmSettingsCliAgents}
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    setScanning(true);
+                    fetch('/api/agent/providers')
+                      .then((r) => (r.ok ? r.json() : null))
+                      .then((data) => {
+                        if (data) {
+                          setCliAgents(data.cliAgents ?? []);
+                          setRunDefault(data.runDefault ?? null);
+                        }
+                      })
+                      .catch(() => {})
+                      .finally(() => setScanning(false));
+                  }}
+                  className="inline-flex items-center gap-0.5 text-[10px] text-claude-accent hover:underline shrink-0"
+                  title={t.llmSettingsCliRescan}
+                >
+                  <RefreshCw className={cn('h-3 w-3', scanning && 'animate-spin')} />
+                  {t.llmSettingsCliRescan}
+                </button>
+              </div>
+              <p className="text-[10px] leading-relaxed text-claude-text-muted dark:text-[#9b9590]">
+                {t.llmSettingsCliAgentsHint}
+              </p>
+              <div className="grid grid-cols-1 gap-1">
+                {cliAgents.map((agent) => {
+                  const isActive = activeOverrideId === agent.provider;
+                  return (
+                    <button
+                      key={agent.provider}
+                      type="button"
+                      disabled={!agent.available}
+                      onClick={() => void pickCliAgent(agent)}
+                      title={
+                        agent.available
+                          ? `${agent.bin}${agent.available ? ` · ${t.llmSettingsCliAgentSet}` : ''}`
+                          : agent.reason
+                      }
+                      className={cn(
+                        'flex items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] border transition-colors',
+                        isActive
+                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                          : agent.available
+                            ? 'border-transparent hover:border-claude-accent/40 hover:bg-claude-bg-elevated/50 text-claude-text dark:text-[#e8e4dd] cursor-pointer'
+                            : 'border-transparent opacity-50 cursor-not-allowed text-claude-text-muted dark:text-[#9b9590]',
+                      )}
+                    >
+                      <span className="text-sm leading-none shrink-0" aria-hidden>{agent.icon}</span>
+                      <span className="flex-1 min-w-0 truncate">{agent.label}</span>
+                      {isActive ? (
+                        <span className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-medium">
+                          <Check className="h-2.5 w-2.5" />
+                          {t.llmSettingsCliAgentActive}
+                        </span>
+                      ) : agent.available ? (
+                        <span className="shrink-0 text-[9px] text-emerald-600 dark:text-emerald-400">
+                          {t.llmSettingsCliAgentSet}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[9px]">{t.llmSettingsCliAgentUnavailable}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[9px] leading-relaxed text-claude-text-muted/80 dark:text-[#9b9590]/80">
+                {t.llmSettingsCliOverrideNote}
+              </p>
             </div>
 
             {/* Manage keys — opens the SAME providers modal the chat uses */}

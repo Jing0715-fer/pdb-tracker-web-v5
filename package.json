@@ -4,7 +4,7 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "NODE_OPTIONS=\"--max-old-space-size=3072\" next dev --webpack -p 3000 2>&1 | tee dev.log",
+    "dev": "MALLOC_ARENA_MAX=2 NODE_OPTIONS=\"--max-old-space-size=2560\" next dev --webpack -p 3000 2>&1 | tee dev.log",
     "build": "next build --webpack",
     "build:electron": "npm run db:generate && npm run build && electron-builder --mac dmg --arm64 --publish never && node scripts/postbuild.js && node scripts/make-dmg.js",
     "build:electron:win": "npm run db:generate && npm run build && electron-builder --win nsis --x64 --publish never && node scripts/postbuild.js",

@@ -263,7 +263,7 @@ export async function POST(req: Request) {
   // provider/model；显式 body.llm 仍可覆盖（API 编程调用向后兼容）。
   // 替换原 Run Center localStorage 配置（UI 已移除）。
   {
-    const { shared: _sharedLlm, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
+    const { shared: _sharedLlm, source: _llmSource, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
     body.llm = resolvedLlm;
   }
 

@@ -4,7 +4,8 @@
 # Runs forever; restarts up to MAX_RESTARTS times within a sliding window.
 
 cd /home/z/my-project
-export NODE_OPTIONS="--max-old-space-size=3072"
+export MALLOC_ARENA_MAX=2
+export NODE_OPTIONS="--max-old-space-size=2560"
 
 MAX_RESTARTS=40
 restart_count=0

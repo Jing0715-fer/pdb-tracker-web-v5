@@ -4784,3 +4784,38 @@ Stage Summary:
 - SharedLlmButton 小按钮入口替代原 218 行 LLM config UI（pills/高级配置/localStorage 全部移除），内嵌 chat 同款 ProvidersPanel；classic 模式同样适用。
 - llm.ts 新增 agent-catalog OpenAI-compat 执行器（17 家供应商、300s 超时、zai 兜底不变）；4 路由接入 resolveRunLlmConfig；setProviderConfig undefined-clobber 修复。
 - 新增 2 文件（SharedLlmButton 285 行 / eval-llm 128 行）+ 修改 10 文件；lint/tsc 零新增；真实运行 + 单元 + 浏览器 E2E 三层实证。
+---
+Task ID: R181
+Agent: main
+Task: agent 检测功能回归（本地 CLI Agent 作为 Run Center 可选 LLM）+ Run Center OOM 根治 + 全项目内存优化
+
+Work Log:
+- 需求澄清：R180 的 SharedLlmButton 替代旧 LLM config 时丢掉了旧 UI 的 agent 检测（/api/llm/providers 扫描本地 CLI agent + provider pills 选择能力）；用户要求保留该能力作为使用项（经典评估管线本身在 R179 后一直与 DSH 并存，未受影响，本轮实测确认）。
+- 内存排查（实测定位三大元凶）：
+  1. next dev (webpack) 的 dev source map：Next 16 用 forked EvalSourceMapDevToolPlugin 实现 eval-source-map（非 devtool 字符串，覆盖 config.devtool 会被 Next 强制回退 "Reverting webpack devtool to 'false'"）——全量逐模块 source map 使全路由 warmed RSS 达 2618MB。唯一有效手段是从 config.plugins 剥离该插件。
+  2. SharedLlmButton mount 即拉 /api/agent/providers（agent manager 全家桶）→ 每次打开 Run Center 都编译重路由（实测该路由首次编译 +128MB）。
+  3. V8 堆上限 3072MB + glibc 多 arena 碎片：heapUsed 实测仅 ~1.2GB，RSS 却 2.6GB+（external ~790MB + native 碎片）。
+- 修复 ①（source map）：next.config.ts dev 分支剥离 EvalSourceMapDevToolPlugin（config.devtool 保持 Next 自设的 false，零警告）；PDB_TRACKER_DEV_SOURCEMAPS=1 可选恢复行级廉价 maps（EvalSourceMapDevToolPlugin {module:true, columns:false}）。
+- 修复 ②（轻量挂载）：新路由 /api/agent/run-llm-status（仅叶模块：eval-llm + run-provider，type-only LlmConfig import 已擦除）返回 pill 标签所需最小载荷；SharedLlmButton mount 改拉此轻路由，重路由 /api/agent/providers 延迟到 popover 打开才编译。
+- 修复 ③（进程级）：dev script + watchdog 加 MALLOC_ARENA_MAX=2（glibc arena 碎片）；NODE_OPTIONS 3072→2560（安全网，实测堆峰值远低于此）。
+- agent 检测回归（新模块）：
+  - src/lib/cli-agent-scan.ts（叶模块，不 import llm.ts）：7 家 CLI agent（hermes/claude/codex/openclaw/gemini/codebuddy/aider，镜像 llm.ts CLI_ADAPTERS 的 id/图标/标签 + hermes/claude/codebuddy/aider 常规安装路径）二进制存在性探测（PATH + extraPaths + X_OK），60s 进程内 TTL 缓存。关键 bug 修复：access 必须从 node:fs/promises 导入——callback 版 fs.access 无回调在 Node≥22/Bun 直接抛 ERR_INVALID_ARG_TYPE（首版全量误报"未检测到"，node -e 与 bun -e 双重实证）。
+  - src/lib/agent/run-provider.ts：.hermes/run-provider.json Run Center 专属 override 存储（mtime 内存缓存，镜像 credentials.ts 模式；仅接受 cli:* id 白名单）。
+  - eval-llm.ts resolveRunLlmConfig 三层优先级：显式 body.llm > run-provider 覆盖 > 共享默认；新增 source 字段（'explicit'|'run-override'|'shared'）；显式 model-only body 作为 CLI agent 的 model 提示保留（复刻旧 UI provider+model 组合语义）。
+  - /api/agent/providers：GET 增 cliAgents 扫描列表 + runDefault 覆盖状态；POST 增 setRunDefault（cli:* 白名单校验，bogus id 400 + 列出合法值）/clearRunDefault 动作（原 setDefault/配置分支的 catalog 校验零改动）。
+  - SharedLlmButton：popover 新增「本地 CLI Agent（agent 检测）」分区——7 行 agent 列表（图标+标签+检测状态：可用→"选定为 Run Center LLM"，未装→置灰"未检测到"+reason tooltip）+ 重新检测按钮 + 激活时 emerald 高亮"当前使用" + 顶部覆盖横幅（Terminal 图标 + 「跟随共享默认（与 Agent 聊天一致）」一键清除）+ 作用域说明（仅 Run Center 模块，不影响 chat）；pill 标签在覆盖激活时显示 CLI · hermes 并换 Terminal 图标。
+  - 4 条 Run 路由：destructure 增 strip source 字段；run-dsh init 帧按 source 动态标注（Run Center 本地 CLI Agent / 显式指定 / 与 Agent 聊天共享）+ 覆盖激活时附 CLI 回退说明、且跳过不相关的共享 provider 未配置警告。
+  - i18n zh/en 各 +9 键（llmSettingsCli* 系列）。
+- 验证：
+  1. lint：12 个改动文件 eslint 0 error 0 warning；tsc 全项目 136 errors 与 HEAD 基线（git stash -u 实测）完全一致 = 零新增。
+  2. 内存 A/B（同一路由集 warmed，curl 无浏览器）：剥离插件前 RSS 2618MB/external 790MB → 剥离后 1861MB/external 487MB（-757MB，-29%）；页面加载 +1440MB、打开 Run Center 仅 +60MB（1500MB 稳态，系统可用 1501MB；旧配置同场景 ~2.9GB 且 OOM-kill，dmesg 实证 next-server 2.78MB anon-rss 被 kernel 杀）。
+  3. resolver 单元（bun 直跑）：无 body.llm→cli:hermes/run-override；显式 zai→explicit 胜出；model-only→cli:hermes+glm-4.5（model 提示保留）；legacy apiKey/baseUrl 丢弃。
+  4. API：setRunDefault cli:hermes→200+文件落盘；bogus→400 带合法值列表；clearRunDefault→{}；run-llm-status effective 正确（CLI · hermes / source=run-override）。
+  5. 假 binary E2E（/tmp/fakebin/hermes 注入服务端 PATH）：providers 扫描 available:true bin 正确 → 浏览器 popover Hermes 行可点击 → 点击后 pill 即时变「LLM CLI · hermes」+ run-provider.json 写入；DSH 真实启动帧 `LLM=cli:hermes/(默认)（Run Center 本地 CLI Agent）`；「跟随共享默认」清除后 pill 回 Z.ai (GLM) · glm-4.6。测试后已清理假 binary 并重置 .hermes。
+  6. 经典管线回归：generateReport:false 轻量运行 2 次（200，9.9s/6.5s）+ history 落库 success；Classic/DSH 药丸切换正常、DSH 科学问题必填输入正常、历史记录渲染正常；浏览器 0 page error / 0 console error；dev.log 无 Reverting/编译警告。
+- 备注：本轮 dmesg 抓到一次 OOM-kill（编辑触发多路由重编译 + chromium 常驻叠加）——正是用户报告的场景；修复后同场景不再复现。
+
+Stage Summary:
+- agent 检测能力完整回归：检测（轻量二进制扫描）→ 展示（7 家 CLI agent 状态列表）→ 选择（Run Center 专属 override，服务端持久化）→ 执行（llm.ts 原 CLI 子进程执行器 + 不可用自动回退）；经典/DSH 评估管线并存不受影响（实测经典运行成功）。
+- Run Center OOM 根治：全 warmed RSS 2618→1861MB（-29%），打开 Run Center 仅 +60MB，系统余量 212MB→1.7GB；三管齐下（EvalSourceMapDevToolPlugin 剥离 / mount 轻量路由 / MALLOC_ARENA_MAX=2）+ 堆上限安全网 2560MB。
+- 新增 3 文件（cli-agent-scan 165 行 / run-provider 108 行 / run-llm-status route 52 行）+ 修改 12 文件；lint/tsc 零新增；假 binary 全链路 E2E + 经典回归 + 内存 A/B 三层实证。

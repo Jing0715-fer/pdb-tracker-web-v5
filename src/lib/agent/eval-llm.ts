@@ -23,6 +23,7 @@ import {
   isProviderAvailable,
   resolveApiKey,
 } from '@/lib/agent/providers';
+import { getRunProviderOverride } from '@/lib/agent/run-provider';
 import type { LlmConfig } from '@/lib/llm';
 
 export interface SharedLlmSettings {
@@ -60,13 +61,19 @@ export function resolveSharedLlmSettings(): SharedLlmSettings {
   };
 }
 
+/** Where a resolved Run Center LLM config came from (for init-message labels). */
+export type RunLlmSource = 'explicit' | 'run-override' | 'shared';
+
 /**
  * Build the effective `LlmConfig` for a Run Center module route.
  *
- * Priority:
+ * Priority (R181):
  *   1. explicit `body.llm` fields (legacy API callers / programmatic use);
- *   2. the shared Agent-chat LLM settings (`.hermes/` store);
- *   3. 'zai' + 'glm-4.6' when nothing is configured (always-available SDK).
+ *   2. the Run Center CLI-agent override (`.hermes/run-provider.json`, `cli:*`
+ *      ids — the restored "agent 检测" option; detected agents run locally
+ *      as subprocesses via the llm.ts CLI executor);
+ *   3. the shared Agent-chat LLM settings (`.hermes/` store);
+ *   4. 'zai' + 'glm-4.6' when nothing is configured (always-available SDK).
  *
  * Model inheritance nuance: an explicit provider different from the shared
  * default does NOT inherit the shared default's model (mixing e.g. provider
@@ -74,7 +81,7 @@ export function resolveSharedLlmSettings(): SharedLlmSettings {
  */
 export function resolveRunLlmConfig(
   bodyLlm?: unknown,
-): LlmConfig & { shared: SharedLlmSettings } {
+): LlmConfig & { shared: SharedLlmSettings; source: RunLlmSource } {
   const shared = resolveSharedLlmSettings();
   const explicit =
     bodyLlm && typeof bodyLlm === 'object' ? (bodyLlm as Record<string, unknown>) : {};
@@ -85,14 +92,34 @@ export function resolveRunLlmConfig(
   const explicitProvider = str(explicit.provider);
   const explicitModel = str(explicit.model);
 
-  const provider = explicitProvider || shared.provider;
-  const model =
-    explicitModel || (provider === shared.provider ? shared.model : '');
+  // R181: the Run Center CLI-agent override sits between explicit API
+  // callers and the shared chat default. It only carries `cli:*` providers.
+  const override = getRunProviderOverride();
 
-  const out: LlmConfig & { shared: SharedLlmSettings } = {
+  let provider: string;
+  let model: string;
+  let source: RunLlmSource;
+  if (explicitProvider) {
+    provider = explicitProvider;
+    model = explicitModel || (provider === shared.provider ? shared.model : '');
+    source = 'explicit';
+  } else if (override) {
+    provider = override.provider;
+    // An explicit model-only body.llm acts as a model hint for the CLI agent
+    // (the pre-R180 UI allowed provider+model combos like cli:hermes+model).
+    model = explicitModel || override.model || '';
+    source = 'run-override';
+  } else {
+    provider = shared.provider;
+    model = shared.model;
+    source = 'shared';
+  }
+
+  const out: LlmConfig & { shared: SharedLlmSettings; source: RunLlmSource } = {
     provider,
     ...(model ? { model } : {}),
     shared,
+    source,
   };
   const system = str(explicit.system);
   if (system) out.system = system;

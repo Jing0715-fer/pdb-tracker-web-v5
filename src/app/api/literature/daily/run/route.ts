@@ -9,7 +9,7 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   // R180: LLM 设置与 Agent 聊天共享（.hermes 默认 provider/model；显式 body.llm 可覆盖）。
   {
-    const { shared: _sharedLlm, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
+    const { shared: _sharedLlm, source: _llmSource, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
     body.llm = resolvedLlm;
   }
   const date = body.date || new Date().toISOString().slice(0, 10);

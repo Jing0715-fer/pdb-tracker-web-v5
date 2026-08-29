@@ -87,6 +87,36 @@ const nextConfig: NextConfig = {
     // than the webpack entry approach (which had issues with data: URLs).
 
     if (dev) {
+      // ── OOM mitigation (R181): dev source-map downgrade ───────────────────
+      // Next dev (webpack) implements `eval-source-map` NOT via the devtool
+      // string but via a forked `EvalSourceMapDevToolPlugin` pushed into
+      // config.plugins (with config.devtool set to `false`). Overwriting
+      // config.devtool is pointless — Next 16 force-reverts any change
+      // ("Reverting webpack devtool to 'false'") — so the ONLY effective lever
+      // is stripping that plugin. Without it (devtool stays `false`), dev
+      // serves NO per-module source maps, which cut next-server RSS by
+      // ~750MB on the fully-warmed app (2618→1861MB) — the difference between
+      // the kernel OOM-killing the server when Run Center compiles and a
+      // stable ~1.7GB system headroom on the 4GB sandbox.
+      //
+      // Opt-in (debugging sessions): PDB_TRACKER_DEV_SOURCEMAPS=1 restores
+      // LINE-LEVEL original-source maps cheaply (columns:false ≈ webpack's
+      // 'eval-cheap-module-source-map') without touching config.devtool.
+      const stripped = (config.plugins || []).filter(
+        (p) => p?.constructor?.name !== 'EvalSourceMapDevToolPlugin',
+      );
+      if (process.env.PDB_TRACKER_DEV_SOURCEMAPS === '1') {
+        try {
+          const webpack = localRequire('webpack');
+          stripped.push(
+            new webpack.EvalSourceMapDevToolPlugin({ module: true, columns: false }),
+          );
+        } catch {
+          /* webpack require failed — stay mapless */
+        }
+      }
+      config.plugins = stripped;
+
       const root = resolve(__dirname_val);
       const ignoredPaths = [
         resolve(root, '.hermes'),

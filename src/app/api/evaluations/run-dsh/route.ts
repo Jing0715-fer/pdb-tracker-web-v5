@@ -56,6 +56,8 @@ export async function POST(req: Request) {
   // R180: DSH 模式 LLM 设置与 Agent 聊天共享（.hermes 默认 provider/model）。
   // 显式 body.llm 仍可覆盖（API 编程调用向后兼容）；Run Center UI 不再发送
   // 自身的 localStorage 配置。
+  // R181: 优先级 = 显式 body.llm > Run Center CLI-agent 覆盖（.hermes/
+  // run-provider.json，agent 检测选定的本地 CLI）> 共享默认。
   const llm = resolveRunLlmConfig(body?.llm);
 
   // ── 幂等 schema 迁移（含 R179 新增的 mode/outline/figures 列）─────────
@@ -77,9 +79,17 @@ export async function POST(req: Request) {
   (async () => {
     const t0 = Date.now();
     try {
-      emit({ stage: 'init', level: 'info', message: `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}（与 Agent 聊天共享）`, progress: 2 });
-      if (!llm.shared.available) {
+      // R181: 标注 LLM 来源——共享默认 / Run Center 本地 CLI Agent 覆盖 / 显式指定。
+      const llmSourceLabel =
+        llm.source === 'run-override' ? '（Run Center 本地 CLI Agent）'
+        : llm.source === 'explicit' ? '（显式指定）'
+        : '（与 Agent 聊天共享）';
+      emit({ stage: 'init', level: 'info', message: `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`, progress: 2 });
+      if (llm.source !== 'run-override' && !llm.shared.available) {
         emit({ stage: 'init', level: 'warn', message: `共享 LLM「${llm.shared.displayName}」未配置 API Key，实际调用将回退到可用 provider（zai SDK 兜底）。可在 Run Center 的 LLM 设置或 Agent 聊天供应商面板中配置。`, progress: 2 });
+      }
+      if (llm.source === 'run-override') {
+        emit({ stage: 'init', level: 'info', message: `Run Center 使用本地 CLI Agent「${llm.provider}」执行 LLM 调用（agent 检测选定）；CLI 不可用时自动回退到可用 provider。`, progress: 2 });
       }
 
       const result = await runDshEvaluation({
