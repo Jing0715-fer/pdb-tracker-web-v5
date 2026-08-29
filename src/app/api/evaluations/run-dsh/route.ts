@@ -17,6 +17,7 @@ import { sseStream, withLog, type SseEvent } from '@/lib/sse';
 import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { runDshEvaluation } from '@/lib/eval-dsh/agent';
+import { resolveRunLlmConfig } from '@/lib/agent/eval-llm';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,11 +53,10 @@ export async function POST(req: Request) {
   const maxLitCount = Math.max(0, Math.min(MAX_LIT_COUNT_CAP, Number(body?.maxLitCount ?? 20)));
   const forceBlast = !!body?.forceBlast;
   const skipBlast = !!body?.skipBlast;
-  // DSH 模式默认 zai SDK（本沙箱可用；用户可用 body.llm 覆盖）。
-  const llm = {
-    ...(body?.llm && typeof body.llm === 'object' ? body.llm : {}),
-    provider: body?.llm?.provider || 'zai',
-  };
+  // R180: DSH 模式 LLM 设置与 Agent 聊天共享（.hermes 默认 provider/model）。
+  // 显式 body.llm 仍可覆盖（API 编程调用向后兼容）；Run Center UI 不再发送
+  // 自身的 localStorage 配置。
+  const llm = resolveRunLlmConfig(body?.llm);
 
   // ── 幂等 schema 迁移（含 R179 新增的 mode/outline/figures 列）─────────
   try {
@@ -77,13 +77,16 @@ export async function POST(req: Request) {
   (async () => {
     const t0 = Date.now();
     try {
-      emit({ stage: 'init', level: 'info', message: `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」`, progress: 2 });
+      emit({ stage: 'init', level: 'info', message: `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}（与 Agent 聊天共享）`, progress: 2 });
+      if (!llm.shared.available) {
+        emit({ stage: 'init', level: 'warn', message: `共享 LLM「${llm.shared.displayName}」未配置 API Key，实际调用将回退到可用 provider（zai SDK 兜底）。可在 Run Center 的 LLM 设置或 Agent 聊天供应商面板中配置。`, progress: 2 });
+      }
 
       const result = await runDshEvaluation({
         uniprot,
         question,
         opts: { maxPdb, maxBlastHits, maxLitCount, forceBlast, skipBlast, signal: req.signal },
-        llm,
+        llm: { provider: llm.provider, model: llm.model, ...(llm.system ? { system: llm.system } : {}) },
         emit,
         signal: req.signal,
       });

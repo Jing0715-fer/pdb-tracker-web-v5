@@ -2,16 +2,23 @@ import { sseStream, sleep, type SseEvent } from '@/lib/sse';
 import { generateText } from '@/lib/llm';
 import { esearch, efetch, classifyMethod, PATH_A_QUERY, PATH_B_QUERY, PATH_C_QUERY, type FetchedPaper } from '@/lib/pubmed';
 import { db } from '@/lib/db';
+import { resolveRunLlmConfig } from '@/lib/agent/eval-llm';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
+  // R180: LLM 设置与 Agent 聊天共享（.hermes 默认 provider/model；显式 body.llm 可覆盖）。
+  {
+    const { shared: _sharedLlm, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
+    body.llm = resolvedLlm;
+  }
   const date = body.date || new Date().toISOString().slice(0, 10);
   const windowDays = Number(body.windowDays ?? 3);
   const maxPathA = Number(body.maxPathA ?? 300);
   const maxPathB = Number(body.maxPathB ?? 50);
   const maxPathC = Number(body.maxPathC ?? 200);
   const skipWikiFiles = !!body.skipWikiFiles;
+  // R180: shared Agent-chat LLM config (resolved above).
   const provider = body.llm?.provider || 'cli:hermes';
   const model = body.llm?.model || 'hermes';
   const { stream, progress, done } = sseStream();

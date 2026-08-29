@@ -115,10 +115,19 @@ export function getProviderConfig(providerId: string): ProviderConfig {
   return configs[providerId] ?? {};
 }
 
-/** Set the config for a single provider (merges with existing). */
+/** Set the config for a single provider (merges with existing).
+ * R180: undefined fields mean "don't touch" — previously `{defaultModel}` alone
+ * clobbered a stored apiKey to undefined via object spread (the shared-LLM
+ * popover posts model-only updates). */
 export function setProviderConfig(providerId: string, config: ProviderConfig): void {
   const configs = loadProviderConfigs();
-  configs[providerId] = { ...configs[providerId], ...config };
+  const merged: ProviderConfig = { ...configs[providerId] };
+  for (const [key, value] of Object.entries(config)) {
+    if (value !== undefined) {
+      (merged as Record<string, unknown>)[key] = value;
+    }
+  }
+  configs[providerId] = merged;
   saveProviderConfigs(configs);
 }
 

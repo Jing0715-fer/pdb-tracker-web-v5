@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { fetchWeeklyPdbIds, fetchPdbEntryDetails, type PdbEntryDetail } from '@/lib/rcsb';
 import { generateText } from '@/lib/llm';
 import { sanitizeReport } from '@/lib/markdown-renderer';
+import { resolveRunLlmConfig } from '@/lib/agent/eval-llm';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -334,7 +335,13 @@ export async function GET() {
 }
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
+  // R180: LLM 设置与 Agent 聊天共享（.hermes 默认 provider/model；显式 body.llm 可覆盖）。
+  {
+    const { shared: _sharedLlm, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
+    body.llm = resolvedLlm;
+  }
   const maxCycles: 1 | 2 | 3 = ([1, 2, 3].includes(Number(body.maxCycles)) ? Number(body.maxCycles) : 2) as 1 | 2 | 3;
+  // R180: shared Agent-chat LLM config (resolved above).
   const provider = body.llm?.provider || 'cli:hermes';
   const model = body.llm?.model || 'hermes';
   // Allow custom ISO week override (format "YYYY-Www"). Compute the week's

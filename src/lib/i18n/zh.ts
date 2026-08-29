@@ -5,8 +5,18 @@
 export const zh = {
   // ─── Run Center ──────────────────────────────────────────────────────────
   runCenter: '运行中心',
-  runCenterDesc: '每日文献检索 · 蛋白靶点评估 · PDB 周报生成 — 支持并行触发、SSE 实时进度、自动 provider 选择',
+  runCenterDesc: '每日文献检索 · 蛋白靶点评估 · PDB 周报生成 — 支持并行触发、SSE 实时进度、LLM 设置与 Agent 聊天共享',
   llmProvider: 'LLM 提供方',
+  // ─── R180: 共享 LLM 设置（Agent 聊天 + Run Center 三模块）────────────────
+  llmSettingsTitle: 'LLM 设置',
+  llmSettingsSharedHint: '与 Agent 聊天共享 — 评估（经典 / DSH）、文献、周报与新聊天会话使用同一供应商与模型',
+  llmSettingsProvider: '供应商',
+  llmSettingsModel: '模型',
+  llmSettingsCustomModel: '自定义模型…',
+  llmSettingsCustomModelPlaceholder: '输入模型 ID…',
+  llmSettingsManageKeys: '管理 API Key',
+  llmSettingsSaved: '已保存',
+  llmSettingsUnavailableWarn: '该供应商未配置 API Key — 运行时将自动回退到可用供应商（zai SDK 兜底）。点击下方「管理 API Key」进行配置。',
   database: '数据库',
   dbTestWarning: '当前使用的是测试数据库（db/custom.db），仅用于功能验证。建议点击「新建」创建正式数据库以保存您的工作数据。',
   dbReady: '数据库已就绪，运行中心与三大模块已同步',

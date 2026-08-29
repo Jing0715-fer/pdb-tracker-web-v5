@@ -9,17 +9,19 @@
  *   • Tabbed navigation across the three skill modules (instead of one long scroll)
  *   • Gradient-accented module cards with clear visual hierarchy
  *   • Animated SSE progress feed with color-coded levels, progress bar, auto-scroll
- *   • Polished LLM provider selector with status pills + scan animation
- *   • Collapsible LLM advanced config, full dark mode, responsive layout
+ *   • R180: shared LLM settings — one small button entry (SharedLlmButton) that
+ *     manages the SAME provider/model store the Agent chat uses (.hermes);
+ *     classic and DSH evaluation both consume it (server-side resolution)
  *   • Framer Motion micro-interactions for state transitions
  *
  * The three modules mirror the original backend contracts:
  *   ① POST /api/literature/daily/run  — Structure-Biology Daily Literature Report
  *   ② POST /api/evaluations/run       — Target Evaluation + LLM Report (atomic)
+ *     ②' POST /api/evaluations/run-dsh — DSH question-driven evaluation (R179)
  *   ③ POST /api/pdb-weekly/run        — Manual PDB Weekly Report (SSE, 1–3 cycles)
  *
- * LLM config (provider / apiKey / baseUrl / model / system) is shared across
- * ① / ② and flows into ③ via the same `llm` body field.
+ * R180: the LLM provider/model is resolved SERVER-SIDE from the shared
+ * Agent-chat settings — the client no longer sends a localStorage `llm` body.
  */
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
@@ -30,12 +32,6 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useRunStream, type StreamEvent } from '@/lib/use-run-stream';
 import { useI18n } from '@/lib/i18n';
 import {
@@ -49,6 +45,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LazyMarkdown } from '@/components/lazy-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
+// R180: shared LLM settings entry (same store as the Agent chat)
+import { SharedLlmButton } from '@/components/agent/SharedLlmButton';
 import {
   BookOpen,
   FlaskConical,
@@ -60,7 +58,6 @@ import {
   XCircle,
   Plus,
   X,
-  RefreshCw,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -72,7 +69,6 @@ import {
   FileText,
   Zap,
   Terminal,
-  Lock,
   Layers,
   Search,
   Copy,
@@ -99,36 +95,6 @@ import { SearchPathStats } from '@/components/search-path-stats';
 /* ──────────────────────────────────────────────────────────────────────── */
 /*  Types                                                                    */
 /* ──────────────────────────────────────────────────────────────────────── */
-
-interface LlmInfo {
-  env: {
-    provider?: string;
-    apiKey?: string;
-    baseUrl?: string;
-    model?: string;
-  };
-  chosen: string;
-  available: Array<{
-    provider: string;
-    bin?: string | null;
-    icon: string;
-  /** When set, render <img /> instead of emoji. */
-  iconUrl?: string | null;
-    label: string;
-    reason: string;
-    available: boolean;
-    via: 'native' | 'wsl' | 'sdk';
-  }>;
-  totalClisScanned: number;
-}
-
-interface LlmUserConfig {
-  provider: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  system: string;
-}
 
 interface RunLog {
   ts: string;
@@ -223,37 +189,6 @@ function asDshFigure(v: unknown): DshFigurePayload | null {
     vlmReason: typeof o.vlmReason === 'string' ? o.vlmReason : undefined,
   };
 }
-
-const DEFAULT_LLM_CFG: LlmUserConfig = {
-  provider: '',
-  apiKey: '',
-  baseUrl: '',
-  model: '',
-  system: '',
-};
-
-const STORAGE_KEY = 'pdb-tracker:llm-cfg:v2';
-const STORAGE_PROVIDER_KEY = 'pdb-tracker:llm-provider:v2';
-const AUTO_PROVIDER = '__auto__';
-
-/* ──────────────────────────────────────────────────────────────────────── */
-/*  localStorage helpers                                                     */
-/* ──────────────────────────────────────────────────────────────────────── */
-
-function loadStoredProvider(): string {
-  if (typeof window === 'undefined') return AUTO_PROVIDER;
-  try { return localStorage.getItem(STORAGE_PROVIDER_KEY) || AUTO_PROVIDER; } catch { return AUTO_PROVIDER; }
-}
-function loadStoredCfg(): LlmUserConfig {
-  if (typeof window === 'undefined') return DEFAULT_LLM_CFG;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_LLM_CFG;
-    return { ...DEFAULT_LLM_CFG, ...JSON.parse(raw) };
-  } catch { return DEFAULT_LLM_CFG; }
-}
-function persistProvider(p: string) { try { localStorage.setItem(STORAGE_PROVIDER_KEY, p); } catch { /* ignore */ } }
-function persistCfg(c: LlmUserConfig) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); } catch { /* ignore */ } }
 
 /* ──────────────────────────────────────────────────────────────────────── */
 /*  Small presentational helpers                                             */
@@ -1851,10 +1786,6 @@ export function SettingsRunPanel({
   const setOpen = externalOnOpenChange ?? setInternalOpen;
   const activeTab = externalTab ?? internalTab;
   const setActiveTab = externalOnTabChange ?? setInternalTab;
-  const [llmInfo, setLlmInfo] = useState<LlmInfo | null>(null);
-  const [chosenProvider, setChosenProvider] = useState<string>(() => loadStoredProvider());
-  const [llmCfg, setLlmCfg] = useState<LlmUserConfig>(() => loadStoredCfg());
-  const [showLlmCfg, setShowLlmCfg] = useState(false);
   const [logs, setLogs] = useState<RunLog[]>([]);
   const [logFilter, setLogFilter] = useState<'all' | 'literature' | 'eval' | 'weekly'>('all');
   const [logSearch, setLogSearch] = useState('');
@@ -1863,7 +1794,6 @@ export function SettingsRunPanel({
   const isRunning = (m: string) => running.has(m);
   const markRunning = (m: string) => setRunning(s => new Set(s).add(m));
   const markDone = (m: string) => setRunning(s => { const n = new Set(s); n.delete(m); return n; });
-  const [scanning, setScanning] = useState(false);
 
   // ① Daily literature params
   const [litDate, setLitDate] = useState(new Date().toISOString().slice(0, 10));
@@ -2193,22 +2123,6 @@ export function SettingsRunPanel({
   /* ── data fetch on open ─────────────────────────────────────────────── */
   useEffect(() => {
     if (!open) return;
-    if (!llmInfo) {
-      Promise.resolve().then(() => setScanning(true));
-      fetch('/api/llm/providers')
-        .then(r => r.json())
-        .then((d: LlmInfo) => {
-          setLlmInfo(d);
-          setLlmCfg(prev => ({
-            ...prev,
-            provider: prev.provider || d.chosen || '',
-            model: prev.model || d.env.model || '',
-            baseUrl: prev.baseUrl || d.env.baseUrl || '',
-          }));
-        })
-        .catch(() => { /* ignore */ })
-        .finally(() => setScanning(false));
-    }
     if (litExistingReports.length === 0) {
       fetch('/api/literature/daily/list')
         .then(r => r.json())
@@ -2228,50 +2142,6 @@ export function SettingsRunPanel({
     }
      
   }, [open]);
-
-  /* ── provider picker ────────────────────────────────────────────────── */
-  const pickProvider = (providerId: string) => {
-    setChosenProvider(providerId);
-    persistProvider(providerId);
-    if (providerId === AUTO_PROVIDER) {
-      setLlmCfg(prev => ({ ...prev, provider: '' }));
-    } else {
-      setLlmCfg(prev => ({ ...prev, provider: providerId }));
-    }
-  };
-
-  const effectiveProviderId = chosenProvider === AUTO_PROVIDER ? (llmInfo?.chosen || '') : chosenProvider;
-
-  const rescan = () => {
-    // Round 51: re-scan UI button must CLEAR the on-disk probe cache + re-probe
-    // before fetching providers. Previously this only called GET /api/llm/providers
-    // which returns the (possibly stale) disk cache without re-probing when the
-    // DISK_TTL_MS (6 days) hasn't elapsed. Calling POST /api/llm/refresh first
-    // ensures the user sees the current CLI inventory on every click.
-    setScanning(true);
-    fetch('/api/llm/refresh', { method: 'POST' })
-      .then(() => fetch('/api/llm/providers'))
-      .then(r => r.json())
-      .then((d: LlmInfo) => setLlmInfo(d))
-      .catch(() => { /* ignore */ })
-      .finally(() => setScanning(false));
-  };
-
-  const llmBody = useCallback(() => {
-    const out: any = {};
-    if (chosenProvider && chosenProvider !== AUTO_PROVIDER) {
-      out.provider = chosenProvider;
-    } else if (llmCfg.provider) {
-      out.provider = llmCfg.provider;
-    }
-    if (llmCfg.apiKey) out.apiKey = llmCfg.apiKey;
-    if (llmCfg.baseUrl) out.baseUrl = llmCfg.baseUrl;
-    if (llmCfg.model) out.model = llmCfg.model;
-    if (llmCfg.system) out.system = llmCfg.system;
-    return Object.keys(out).length > 0 ? out : undefined;
-  }, [chosenProvider, llmCfg]);
-
-  useEffect(() => { persistCfg(llmCfg); }, [llmCfg]);
 
   const log = (entry: RunLog) => setLogs(l => {
     // If this is a success/error entry for a module that has a 'running'
@@ -2347,7 +2217,6 @@ export function SettingsRunPanel({
       maxPathC: litMaxPathC,
       maxPapers: litMaxPapers,
       skipWikiFiles: litSkipWikiFiles,
-      llm: llmBody(),
     });
   };
 
@@ -2419,7 +2288,6 @@ export function SettingsRunPanel({
         maxLitCount: evalMaxLitCount,
         forceBlast: t0.forceBlast,
         skipBlast: t0.skipBlast,
-        llm: llmBody(),
       });
       return;
     }
@@ -2460,7 +2328,6 @@ export function SettingsRunPanel({
           generateReport: evalGenerateReport,
           saveReportFile: evalSaveReportFile,
           skipStructureAnalysis: evalSkipStructureAnalysis,
-          llm: llmBody(),
         });
       } else {
         // Multiple sequences — send as `sequences` array; backend runs BLAST
@@ -2477,7 +2344,6 @@ export function SettingsRunPanel({
           generateReport: evalGenerateReport,
           saveReportFile: evalSaveReportFile,
           skipStructureAnalysis: evalSkipStructureAnalysis,
-          llm: llmBody(),
         });
       }
       return;
@@ -2516,7 +2382,6 @@ export function SettingsRunPanel({
       generateReport: evalGenerateReport,
       saveReportFile: evalSaveReportFile,
       skipStructureAnalysis: evalSkipStructureAnalysis,
-      llm: llmBody(),
     });
   };
 
@@ -2528,7 +2393,6 @@ export function SettingsRunPanel({
     weeklyStream.start('/api/pdb-weekly/run', {
       maxCycles,
       ...(weeklyCustomWeek ? { weekId: weeklyCustomWeek } : {}),
-      llm: llmBody(),
     });
   };
 
@@ -2691,226 +2555,24 @@ export function SettingsRunPanel({
           </DialogHeader>
         </div>
 
-        {/* ── LLM provider status bar — 2-column compact layout ──────────── */}
-        <div className="px-6 py-2.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-bg/40 dark:bg-[#1a1917]/40 flex-shrink-0">
+        {/* ── R180: shared LLM settings — small button entry (replaces the old
+            LLM provider status bar + advanced config block). The provider/model
+            store is SHARED with the Agent chat; classic and DSH evaluation,
+            literature and weekly modules all resolve it server-side. ─────── */}
+        <div className="px-6 py-2 border-b border-claude-border dark:border-[#3d3832] bg-claude-bg/40 dark:bg-[#1a1917]/40 flex-shrink-0">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
-              <div className="flex items-center gap-1.5 shrink-0">
-                <Cpu className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590]" />
-                <span className="text-sm font-medium text-claude-text dark:text-[#e8e4dd]">{t.llmProvider}</span>
-              </div>
-              <code className="px-2 py-0.5 rounded bg-claude-surface dark:bg-[#1a1917] border border-claude-border dark:border-[#3d3832] font-mono text-sm text-claude-text dark:text-[#e8e4dd] shrink-0">
-                {effectiveProviderId || (scanning ? (locale === 'zh' ? '扫描中…' : 'Scanning…') : (locale === 'zh' ? '未检测到' : 'Not detected'))}
-              </code>
-              <div className="hidden sm:flex items-center gap-2 text-xs text-claude-text-muted/70 dark:text-[#9b9590]/70">
-                <span>
-                  {chosenProvider === AUTO_PROVIDER ? (locale === 'zh' ? 'auto · ' : 'auto · ') : (locale === 'zh' ? '🔒 已锁定 · ' : '🔒 Locked · ')}
-                  <span className="font-mono">
-                    {llmInfo?.available?.length ?? 0}
-                  </span>
-                  {locale === 'zh' ? ' 可用' : ' available'}
-                </span>
-                <span className="opacity-50">/</span>
-                <span className="font-mono">{llmInfo?.totalClisScanned ?? 0} {locale === 'zh' ? '个 CLI' : 'CLI'}</span>
-              </div>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-xs text-claude-text-muted dark:text-[#9b9590] truncate">
+                {locale === 'zh' ? '评估（经典 / DSH）· 文献 · 周报与 Agent 聊天共用 LLM 设置' : 'Evaluations (classic / DSH) · literature · weekly share LLM settings with the Agent chat'}
+              </span>
             </div>
-            <div className="flex items-center gap-1">
-              <TooltipProvider delayDuration={300}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 hover:bg-claude-border-light dark:hover:bg-[#2b2926]" onClick={rescan} disabled={scanning}>
-                      <RefreshCw className={`h-3.5 w-3.5 ${scanning ? 'animate-spin' : ''}`} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">{locale === 'zh' ? '重新扫描 CLI / SDK' : 'Re-scan CLI / SDK'}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <Button variant="ghost" size="sm" className="h-7 text-sm gap-1 hover:bg-claude-border-light dark:hover:bg-[#2b2926]" onClick={() => setShowLlmCfg(s => !s)}>
-                <ChevronDown className={`h-3 w-3 transition-transform ${showLlmCfg ? 'rotate-180' : ''}`} />
-                {showLlmCfg ? (locale === 'zh' ? '隐藏配置' : 'Hide Config') : (locale === 'zh' ? 'LLM 配置' : 'LLM Config')}
-              </Button>
-            </div>
+            <SharedLlmButton />
           </div>
+        </div>
 
-          {/* provider pills — always show at least auto + z.ai SDK; backend providers appended when available */}
-          <div className="mt-2 flex flex-wrap gap-1.5">
-              <button
-                type="button"
-                onClick={() => pickProvider(AUTO_PROVIDER)}
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all ${
-                  chosenProvider === AUTO_PROVIDER
-                    ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent font-medium shadow-sm'
-                    : 'border-claude-border dark:border-[#3d3832] text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] hover:border-claude-accent/40'
-                }`}
-                title={locale === 'zh' ? '让服务器按 CLI → SDK 顺序自动选择' : 'Let server auto-select in CLI → SDK order'}
-              >
-                <Sparkles className="h-2 w-2" />
-                <span>auto</span>
-              </button>
-              {llmInfo?.available && llmInfo.available.length > 0 && llmInfo.available.map((a, i) => {
-                const isPinned = chosenProvider === a.provider;
-                const isEffective = effectiveProviderId === a.provider;
-                // Hover-only tooltip: provider name (left), then full bin path (right).
-                // Path is suppressed from the visible label to keep pills compact.
-                return (
-                  <TooltipProvider key={i} delayDuration={250}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => pickProvider(a.provider)}
-                          className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                            isPinned
-                              ? 'border-primary/50 bg-primary/10 text-foreground shadow-sm'
-                              : isEffective
-                              ? 'border-emerald-500/40 bg-emerald-500/5 text-foreground'
-                              : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-primary/40'
-                          }`}
-                        >
-                          {a.iconUrl ? (
-                            <img
-                              src={`/api/llm/icon?provider=${encodeURIComponent(a.provider)}&bin=${encodeURIComponent(a.bin || '')}`}
-                              alt={a.label}
-                              width={14}
-                              height={14}
-                              className="h-3.5 w-3.5 object-contain shrink-0"
-                              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                            />
-                          ) : (
-                            <span className="text-[12px] leading-none">{a.icon || '·'}</span>
-                          )}
-                          <span className="font-mono text-sm">{a.label || a.provider}</span>
-                          {a.via === 'wsl' && <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-violet-500/15 text-violet-600 dark:text-violet-300 text-xs font-medium font-mono">WSL</span>}
-                          {a.via === 'sdk' && <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-sky-500/15 text-sky-600 dark:text-sky-300 text-xs font-medium font-mono">SDK</span>}
-                          {a.configHint && (
-                            <span
-                              className="px-1.5 h-5 inline-flex items-center rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-300 text-xs font-medium"
-                              title={a.configHint}
-                            >
-                              ⚠
-                            </span>
-                          )}
-                          {isPinned && <Lock className="h-2.5 w-2.5 opacity-70" />}
-                          {isEffective && !isPinned && (
-                            <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="max-w-xs whitespace-pre-line text-left">
-                        <div className="font-mono text-xs">{a.label || a.provider}</div>
-                        {a.bin && (
-                          <div className="font-mono text-xs opacity-80 mt-0.5 break-all">📁 {a.bin}</div>
-                        )}
-                        <div className="text-xs opacity-70 mt-0.5">{a.reason}</div>
-                        {a.configHint && (
-                          <div className="text-xs text-amber-600 dark:text-amber-300 mt-1 flex items-start gap-1">
-                            <span>⚠</span>
-                            <span>{a.configHint}</span>
-                          </div>
-                        )}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                );
-              })}
-              {/* z.ai SDK — temporary option for LLM testing using z-ai-web-dev-sdk */}
-              <TooltipProvider delayDuration={250}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => pickProvider('zai')}
-                      className={`group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
-                        chosenProvider === 'zai'
-                          ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent shadow-sm'
-                          : 'border-claude-accent/30 bg-claude-accent/5 text-claude-accent hover:border-claude-accent/50'
-                      }`}
-                      title="z.ai SDK (z-ai-web-dev-sdk) — temporary LLM test option"
-                    >
-                      <Sparkles className="h-3 w-3" />
-                      <span className="font-mono text-sm">z.ai</span>
-                      <span className="px-1.5 h-5 inline-flex items-center rounded-md bg-claude-accent/15 text-claude-accent text-xs font-medium font-mono">SDK</span>
-                      {chosenProvider === 'zai' && <Lock className="h-2.5 w-2.5 opacity-70" />}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs whitespace-pre-line text-left">
-                    <div className="font-mono text-xs">z.ai SDK (z-ai-web-dev-sdk)</div>
-                    <div className="text-xs text-muted-foreground mt-1">Temporary LLM test option using built-in z-ai-web-dev-sdk to call GLM models. No extra API key configuration needed.</div>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
-
-          <div className="mt-1.5 text-xs text-muted-foreground/60">
-            {chosenProvider === AUTO_PROVIDER
-              ? (locale === 'zh' ? '自动模式：服务器按 CLI → SDK 顺序自动选，锁定的 provider 显示 🔒' : 'Auto mode: server auto-selects in CLI → SDK order. Locked provider shows 🔒')
-              : `Locked to ${chosenProvider}. Click auto or another provider to switch.`}
-          </div>
-
-          {/* advanced LLM config (collapsible) */}
-          <AnimatePresence>
-            {showLlmCfg && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="overflow-hidden"
-              >
-                <div className="mt-3 pt-3 border-t border-border/40 grid grid-cols-2 gap-2.5">
-                  <div className="col-span-2">
-                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">{locale === 'zh' ? '提供方' : 'Provider'}</Label>
-                    <Input
-                      placeholder={locale === 'zh' ? 'cli:hermes | cli:claude | cli:codex | anthropic | openai | (空=自动)' : 'cli:hermes | cli:claude | cli:codex | anthropic | openai | (empty=auto)'}
-                      value={llmCfg.provider}
-                      onChange={e => setLlmCfg({ ...llmCfg, provider: e.target.value })}
-                      className="h-8 px-2 text-xs md:text-xs font-mono mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">{locale === 'zh' ? 'API 密钥' : 'API Key'}</Label>
-                    <Input
-                      type="password"
-                      placeholder="sk-…"
-                      value={llmCfg.apiKey}
-                      onChange={e => setLlmCfg({ ...llmCfg, apiKey: e.target.value })}
-                      className="h-8 px-2 text-xs md:text-xs font-mono mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">{locale === 'zh' ? 'Base URL' : 'Base URL'}</Label>
-                    <Input
-                      placeholder="https://api.openai.com/v1"
-                      value={llmCfg.baseUrl}
-                      onChange={e => setLlmCfg({ ...llmCfg, baseUrl: e.target.value })}
-                      className="h-8 px-2 text-xs md:text-xs font-mono mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">{locale === 'zh' ? '模型' : 'Model'}</Label>
-                    <Input
-                      placeholder="claude-sonnet-4-20250514 / gpt-4o-mini"
-                      value={llmCfg.model}
-                      onChange={e => setLlmCfg({ ...llmCfg, model: e.target.value })}
-                      className="h-8 px-2 text-xs md:text-xs font-mono mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">{locale === 'zh' ? 'System' : 'System'}</Label>
-                    <Input
-                      placeholder={locale === 'zh' ? '(可选) System 提示词' : '(optional) System prompt'}
-                      value={llmCfg.system}
-                      onChange={e => setLlmCfg({ ...llmCfg, system: e.target.value })}
-                      className="h-8 px-2 text-xs md:text-xs font-mono mt-1"
-                    />
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
+        <div className="px-6 py-2.5 border-b border-claude-border dark:border-[#3d3832] bg-claude-bg/40 dark:bg-[#1a1917]/40 flex-shrink-0">
           {/* ── Database config (always visible) ──────────────────────── */}
-          <div className="mt-3 border-t border-claude-border/40 dark:border-[#3d3832]/40 pt-2">
+          <div>
             {/* Title + active path + schema badges + loaded status — single dense line */}
             <div className="flex items-center gap-1.5 flex-wrap mb-3">
               <Database className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590] shrink-0" />
@@ -3642,10 +3304,10 @@ export function SettingsRunPanel({
                     {locale === 'zh' ? '对比报告' : 'Compare'}
                   </Button>
 
-                  <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
-                    <Cpu className="h-3 w-3" />
-                    {locale === 'zh' ? 'LLM →' : 'LLM →'} <code className="px-1 py-0.5 rounded bg-muted/60 font-mono">{effectiveProviderId || 'auto'}</code>
-                  </span>
+                  {/* R180: the old "LLM → provider" hint was removed — the provider
+                      is resolved server-side from the shared Agent-chat settings;
+                      the SharedLlmButton at the top of the dialog is the single
+                      source of truth. */}
                 </div>
 
                 {/* Cycle timeline — visualises the Generator → Critic → Synthesis orchestration */}

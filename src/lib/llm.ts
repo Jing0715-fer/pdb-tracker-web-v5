@@ -24,6 +24,22 @@ import { existsSync, writeFileSync, readFileSync, unlinkSync, statSync, mkdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// R180: shared LLM settings — the Agent-chat provider catalog (.hermes store)
+// is now also usable by the Run Center modules (eval classic/DSH, literature,
+// weekly). These imports are server-side only and deliberately leaf-level
+// (catalog + credentials) to avoid any cycle with the agent subsystem.
+import {
+  PROVIDER_CATALOG,
+  getProviderProfile,
+  resolveApiKey,
+  resolveBaseURL,
+} from '@/lib/agent/providers';
+
+/** Agent-catalog provider ids (excluding 'zai' which has its own SDK branch). */
+const AGENT_PROVIDER_IDS: ReadonlySet<string> = new Set(
+  PROVIDER_CATALOG.map((p) => p.id).filter((id) => id !== 'zai'),
+);
+
 // ─── Shared cache dir (defined early, used by session registry + provider cache) ──
 const _CACHE_DIR = join(tmpdir(), 'pdb-tracker-cache');
 try { mkdirSync(_CACHE_DIR, { recursive: true }); } catch { /* ignore */ }
@@ -1542,6 +1558,34 @@ async function callAnyLlm(
         continue;
       }
     }
+    // ── Agent-catalog providers (R180 shared settings: deepseek, openai,
+    // anthropic, qwen, moonshot, …) — OpenAI-compat direct fetch with the
+    // credentials the Agent chat stores in .hermes/. Mirrors the chat's
+    // OpenAICompatAdapter wire format (authHeader/authPrefix/extraHeaders),
+    // so eval works with a provider wherever the chat works.
+    if (AGENT_PROVIDER_IDS.has(id)) {
+      try {
+        const t0 = Date.now();
+        const profile = getProviderProfile(id);
+        const text = await callAgentProviderCompat(id, prompt, cfg.system, cfg.model, cfg.signal);
+        return {
+          ok: true,
+          content: text,
+          text,
+          provider: id,
+          model: cfg.model || profile?.defaultModel || id,
+          durationMs: Date.now() - t0,
+          fallback: item.fallback,
+          meta: { via: 'agent-catalog' },
+        };
+      } catch (err: any) {
+        // No key / API error → fall through the rest of the chain (ends at
+        // the always-available zai SDK), so a misconfigured shared default
+        // never hard-fails a Run Center module.
+        errors.push(`${id}: ${err?.message ?? String(err)}`);
+        continue;
+      }
+    }
     // ── z.ai SDK (independent branch, no API key needed) ──
     if (id === 'zai') {
       try {
@@ -1905,6 +1949,108 @@ async function callOpenai(prompt: string, system?: string, model?: string, signa
     return resp.choices?.[0]?.message?.content || '';
   } finally {
     t.dispose();
+  }
+}
+
+/**
+ * R180: Agent-catalog provider call — OpenAI-compatible `/chat/completions`
+ * direct fetch using the credentials the Agent chat stores in `.hermes/`
+ * (with env-var fallback, exactly like the chat's OpenAICompatAdapter).
+ *
+ * Mirrors the chat adapter's wire format: authHeader/authPrefix/extraHeaders
+ * come from the provider profile, so Anthropic's `x-api-key` style auth and
+ * any future header quirks behave identically in chat and Run Center modules.
+ *
+ * Timeout: 300s hard cap (eval chapter generation regularly runs 1-3 min —
+ * the chat's 120s tool-call budget is too tight for full-report prompts).
+ */
+const AGENT_COMPAT_TIMEOUT_MS = 300_000;
+
+async function callAgentProviderCompat(
+  providerId: string,
+  prompt: string,
+  system: string | undefined,
+  model: string | undefined,
+  signal?: AbortSignal,
+): Promise<string> {
+  const profile = getProviderProfile(providerId);
+  if (!profile) throw new Error(`unknown agent provider "${providerId}"`);
+  const apiKey = resolveApiKey(providerId);
+  if (!apiKey) {
+    throw new Error(
+      `no API key configured for "${providerId}" — set it in the shared LLM settings (Run Center LLM button / Agent chat providers panel) or ${profile.apiKeyEnv}`,
+    );
+  }
+  const baseURL = (resolveBaseURL(providerId) ?? profile.baseURL ?? '').replace(/\/+$/, '');
+  if (!baseURL) throw new Error(`no baseURL for provider "${providerId}"`);
+  const url = `${baseURL}/chat/completions`;
+
+  const authHeader = profile.authHeader ?? 'Authorization';
+  const authPrefix = profile.authPrefix ?? 'Bearer ';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    [authHeader]: `${authPrefix}${apiKey}`,
+    ...(profile.extraHeaders ?? {}),
+  };
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: prompt });
+  const body: Record<string, unknown> = {
+    model: model || profile.defaultModel,
+    messages,
+    stream: false,
+  };
+
+  // Compose caller cancellation + hard timeout (same pattern as withSdkTimeout
+  // but self-contained — llm.ts cannot import agent internals beyond the
+  // leaf-level providers barrel).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => {
+    ctrl.abort(
+      typeof DOMException === 'function'
+        ? new DOMException(`agent-provider call timed out after ${AGENT_COMPAT_TIMEOUT_MS}ms`, 'TimeoutError')
+        : new Error(`agent-provider call timed out after ${AGENT_COMPAT_TIMEOUT_MS}ms`),
+    );
+  }, AGENT_COMPAT_TIMEOUT_MS);
+  const onCallerAbort = () => ctrl.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) ctrl.abort(signal.reason);
+    else signal.addEventListener('abort', onCallerAbort, { once: true });
+  }
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => resp.statusText);
+      const isHtml = errText.trimStart().startsWith('<');
+      throw new Error(
+        isHtml
+          ? `${profile.displayName} API error ${resp.status}: server returned HTML (endpoint/key likely incorrect — ${url})`
+          : `${profile.displayName} API error ${resp.status}: ${errText.slice(0, 300)}`,
+      );
+    }
+    const raw = await resp.text();
+    if (raw.trimStart().startsWith('<')) {
+      throw new Error(`${profile.displayName} API returned HTML instead of JSON (endpoint may be incorrect)`);
+    }
+    let json: { choices?: Array<{ message?: { content?: string | null } }> };
+    try {
+      json = JSON.parse(raw) as typeof json;
+    } catch {
+      throw new Error(`${profile.displayName} API returned invalid JSON`);
+    }
+    const content = json.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content) {
+      throw new Error(`${profile.displayName} API returned an empty completion`);
+    }
+    return content;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onCallerAbort);
   }
 }
 

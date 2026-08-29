@@ -5,8 +5,18 @@
 export const en = {
   // ─── Run Center ──────────────────────────────────────────────────────────
   runCenter: 'Run Center',
-  runCenterDesc: 'Daily literature search · Protein target evaluation · PDB weekly report — supports parallel execution, SSE real-time progress, auto provider selection',
+  runCenterDesc: 'Daily literature search · Protein target evaluation · PDB weekly report — supports parallel execution, SSE real-time progress, LLM settings shared with the Agent chat',
   llmProvider: 'LLM Provider',
+  // ─── R180: shared LLM settings (Agent chat + all 3 Run Center modules) ──
+  llmSettingsTitle: 'LLM Settings',
+  llmSettingsSharedHint: 'Shared with the Agent chat — evaluations (classic / DSH), literature, weekly reports and new chat sessions all use this provider & model',
+  llmSettingsProvider: 'Provider',
+  llmSettingsModel: 'Model',
+  llmSettingsCustomModel: 'Custom model…',
+  llmSettingsCustomModelPlaceholder: 'Enter a model ID…',
+  llmSettingsManageKeys: 'Manage API Keys',
+  llmSettingsSaved: 'Saved',
+  llmSettingsUnavailableWarn: 'No API key configured for this provider — runs will fall back to an available provider (zai SDK as last resort). Use "Manage API Keys" below to configure one.',
   database: 'Database',
   dbTestWarning: 'Currently using a test database (db/custom.db) for validation only. Click "New" to create a production database.',
   dbReady: 'Database ready, Run Center and all 3 modules synced',

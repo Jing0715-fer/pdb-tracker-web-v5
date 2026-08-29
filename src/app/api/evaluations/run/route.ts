@@ -13,6 +13,7 @@ import { Prisma } from "@prisma/client";
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { getActiveDbFsPath } from '@/lib/db';
 import { JOURNAL_IF_MAP } from '@/lib/journal-if-map';
+import { resolveRunLlmConfig } from '@/lib/agent/eval-llm';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -258,6 +259,14 @@ async function buildLiteratureInfo(
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
 
+  // R180: LLM 设置与 Agent 聊天共享（classic 模式同样适用）—— .hermes 默认
+  // provider/model；显式 body.llm 仍可覆盖（API 编程调用向后兼容）。
+  // 替换原 Run Center localStorage 配置（UI 已移除）。
+  {
+    const { shared: _sharedLlm, ...resolvedLlm } = resolveRunLlmConfig(body?.llm);
+    body.llm = resolvedLlm;
+  }
+
   // ── Ensure DB schema is up-to-date before any write ──────────────────
   // Legacy DBs may be missing skill module tables (SkillRunRecord etc.)
   // or columns added after the DB was created. applySchemaCompat() is
@@ -306,7 +315,9 @@ export async function POST(req: Request) {
   // Round 36: Allow opting out of structural analysis for faster report generation
   const skipStructureAnalysis = !!body.skipStructureAnalysis;
   const isBatch = !!body.isBatch && targets.length > 1;
-  // Default to hermes CLI (no z-ai — this app must run without z-ai-web-dev-sdk).
+  // R180: body.llm has been replaced with the shared Agent-chat LLM config
+  // above — provider/model now default to the shared default provider
+  // (zai SDK when nothing is configured). Fallbacks kept for safety.
   const provider = body.llm?.provider || 'cli:hermes';
   const model = body.llm?.model || 'hermes';
 

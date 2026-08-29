@@ -4754,3 +4754,33 @@ Work Log:
 Stage Summary:
 - DSH 模式端到端交付：输入 UniProt ID + 科学问题 → 数据收集（方式不变）→ agent 相关性分析（dshRelevance）→ 从 19 章节库规划 5-9 章大纲（dshOutline，格式约束防漂移）→ RCSB 结构图 + web 原理/通路图（z-ai image-search + VLM 验证，宁缺毋滥，上限 2 张）→ 逐章流式撰写（chapter/chapter_done SSE）→ 报告含内嵌配图持久化（SkillEvaluationReport mode='dsh' + outline/figures JSON）。
 - 经典管线零改动并行共存；新增 5 文件 + 修改 11 文件；lint 零新增；4 次真实全链路运行全部成功（3 次后端冒烟 + 1 次变异问题验证）。
+
+---
+Task ID: R180
+Agent: main
+Task: 评估（DSH + classic）的 LLM 设置与 chat 的 DSH LLM 设置共享；Run Center 页面加一个小按钮入口（SharedLlmButton）替代原 LLM config 功能。
+
+Work Log:
+- 架构调查：chat（dsh harness）LLM 设置 = 服务端 `.hermes/agent-providers.json`（每 provider apiKey/baseURL/defaultModel）+ `.hermes/agent-default-provider.json`（默认 provider），由 ProvidersPanel/SessionSettingsPopover UI 管理，chat 新会话经 manager.createSession → getDefaultProvider() ?? 'zai' 解析；而 Run Center 三模块（eval classic/DSH、literature、weekly）此前用客户端 localStorage 配置（pdb-tracker:llm-cfg:v2 + provider pills + Provider/API Key/Base URL/Model/System 高级配置块）经 body.llm 传给路由——两套栈完全独立，且 LlmConfig 无 apiKey/baseUrl 字段（客户端发送也被服务端忽略）。
+- 后端新模块 `src/lib/agent/eval-llm.ts`：resolveSharedLlmSettings()（读 .hermes 默认 provider + config.defaultModel ?? catalog defaultModel → {provider, model, available, hasApiKey, displayName}）+ resolveRunLlmConfig(bodyLlm)（显式 body.llm 字段优先=API 编程调用向后兼容；否则用共享设置；显式 provider ≠ 共享 provider 时不继承共享 model，避免跨 provider 混 model；丢弃 legacy apiKey/baseUrl 字段）。
+- llm.ts 新执行器 callAgentProviderCompat（R180）：agent-catalog 17 家 provider（除 zai 走原 SDK 分支）经 OpenAI-compat `/chat/completions` 直连 fetch——镜像 chat 的 OpenAICompatAdapter 线格式（authHeader/authPrefix/extraHeaders 来自 catalog profile，anthropic x-api-key 兼容），凭据经 resolveApiKey（.hermes config → env），300s 硬超时（评估逐章 1-3min，超 chat 的 120s tool-call 预算）+ 调用方 signal 组合；callAnyLlm 新分支 AGENT_PROVIDER_IDS（置于 anthropic/openai 原生分支之前——resolveApiKey 已含 env 回退，无 key 时两路径等价失败）；失败/无 key → errors.push + continue → 链尾 zai 兜底，误配共享默认值绝不硬失败。
+- credentials.ts setProviderConfig 修复（R180）：undefined 字段不再经对象展开覆写已存值——此前只 POST {defaultModel} 会把已存 apiKey 覆盖为 undefined（共享设置弹窗的仅改模型路径会清空 key）。
+- 4 路由接入共享解析（显式 body.llm 仍可覆盖）：run-dsh（原默认 'zai' 硬编码 → resolveRunLlmConfig；init 帧新增 `LLM=provider/model（与 Agent 聊天共享）` + 共享 provider 不可用时 warn 帧提示回退）、run（classic，原默认 'cli:hermes' → 共享解析，"classic 模式也可用"）、literature/daily/run、pdb-weekly/run（三处均在 body 解析后 `body.llm = resolvedLlm`，后续 generateText/llmWithSession 引用零改动）。
+- 前端新组件 `src/components/agent/SharedLlmButton.tsx`：小药丸按钮（Cpu 图标 + LLM + `Z.ai (GLM) · glm-4.6`）→ Popover：供应商下拉（可用可选、未配置 key 禁用并标注）+ 模型下拉（catalog 列表 + 自定义模型输入）+ 不可用 amber 警告 + 「管理 API Key」按钮——复用 chat 的 ProvidersPanel 弹窗原样组件（同一设置面板）；所有写入走既有 POST /api/agent/providers（setDefault / defaultModel），chat 新会话与 Run Center 模块随之联动=共享契约；mount 时拉取一次 + popover 打开刷新 + ProvidersPanel 关闭后刷新。
+- SettingsRunPanel 手术（-400 行/+40 行）：移除 LlmInfo/LlmUserConfig 类型、DEFAULT_LLM_CFG/STORAGE_KEY/AUTO_PROVIDER 常量、loadStoredProvider/loadStoredCfg/persistProvider/persistCfg、llmInfo/chosenProvider/llmCfg/showLlmCfg/scanning 状态、/api/llm/providers fetch、pickProvider/effectiveProviderId/rescan/llmBody、6 处 `llm: llmBody()` 载荷字段、LLM provider 状态栏 + provider pills + z.ai 药丸 + 高级 LLM 配置块（218 行 UI）、weekly 卡片的 "LLM → provider" 静态提示、未用导入（Tooltip×4/Lock/RefreshCw）；Database config 块改独立容器（原在 LLM bar 容器内）；新增共享提示行 + SharedLlmButton。
+- i18n：zh/en 各 +10 键（llmSettingsTitle/SharedHint/Provider/Model/CustomModel/CustomModelPlaceholder/ManageKeys/Saved/UnavailableWarn + runCenterDesc 改"LLM 设置与 Agent 聊天共享"）。
+- 验证：
+  1. lint/tsc：11 个改动文件 eslint 0 error 0 warning；tsc 全项目 120 errors（基线 124，删除旧代码净减 4，零新增）。
+  2. resolver 单元（bun 直跑）：共享默认 zai/glm-4.6；无 body.llm → zai/glm-4.6；显式 'cli:hermes' 不继承 zai model；system/temperature 透传；legacy apiKey/baseUrl 丢弃。
+  3. DSH 真实运行（curl SSE）：init 帧 `LLM=zai/glm-4.6（与 Agent 聊天共享）`；切共享默认为 deepseek（假 key）后 init 帧 `LLM=deepseek/deepseek-chat（与 Agent 聊天共享）` 且 relevance/outline/章节 1-2 照常生成（deepseek 401 → 回退 zai，curl 直连 api.deepseek.com 证实 401 + 线格式一致）。
+  4. 共享写入链路：POST {defaultModel} 后 .hermes/agent-providers.json 仅含 defaultModel 且 apiKey 存活（merge 修复实证）；浏览器 popover 切 glm-4.5 → store 写入 + 按钮标签即时更新 → 切回 glm-4.6。
+  5. classic 轻量运行（generateReport:false）：exit=0、10 PDB 持久化、路由带共享解析正常执行。
+  6. 浏览器 E2E（agent-browser）：Run Center 打开→旧 LLM Config/pills 全部消失、新按钮标签正确；popover 供应商（未配置者禁用+标注）/模型/自定义模型/管理 API Key；点击打开 chat 同款 ProvidersPanel（供应商配置弹窗）；zh/en 双语标签完整（"与 Agent 聊天共享 — 评估（经典 / DSH）、文献、周报与新聊天会话使用同一供应商与模型"）；0 控制台错误、0 页面错误。
+  7. OOM A/B 判证：DSH 完整运行在 figure/章节阶段多次被 OOM-kill（next-server ~3.4GB RSS）→ git stash 后旧代码同样 OOM 同阶段 → 环境限制（4GB 沙盒，与 R176/R179 记录一致）而非本轮回归；共享 LLM 机制本身已由上述 2-6 全覆盖实证。
+- 遗留清理：测试后 .hermes 已重置（default=zai，假 deepseek key 已删除）。
+
+Stage Summary:
+- 共享契约落地：Run Center（eval classic + DSH + literature + weekly）与 Agent chat（新会话）共用同一服务端 LLM 设置（.hermes 默认 provider + 每供应商 key/model）；任一入口（chat 的 ProvidersPanel 或 Run Center 的 SharedLlmButton）修改即全局生效。
+- SharedLlmButton 小按钮入口替代原 218 行 LLM config UI（pills/高级配置/localStorage 全部移除），内嵌 chat 同款 ProvidersPanel；classic 模式同样适用。
+- llm.ts 新增 agent-catalog OpenAI-compat 执行器（17 家供应商、300s 超时、zai 兜底不变）；4 路由接入 resolveRunLlmConfig；setProviderConfig undefined-clobber 修复。
+- 新增 2 文件（SharedLlmButton 285 行 / eval-llm 128 行）+ 修改 10 文件；lint/tsc 零新增；真实运行 + 单元 + 浏览器 E2E 三层实证。
