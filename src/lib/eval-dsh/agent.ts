@@ -22,6 +22,7 @@ import type { LlmConfig } from '@/lib/llm';
 import { generateText, stripReasoning } from '@/lib/llm';
 import { buildDetailedPdbTable, buildDetailedBlastTable } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
+import { Prisma } from '@prisma/client';
 import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, type CollectOpts, type CollectResult, type LiteratureRow } from './collect';
@@ -436,6 +437,44 @@ function prismaErrReason(err: unknown): string {
 }
 
 /**
+ * R190: 运行时检测本地 Prisma client 是否认识指定 model 的字段
+ * （stale client 预检测）。
+ *
+ * 生成物把 DMMF（全部 model 的字段清单）内嵌在 Prisma.dmmf 里；旧版
+ * client（R179 之前生成）的 SkillEvaluationReport 没有 mode/outline/
+ * figures。据此可在写库前就识别 stale，把注定失败的 ①② 直接跳到 ③
+ * raw SQL，避免一条吓人的「Prisma 写入失败」warn（用户现场 19:05 /
+ * 21:36 两次询问该 warn「怎么回事」——实际数据全程无损）。检测本身
+ * 失败/不可用时返回 true（按健康处理，保持原有 ①→②→③ 流程）。
+ */
+export function prismaClientKnows(model: string, fields: string[]): boolean {
+  try {
+    const models = (
+      Prisma as unknown as {
+        dmmf?: { datamodel?: { models?: Array<{ name?: string; fields?: Array<{ name?: string }> }> } };
+      }
+    ).dmmf?.datamodel?.models;
+    return modelsKnowFields(models, model, fields);
+  } catch {
+    return true;
+  }
+}
+
+/** R190: prismaClientKnows 的纯逻辑部分（独立导出便于单测——Prisma.dmmf
+ * 是只读命名空间属性，测试里无法 monkey-patch，只能从这一层注入假 DMMF）。 */
+export function modelsKnowFields(
+  models: Array<{ name?: string; fields?: Array<{ name?: string }> }> | undefined | null,
+  model: string,
+  fields: string[],
+): boolean {
+  if (!models || !Array.isArray(models)) return true;
+  const m = models.find(x => x?.name === model);
+  if (!m || !Array.isArray(m.fields)) return false;
+  const names = new Set(m.fields.map(f => String(f?.name)));
+  return fields.every(f => names.has(f));
+}
+
+/**
  * R183: DSH 报告记录三级写入。
  *
  * 用户现场报告 `Invalid db.skillEvaluationReport.create() invocation`
@@ -453,6 +492,11 @@ function prismaErrReason(err: unknown): string {
  *   ③ raw SQL INSERT —— 完全绕过 client delegate（治 A；与经典管线
  *      SkillRunRecord 的 raw SQL 写入同一模式与理由，见
  *      api/evaluations/run/route.ts 的注释）
+ *
+ * R190 增设 ⓪ stale 预检测（prismaClientKnows，治 A 的日志噪音）：
+ * 写库前查运行时 client 内嵌的 DMMF，SkillEvaluationReport 缺
+ * mode/outline/figures 即判为旧版生成物——跳过 ①② 直接 raw SQL，
+ * SSE 日志用平静的 info 环境提示替代「Prisma 写入失败」的 warn。
  */
 async function persistDshReportRecord(
   row: {
@@ -469,7 +513,7 @@ async function persistDshReportRecord(
     outlineJson: string;
     figuresJson: string;
   },
-  warn: (msg: string) => void,
+  notify: (msg: string, level?: 'info' | 'warn') => void,
 ): Promise<boolean> {
   const data = {
     uniprotId: row.uniprotId,
@@ -486,36 +530,60 @@ async function persistDshReportRecord(
     outline: row.outlineJson,
     figures: row.figuresJson,
   };
-  // ① 常规路径。
-  try {
-    await db.skillEvaluationReport.create({ data });
-    return true;
-  } catch (err: any) {
-    warn(`SkillEvaluationReport Prisma 写入失败：${prismaErrReason(err)}`);
-  }
-  // ② schema-compat 自愈（缺表 CREATE / 缺列 ALTER）后重试一次。
-  try {
-    const compat = await applySchemaCompat(getActiveDbFsPath());
-    if (!compat.ok) warn(`schema-compat 自愈未完成：${compat.error ?? 'unknown'}`);
-  } catch (err: any) {
-    warn(`schema-compat 自愈异常：${err?.message?.slice(0, 120) ?? 'unknown'}`);
-  }
-  try {
-    await db.skillEvaluationReport.create({ data });
-    warn('schema-compat 自愈后重试写入成功');
-    return true;
-  } catch {
-    // 与 ① 同因（stale client 的客户端校验错误在重试中必然复现）——
-    // 直接转 ③ raw SQL 兜底。
+  // ⓪ R190: stale-client 预检测 —— 旧版 client 的 create 在客户端校验
+  // 阶段必然抛 Unknown argument（与数据库无关，② 的 schema-compat 自愈
+  // 对它无效）。提前识别后直接走 ③ raw SQL，SSE 日志以平静的 info 环境
+  // 提示替代「Prisma 写入失败」的 warn 噪音。
+  const staleClient = !prismaClientKnows('SkillEvaluationReport', ['mode', 'outline', 'figures']);
+  if (!staleClient) {
+    // ① 常规路径。
+    try {
+      await db.skillEvaluationReport.create({ data });
+      return true;
+    } catch (err: any) {
+      notify(`SkillEvaluationReport Prisma 写入失败：${prismaErrReason(err)}`);
+    }
+    // ② schema-compat 自愈（缺表 CREATE / 缺列 ALTER）后重试一次。
+    try {
+      const compat = await applySchemaCompat(getActiveDbFsPath());
+      if (!compat.ok) notify(`schema-compat 自愈未完成：${compat.error ?? 'unknown'}`);
+    } catch (err: any) {
+      notify(`schema-compat 自愈异常：${err?.message?.slice(0, 120) ?? 'unknown'}`);
+    }
+    try {
+      await db.skillEvaluationReport.create({ data });
+      notify('schema-compat 自愈后重试写入成功');
+      return true;
+    } catch {
+      // 与 ① 同因（stale client 的客户端校验错误在重试中必然复现）——
+      // 直接转 ③ raw SQL 兜底。
+    }
+  } else {
+    notify(
+      '检测到本地 Prisma client 为旧版生成物（缺少 mode/outline/figures 字段）——非代码错误、报告数据不受影响，本次改用 raw SQL 直接写入（数据无损）。一次性修复：执行 `bun install`（触发 postinstall 自动 generate）或 `bun run db:generate`，删除 .next 缓存后重启 dev server，此提示即消失',
+      'info',
+    );
+    // 库表列仍按 ② 的逻辑尽力确保一次（路由启动时已跑过，正常为 no-op；
+    // 防极端叠加：启动时 compat 失败 + 旧 client 同时出现时 ③ 无列可写）。
+    try {
+      const compat = await applySchemaCompat(getActiveDbFsPath());
+      if (!compat.ok) notify(`schema-compat 自愈未完成：${compat.error ?? 'unknown'}`);
+    } catch (err: any) {
+      notify(`schema-compat 自愈异常：${err?.message?.slice(0, 120) ?? 'unknown'}`);
+    }
   }
   // ③ raw SQL：绕过 stale client delegate（经典管线 SkillRunRecord 同款）。
   try {
     const id = `dsh_${row.uniprotId}_${Date.now()}`;
     await db.$executeRaw`INSERT INTO SkillEvaluationReport (id, uniprotId, proteinName, overallScore, directPdbCount, coverage, report, llmOk, llmProvider, llmModel, llmDurationMs, mode, outline, figures, createdAt) VALUES (${id}, ${row.uniprotId}, ${row.proteinName}, ${row.overallScore}, ${row.directPdbCount}, ${row.coverage}, ${row.report}, ${row.llmOk ? 1 : 0}, ${row.llmProvider || null}, ${row.llmModel || null}, ${row.llmDurationMs}, ${'dsh'}, ${row.outlineJson}, ${row.figuresJson}, CURRENT_TIMESTAMP)`;
-    warn('已通过 raw SQL 兜底写入 SkillEvaluationReport（数据无损）。常规路径失败多为本地 Prisma client 旧版生成物：执行 `bun install`（触发 postinstall 自动 generate）或 `bun run db:generate` 后重启 dev server 即可恢复');
+    notify(
+      staleClient
+        ? '已通过 raw SQL 写入 SkillEvaluationReport（数据无损；旧版 client 只影响日志观感，不影响落库结果）'
+        : '已通过 raw SQL 兜底写入 SkillEvaluationReport（数据无损）。常规路径失败多为本地 Prisma client 旧版生成物：执行 `bun install`（触发 postinstall 自动 generate）或 `bun run db:generate` 后重启 dev server 即可恢复',
+    );
     return true;
   } catch (err: any) {
-    warn(`SkillEvaluationReport raw SQL 兜底失败：${prismaErrReason(err)}`);
+    notify(`SkillEvaluationReport raw SQL 兜底失败：${prismaErrReason(err)}`);
     return false;
   }
 }
@@ -1111,9 +1179,10 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
   const finalReport = sanitizeReport(rawReport);
   const reportOk = chaptersOk > 0;
 
-  // 持久化 1/2：SkillEvaluationReport。R183 三级写入（Prisma → compat
-  // 自愈重试 → raw SQL 兜底）——治 stale client 的 Unknown argument 与
-  // 缺表/缺列两类 Invalid invocation（见 persistDshReportRecord 注释）。
+  // 持久化 1/2：SkillEvaluationReport。R183 三级写入 + R190 stale 预检测
+  // （⓪ 预检测 → ① Prisma → ② compat 自愈重试 → ③ raw SQL 兜底）——治
+  // stale client 的 Unknown argument 与缺表/缺列两类 Invalid invocation
+  // （见 persistDshReportRecord 注释）。
   let dbSaved = false;
   const persistOk = await persistDshReportRecord(
     {
@@ -1130,7 +1199,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       outlineJson: JSON.stringify(outline),
       figuresJson: JSON.stringify(verifiedFigures),
     },
-    (msg) => emit({ stage: 'write-db', level: 'warn', message: msg, progress: 97 }),
+    (msg, level) => emit({ stage: 'write-db', level: level ?? 'warn', message: msg, progress: 97 }),
   );
   if (persistOk) {
     dbSaved = true;
