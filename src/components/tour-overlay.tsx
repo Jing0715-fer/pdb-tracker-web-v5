@@ -94,15 +94,9 @@ export function buildTourSteps(t: any): Omit<TourStepConfig, 'targetRef'>[] {
   ];
 }
 
-// Keep a static reference for backward compatibility (use-tour.ts imports it)
-// — the actual localized steps are built at runtime via buildTourSteps().
-export const TOUR_STEPS: Omit<TourStepConfig, 'targetRef'>[] = buildTourSteps({
-  tourStep1Title: 'Step 1', tourStep1Desc: '', tourStep2Title: 'Step 2', tourStep2Desc: '',
-  tourStep3Title: 'Step 3', tourStep3Desc: '', tourStep4Title: 'Step 4', tourStep4Desc: '',
-  tourStep5Title: 'Step 5', tourStep5Desc: '', tourStep6Title: 'Step 6', tourStep6Desc: '',
-  tourStep7Title: 'Step 7', tourStep7Desc: '', tourStep8Title: 'Step 8', tourStep8Desc: '',
-  tourStep9Title: 'Step 9', tourStep9Desc: '',
-});
+// Keep a build-time reference only for type inference — the localized steps
+// are built at runtime via buildTourSteps() (R182: removed the dead 'Step N'
+// placeholder export; use-tour.ts no longer imports it).
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 
@@ -141,6 +135,7 @@ interface TooltipPos {
 function computeTooltipPos(
   spotlight: DOMRect | null,
   tooltipH: number,
+  tooltipW: number,
 ): TooltipPos {
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 720;
@@ -149,7 +144,7 @@ function computeTooltipPos(
   if (!spotlight) {
     return {
       top: Math.max(VIEWPORT_MARGIN, (vh - tooltipH) / 2),
-      left: Math.max(VIEWPORT_MARGIN, (vw - TOOLTIP_WIDTH) / 2),
+      left: Math.max(VIEWPORT_MARGIN, (vw - tooltipW) / 2),
       side: 'bottom-right',
     };
   }
@@ -161,19 +156,19 @@ function computeTooltipPos(
   let top = spotlight.bottom + TOOLTIP_GAP;
   let side: TooltipPos['side'] = 'bottom-right';
 
-  const overflowsRight = left + TOOLTIP_WIDTH > vw - VIEWPORT_MARGIN;
+  const overflowsRight = left + tooltipW > vw - VIEWPORT_MARGIN;
   const overflowsBottom = top + h > vh - VIEWPORT_MARGIN;
 
   if (overflowsRight && overflowsBottom) {
     // Both overflow → place inside the spotlight at its bottom-right corner.
     // The tooltip overlays the lower-right portion of the spotlight, keeping
     // it at the bottom-right without jumping to top-left.
-    left = Math.max(VIEWPORT_MARGIN, spotlight.right - TOOLTIP_WIDTH - 8);
+    left = Math.max(VIEWPORT_MARGIN, spotlight.right - tooltipW - 8);
     top = Math.max(VIEWPORT_MARGIN, spotlight.bottom - h - 8);
     side = 'bottom-right';
   } else if (overflowsRight) {
     // Right overflow → bottom-left
-    left = spotlight.left - TOOLTIP_GAP - TOOLTIP_WIDTH;
+    left = spotlight.left - TOOLTIP_GAP - tooltipW;
     top = spotlight.bottom + TOOLTIP_GAP;
     side = 'bottom-left';
   } else if (overflowsBottom) {
@@ -185,7 +180,7 @@ function computeTooltipPos(
 
   // Clamp into viewport.
   top = Math.max(VIEWPORT_MARGIN, Math.min(vh - VIEWPORT_MARGIN - h, top));
-  left = Math.max(VIEWPORT_MARGIN, Math.min(vw - VIEWPORT_MARGIN - TOOLTIP_WIDTH, left));
+  left = Math.max(VIEWPORT_MARGIN, Math.min(vw - VIEWPORT_MARGIN - tooltipW, left));
 
   return { top, left, side };
 }
@@ -319,8 +314,22 @@ export function TourOverlay({
 
   if (!tourActive || !currentStep || !stepConfig) return null;
 
-  const pos = computeTooltipPos(spotlightRect, tooltipHeight);
+  // R182: responsive card width — never wider than the viewport minus margins
+  // (manual tour trigger on narrow screens no longer overflows the edge).
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+  const tooltipW = Math.min(TOOLTIP_WIDTH, vw - VIEWPORT_MARGIN * 2);
+  const pos = computeTooltipPos(spotlightRect, tooltipHeight, tooltipW);
   const hasSpotlight = !isCentered && !!spotlightRect;
+  // R182: spotlight geometry shared by mask / ring / pulse halo — animated as
+  // one spring so the hole glides between targets instead of jumping.
+  const spotGeom = spotlightRect
+    ? {
+        top: spotlightRect.top - activePadding,
+        left: spotlightRect.left - activePadding,
+        width: spotlightRect.width + activePadding * 2,
+        height: spotlightRect.height + activePadding * 2,
+      }
+    : null;
 
   return createPortal(
     <AnimatePresence mode="wait">
@@ -341,28 +350,33 @@ export function TourOverlay({
             onClick={finishTour}
             title="Click to skip tour"
           />
-        ) : hasSpotlight && spotlightRect ? (
+        ) : hasSpotlight && spotlightRect && spotGeom ? (
           /* Spotlight mode: a div sized to the target with a huge box-shadow
-             creates a dark mask everywhere EXCEPT the spotlight area. */
+             creates a dark mask everywhere EXCEPT the spotlight area.
+             R182: mask + ring + pulse halo all spring-animate between steps. */
           <>
-            <div
+            <motion.div
               className="absolute pointer-events-none rounded-[8px]"
+              initial={false}
+              animate={spotGeom}
+              transition={{ type: 'spring', stiffness: 260, damping: 28 }}
               style={{
-                top: spotlightRect.top - activePadding,
-                left: spotlightRect.left - activePadding,
-                width: spotlightRect.width + activePadding * 2,
-                height: spotlightRect.height + activePadding * 2,
                 boxShadow: `0 0 0 9999px rgba(0,0,0,${MASK_OPACITY})`,
               }}
             />
-            {/* Clean border frame around the spotlight — subtle, no animation */}
-            <div
+            {/* Clean border frame around the spotlight + gentle pulse halo */}
+            <motion.div
               className="absolute rounded-[10px] ring-2 ring-claude-accent pointer-events-none"
-              style={{
-                top: spotlightRect.top - activePadding,
-                left: spotlightRect.left - activePadding,
-                width: spotlightRect.width + activePadding * 2,
-                height: spotlightRect.height + activePadding * 2,
+              initial={false}
+              animate={spotGeom}
+              transition={{ type: 'spring', stiffness: 260, damping: 28 }}
+            />
+            <motion.div
+              className="absolute rounded-[12px] border-2 border-claude-accent pointer-events-none"
+              initial={false}
+              animate={{ ...spotGeom, opacity: [0.5, 0, 0.5] }}
+              transition={{
+                opacity: { duration: 2.2, repeat: Infinity, ease: 'easeInOut' },
               }}
             />
           </>
@@ -383,10 +397,11 @@ export function TourOverlay({
           style={{
             top: pos.top,
             left: pos.left,
-            width: TOOLTIP_WIDTH,
+            width: tooltipW,
           }}
         >
-          <div className="relative bg-white dark:bg-[#1c1b1a] rounded-xl shadow-[0_8px_32px_-4px_rgba(0,0,0,0.3),0_4px_12px_-2px_rgba(0,0,0,0.2)] ring-1 ring-black/[0.08] dark:ring-white/[0.06] overflow-hidden">
+          {/* R182: claude-surface token（随 6 套主题/暗色模式走，不再硬编码 hex） */}
+          <div className="relative bg-claude-surface dark:bg-[#242220] rounded-xl shadow-[0_8px_32px_-4px_rgba(0,0,0,0.3),0_4px_12px_-2px_rgba(0,0,0,0.2)] ring-1 ring-black/[0.08] dark:ring-white/[0.06] overflow-hidden">
             {/* Header — step badge + close (no top accent bar) */}
             <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
               {/* Step indicator badge */}
@@ -458,13 +473,10 @@ export function TourOverlay({
                 >
                   {t.tourSkip}
                 </button>
+                {/* R182: 最后一步也用 accent（原先 emerald 与主题体系割裂） */}
                 <button
                   onClick={() => { if (isLastStep) finishTour(); else nextStep(); }}
-                  className={`flex items-center gap-1 px-3.5 h-7 rounded-md text-[11px] font-semibold transition-all ml-auto ${
-                    isLastStep
-                      ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                      : 'bg-claude-accent text-white hover:bg-claude-accent-hover'
-                  }`}
+                  className="flex items-center gap-1 px-3.5 h-7 rounded-md text-[11px] font-semibold transition-all ml-auto bg-claude-accent text-white hover:bg-claude-accent-hover"
                 >
                   {isLastStep ? <>{t.tourFinish} <CheckCircle2 className="h-3 w-3" /></> : <>{t.tourNext} <ChevronRight className="h-3 w-3" /></>}
                 </button>

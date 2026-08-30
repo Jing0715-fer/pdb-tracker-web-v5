@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { X } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { cn } from '@/lib/utils';
 import type { LitPaper, LitReport } from '@/lib/pdb-types';
@@ -163,9 +164,10 @@ export function LiteratureDateSidebar({
           {onClearFilter && (
             <button
               onClick={onClearFilter}
-              className="ml-auto text-claude-accent hover:text-claude-accent-hover text-[10px] shrink-0"
+              className="ml-auto text-claude-accent hover:text-claude-accent-hover shrink-0"
+              aria-label="Clear filter"
             >
-              ✕
+              <X className="h-3 w-3" aria-hidden="true" />
             </button>
           )}
         </div>

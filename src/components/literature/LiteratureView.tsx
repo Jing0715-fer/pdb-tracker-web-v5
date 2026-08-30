@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { BookOpen, GitCompare } from 'lucide-react';
+import { BookOpen, GitCompare, X } from 'lucide-react';
 import type { LitPaper, LitReport, LitStats } from '@/lib/pdb-types';
 
 import { LiteratureToolbar, LiteratureToolbarMain, LiteratureToolbarChips, type ViewMode, type SortField, type DateFilter, type IfFilter } from './LiteratureToolbar';
@@ -427,7 +427,7 @@ export function LiteratureContent({
             <button onClick={onClearDateFilter} className="text-claude-accent dark:text-claude-accent-hover hover:underline">
               {selectedDate}
             </button>
-            <button onClick={onClearDateFilter} className="ml-1 text-claude-text-muted hover:text-claude-text">✕</button>
+            <button onClick={onClearDateFilter} className="ml-1 text-claude-text-muted hover:text-claude-text" aria-label="Clear date filter"><X className="h-3 w-3" aria-hidden="true" /></button>
           </span>
         )}
         {readingListFilter && onClearReadingListFilter && (
@@ -436,7 +436,7 @@ export function LiteratureContent({
             <button onClick={onClearReadingListFilter} className="text-claude-accent dark:text-claude-accent-hover hover:underline">
               Reading list
             </button>
-            <button onClick={onClearReadingListFilter} className="ml-1 text-claude-text-muted hover:text-claude-text">✕</button>
+            <button onClick={onClearReadingListFilter} className="ml-1 text-claude-text-muted hover:text-claude-text" aria-label="Clear reading list filter"><X className="h-3 w-3" aria-hidden="true" /></button>
           </span>
         )}
         {tagFilter && onTagFilterChange && (
@@ -445,13 +445,13 @@ export function LiteratureContent({
             <button onClick={() => onTagFilterChange(null)} className="text-claude-accent dark:text-claude-accent-hover hover:underline">
               {tagFilter}
             </button>
-            <button onClick={() => onTagFilterChange(null)} className="ml-1 text-claude-text-muted hover:text-claude-text">✕</button>
+            <button onClick={() => onTagFilterChange(null)} className="ml-1 text-claude-text-muted hover:text-claude-text" aria-label="Clear tag filter"><X className="h-3 w-3" aria-hidden="true" /></button>
           </span>
         )}
         {sourceFilter === 'daily' && (
           <span className="text-xs text-claude-accent dark:text-claude-accent-hover">
             <BookOpen className="h-3 w-3 inline" /> 日报 ({filteredPapers.length}){' '}
-            <button onClick={() => handleSourceFilterClear()} className="hover:underline">✕</button>
+            <button onClick={() => handleSourceFilterClear()} className="hover:underline" aria-label="Clear daily filter"><X className="h-3 w-3 inline" aria-hidden="true" /></button>
           </span>
         )}
         <div className="flex-1" />

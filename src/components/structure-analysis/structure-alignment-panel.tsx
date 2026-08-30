@@ -16,6 +16,8 @@ import {
   AlertCircle,
   CheckCircle2,
   ArrowRight,
+  Check,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -298,11 +300,11 @@ export function StructureAlignmentPanel() {
           {/* Quality indicator */}
           <div className="rounded bg-claude-surface p-1.5 text-[9px] text-center">
             {result.rmsd < 2 && result.tm_score > 0.5 ? (
-              <span className="text-green-600 font-medium">✓ High structural similarity</span>
+              <span className="text-green-600 font-medium flex items-center justify-center gap-1"><Check className="h-3 w-3" aria-hidden="true" />High structural similarity</span>
             ) : result.rmsd < 4 ? (
               <span className="text-amber-600 font-medium">~ Moderate similarity</span>
             ) : (
-              <span className="text-red-600 font-medium">✗ Low similarity / different fold</span>
+              <span className="text-red-600 font-medium flex items-center justify-center gap-1"><X className="h-3 w-3" aria-hidden="true" />Low similarity / different fold</span>
             )}
           </div>
         </div>

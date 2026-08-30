@@ -34,8 +34,25 @@
 
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Cpu, ChevronDown, KeyRound, RefreshCw, Check, AlertTriangle, Terminal, ScanSearch, RotateCcw } from 'lucide-react';
+import { useCallback, useEffect, useState, type ElementType } from 'react';
+import { Cpu, ChevronDown, KeyRound, RefreshCw, Check, AlertTriangle, Terminal, ScanSearch, RotateCcw, Feather, Sparkles, Sparkle, Bird, Panda, Wrench, Bot, Brain } from 'lucide-react';
+
+// R182: CLI-agent icon keys (llm.ts / cli-agent-scan.ts emit these) → Lucide icons.
+const CLI_ICON_BY_KEY: Record<string, ElementType> = {
+  feather: Feather,
+  sparkles: Sparkles,
+  terminal: Terminal,
+  bird: Bird,
+  gemini: Sparkle,
+  panda: Panda,
+  wrench: Wrench,
+  bot: Bot,
+  brain: Brain,
+};
+const CliAgentIcon = ({ iconKey, className }: { iconKey: string; className?: string }) => {
+  const Icon = CLI_ICON_BY_KEY[iconKey] || Terminal;
+  return <Icon className={className} aria-hidden />;
+};
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -71,7 +88,7 @@ interface CliAgentInfo {
   provider: string; // 'cli:hermes'
   id: string;       // 'hermes'
   label: string;    // 'Hermes CLI'
-  icon: string;     // '🪶'
+  icon: string;     // Lucide icon key, e.g. 'feather' (R182)
   available: boolean;
   bin: string | null;
   reason: string;
@@ -488,7 +505,7 @@ export function SharedLlmButton({ className }: Props) {
                             : 'border-transparent opacity-50 cursor-not-allowed text-claude-text-muted dark:text-[#9b9590]',
                       )}
                     >
-                      <span className="text-sm leading-none shrink-0" aria-hidden>{agent.icon}</span>
+                      <CliAgentIcon iconKey={agent.icon} className="h-3.5 w-3.5 shrink-0 text-claude-accent" />
                       <span className="flex-1 min-w-0 truncate">{agent.label}</span>
                       {isActive ? (
                         <span className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-medium">

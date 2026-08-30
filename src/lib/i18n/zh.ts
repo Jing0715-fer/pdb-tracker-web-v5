@@ -249,7 +249,7 @@ export const zh = {
 
   // ─── Filters ─────────────────────────────────────────────────────────────
   filterAll: '全部',
-  filterBookmarks: '★ 收藏',
+  filterBookmarks: '收藏',
   filterCryoem: 'Cryo-EM',
   filterXray: 'X-ray',
   filterNmr: 'NMR',

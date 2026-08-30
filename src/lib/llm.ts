@@ -75,9 +75,9 @@ export interface LlmProviderInfo {
   provider: string;
   /** Resolved binary path if a CLI provider; null for SDK providers. */
   bin: string | null;
-  /** UI icon — single emoji chosen to loosely match the original brand. */
+  /** UI icon key — rendered via the SharedLlmButton Lucide map (R182: emoji→key). */
   icon: string;
-  /** When set, the UI should render <img src={iconUrl} /> instead of emoji. */
+  /** When set, the UI should render <img src={iconUrl} /> instead of the icon. */
   iconUrl?: string | null;
   label: string;
   reason: string;
@@ -287,7 +287,7 @@ interface CliAdapter {
   id: string;
   /** Display name. */
   label: string;
-  /** Brand-matching icon (emoji that visually resembles the original logo). */
+  /** Brand-matching icon key (Lucide map key, e.g. 'feather' — R182). */
   icon: string;
   /** CLI binary name to resolve on PATH. */
   bin: string;
@@ -539,7 +539,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     id: 'hermes',
     label: 'Hermes CLI',
     bin: 'hermes',
-    icon: '🪶',
+    icon: 'feather',
     wslBin: 'hermes',
     // Round 55: Hermes AI CLI is installed to ~/.local/bin/hermes by the
     // install script from hermes-agent.nousresearch.com
@@ -601,7 +601,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     id: 'claude',
     label: 'Claude Code CLI',
     bin: 'claude',
-    icon: '🟠',
+    icon: 'sparkles',
     wslBin: 'claude',
     probeArgs: ['--version'],
     // Claude Code supports `claude -p "..." --session <id>` for session reuse.
@@ -614,7 +614,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     id: 'codex',
     label: 'Codex CLI',
     bin: 'codex',
-    icon: '🟢',
+    icon: 'terminal',
     wslBin: 'codex',
     probeArgs: ['--version'],
     /** Multi-machine fallback locations for `@openai/codex` (npm i -g / bun add -g).
@@ -690,7 +690,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     id: 'openclaw',
     label: 'OpenClaw CLI',
     bin: 'openclaw',
-    icon: '🦅',
+    icon: 'bird',
     wslBin: 'openclaw',
     probeArgs: ['--version'],
     callArgs: (q, _m, sid) => sid ? ['llm', 'chat', '--no-stream', q, '--session', sid] : ['llm', 'chat', '--no-stream', q],
@@ -702,7 +702,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     id: 'gemini',
     label: 'Gemini CLI',
     bin: 'gemini',
-    icon: '♊',
+    icon: 'gemini',
     wslBin: 'gemini',
     probeArgs: ['--version'],
     callArgs: (q, _m, sid) => sid ? [q, '--session', sid] : [q],
@@ -713,7 +713,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
   {
     id: 'codebuddy',
     label: 'Codebuddy / WorkBuddy CLI',
-    icon: '🐼',
+    icon: 'panda',
     bin: 'codebuddy',
     needsNode: true,
     /** Hard-coded fallback for WorkBuddy's bundled CLI on Windows + macOS.
@@ -758,7 +758,7 @@ const CLI_ADAPTERS: CliAdapter[] = [
     id: 'aider',
     label: 'Aider CLI',
     bin: 'aider',
-    icon: '🛠️',
+    icon: 'wrench',
     wslBin: 'aider',
     probeArgs: ['--version'],
     callArgs: (q, _m, sid) => sid ? ['--message', q, '--no-git', '--yes', '--no-auto-commits', '--session', sid] : ['--message', q, '--no-git', '--yes', '--no-auto-commits'],
@@ -1363,7 +1363,7 @@ export async function inspectProviders(opts: InspectProvidersOptions = {}): Prom
   available.push({
     provider: 'anthropic',
     bin: null,
-    icon: '🤖',
+    icon: 'bot',
     iconUrl: null,
     label: 'Anthropic SDK',
     reason: anthropicAvailable ? 'ANTHROPIC_API_KEY is set' : 'ANTHROPIC_API_KEY not set',
@@ -1375,7 +1375,7 @@ export async function inspectProviders(opts: InspectProvidersOptions = {}): Prom
   available.push({
     provider: 'openai',
     bin: null,
-    icon: '🧠',
+    icon: 'brain',
     iconUrl: null,
     label: 'OpenAI SDK',
     reason: openaiAvailable ? 'OPENAI_API_KEY is set' : 'OPENAI_API_KEY not set',

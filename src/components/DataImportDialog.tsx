@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Upload, FileText, FileJson, Download, Loader2, CheckCircle2,
+  Upload, FileText, FileJson, Download, Loader2, CheckCircle2, Check,
   AlertCircle, X, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -455,8 +455,9 @@ export function DataImportDialog({ open, onOpenChange, defaultType = 'pdb' }: Da
                 </div>
 
                 <div className="flex items-center gap-4 text-[11px]">
-                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                    ✓ {summary.imported} imported
+                  <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                    {summary.imported} imported
                   </span>
                   {summary.skipped > 0 && (
                     <span className="text-amber-600 dark:text-amber-400 font-medium">

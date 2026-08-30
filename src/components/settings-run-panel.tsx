@@ -87,6 +87,12 @@ import {
   Lightbulb,
   Info,
   Image as ImageIcon,
+  // R182: emoji → Lucide（结构分析摘要卡 / 周报对比 / 互作统计）
+  Microscope,
+  Handshake,
+  Droplets,
+  Snowflake,
+  Ruler,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DbSetupWizard, type DbStatus } from '@/components/db-setup-wizard';
@@ -194,6 +200,17 @@ function asDshFigure(v: unknown): DshFigurePayload | null {
 /*  Small presentational helpers                                             */
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** R182: 客户端 Blob 导出下载 — 原先在 3 个导出按钮 + exportLogs 里重复 4 份。 */
+function downloadBlob(content: string, mime: string, filename: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function levelColor(level?: string) {
   // Use standard Tailwind colors for status — guaranteed distinct from ALL 6 theme accents.
   // Theme accents: claude(#c96442), ocean(#2d8f8f), forest(#16a34a), sunset(#ea580c), berry(#7c5cbf), rose(#e11d48)
@@ -248,6 +265,7 @@ function StreamFeed({
   ok: boolean;
   emptyHint: string;
 }) {
+  const { locale } = useI18n();
   const lastProgress = events.filter(e => typeof e.progress === 'number').slice(-1)[0]?.progress ?? null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -297,9 +315,9 @@ function StreamFeed({
             type="button"
             onClick={() => setAutoScroll(a => !a)}
             className={`text-xs font-medium px-2 h-5 gap-1 rounded-md border transition-colors inline-flex items-center ${autoScroll ? 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' : 'border-claude-border/60 dark:border-[#3d3832]/60 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] bg-claude-border-light/40 dark:bg-[#2b2926]/40'}`}
-            title={autoScroll ? 'Auto-scrolling, click to pause' : 'Paused, click to resume'}
+            title={autoScroll ? (locale === 'zh' ? '自动滚动中，点击暂停' : 'Auto-scrolling, click to pause') : (locale === 'zh' ? '已暂停，点击恢复' : 'Paused, click to resume')}
           >
-            {autoScroll ? 'auto' : 'paused'}
+            {autoScroll ? (locale === 'zh' ? '自动' : 'auto') : (locale === 'zh' ? '暂停' : 'paused')}
           </button>
           <StatusPill running={running} done={done} ok={ok} />
         </div>
@@ -313,8 +331,8 @@ function StreamFeed({
               {lastProgress < 100 ? 'processing' : 'complete'} · {lastProgress}%
             </span>
             {done && (
-              <span className={`text-xs font-mono font-semibold tabular-nums ${ok ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
-                {ok ? '✓' : '✗'} {(elapsed / 1000).toFixed(1)}s
+              <span className={`text-xs font-mono font-semibold tabular-nums inline-flex items-center gap-1 ${ok ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
+                {ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />} {(elapsed / 1000).toFixed(1)}s
               </span>
             )}
           </div>
@@ -475,22 +493,17 @@ function LLMPreview({
   // Failure case: no content but we have an error — show a failure card.
   const isFailure = ok === false || (fallback && !content);
 
-  // Claude-themed accent map — ALL variants now use the theme accent to avoid
-  // color collisions across the 6 preset themes. The accent prop is kept for
-  // API backward compat but all values produce the same accent styling.
-  // Status badges (LLM Generated/Failed/Saved) use standard Tailwind colors.
-  const accentMap: Record<string, { ring: string; bg: string; icon: string; badge: string }> = {
-    cryoem: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    nmr: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    xray: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    accent: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    // Legacy aliases
-    emerald: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    sky: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    violet: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
-    amber: { ring: 'border-claude-accent/40', bg: 'from-claude-accent/8', icon: 'text-claude-accent', badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light' },
+  // Claude-themed accent — ALL variants use the theme accent to avoid color
+  // collisions across the 6 preset themes (R182: collapsed the former 8-key
+  // accentMap whose values were all identical). Status badges use standard
+  // Tailwind colors.
+  const ACCENT = {
+    ring: 'border-claude-accent/40',
+    bg: 'from-claude-accent/8',
+    icon: 'text-claude-accent',
+    badge: 'border-claude-accent/40 text-claude-accent bg-claude-accent-light',
   };
-  const a = accentMap[accent] || accentMap.cryoem;
+  const a = ACCENT;
   // Override styling for failure state.
   const ringCls = isFailure ? 'border-red-500/40' : a.ring;
   const bgCls = isFailure ? 'from-red-500/8' : a.bg;
@@ -595,7 +608,8 @@ function LLMPreview({
               </div>
             ) : null}
             {/* R179 (Task 2-b): DSH 模式 — done 后的最终配图画廊（正文下方），
-                每张卡：缩略图 + 说明 + 来源/类型行。rejected 配图降透明度。 */}
+                每张卡：缩略图 + 说明 + 来源/类型行。rejected 配图降透明度。
+                R182: 缩略卡抽取为 DshFigureThumb（与 DshFiguresStrip 共用）。 */}
             {figures && figures.length > 0 && (
               <div className="px-3 py-2 border-t border-claude-border/40 dark:border-[#3d3832]/40">
                 <div className="flex items-center gap-1.5 mb-2">
@@ -603,35 +617,9 @@ function LLMPreview({
                   <span className="text-3xs font-semibold uppercase tracking-wider text-claude-text-muted dark:text-[#9b9590]">{t.evalDshFigures}</span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {figures.map((f, i) => {
-                    const rejected = f.status === 'rejected' || f.status === 'failed';
-                    return (
-                      <div
-                        key={`${f.url}-${i}`}
-                        className={`rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
-                        title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
-                      >
-                        {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
-                        {/^https:\/\//i.test(f.url) ? (
-                          <img src={f.url} alt={f.caption} loading="lazy" className="h-28 w-full object-cover bg-muted/30" />
-                        ) : (
-                          <div className="h-28 w-full flex items-center justify-center bg-muted/30" aria-hidden="true">
-                            <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
-                          </div>
-                        )}
-                        <div className="p-1.5 space-y-0.5">
-                          <DshFigureStatusBadge
-                            status={f.status}
-                            label={{ searching: t.evalDshFigureSearching, verified: t.evalDshFigureVerified, rejected: t.evalDshFigureRejected }}
-                          />
-                          <p className="text-3xs text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
-                          <p className="text-4xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
-                            {f.kind}{f.source ? ` · ${f.source}` : ''}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {figures.map((f, i) => (
+                    <DshFigureThumb key={`${f.url}-${i}`} figure={f} labels={{ searching: t.evalDshFigureSearching, verified: t.evalDshFigureVerified, rejected: t.evalDshFigureRejected }} />
+                  ))}
                 </div>
               </div>
             )}
@@ -700,7 +688,7 @@ function RunHistoryPanel({
 
   if (loading) {
     return (
-      <div className="px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground/60 border-t border-border/40 bg-background/30">
+      <div className="px-3 py-2 flex items-center gap-2 text-xs text-claude-text-muted/70 dark:text-[#9b9590]/70 border-t border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-bg/30 dark:bg-[#1a1917]/30">
         <Loader2 className="h-2.5 w-2.5 animate-spin" />
         Loading run history…
       </div>
@@ -723,10 +711,10 @@ function RunHistoryPanel({
   };
 
   return (
-    <div className="px-3 py-2 border-t border-border/40 bg-background/30">
+    <div className="px-3 py-2 border-t border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-bg/30 dark:bg-[#1a1917]/30">
       <div className="flex items-center gap-2 mb-1.5">
-        <History className="h-3 w-3 text-muted-foreground/70" />
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
+        <History className="h-3 w-3 text-claude-text-muted/70 dark:text-[#9b9590]/70" />
+        <span className="text-xs font-semibold uppercase tracking-wider text-claude-text-muted/70 dark:text-[#9b9590]/70">
           Recent {rows.length} runs
         </span>
       </div>
@@ -736,7 +724,7 @@ function RunHistoryPanel({
           const isErr = r.status === 'error';
           const isOpen = expandedId === r.id;
           return (
-            <div key={r.id} className="border border-border/40 rounded-md bg-background/40 overflow-hidden">
+            <div key={r.id} className="border border-claude-border/40 dark:border-[#3d3832]/40 rounded-md bg-claude-surface/40 dark:bg-[#242220]/40 overflow-hidden">
               <button
                 type="button"
                 onClick={() => {
@@ -762,7 +750,7 @@ function RunHistoryPanel({
                     }
                   }
                 }}
-                className="w-full px-2 py-1 flex items-center gap-2 text-left hover:bg-background/60 transition-colors"
+                className="w-full px-2 py-1 flex items-center gap-2 text-left hover:bg-claude-bg/60 dark:hover:bg-[#1a1917]/60 transition-colors"
               >
                 {isOk ? (
                   <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />
@@ -771,20 +759,20 @@ function RunHistoryPanel({
                 ) : (
                   <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
                 )}
-                <span className="text-xs font-mono text-muted-foreground shrink-0">{fmtTime(r.createdAt)}</span>
-                <span className="text-xs truncate flex-1" title={r.summary}>{r.summary}</span>
+                <span className="text-xs font-mono text-claude-text-muted dark:text-[#9b9590] shrink-0">{fmtTime(r.createdAt)}</span>
+                <span className="text-xs truncate flex-1 text-claude-text/90 dark:text-[#e8e4dd]/90" title={r.summary}>{r.summary}</span>
                 {r.provider && (
-                  <span className="text-3xs font-mono text-muted-foreground/70 shrink-0 hidden sm:inline truncate max-w-[100px]" title={`${r.provider}/${r.model}`}>
+                  <span className="text-3xs font-mono text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0 hidden sm:inline truncate max-w-[100px]" title={`${r.provider}/${r.model}`}>
                     {r.provider}/{r.model}
                   </span>
                 )}
-                <span className="text-3xs text-muted-foreground/60 font-mono shrink-0">{fmtDur(r.durationMs)}</span>
+                <span className="text-3xs text-claude-text-muted/60 dark:text-[#9b9590]/60 font-mono shrink-0">{fmtDur(r.durationMs)}</span>
                 {(r.logBytes ?? 0) > 0 && (
-                  <span className="text-3xs font-mono text-muted-foreground/60 shrink-0 hidden sm:inline" title="SSE log size in bytes">
+                  <span className="text-3xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 shrink-0 hidden sm:inline" title="SSE log size in bytes">
                     log {(r.logBytes! / 1024).toFixed(1)}KB
                   </span>
                 )}
-                <ChevronRight className={`h-3 w-3 text-muted-foreground/60 transition-transform shrink-0 ${isOpen ? 'rotate-90' : ''}`} />
+                <ChevronRight className={`h-3 w-3 text-claude-text-muted/60 dark:text-[#9b9590]/60 transition-transform shrink-0 ${isOpen ? 'rotate-90' : ''}`} />
               </button>
               <AnimatePresence initial={false}>
                 {isOpen && (
@@ -795,17 +783,17 @@ function RunHistoryPanel({
                     transition={{ duration: 0.15 }}
                     className="overflow-hidden"
                   >
-                    <div className="px-2 pb-2 pt-1 space-y-1 border-t border-border/30">
+                    <div className="px-2 pb-2 pt-1 space-y-1 border-t border-claude-border/30 dark:border-[#3d3832]/30">
                       {r.llmError && (
                         <div className="rounded border border-rose-500/30 bg-rose-500/5 px-2 py-1 text-xs font-mono text-rose-600 dark:text-rose-300 break-all">
                           {r.llmError}
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-1 text-xs">
-                        <div className="text-muted-foreground/70">status: <span className="font-mono">{r.status}</span></div>
-                        <div className="text-muted-foreground/70">provider: <span className="font-mono">{r.provider || '—'}</span></div>
-                        <div className="text-muted-foreground/70">model: <span className="font-mono">{r.model || '—'}</span></div>
-                        <div className="text-muted-foreground/70">llmOk: <span className="font-mono">{r.llmOk === true ? '✓' : r.llmOk === false ? '✗' : '—'}</span></div>
+                        <div className="text-claude-text-muted/70 dark:text-[#9b9590]/70">status: <span className="font-mono">{r.status}</span></div>
+                        <div className="text-claude-text-muted/70 dark:text-[#9b9590]/70">provider: <span className="font-mono">{r.provider || '—'}</span></div>
+                        <div className="text-claude-text-muted/70 dark:text-[#9b9590]/70">model: <span className="font-mono">{r.model || '—'}</span></div>
+                        <div className="text-claude-text-muted/70 dark:text-[#9b9590]/70">llmOk: <span className="font-mono">{r.llmOk === true ? 'true' : r.llmOk === false ? 'false' : '—'}</span></div>
                       </div>
                       {/* Full SSE log viewer. Shows a loading indicator while
                           fetching, the log text once loaded, or a hint
@@ -827,7 +815,7 @@ function RunHistoryPanel({
                             <div className="text-3xs text-rose-600 dark:text-rose-300">log fetch failed: {expandedLogError}</div>
                           )}
                           {expandedLog && (
-                            <pre className="max-h-60 overflow-y-auto rounded border border-border/40 bg-background/40 p-1.5 text-3xs font-mono leading-snug text-muted-foreground/80 whitespace-pre-wrap break-all">
+                            <pre className="max-h-60 overflow-y-auto rounded border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 p-1.5 text-3xs font-mono leading-snug text-claude-text-muted/80 dark:text-[#9b9590]/80 whitespace-pre-wrap break-all">
                               {expandedLog.text}
                             </pre>
                           )}
@@ -874,7 +862,7 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
         return (
           <div key={idx} className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-base">🔬</span>
+              <Microscope className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                 {zh ? '结构分析摘要' : 'Structure Analysis Summary'}
               </span>
@@ -886,17 +874,11 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
               <span className="text-[10px] text-muted-foreground ml-auto">
                 PDB: <span className="font-mono font-semibold">{s.pdbId}</span>
               </span>
-              {/* Round 45/46: Export buttons (JSON + CSV) */}
+              {/* Round 45/46/47: Export buttons (JSON + CSV + Markdown) — R182 共用 downloadBlob */}
               <button
                 onClick={() => {
                   const json = JSON.stringify(s, null, 2);
-                  const blob = new Blob([json], { type: 'application/json' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `analysis-summary-${s.pdbId}-${Date.now()}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  downloadBlob(json, 'application/json', `analysis-summary-${s.pdbId}-${Date.now()}.json`);
                 }}
                 className="grid h-5 w-5 place-items-center rounded text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
                 title={zh ? '导出为 JSON' : 'Export as JSON'}
@@ -934,13 +916,7 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
                   }
                   rows.push(`PDB,ID,${s.pdbId}`);
                   const csv = rows.join('\n');
-                  const blob = new Blob([csv], { type: 'text/csv' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `analysis-summary-${s.pdbId}-${Date.now()}.csv`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  downloadBlob(csv, 'text/csv', `analysis-summary-${s.pdbId}-${Date.now()}.csv`);
                 }}
                 className="grid h-5 w-5 place-items-center rounded text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
                 title={zh ? '导出为 CSV' : 'Export as CSV'}
@@ -1003,13 +979,7 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
                     lines.push('');
                   }
                   const md = lines.join('\n');
-                  const blob = new Blob([md], { type: 'text/markdown' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `analysis-summary-${s.pdbId}-${Date.now()}.md`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                  downloadBlob(md, 'text/markdown', `analysis-summary-${s.pdbId}-${Date.now()}.md`);
                 }}
                 className="grid h-5 w-5 place-items-center rounded text-emerald-600/60 hover:text-emerald-600 hover:bg-emerald-500/10 transition-colors"
                 title={zh ? '导出为 Markdown' : 'Export as Markdown'}
@@ -1041,8 +1011,17 @@ function AnalysisSummaryCard({ events, locale }: { events: StreamEvent[]; locale
                   <div className="text-[9px] text-muted-foreground">
                     {zh ? '个 · 链' : 'total · chains'} {s.allInteractions.chains}
                   </div>
-                  <div className="text-[8px] text-muted-foreground/60 mt-0.5">
-                    🤝 {s.allInteractions.hbonds} · ⚡ {s.allInteractions.saltBridges} · 💧 {s.allInteractions.hydrophobic}
+                  {/* R182: 🤝⚡💧 → Lucide 微型图标（H-bonds / 盐桥 / 疏水） */}
+                  <div className="flex items-center gap-2 text-[8px] text-muted-foreground/80 mt-0.5">
+                    <span className="inline-flex items-center gap-0.5" title={zh ? '氢键' : 'H-bonds'}>
+                      <Handshake className="h-2.5 w-2.5" />{s.allInteractions.hbonds}
+                    </span>
+                    <span className="inline-flex items-center gap-0.5" title={zh ? '盐桥' : 'Salt bridges'}>
+                      <Zap className="h-2.5 w-2.5" />{s.allInteractions.saltBridges}
+                    </span>
+                    <span className="inline-flex items-center gap-0.5" title={zh ? '疏水接触' : 'Hydrophobic'}>
+                      <Droplets className="h-2.5 w-2.5" />{s.allInteractions.hydrophobic}
+                    </span>
                   </div>
                 </div>
               )}
@@ -1118,6 +1097,14 @@ function ChapterStream({
   // Collapse state for the whole chapter list — click header to toggle.
   const [collapsed, setCollapsed] = useState(false);
   const { locale } = useI18n();
+  // R182: 运行结束后自动折叠章节流——逐章过程视图让位给下方的完整报告预览，
+  // 避免同一批章节内容重复展示两遍（用户仍可手动展开回看单章）。
+  // React 官方"渲染期间调整状态"模式（props→state 同步，替代 effect+setState）。
+  const [prevDone, setPrevDone] = useState(false);
+  if (done !== prevDone) {
+    setPrevDone(done);
+    if (done) setCollapsed(true);
+  }
   // Pull ordered chapters from the event stream.
   // Two flavors:
   //   chapter_done    — finalised, has chapterContent (real Markdown)
@@ -1276,18 +1263,13 @@ function ChapterStream({
       animate={{ opacity: 1, y: 0 }}
       className="mt-3 rounded-lg border border-claude-accent/40 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
     >
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setCollapsed((v) => !v)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
-        aria-expanded={!collapsed}
-        aria-label="Collapse/Expand LLM chapter stream list"
+      <CollapsibleCardHeader
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((v) => !v)}
+        ariaLabel="Collapse/Expand LLM chapter stream list"
+        accentColor="text-claude-accent"
+        title="LLM Chapter Stream"
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ChevronRight className={`h-3 w-3 text-claude-accent shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-          <span className="text-3xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">LLM Chapter Stream</span>
           {groups.length > 1 && (
             <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
               <Layers className="h-2 w-2" /> {groups.length} targets
@@ -1298,12 +1280,12 @@ function ChapterStream({
           </Badge>
           {okCount > 0 && failCount === 0 && (
             <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              ✓ All OK
+              <CheckCircle2 className="h-2 w-2" /> All OK
             </Badge>
           )}
           {failCount > 0 && (
             <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
-              ✗ {failCount} failed
+              <XCircle className="h-2 w-2" /> {failCount} failed
             </Badge>
           )}
           {running && completedCount < totalCount && (
@@ -1312,9 +1294,7 @@ function ChapterStream({
               Generating…
             </span>
           )}
-        </div>
-        <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
-      </div>
+      </CollapsibleCardHeader>
       {!collapsed && (
       <div className="max-h-[40rem] overflow-y-auto thin-scroll p-2 space-y-2">
         {groups.map((g) => {
@@ -1334,7 +1314,7 @@ function ChapterStream({
                   </Badge>
                   {gFail > 0 && (
                     <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400">
-                      ✗ {gFail}
+                      <XCircle className="h-2 w-2" /> {gFail}
                     </Badge>
                   )}
                 </div>
@@ -1420,25 +1400,18 @@ function DshRelevanceCard({ data }: { data: DshRelevancePayload }) {
       animate={{ opacity: 1, y: 0 }}
       className="mt-3 rounded-lg border border-claude-cryoem/40 bg-gradient-to-br from-claude-cryoem/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
     >
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setCollapsed((v) => !v)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
-        aria-expanded={!collapsed}
-        aria-label="Collapse/Expand DSH relevance analysis card"
+      <CollapsibleCardHeader
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((v) => !v)}
+        ariaLabel="Collapse/Expand DSH relevance analysis card"
+        accentColor="text-claude-cryoem"
+        accentIcon={<ScanSearch className="h-3.5 w-3.5 text-claude-cryoem shrink-0" />}
+        title={t.evalDshRelevance}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ChevronRight className={`h-3 w-3 text-claude-cryoem shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-          <ScanSearch className="h-3.5 w-3.5 text-claude-cryoem shrink-0" />
-          <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{t.evalDshRelevance}</span>
-          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem/10 text-claude-cryoem">
-            {data.findings.length} sources
-          </Badge>
-        </div>
-        <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
-      </div>
+        <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem/10 text-claude-cryoem">
+          {data.findings.length} sources
+        </Badge>
+      </CollapsibleCardHeader>
       {!collapsed && (
         <div className="p-3 space-y-2.5">
           {/* Question restatement — italic quote */}
@@ -1456,8 +1429,16 @@ function DshRelevanceCard({ data }: { data: DshRelevancePayload }) {
                   <Badge variant="outline" className="text-4xs font-mono px-1.5 h-4 rounded shrink-0 mt-0.5 uppercase border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-surface/60 dark:bg-[#242220]/60 text-claude-text-muted dark:text-[#9b9590]">
                     {f.source}
                   </Badge>
-                  <span className={`font-semibold shrink-0 mt-0.5 ${dshRelevanceColor(f.relevance)}`} title={f.relevance}>
-                    {f.relevance === 'high' ? '●●●' : f.relevance === 'medium' ? '●●○' : '●○○'}
+                  {/* R182: ●●● 字符等级 → 三点微型信号条（颜色继承父级着色 class） */}
+                  <span
+                    className={`flex items-center gap-0.5 shrink-0 mt-1.5 ${dshRelevanceColor(f.relevance)}`}
+                    title={f.relevance}
+                    aria-label={`${f.relevance} relevance`}
+                  >
+                    {[0, 1, 2].map((d) => {
+                      const filled = f.relevance === 'high' ? 3 : f.relevance === 'medium' ? 2 : 1;
+                      return <span key={d} className={`h-1 w-1 rounded-full ${d < filled ? 'bg-current' : 'bg-current opacity-20'}`} />;
+                    })}
                   </span>
                   <span className="text-claude-text/80 dark:text-[#e8e4dd]/80 min-w-0 break-words">{f.note}</span>
                 </li>
@@ -1515,25 +1496,18 @@ function DshOutlineCard({ data }: { data: DshOutlinePayload }) {
       animate={{ opacity: 1, y: 0 }}
       className="mt-3 rounded-lg border border-claude-accent/40 bg-gradient-to-br from-claude-accent/8 via-transparent to-transparent overflow-hidden claude-card-shadow"
     >
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setCollapsed((v) => !v)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((v) => !v); } }}
-        className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
-        aria-expanded={!collapsed}
-        aria-label="Collapse/Expand DSH outline card"
+      <CollapsibleCardHeader
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((v) => !v)}
+        ariaLabel="Collapse/Expand DSH outline card"
+        accentColor="text-claude-accent"
+        accentIcon={<ListTree className="h-3.5 w-3.5 text-claude-accent shrink-0" />}
+        title={t.evalDshOutline}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ChevronRight className={`h-3 w-3 text-claude-accent shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-          <ListTree className="h-3.5 w-3.5 text-claude-accent shrink-0" />
-          <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{t.evalDshOutline}</span>
-          <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
-            {data.sections.length}/{data.total || data.sections.length}
-          </Badge>
-        </div>
-        <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
-      </div>
+        <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
+          {data.sections.length}/{data.total || data.sections.length}
+        </Badge>
+      </CollapsibleCardHeader>
       {!collapsed && (
         <ol className="p-3 space-y-1.5 list-none" aria-label={t.evalDshOutline}>
           {data.sections.map((s, i) => (
@@ -1576,13 +1550,96 @@ function DshFigureStatusBadge({ status, label }: { status: DshFigurePayload['sta
   );
 }
 
+/** R182: 配图缩略卡 — LLMPreview 画廊与 DshFiguresStrip 共用（原先两处 ~40 行重复）。 */
+function DshFigureThumb({
+  figure: f,
+  labels,
+  imageHeight = 'h-28',
+}: {
+  figure: DshFigurePayload;
+  labels: { searching: string; verified: string; rejected: string };
+  imageHeight?: string;
+}) {
+  const { t } = useI18n();
+  const rejected = f.status === 'rejected' || f.status === 'failed';
+  return (
+    <div
+      className={`rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
+      title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
+    >
+      {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
+      {/^https:\/\//i.test(f.url) ? (
+        <img src={f.url} alt={f.caption} loading="lazy" className={`${imageHeight} w-full object-cover bg-muted/30`} />
+      ) : (
+        <div className={`${imageHeight} w-full flex items-center justify-center bg-muted/30`} aria-hidden="true">
+          <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
+        </div>
+      )}
+      <div className="p-1.5 space-y-0.5">
+        <DshFigureStatusBadge status={f.status} label={labels} />
+        <p className="text-3xs text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
+        <p className="text-4xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
+          {f.kind}{f.source ? ` · ${f.source}` : ''}{f.pdbId ? ` · ${f.pdbId}` : ''}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** R182: 可折叠卡片头 — ChapterStream / DshRelevanceCard / DshOutlineCard 三处逐字重复的
+ *  role=button + ChevronRight 旋转 + Expand/Collapse 尾标签，收敛为一个组件。 */
+function CollapsibleCardHeader({
+  collapsed,
+  onToggle,
+  ariaLabel,
+  accentIcon,
+  title,
+  accentColor,
+  children,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  ariaLabel: string;
+  /** 头部主图标（如 ScanSearch / ListTree）。 */
+  accentIcon?: React.ReactNode;
+  title: string;
+  /** ChevronRight 的着色 class（如 text-claude-accent）。 */
+  accentColor: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onToggle}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+      className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 cursor-pointer hover:bg-claude-surface dark:hover:bg-[#242220] transition-colors select-none"
+      aria-expanded={!collapsed}
+      aria-label={ariaLabel}
+    >
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'} ${accentColor}`} />
+        {accentIcon}
+        <span className="text-xs font-semibold truncate text-claude-text dark:text-[#e8e4dd]">{title}</span>
+        {children}
+      </div>
+      <span className="text-3xs text-claude-text-muted/70 dark:text-[#9b9590]/70 shrink-0">{collapsed ? 'Expand' : 'Collapse'}</span>
+    </div>
+  );
+}
+
 /** 报告配图条 — horizontally-scrollable strip of figure thumbnails. Multiple
  *  events per figure (searching → verified/rejected) are deduped by url with
- *  latest status winning before reaching this component. */
+ *  latest status winning before reaching this component.
+ *  R182: done 后仅展示被拒/失败配图（带 VLM 判定理由）——已验证配图由报告正文
+ *  下方的 LLMPreview 画廊呈现，避免同一批图重复展示两遍。 */
 function DshFiguresStrip({ figures, done }: { figures: DshFigurePayload[]; done: boolean }) {
   const { t } = useI18n();
   const labels = { searching: t.evalDshFigureSearching, verified: t.evalDshFigureVerified, rejected: t.evalDshFigureRejected };
-  // Empty state only after the run finished with zero verified-or-pending figures.
+  // After the run finishes, verified figures move to the report gallery —
+  // the strip keeps only rejected/failed ones (VLM reasons). No leftovers → hide.
+  const stripFigures = done ? figures.filter((f) => f.status === 'rejected' || f.status === 'failed') : figures;
+  // Empty state only after the run finished with zero figures at all.
   if (figures.length === 0) {
     if (!done) return null;
     return (
@@ -1592,6 +1649,7 @@ function DshFiguresStrip({ figures, done }: { figures: DshFigurePayload[]; done:
       </div>
     );
   }
+  if (stripFigures.length === 0) return null;
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -1607,38 +1665,11 @@ function DshFiguresStrip({ figures, done }: { figures: DshFigurePayload[]; done:
         </Badge>
       </div>
       <div className="flex gap-2 overflow-x-auto thin-scroll p-2" role="list">
-        {figures.map((f, i) => {
-          const rejected = f.status === 'rejected' || f.status === 'failed';
-          return (
-            <div
-              key={`${f.url}-${i}`}
-              role="listitem"
-              className={`w-40 shrink-0 rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
-              title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
-            >
-              {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
-              {/^https:\/\//i.test(f.url) ? (
-                <img
-                  src={f.url}
-                  alt={f.caption}
-                  loading="lazy"
-                  className="h-24 w-full object-cover bg-muted/30"
-                />
-              ) : (
-                <div className="h-24 w-full flex items-center justify-center bg-muted/30" aria-hidden="true">
-                  <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
-                </div>
-              )}
-              <div className="p-1.5 space-y-1">
-                <DshFigureStatusBadge status={f.status} label={labels} />
-                <p className="text-3xs text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
-                <p className="text-4xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
-                  {f.kind}{f.pdbId ? ` · ${f.pdbId}` : ''}
-                </p>
-              </div>
-            </div>
-          );
-        })}
+        {stripFigures.map((f, i) => (
+          <div key={`${f.url}-${i}`} role="listitem" className="w-40 shrink-0">
+            <DshFigureThumb figure={f} labels={labels} imageHeight="h-24" />
+          </div>
+        ))}
       </div>
     </motion.div>
   );
@@ -1704,14 +1735,10 @@ function CycleTimeline({
       <div className="flex items-stretch gap-1">
         {roleStatus.map((r, i) => {
           const isLast = i === roleStatus.length - 1;
-          // All steps use the theme accent — no per-step color distinction.
-          // This avoids collisions (e.g. Ocean accent=cryoem, Berry accent=xray).
-          const colorMap: Record<string, { dot: string; ring: string; bg: string; text: string }> = {
-            sky: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
-            amber: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
-            emerald: { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' },
-          };
-          const c = colorMap[r.color] || colorMap.sky;
+          // All steps use the theme accent — no per-step color distinction
+          // (avoids collisions, e.g. Ocean accent=cryoem, Berry accent=xray).
+          // R182: collapsed the former 3-key colorMap whose values were all identical.
+          const c = { dot: 'bg-claude-accent', ring: 'border-claude-accent/40', bg: 'bg-claude-accent/8', text: 'text-claude-accent' };
           return (
             <div key={r.key} className="flex items-stretch flex-1 min-w-0">
               <div className={`flex-1 rounded-lg border ${r.completed ? c.ring : 'border-claude-border/60 dark:border-[#3d3832]/60'} ${r.completed ? c.bg : 'bg-claude-surface/40 dark:bg-[#242220]/40'} p-2 transition-all`}>
@@ -1789,6 +1816,13 @@ export function SettingsRunPanel({
   const [logs, setLogs] = useState<RunLog[]>([]);
   const [logFilter, setLogFilter] = useState<'all' | 'literature' | 'eval' | 'weekly'>('all');
   const [logSearch, setLogSearch] = useState('');
+  // R182: 过滤链只第一遍（原先渲染端 + 空态判断各算一次，共 3 遍/渲染）。
+  const filteredLogs = useMemo(
+    () => logs
+      .filter(l => logFilter === 'all' || l.module === logFilter)
+      .filter(l => !logSearch || l.summary.toLowerCase().includes(logSearch.toLowerCase()) || (l.details || '').toLowerCase().includes(logSearch.toLowerCase())),
+    [logs, logFilter, logSearch],
+  );
   /** Modules currently running — supports parallel execution. */
   const [running, setRunning] = useState<Set<string>>(new Set());
   const isRunning = (m: string) => running.has(m);
@@ -1910,7 +1944,8 @@ export function SettingsRunPanel({
    *  actually reading/writing. */
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [dbPathSaving, setDbPathSaving] = useState(false);
-  const [dbPathStatus, setDbPathStatus] = useState<string | null>(null);
+  // R182: ✓/✗ 前缀字符串改为结构化状态（原先渲染端用 startsWith('✓') 判断颜色）。
+  const [dbPathStatus, setDbPathStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [dbWizardOpen, setDbWizardOpen] = useState(false);
   const [dbWizardMode, setDbWizardMode] = useState<'choose' | 'create' | 'select'>('choose');
 
@@ -1920,7 +1955,7 @@ export function SettingsRunPanel({
       // Guard against HTML error pages (502 from gateway when server crashes)
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
-        setDbPathStatus('✗ Server not responding, please retry');
+        setDbPathStatus({ ok: false, text: locale === 'zh' ? '服务器无响应，请重试' : 'Server not responding, please retry' });
         return;
       }
       const data = await res.json() as DbStatus;
@@ -1929,11 +1964,11 @@ export function SettingsRunPanel({
       // This keeps the Run Center display in lock-step with the setup wizard:
       // whichever path the wizard just confirmed is what we show here.
       setDbPath(data.configuredDbPath || data.activeUrl || 'file:./db/custom.db');
-      setDbPathStatus('✓ Loaded');
+      setDbPathStatus({ ok: true, text: locale === 'zh' ? '已加载' : 'Loaded' });
     } catch {
-      setDbPathStatus('✗ Load failed');
+      setDbPathStatus({ ok: false, text: locale === 'zh' ? '加载失败' : 'Load failed' });
     }
-  }, []);
+  }, [locale]);
 
   const saveDbPath = useCallback(async () => {
     setDbPathSaving(true);
@@ -1947,27 +1982,27 @@ export function SettingsRunPanel({
       // Guard against HTML error pages (502 when server crashes during prisma db push)
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
-        setDbPathStatus('✗ Server not responding during initialization, please retry');
+        setDbPathStatus({ ok: false, text: locale === 'zh' ? '初始化期间服务器无响应，请重试' : 'Server not responding during initialization, please retry' });
         setDbPathSaving(false);
         return;
       }
       const data = await res.json();
       if (data.ok) {
-        setDbPathStatus('✓ Switched and effective immediately (no restart needed)');
+        setDbPathStatus({ ok: true, text: locale === 'zh' ? '已切换，立即生效（无需重启）' : 'Switched and effective immediately (no restart needed)' });
         // Refresh status so the UI reflects the new active path + counts.
         await loadDbPath();
         // Notify parent (pdb-tracker) so it re-fetches all data from the
         // newly-active database — keeps the dashboard in sync.
         onDbChanged?.();
       } else {
-        setDbPathStatus(`✗ ${data.error || (locale === 'zh' ? '保存失败' : 'Save failed')}`);
+        setDbPathStatus({ ok: false, text: data.error || (locale === 'zh' ? '保存失败' : 'Save failed') });
       }
     } catch (err: any) {
-      setDbPathStatus(`✗ ${err?.message || (locale === 'zh' ? '网络错误' : 'Network error')}`);
+      setDbPathStatus({ ok: false, text: err?.message || (locale === 'zh' ? '网络错误' : 'Network error') });
     } finally {
       setDbPathSaving(false);
     }
-  }, [dbPath, loadDbPath, onDbChanged]);
+  }, [dbPath, loadDbPath, onDbChanged, locale]);
 
   // Load DB path on mount
   useEffect(() => { Promise.resolve().then(() => loadDbPath()); }, [loadDbPath]);
@@ -2159,11 +2194,9 @@ export function SettingsRunPanel({
     return [entry, ...l].slice(0, 50);
   });
 
-  /** Export the current (filtered) logs as a Markdown file download. */
+  /** Export the current (filtered) logs as a Markdown/JSON file download (R182: shared downloadBlob + filteredLogs). */
   const exportLogs = (format: 'md' | 'json') => {
-    const filtered = logs
-      .filter(l => logFilter === 'all' || l.module === logFilter)
-      .filter(l => !logSearch || l.summary.toLowerCase().includes(logSearch.toLowerCase()) || (l.details || '').toLowerCase().includes(logSearch.toLowerCase()));
+    const filtered = filteredLogs;
     if (filtered.length === 0) return;
     const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     let content: string;
@@ -2194,15 +2227,8 @@ export function SettingsRunPanel({
       mime = 'text/markdown';
       ext = 'md';
     }
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `runcenter-logs-${ts}.${ext}`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(content, mime, `runcenter-logs-${ts}.${ext}`);
   };
-
   /* ── run triggers ───────────────────────────────────────────────────── */
   const runLiterature = () => {
     markRunning('lit');
@@ -2407,7 +2433,7 @@ export function SettingsRunPanel({
         module: 'literature',
         status: 'success',
         summary: `${d.date}: 候选 ${d.totalCandidates} (Path A=${d.pathACount}, Path B=${d.pathBCount}, Path C=${d.pathCCount ?? 0}) → 最终入选 ${d.finalCount} 篇 [${Object.entries(d.methodStats || {}).map(([m, c]: [string, any]) => `${m}:${c}`).join(', ')}]`,
-        details: d.files?.dailyIndex ? `📁 ${d.files.dailyIndex}\n${d.digest ? `摘要:\n${d.digest.slice(0, 1500)}${d.digest.length > 1500 ? '…' : ''}` : ''}` : '无文件系统输出 (skipWikiFiles)',
+        details: d.files?.dailyIndex ? `${d.files.dailyIndex}\n${d.digest ? `摘要:\n${d.digest.slice(0, 1500)}${d.digest.length > 1500 ? '…' : ''}` : ''}` : '无文件系统输出 (skipWikiFiles)',
         durationMs: d.durationMs,
       }));
       fetch('/api/literature/daily/list')
@@ -2540,9 +2566,6 @@ export function SettingsRunPanel({
                 <Sparkles className="h-4.5 w-4.5 text-claude-accent" />
               </div>
               <span className="text-claude-text dark:text-[#e8e4dd]">{t.runCenter}</span>
-              <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590]">
-                <Layers className="h-2.5 w-2.5" /> {locale === 'zh' ? '3 个模块' : '3 modules'}
-              </Badge>
               {running.size > 0 && (
                 <Badge variant="outline" className="ml-1 text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
                   <Loader2 className="h-2.5 w-2.5 animate-spin" /> {running.size} {locale === 'zh' ? '运行中' : 'running'}
@@ -2612,8 +2635,9 @@ export function SettingsRunPanel({
                 </Badge>
               )}
               {dbPathStatus && (
-                <span className={`text-xs font-medium ml-auto shrink-0 ${dbPathStatus.startsWith('✓') ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
-                  {dbPathStatus}
+                <span className={`text-xs font-medium ml-auto shrink-0 inline-flex items-center gap-1 ${dbPathStatus.ok ? 'text-emerald-500 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
+                  {dbPathStatus.ok ? <CheckCircle2 className="h-2.5 w-2.5" /> : <XCircle className="h-2.5 w-2.5" />}
+                  {dbPathStatus.text}
                 </span>
               )}
             </div>
@@ -2723,12 +2747,13 @@ export function SettingsRunPanel({
                     （问题驱动智能体）。 Same pill idiom as the input-mode toggle
                     below; DSH pill uses the claude-cryoem accent + Sparkles icon. */}
                 <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                  <div className="flex items-center gap-0.5 rounded-md bg-muted/40 border border-border/40 p-0.5" role="group" aria-label={locale === 'zh' ? '评估流水线模式' : 'Evaluation pipeline mode'}>
+                  {/* R182: pill 容器统一 claude token（与 Tabs 同源），避免 shadcn muted 混搭 */}
+                  <div className="flex items-center gap-0.5 rounded-md bg-claude-bg/60 dark:bg-[#1a1917]/60 border border-claude-border/40 dark:border-[#3d3832]/40 p-0.5" role="group" aria-label={locale === 'zh' ? '评估流水线模式' : 'Evaluation pipeline mode'}>
                     <button
                       type="button"
                       onClick={() => switchEvalPipeline('classic')}
                       aria-pressed={evalPipeline === 'classic'}
-                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${evalPipeline === 'classic' ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${evalPipeline === 'classic' ? 'bg-claude-accent/15 text-claude-accent' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}
                     >
                       {t.evalModeClassic}
                     </button>
@@ -2736,7 +2761,7 @@ export function SettingsRunPanel({
                       type="button"
                       onClick={() => switchEvalPipeline('dsh')}
                       aria-pressed={evalPipeline === 'dsh'}
-                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${evalPipeline === 'dsh' ? 'bg-claude-cryoem/10 text-claude-cryoem' : 'text-muted-foreground hover:text-foreground'}`}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${evalPipeline === 'dsh' ? 'bg-claude-cryoem/10 text-claude-cryoem' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}
                     >
                       <Sparkles className="h-3 w-3" /> {t.evalModeDsh}
                     </button>
@@ -2755,14 +2780,14 @@ export function SettingsRunPanel({
                     (DSH only supports UniProt input for now). */}
                 {evalPipeline !== 'dsh' && (
                 <div className="flex items-center gap-1.5 mb-3">
-                  <div className="flex items-center gap-0.5 rounded-md bg-muted/40 border border-border/40 p-0.5">
-                    <button type="button" onClick={() => setEvalInputMode('uniprot')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalInputMode === 'uniprot' ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{locale === 'zh' ? 'UniProt ID' : 'UniProt ID'}</button>
-                    <button type="button" onClick={() => setEvalInputMode('sequence')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalInputMode === 'sequence' ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{t.evalInputModeSequence}</button>
+                  <div className="flex items-center gap-0.5 rounded-md bg-claude-bg/60 dark:bg-[#1a1917]/60 border border-claude-border/40 dark:border-[#3d3832]/40 p-0.5">
+                    <button type="button" onClick={() => setEvalInputMode('uniprot')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalInputMode === 'uniprot' ? 'bg-claude-accent/15 text-claude-accent' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}>{locale === 'zh' ? 'UniProt ID' : 'UniProt ID'}</button>
+                    <button type="button" onClick={() => setEvalInputMode('sequence')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalInputMode === 'sequence' ? 'bg-claude-accent/15 text-claude-accent' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}>{t.evalInputModeSequence}</button>
                   </div>
                   {evalInputMode === 'sequence' && (
-                    <div className="flex items-center gap-0.5 rounded-md bg-muted/40 border border-border/40 p-0.5">
-                      <button type="button" onClick={() => setEvalSeqType('aa')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalSeqType === 'aa' ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300' : 'text-muted-foreground hover:text-foreground'}`}>{t.evalSeqTypeAA}</button>
-                      <button type="button" onClick={() => setEvalSeqType('dna')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalSeqType === 'dna' ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300' : 'text-muted-foreground hover:text-foreground'}`}>DNA</button>
+                    <div className="flex items-center gap-0.5 rounded-md bg-claude-bg/60 dark:bg-[#1a1917]/60 border border-claude-border/40 dark:border-[#3d3832]/40 p-0.5">
+                      <button type="button" onClick={() => setEvalSeqType('aa')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalSeqType === 'aa' ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}>{t.evalSeqTypeAA}</button>
+                      <button type="button" onClick={() => setEvalSeqType('dna')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalSeqType === 'dna' ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}>DNA</button>
                     </div>
                   )}
                 </div>
@@ -3214,11 +3239,11 @@ export function SettingsRunPanel({
                       <CalendarClock className="h-3 w-3" />{locale === 'zh' ? 'ISO 周' : 'ISO Week'}
                     </Label>
                     <div className="mt-1 flex items-center gap-1">
-                      <input
+                      <Input
                         type="week"
                         value={weeklyCustomWeek || (weeklyWindow?.weekId || '')}
                         onChange={e => setWeeklyCustomWeek(e.target.value)}
-                        className="h-8 px-2 rounded-md border border-border/60 bg-background text-xs font-mono text-foreground flex-1 min-w-0"
+                        className="h-8 px-2 text-xs font-mono flex-1 min-w-0"
                         title="Custom ISO week selection (leave empty for current week)"
                       />
                       {weeklyCustomWeek && (
@@ -3253,8 +3278,8 @@ export function SettingsRunPanel({
                         onClick={() => setWeeklyCycles(c)}
                         className={`h-8 px-2 rounded-md text-xs border transition-all ${
                           weeklyCycles === c
-                            ? 'border-primary/50 bg-primary/10 text-foreground font-medium'
-                            : 'border-border/60 text-muted-foreground hover:text-foreground hover:border-border'
+                            ? 'border-claude-accent/50 bg-claude-accent/10 text-claude-accent font-medium'
+                            : 'border-claude-border/60 dark:border-[#3d3832]/60 text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd] hover:border-claude-border dark:hover:border-[#3d3832]'
                         }`}
                         title={c === 1 ? (locale === 'zh' ? '约 5 分钟' : '~5 min') : c === 2 ? (locale === 'zh' ? '约 10 分钟' : '~10 min') : (locale === 'zh' ? '约 15 分钟' : '~15 min')}
                       >
@@ -3340,23 +3365,23 @@ export function SettingsRunPanel({
                 exit={{ opacity: 0, height: 0 }}
                 className="mt-4"
               >
-                <div className="rounded-lg border border-border/60 bg-muted/20 overflow-hidden">
+                <div className="rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-bg/40 dark:bg-[#1a1917]/40 overflow-hidden">
                   {/* header with filter pills + search */}
-                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 bg-muted/40 flex-wrap">
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-surface/60 dark:bg-[#242220]/60 flex-wrap">
                     <div className="flex items-center gap-2">
-                      <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-xs font-semibold">{t.execLog}</span>
-                      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-border/60 bg-muted/40 text-muted-foreground">
-                        {logFilter === 'all' ? logs.length : logs.filter(l => l.module === logFilter).length}
+                      <Activity className="h-3.5 w-3.5 text-claude-text-muted dark:text-[#9b9590]" />
+                      <span className="text-xs font-semibold text-claude-text dark:text-[#e8e4dd]">{t.execLog}</span>
+                      <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-border-light/60 dark:bg-[#2b2926]/60 text-claude-text-muted dark:text-[#9b9590]">
+                        {filteredLogs.length}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      {/* module filter pills */}
-                      <div className="flex items-center gap-0.5 rounded-md bg-background/60 border border-border/40 p-0.5">
+                      {/* module filter pills — R182: 编号与 Tabs 对齐（① 评估 ② 文献 ③ 周报） */}
+                      <div className="flex items-center gap-0.5 rounded-md bg-claude-bg/60 dark:bg-[#1a1917]/60 border border-claude-border/40 dark:border-[#3d3832]/40 p-0.5">
                         {([
-                          { k: 'all', label: 'All' },
-                          { k: 'literature', label: '①' },
-                          { k: 'eval', label: '②' },
+                          { k: 'all', label: locale === 'zh' ? '全部' : 'All' },
+                          { k: 'eval', label: '①' },
+                          { k: 'literature', label: '②' },
                           { k: 'weekly', label: '③' },
                         ] as const).map(f => (
                           <button
@@ -3364,7 +3389,7 @@ export function SettingsRunPanel({
                             type="button"
                             onClick={() => setLogFilter(f.k)}
                             className={`px-1.5 py-0.5 rounded text-xs font-medium transition-colors ${
-                              logFilter === f.k ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:text-foreground'
+                              logFilter === f.k ? 'bg-claude-accent/15 text-claude-accent' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'
                             }`}
                             title={f.k === 'all' ? t.execLogFilterAll : f.k === 'literature' ? t.tabLit : f.k === 'eval' ? t.tabEval : t.tabWeekly}
                           >
@@ -3373,14 +3398,14 @@ export function SettingsRunPanel({
                         ))}
                       </div>
                       {/* search box */}
-                      <div className="flex items-center h-6 rounded-md border border-border/40 bg-background/60 px-1.5 gap-1">
-                        <Search className="h-2.5 w-2.5 text-muted-foreground/60" />
+                      <div className="flex items-center h-6 rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 px-1.5 gap-1">
+                        <Search className="h-2.5 w-2.5 text-claude-text-muted/60 dark:text-[#9b9590]/60" />
                         <input
                           type="text"
                           value={logSearch}
                           onChange={e => setLogSearch(e.target.value)}
                           placeholder={t.execLogSearch}
-                          className="w-16 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50"
+                          className="w-16 bg-transparent text-xs outline-none placeholder:text-claude-text-muted/50 dark:placeholder:text-[#9b9590]/50 text-claude-text dark:text-[#e8e4dd]"
                         />
                       </div>
                       <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => exportLogs('md')} title={locale === 'zh' ? '导出 Markdown' : 'Export Markdown'} disabled={logs.length === 0}>
@@ -3396,42 +3421,44 @@ export function SettingsRunPanel({
                   </div>
                   <div className="max-h-72 overflow-y-auto thin-scroll">
                     <div className="px-3 py-2 space-y-2">
-                      {logs
-                        .filter(l => logFilter === 'all' || l.module === logFilter)
-                        .filter(l => !logSearch || l.summary.toLowerCase().includes(logSearch.toLowerCase()) || (l.details || '').toLowerCase().includes(logSearch.toLowerCase()))
-                        .map((l, i) => {
-                          const moduleBadge = l.module === 'literature'
-                            ? { txt: '② Lit', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' }
-                            : l.module === 'eval'
-                            ? { txt: '① Eval', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' }
-                            : { txt: '③ Weekly', cls: 'border-claude-accent/40 text-claude-accent bg-claude-accent/10' };
-                          return (
-                            <div
-                              key={i}
-                              className="text-xs border-l-2 pl-2.5 py-1"
-                              style={{
-                                borderColor: l.status === 'success' ? '#10b981' : l.status === 'error' ? '#ef4444' : 'var(--claude-accent)',
-                              }}
-                            >
-                              <div className="flex items-center gap-1.5">
-                                {l.status === 'success' && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />}
-                                {l.status === 'error' && <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
-                                {l.status === 'running' && <Loader2 className="h-3 w-3 animate-spin text-claude-accent shrink-0" />}
-                                <span className="text-muted-foreground font-mono text-xs shrink-0">{l.ts.slice(11, 19)}</span>
-                                <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${moduleBadge.cls}`}>{moduleBadge.txt}</Badge>
-                                <span className="font-medium flex-1 leading-tight">{l.summary}</span>
-                                {l.durationMs != null && <span className="text-muted-foreground text-xs shrink-0">{Math.round(l.durationMs / 100) / 10}s</span>}
-                              </div>
-                              {l.details && (
-                                <pre className="mt-1 text-xs whitespace-pre-wrap text-muted-foreground max-h-32 overflow-y-auto font-mono leading-relaxed">
-                                  {l.details}
-                                </pre>
-                              )}
+                      {filteredLogs.map((l, i) => {
+                        // R182: 三模块徽章共用同一 accent 样式；编号与 Tabs 对齐。
+                        const MODULE_BADGE_CLS = 'border-claude-accent/40 text-claude-accent bg-claude-accent/10';
+                        const moduleBadge = l.module === 'literature'
+                          ? { txt: '② Lit', cls: MODULE_BADGE_CLS }
+                          : l.module === 'eval'
+                          ? { txt: '① Eval', cls: MODULE_BADGE_CLS }
+                          : { txt: '③ Weekly', cls: MODULE_BADGE_CLS };
+                        return (
+                          <div
+                            key={i}
+                            className={`text-xs border-l-2 pl-2.5 py-1 ${
+                              l.status === 'success'
+                                ? 'border-emerald-500'
+                                : l.status === 'error'
+                                ? 'border-red-500'
+                                : 'border-claude-accent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5">
+                              {l.status === 'success' && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />}
+                              {l.status === 'error' && <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
+                              {l.status === 'running' && <Loader2 className="h-3 w-3 animate-spin text-claude-accent shrink-0" />}
+                              <span className="text-claude-text-muted dark:text-[#9b9590] font-mono text-xs shrink-0">{l.ts.slice(11, 19)}</span>
+                              <Badge variant="outline" className={`text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 ${moduleBadge.cls}`}>{moduleBadge.txt}</Badge>
+                              <span className="font-medium flex-1 leading-tight text-claude-text/90 dark:text-[#e8e4dd]/90">{l.summary}</span>
+                              {l.durationMs != null && <span className="text-claude-text-muted dark:text-[#9b9590] text-xs shrink-0">{Math.round(l.durationMs / 100) / 10}s</span>}
                             </div>
-                          );
-                        })}
-                      {logs.filter(l => logFilter === 'all' || l.module === logFilter).filter(l => !logSearch || l.summary.toLowerCase().includes(logSearch.toLowerCase()) || (l.details || '').toLowerCase().includes(logSearch.toLowerCase())).length === 0 && (
-                        <div className="text-xs text-muted-foreground/60 text-center py-3">{locale === 'zh' ? '没有匹配的日志' : 'No matching logs'}</div>
+                            {l.details && (
+                              <pre className="mt-1 text-xs whitespace-pre-wrap text-claude-text-muted dark:text-[#9b9590] max-h-32 overflow-y-auto font-mono leading-relaxed">
+                                {l.details}
+                              </pre>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {filteredLogs.length === 0 && (
+                        <div className="text-xs text-claude-text-muted/60 dark:text-[#9b9590]/60 text-center py-3">{locale === 'zh' ? '没有匹配的日志' : 'No matching logs'}</div>
                       )}
                     </div>
                   </div>
@@ -3464,7 +3491,7 @@ export function SettingsRunPanel({
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
-              <div className="flex items-center justify-between px-5 py-3 border-b border-claude-border dark:border-[#3d3832] bg-gradient-to-r from-[#faf7f4] to-[#f5f0ea] dark:from-[#242220] dark:to-[#2b2926]">
+              <div className="flex items-center justify-between px-5 py-3 border-b border-claude-border dark:border-[#3d3832] bg-gradient-to-r from-claude-accent-light/60 via-claude-surface to-claude-surface dark:from-[#2a1f1a] dark:via-[#242220] dark:to-[#242220]">
                 <div className="flex items-center gap-2">
                   <Columns2 className="h-4 w-4 text-claude-accent" />
                   <h2 className="text-sm font-bold text-claude-text">
@@ -3493,7 +3520,8 @@ export function SettingsRunPanel({
                     {/* Cryo-EM panel */}
                     <div className="flex flex-col rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 overflow-hidden bg-white/50 dark:bg-[#1a1917]/50">
                       <div className="flex items-center gap-1.5 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-accent/8">
-                        <span className="text-xs font-semibold text-claude-accent">🧊 Cryo-EM</span>
+                        <Snowflake className="h-3.5 w-3.5 text-claude-accent shrink-0" />
+                        <span className="text-xs font-semibold text-claude-accent">Cryo-EM</span>
                         <span className="text-[10px] text-muted-foreground ml-auto">{compareData.cryoem.length} chars</span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-3 thin-scroll text-xs leading-relaxed">
@@ -3508,7 +3536,8 @@ export function SettingsRunPanel({
                     {/* X-ray panel */}
                     <div className="flex flex-col rounded-lg border border-claude-border/60 dark:border-[#3d3832]/60 overflow-hidden bg-white/50 dark:bg-[#1a1917]/50">
                       <div className="flex items-center gap-1.5 px-3 py-2 border-b border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-accent/8">
-                        <span className="text-xs font-semibold text-claude-accent">📐 X-ray</span>
+                        <Ruler className="h-3.5 w-3.5 text-claude-accent shrink-0" />
+                        <span className="text-xs font-semibold text-claude-accent">X-ray</span>
                         <span className="text-[10px] text-muted-foreground ml-auto">{compareData.xray.length} chars</span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-3 thin-scroll text-xs leading-relaxed">
@@ -3545,74 +3574,23 @@ export function SettingsRunPanel({
 /* ──────────────────────────────────────────────────────────────────────── */
 
 // Claude-themed accent tokens.
-// IMPORTANT: All module cards/tabs now use the SAME theme accent (`claude-accent`)
-// to avoid color collisions when the user switches themes. The 6 preset themes
-// map their accent to: claude(#c96442), ocean(#2d8f8f=claude-cryoem!),
-// forest(#16a34a=claude-mid!), sunset(#ea580c=claude-high!), berry(#7c5cbf=claude-xray!),
-// rose(#e11d48≈claude-top). So if we used cryoem/xray/nmr for different modules,
-// 4 of 6 themes would produce exact color duplicates.
+// IMPORTANT: All module cards/tabs use the SAME theme accent (`claude-accent`)
+// to avoid color collisions when the user switches themes (6 preset themes map
+// their accents onto the claude-* scale — see the theme table in globals.css).
 // Modules are distinguished by ICON + NUMBER (①②③), not by color.
 // Status colors (success/error/warn) use standard Tailwind colors that are
 // guaranteed distinct from ALL 6 theme accents.
-const ACCENT_CLASSES: Record<string, { ring: string; chip: string; icon: string; glow: string; shadow: string }> = {
-  accent: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  // Legacy aliases — ALL map to accent now (no per-module color distinction)
-  cryoem: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  nmr: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  xray: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  sky: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  emerald: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  amber: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
-  violet: {
-    ring: 'before:from-claude-accent/70',
-    chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
-    icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
-    glow: 'from-claude-accent/8',
-    shadow: 'claude-card-shadow',
-  },
+// R182: the former 8-key ACCENT_CLASSES (7 legacy aliases, all identical values)
+// collapsed to a single MODULE_ACCENT constant. The `accent` prop is kept for
+// API compatibility but no longer selects different styles.
+const MODULE_ACCENT = {
+  ring: 'before:from-claude-accent/70',
+  chip: 'bg-claude-accent-light text-claude-accent border-claude-accent/30',
+  icon: 'bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 text-claude-accent',
+  glow: 'from-claude-accent/8',
+  shadow: 'claude-card-shadow',
 };
+const ACCENT_CLASSES: Record<string, typeof MODULE_ACCENT> = { accent: MODULE_ACCENT };
 
 function ModuleCard({
   icon,
@@ -3633,7 +3611,7 @@ function ModuleCard({
   children: React.ReactNode;
   headerBadge?: React.ReactNode;
 }) {
-  const a = ACCENT_CLASSES[accent] || ACCENT_CLASSES.cryoem;
+  const a = ACCENT_CLASSES[accent] || MODULE_ACCENT;
   return (
     <div
       className={`group relative rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] ${a.shadow} overflow-hidden transition-all duration-200 hover:border-claude-accent/30 hover:-translate-y-px before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-gradient-to-b ${a.ring} before:to-transparent`}

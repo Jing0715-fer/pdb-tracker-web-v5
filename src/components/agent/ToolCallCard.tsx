@@ -9,7 +9,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight, Crosshair, ShieldAlert } from 'lucide-react';
+import { Loader2, Check, X, Wrench, Box, Ruler, Camera, FlaskConical, AlertCircle, AlertTriangle, Star, RotateCcw, Copy, Timer, ZoomIn, X as XClose, ChevronLeft, ChevronRight, Crosshair, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/molcraft/store';
 import type { ConversationNode } from './use-agent-session';
@@ -293,8 +293,11 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
                   </span>
                 )}
                 {vlmAcceptable != null && (
-                  <span className={`px-1 py-0.5 rounded-full text-[8px] ${vlmAcceptable ? 'bg-emerald-500/20 text-emerald-600' : 'bg-amber-500/20 text-amber-600'}`}>
-                    {vlmAcceptable ? '✓ 质量 acceptable' : '⚠ 需改进'}
+                  <span className={`px-1 py-0.5 rounded-full text-[8px] flex items-center gap-0.5 ${vlmAcceptable ? 'bg-emerald-500/20 text-emerald-600' : 'bg-amber-500/20 text-amber-600'}`}>
+                    {vlmAcceptable
+                      ? <Check className="h-2.5 w-2.5" aria-hidden="true" />
+                      : <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />}
+                    {vlmAcceptable ? '质量 acceptable' : '需改进'}
                   </span>
                 )}
                 {vlmFailed && (
@@ -309,8 +312,9 @@ function ResultView({ name, result }: { name: string; result: unknown }) {
               </div>
             )}
             {vlmFailed && (
-              <div className="mb-1.5 px-2 py-1 rounded-md bg-red-500/10 border border-red-500/25 text-[9px] text-red-600 leading-relaxed">
-                ⚠ {vlmErrorText || 'VLM 视觉验证未完成'}（已按 5s/15s/45s 指数退避重试）。以下分析结论仅基于数值计算结果，未经截图视觉校验。
+              <div className="mb-1.5 px-2 py-1 rounded-md bg-red-500/10 border border-red-500/25 text-[9px] text-red-600 leading-relaxed flex items-start gap-1">
+                <AlertTriangle className="h-3 w-3 shrink-0 mt-px" aria-hidden="true" />
+                <span>{vlmErrorText || 'VLM 视觉验证未完成'}（已按 5s/15s/45s 指数退避重试）。以下分析结论仅基于数值计算结果，未经截图视觉校验。</span>
               </div>
             )}
             <ScreenshotResult name="capture_multi_angle" screenshots={autoScreenshots} result={r.autoCapture} />
@@ -467,9 +471,13 @@ function ScreenshotResult({ name, screenshots, result }: {
     : quality === 'degraded' ? 'bg-amber-500/80'
     : quality === 'unacceptable' ? 'bg-red-500/80'
     : 'bg-slate-500/80';
-  const qualityLabel = quality === 'acceptable' ? '✓ 良好'
-    : quality === 'degraded' ? '⚠ 一般'
-    : quality === 'unacceptable' ? '✗ 不合格'
+  const qualityLabel = quality === 'acceptable' ? '良好'
+    : quality === 'degraded' ? '一般'
+    : quality === 'unacceptable' ? '不合格'
+    : null;
+  const QualityIcon = quality === 'acceptable' ? Check
+    : quality === 'degraded' ? AlertTriangle
+    : quality === 'unacceptable' ? X
     : null;
 
   return (
@@ -488,8 +496,9 @@ function ScreenshotResult({ name, screenshots, result }: {
               未经视觉验证
             </span>
           )}
-          {qualityLabel && (
-            <span className={`px-1.5 py-0.5 rounded-full text-[9px] text-white ${qualityColor}`}>
+          {qualityLabel && QualityIcon && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[9px] text-white ${qualityColor} flex items-center gap-0.5`}>
+              <QualityIcon className="h-2.5 w-2.5" aria-hidden="true" />
               {qualityLabel}
             </span>
           )}
@@ -516,8 +525,9 @@ function ScreenshotResult({ name, screenshots, result }: {
 
         {/* Best image badge */}
         {bestIndex === currentIdx && (
-          <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-claude-accent/90 text-white">
-            ★ 最佳
+          <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-claude-accent/90 text-white flex items-center gap-0.5">
+            <Star className="h-2.5 w-2.5" aria-hidden="true" />
+            最佳
           </div>
         )}
 
@@ -614,7 +624,7 @@ function ScreenshotResult({ name, screenshots, result }: {
             {bestIndex === currentIdx && (
               <>
                 <span className="opacity-60">·</span>
-                <span className="text-yellow-300">★ 最佳</span>
+                <span className="text-yellow-300 flex items-center gap-0.5"><Star className="h-3 w-3" aria-hidden="true" />最佳</span>
               </>
             )}
             {scores && currentIdx < scores.length && (

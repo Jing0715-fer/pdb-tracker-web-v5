@@ -91,7 +91,7 @@ export function EvalMultiCompare({ evaluations, onClose }: EvalMultiCompareProps
     },
     {
       label: locale === 'zh' ? '有报告' : 'Has Report',
-      getValue: (e: Evaluation) => e.report ? '✓' : '—',
+      getValue: (e: Evaluation) => e.report ? (locale === 'zh' ? '是' : 'Yes') : '—',
     },
   ];
 

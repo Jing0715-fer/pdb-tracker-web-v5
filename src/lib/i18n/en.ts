@@ -249,7 +249,7 @@ export const en = {
 
   // ─── Filters ─────────────────────────────────────────────────────────────
   filterAll: 'All',
-  filterBookmarks: '★ Bookmarks',
+  filterBookmarks: 'Bookmarks',
   filterCryoem: 'Cryo-EM',
   filterXray: 'X-ray',
   filterNmr: 'NMR',

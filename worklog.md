@@ -4819,3 +4819,70 @@ Stage Summary:
 - agent 检测能力完整回归：检测（轻量二进制扫描）→ 展示（7 家 CLI agent 状态列表）→ 选择（Run Center 专属 override，服务端持久化）→ 执行（llm.ts 原 CLI 子进程执行器 + 不可用自动回退）；经典/DSH 评估管线并存不受影响（实测经典运行成功）。
 - Run Center OOM 根治：全 warmed RSS 2618→1861MB（-29%），打开 Run Center 仅 +60MB，系统余量 212MB→1.7GB；三管齐下（EvalSourceMapDevToolPlugin 剥离 / mount 轻量路由 / MALLOC_ARENA_MAX=2）+ 堆上限安全网 2560MB。
 - 新增 3 文件（cli-agent-scan 165 行 / run-provider 108 行 / run-llm-status route 52 行）+ 修改 12 文件；lint/tsc 零新增；假 binary 全链路 E2E + 经典回归 + 内存 A/B 三层实证。
+
+---
+Task ID: 2-c
+Agent: emoji-replacement-batch
+Task: 全项目 UI emoji→Lucide 机械替换批次（21 文件）
+
+Work Log:
+- notification-bell.tsx：buildCategoryConfig 删除 emoji 字段（grep 确认无其他消费者）；分类徽章 `{config.emoji} {config.label}` → 仅 label（Lucide Icon 已在行首渲染）；NotifPrefToggle prop `emoji: string` → `icon: React.ElementType`，渲染 `<Icon className="h-3 w-3 text-claude-text-muted" aria-hidden="true" />`；5 个调用点 🔬📊📄⭐📄 → Microscope/FlaskConical/BookOpen/Star/TrendingUp（与 config 一致）；"View all activity →" 排版箭头保留。
+- notification-panel.tsx：同上模式——emoji 字段删除、徽章去 emoji、PanelPrefToggle emoji→icon prop；5 个调用点 🔬📊📄⭐📈 → Microscope/FlaskConical/BookOpen/Star/TrendingUp（weekly_summary 对应 TrendingUp）。
+- structure-analysis/viewer-tools-tabs.tsx（CRLF 文件，逐行替换保持行尾不变）：快捷提问数组 icon "📋/🔬/💡" → ClipboardList/Microscope/Lightbulb 组件引用，渲染 `<s.icon className="h-3.5 w-3.5 shrink-0 text-claude-accent" aria-hidden="true" />`（JSX 成员表达式）；2 处聊天气泡错误消息去 "❌ " 前缀（保留 "Error: ..."，markdown 气泡内容）；L745 链内模式科学记法 ↔ 保留。
+- agent/ToolCallCard.tsx：①VLM 可接受徽章 '✓ 质量 acceptable'/'⚠ 需改进' → Check/AlertTriangle 图标 + 文字（徽章加 flex items-center gap-0.5）；②vlmFailed 红色警告横幅 ⚠ 前缀 → AlertTriangle 图标（h-3 w-3）+ 文字 span；③qualityLabel 拆分为纯文字（良好/一般/不合格）+ 新增 QualityIcon（Check/AlertTriangle/X）在徽章内渲染；④2 处 "★ 最佳" 截图徽章 → Star 图标 + 最佳（轮播角标 + 全屏 info bar，均保持原配色）。
+- agent/ToolStatsPopover.tsx：工具统计列表 "✓ N"/"✗ N" → Check/X 图标（h-3 w-3）+ 数字（emerald/red 配色不变）。
+- EvalProgressTracker.tsx：Tooltip 阶段状态 "✓ Complete/● In Progress/○ Pending" → Check/CircleDot/Circle 图标（h-2.5 w-2.5，三色 class 不变）+ 文字。
+- DataImportDialog.tsx："✓ N imported" → Check 图标（h-3.5 w-3.5）+ "N imported"。
+- structure-analysis/structure-alignment-panel.tsx："✓ High structural similarity"/"✗ Low similarity / different fold" → Check/X 图标 + 文字（"~ Moderate similarity" 保持）；绿色/红色 class 不变。
+- charts/screening-chart.tsx：Lipinski Ro5 徽章 `Ro5 {passes ? "✓" : "✗"}` → `Ro5` + Check/X 图标（badge 加 gap-0.5）；"★ Top Hit" 徽章 → Star 图标 + "Top Hit"。导出 CSV/JSON 无符号内容未涉及。
+- charts/pocket-detection-chart.tsx："★ Top" 徽章 → Star 图标 + "Top"。
+- charts/structure-overview-dashboard.tsx：加载进度清单 `{done ? "✓" : "…"} {label}` → Check 图标/… + label（div 加 gap-1）；L374/412/518 导出 MD/HTML 模板字符串中 ⚠️🔬 保留未动。
+- charts/structure-comparison-dashboard.tsx：UI 表格通用单元格最佳值 `<span>★</span>` → Star（h-2 w-2 = 原 text-[8px]，继承单元格色）；图例 ★ swatch → Star 图标；info 说明句 "★ marks the best value" → 行内 Star 图标。**关键决策**：formatValue 的 bool 分支 `'✓ Yes'/'✗ No'`（L394）保留原样——该函数同时被 MD(L226)/HTML(L285) 导出消费，属产物内容非 UI；UI 侧新增 `row.type === "bool"` 单元格特殊渲染分支（Check/X 图标 + Yes/No），导出与 UI 互不影响。L206-297 导出模板 ⚠️★🟢🟡🔴 全部保留。
+- literature/LiteratureView.tsx：4 处筛选标签清除按钮 "✕"（日期/阅读列表/标签/日报）→ X 图标（h-3 w-3）+ aria-label。
+- literature/LiteratureDateSidebar.tsx：清除筛选 "✕" 按钮 → X 图标 + aria-label。
+- literature/LiteraturePaperCard.tsx："✓ Read" 已读徽章 → Check 图标（h-3 w-3）+ "Read"。
+- literature/LiteratureDetailPanel.tsx：期刊声望徽章 "★ {label}" → Star 图标（h-3 w-3，继承徽章配色）+ label。
+- weekly-structure-compare.tsx：底部图例 "★ = best value in row" → Star 图标（h-3 w-3 text-[#2d8f8f] fill-[#2d8f8f]，与表格内最佳值星标一致）+ "= best value in row"。
+- eval-comparison.tsx："(★ = better)" → 行内 Star 图标（h-2.5 w-2.5）+ "( = better)"。
+- eval-multi-compare.tsx：'Has Report' 列取值 `'✓' : '—'` → `(locale === 'zh' ? '是' : 'Yes') : '—'`——纯字符串直接进表格（无 cell renderer、无该列字符串判断逻辑），且表格 outerHTML 直接导出报告，文字值最稳；双语 locale 化。
+- pdb-tracker.tsx：期刊声望徽章 Nature/Science/Cell 三分支删除 `star: '★'` 字段，渲染改 `<Star className="h-3 w-3" aria-hidden="true" /> {prestige.label}`（红/蓝/绿配色不变）；import 增 Star。
+- lib/i18n/zh.ts + en.ts：`filterBookmarks: '★ 收藏'/'★ Bookmarks'` → '收藏'/'Bookmarks'（消费者 pdb-sidebar.tsx L638 旁边已有 Bookmark Lucide 图标；weekly-page.tsx 纯文本 chip）；backToList/tourKeyboardHint 的 ← → 键盘符号保留。
+- agent/ChatPanel.tsx：SUGGESTIONS 数组 4 个 `icon: ''` 死字段删除 + 渲染处 `<span className="text-sm shrink-0">{s.icon}</span>` 删除；⌘⇧R kbd 提示保留。
+
+验证：
+1. eslint：23 个改动文件全部运行 `bunx eslint <file> --no-warn-ignored`——22 文件 0 error 0 warning；ToolStatsPopover.tsx 1 error（react-hooks/set-state-in-effect @ L35，git stash 实证为 HEAD 既有错误，与本轮 L121-124 两行改动无关）。
+2. emoji 残留复查：`rg -n "[\x{1F300}-\x{1FAFF}]"` 23 文件——仅剩 structure-overview-dashboard L413 与 structure-comparison-dashboard L261/L298 导出 HTML 报告模板内 🔬🟢🟡🔴（产物内容，按规则保留）；符号类复查（✓✗★✕⚠）仅剩：structure-comparison-dashboard formatValue bool 分支（仅供导出，见上）+ 导出模板 + ⌘⇧←→ 键盘符号/排版箭头 + 代码注释。
+3. tsc：全项目 120 errors，与 stash 基线逐条 diff 完全一致（唯一差异 = structure-overview-dashboard 两处既有错误行号 +1，因 import 增 1 行）→ 零新增。
+4. 未触碰 6 个禁改文件（settings-run-panel/tour-overlay/use-tour/analysis-tour/llm.ts/cli-agent-scan.ts/SharedLlmButton）与 src/app/api/**。
+
+Stage Summary:
+- 23 文件 UI emoji 全部替换为 Lucide 图标（约 50+ 处），尺寸匹配周围文本（徽章 h-2.5~h-3.5），装饰性图标统一 aria-hidden="true"；颜色 class 全部保持原样。
+- 两处逻辑依赖处理：①structure-comparison-dashboard formatValue 的 "✓ Yes"/"✗ No" 为 MD/HTML 导出产物共用——UI 单元格新增 bool 特殊渲染分支（Lucide），导出字符串保留，行为零变化；②eval-multi-compare '✓' 列值为纯字符串进表格且参与 outerHTML 导出——改为 locale 化 '是'/'Yes' 文字。
+- 保留项全部核实：kbd 键盘符号（⌘⇧R/←→）、科学记法 ↔/→（链内残基对/注释）、导出报告模板 emoji（⚠️🔬★🟢🟡🔴）、排序/排版箭头。
+- eslint 22/23 文件 0 error（1 个 pre-existing 与本轮无关，stash 实证）；tsc 零新增（120=120 基线逐条一致）。
+
+---
+Task ID: 2-a / 2-b / 2-d (R182)
+Agent: main-agent (Z.ai Code)
+Task: 全项目 UI 升级——去 emoji 图标 + Tour/Run Center 美化 + UI 问题清单修正 + 内容去重（用户最新指示）
+
+Work Log:
+- 前置核查：远程 git 历史完整（origin/main HEAD=9187039，R179 DSH/R180 LLM 共享/R181 OOM 根治均已落地）；本轮聚焦 UI 升级。
+- 全项目 emoji 扫描（子代理探查 157 文件 934 处）：三分之二为注释排版箭头，真图形 emoji 集中在 ~35 文件；划分 A（UI 可见）/B（注释）/C（i18n）/D（LLM 提示词）四类，D 类与键盘符号/科学记法 ↔ 明确保留。
+- Task 2-c（子代理，23 文件机械替换）：通知两件套 emoji 字段→Lucide prop；viewer-tools-tabs 快捷提问 📋🔬💡→组件引用 + ❌ 前缀去除；ToolCallCard ✓⚠✗★ 质量徽章→Check/AlertTriangle/X/Star；ToolStatsPopover/EvalProgressTracker/DataImportDialog/structure-alignment-panel/charts×5（仅 UI 侧，导出模板保留）/literature×4/weekly-structure-compare/eval-comparison 状态符号→Lucide；eval-multi-compare 列值 '✓'→locale 双语 '是/Yes'；pdb-tracker 期刊 ★ 徽章→Star；i18n filterBookmarks 去 ★；ChatPanel 死 icon:'' 字段清理。意外处理：structure-comparison-dashboard formatValue '✓ Yes/✗ No' 同时被导出消费→UI 侧新增 bool cell 渲染分支、导出零改动。
+- Task 2-a（Run Center，settings-run-panel.tsx）：
+  - 去 emoji：🔬→Microscope、🤝⚡💧互作统计→Handshake/Zap/Droplets（带 tooltip）、🧊📐周报对比→Snowflake/Ruler、📁 日志前缀去除、✓✗ 徽章→CheckCircle2/XCircle、●●● 相关性等级→三点微型信号条。
+  - 内容去重：downloadBlob() 收敛 4 处 Blob 样板（3 导出按钮+exportLogs）；DshFigureThumb 共享缩略卡（LLMPreview 画廊与 DshFiguresStrip 原先 ~40 行×2）；CollapsibleCardHeader 收敛 3 处逐字重复折叠头；DSH done 后配图条只留被拒图（verified 移入报告画廊，消除同图双展示）；ChapterStream done 自动折叠（React 官方 render 期调整 state 模式，替代 effect+setState 报错）。
+  - 死代码：LLMPreview accentMap 8 键全同值→单 ACCENT；ACCENT_CLASSES 7 别名全同值→MODULE_ACCENT；CycleTimeline colorMap 3 键全同值→单常量。
+  - Bug 修复：执行日志 filter pills 编号错位（literature=①/eval=② 与 Tabs ①评估②文献 矛盾→对齐 ①②③）；dbPathStatus startsWith('✓') 符号逻辑依赖→{ok,text} 结构化状态（附带双语化）；moduleBadge 三同值 cls→常量。
+  - token 统一：执行日志 inline hex borderColor→Tailwind class；pill 容器 bg-muted/40→claude token（4 处）；RunHistoryPanel 全套 shadcn 原生 token→claude 体系；周报对比头硬编码渐变 #faf7f4/#f5f0ea→token；原生 week input→shadcn Input；过滤链 3 遍/渲染→filteredLogs useMemo；头部冗余"3 个模块"徽章删除（与 Tabs 信息重复）；auto-scroll tooltip 双语化。
+- Task 2-b（Tour）：tour-overlay.tsx——spotlight 遮罩/边框/脉冲光环三层 spring 联动动画（步骤间滑移而非跳变）；卡片宽度响应式 min(340, vw-32)；硬编码 bg-white/#1c1b1a→claude-surface token；最后一步 emerald 按钮→accent 统一；删除死 TOUR_STEPS 假数据导出。analysis-tour.tsx——硬编码 rgba(201,100,66) boxShadow 脉冲→border-claude-accent + opacity 呼吸（token 化随主题）；卡片 360→340 与主站统一；进度点/图标容器/按钮样式对齐主站；dark mode 支持补齐。
+- Task 2-d（provider 图标 key 化）：llm.ts + cli-agent-scan.ts icon 字段 emoji→key（feather/sparkles/terminal/bird/gemini/panda/wrench/bot/brain）；SharedLlmButton 新增 CLI_ICON_BY_KEY→Lucide 映射（Gemini 图标 lucide 0.525 不存在→Sparkle 四角星替代）+ CliAgentIcon 组件替换 emoji 文本渲染。
+- 一次性 SSE ✓✗ 消息（API 路由、入库数据）本轮明确不动：属日志产物内容而非 UI 图标，StreamFeed 已按 level 着色；避免破坏存量 SkillRunRecord 渲染与 e2e fixture。
+
+Stage Summary:
+- 30 个文件改动（25 UI 组件 + i18n×2 + llm/cli-agent-scan/tour×3）+ worklog；全项目用户可见图形 emoji 清零（仅剩 2 处导出 HTML 报告模板内的 🔬🟢🟡🔴，属产物内容按规则保留）。
+- Run Center：5 处 emoji→Lucide、6 类内容去重（Blob×4/缩略卡×2/折叠头×3/配图双展示/章节流自动折叠/死代码×3）、1 个编号错位 bug、token 全统一、周报对比美化。
+- Tour：两套 tour 视觉统一 + spotlight spring 滑移动画 + 呼吸光环 + 响应式宽度 + token 化；analysis-tour 暗色模式补齐。
+- 验证：eslint 30 文件 0 新增（仅 ToolStatsPopover 1 个 HEAD 既有）；tsc 120 errors 与基线逐条一致=零新增；agent-browser E2E——首页渲染/工具栏/0 错误、Tour 第 1 步卡片与第 2 步 spotlight 像素级对齐（ring (237,4) 323×46 与遮罩挖洞重合、#C96442 边框）、Run Center 结构/DSH 切换/LLM popover 7 行 CLI agent 全部 Lucide 图标（Feather/Sparkles/Terminal/Bird/Sparkle/Panda/Wrench）/周报 tab 周选择器+accent 周期按钮/文献 tab 无错误、analysis tour 卡片+挖洞+脉冲光环全部通过；VLM 截图交叉验证 8 轮均无 emoji 无布局破损。
+- 期间 dev server 一次 OOM-kill（编辑触发的多路由重编译+chromium 叠加所致，R181 修复的同场景复发边界）——清理浏览器进程后重启即恢复，验证全程稳定。

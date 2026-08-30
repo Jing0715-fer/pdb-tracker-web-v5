@@ -17,7 +17,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Palette, Zap, Download, Upload, Loader2, Trash2, Box,
   Microscope, FlaskConical, ShieldCheck, Atom, Camera, RotateCcw, Copy,
-  FileBox, Link2, Dna, Crosshair, Sparkles, User, Bot, Send,
+  FileBox, Link2, Dna, Crosshair, Sparkles, User, Bot, Send, ClipboardList, Lightbulb,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1799,7 +1799,7 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
       if (!res.ok) {
         setMessages((prev) => {
           const updated = [...prev];
-          updated[updated.length - 1] = { role: "assistant", content: `❌ Error: HTTP ${res.status}` };
+          updated[updated.length - 1] = { role: "assistant", content: `Error: HTTP ${res.status}` };
           return updated;
         });
         return;
@@ -1840,7 +1840,7 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
       } else {
         setMessages((prev) => {
           const updated = [...prev];
-          updated[updated.length - 1] = { role: "assistant", content: `❌ Error: ${err instanceof Error ? err.message : String(err)}` };
+          updated[updated.length - 1] = { role: "assistant", content: `Error: ${err instanceof Error ? err.message : String(err)}` };
           return updated;
         });
       }
@@ -1874,16 +1874,16 @@ export function ModalChatTab({ pdbId }: { pdbId: string }) {
             </div>
             <div className="w-full space-y-1 mt-1">
               {[
-                { icon: "📋", title: "What is this structure?", prompt: `What can you tell me about PDB structure ${pdbId}?` },
-                { icon: "🔬", title: "Suggest analyses", prompt: `What analyses should I run on ${pdbId}?` },
-                { icon: "💡", title: "Explain features", prompt: "What measurement tools are available in this viewer?" },
+                { icon: ClipboardList, title: "What is this structure?", prompt: `What can you tell me about PDB structure ${pdbId}?` },
+                { icon: Microscope, title: "Suggest analyses", prompt: `What analyses should I run on ${pdbId}?` },
+                { icon: Lightbulb, title: "Explain features", prompt: "What measurement tools are available in this viewer?" },
               ].map((s) => (
                 <button
                   key={s.title}
                   onClick={() => send(s.prompt)}
                   className="flex w-full items-start gap-2 rounded-md border border-claude-border-light/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 px-2 py-1.5 text-left hover:border-claude-accent/40 hover:bg-claude-accent-light/20 transition-colors"
                 >
-                  <span className="text-sm shrink-0">{s.icon}</span>
+                  <s.icon className="h-3.5 w-3.5 shrink-0 text-claude-accent" aria-hidden="true" />
                   <div className="min-w-0">
                     <div className="text-[10px] font-medium text-claude-text">{s.title}</div>
                     <div className="text-[11px] text-claude-text-muted truncate">{s.prompt}</div>

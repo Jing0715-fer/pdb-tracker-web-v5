@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
-import { X, ExternalLink, Link2, BookOpen, Users, Calendar, Tag, Sparkles, Loader2, CheckCircle2, Circle, Box, ExternalLink as ExtLink } from 'lucide-react';
+import { X, ExternalLink, Link2, BookOpen, Users, Calendar, Tag, Sparkles, Loader2, CheckCircle2, Circle, Box, Star, ExternalLink as ExtLink } from 'lucide-react';
 import type { LitPaper } from '@/lib/pdb-types';
 import { getMethodColor, getMethodLabel } from '@/components/pdb-helpers';
 import { TagInput, TagPill } from './LiteraturePaperTags';
@@ -364,7 +364,7 @@ function DetailPanelBody({
             {/* Journal Prestige Badge */}
             {prestige && (
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${prestige.color} ${prestige.bgLight} ${prestige.bgDark} ${prestige.borderLight} ${prestige.borderDark} prestige-badge`}>
-                ★ {prestige.label}
+                <Star className="h-3 w-3" aria-hidden="true" /> {prestige.label}
               </span>
             )}
 

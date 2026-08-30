@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAppStore, selectActiveStructure } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
-import { Loader2, AlertCircle, Target } from "lucide-react";
+import { Loader2, AlertCircle, Target, Star } from "lucide-react";
 import { exportJSON, exportCSV } from "@/components/structure-analysis/chart-export-utils";
 
 // ----- Types -----
@@ -287,7 +287,10 @@ export function PocketDetectionChart() {
                           {cls}
                         </Badge>
                         {idx === 0 && (
-                          <Badge className="bg-violet-500 text-white text-[9px]">★ Top</Badge>
+                          <Badge className="bg-violet-500 text-white text-[9px] gap-0.5">
+                            <Star className="h-2.5 w-2.5" aria-hidden="true" />
+                            Top
+                          </Badge>
                         )}
                       </div>
                       <div className="text-right">

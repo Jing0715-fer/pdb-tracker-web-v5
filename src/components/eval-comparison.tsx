@@ -327,7 +327,7 @@ export function EvalComparison({ evaluations }: EvalComparisonProps) {
             <div className="flex items-center justify-between">
               <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider flex items-center gap-1.5">
                 Score Comparison
-                <span className="text-[9px] font-normal text-claude-text-muted">(★ = better)</span>
+                <span className="text-[9px] font-normal text-claude-text-muted">(<Star className="inline h-2.5 w-2.5 align-[-1px]" aria-hidden="true" /> = better)</span>
               </h4>
               <ChartExportButton chartName="eval-score-comparison" />
             </div>

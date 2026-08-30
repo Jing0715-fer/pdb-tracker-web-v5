@@ -70,37 +70,31 @@ interface NotificationPanelProps {
 const buildCategoryConfig = (locale: 'en' | 'zh'): Record<NotificationCategory, {
   icon: React.ElementType;
   label: string;
-  emoji: string;
   cssClass: string;
 }> => ({
   new_structure: {
     icon: Microscope,
     label: locale === 'zh' ? '新结构' : 'New Structure',
-    emoji: '🔬',
     cssClass: 'new_structure',
   },
   evaluation: {
     icon: FlaskConical,
     label: locale === 'zh' ? '评估' : 'Evaluation',
-    emoji: '📊',
     cssClass: 'evaluation',
   },
   literature: {
     icon: BookOpen,
     label: locale === 'zh' ? '文献' : 'Literature',
-    emoji: '📄',
     cssClass: 'literature',
   },
   high_impact: {
     icon: Star,
     label: locale === 'zh' ? '高影响力' : 'High Impact',
-    emoji: '⭐',
     cssClass: 'high_impact',
   },
   weekly_summary: {
     icon: TrendingUp,
     label: locale === 'zh' ? '周报' : 'Weekly Summary',
-    emoji: '📈',
     cssClass: 'weekly_summary',
   },
 });
@@ -357,31 +351,31 @@ export function NotificationPanel({
             <div className="notif-prefs-section">
               <PanelPrefToggle
                 label={locale === 'zh' ? '新结构通知' : 'New structure notifications'}
-                emoji="🔬"
+                icon={Microscope}
                 checked={prefs.showNewStructure}
                 onChange={(v) => setPrefs(p => ({ ...p, showNewStructure: v }))}
               />
               <PanelPrefToggle
                 label={locale === 'zh' ? '评估通知' : 'Evaluation notifications'}
-                emoji="📊"
+                icon={FlaskConical}
                 checked={prefs.showEvaluation}
                 onChange={(v) => setPrefs(p => ({ ...p, showEvaluation: v }))}
               />
               <PanelPrefToggle
                 label={locale === 'zh' ? '文献通知' : 'Literature notifications'}
-                emoji="📄"
+                icon={BookOpen}
                 checked={prefs.showLiterature}
                 onChange={(v) => setPrefs(p => ({ ...p, showLiterature: v }))}
               />
               <PanelPrefToggle
                 label={locale === 'zh' ? '高影响力提醒' : 'High impact alerts'}
-                emoji="⭐"
+                icon={Star}
                 checked={prefs.showHighImpact}
                 onChange={(v) => setPrefs(p => ({ ...p, showHighImpact: v }))}
               />
               <PanelPrefToggle
                 label={locale === 'zh' ? '周报' : 'Weekly summary'}
-                emoji="📈"
+                icon={TrendingUp}
                 checked={prefs.showWeeklySummary}
                 onChange={(v) => setPrefs(p => ({ ...p, showWeeklySummary: v }))}
               />
@@ -507,7 +501,7 @@ function PanelNotificationCard({
         <div className="flex items-center gap-2 mt-1.5">
           {/* Category badge */}
           <span className={`notif-cat-badge notif-cat-badge-${config.cssClass}`}>
-            {config.emoji} {config.label}
+            {config.label}
           </span>
           <Clock className="h-3 w-3 text-[#9b9590]" />
           <span className="text-[10px] text-[#9b9590]">
@@ -544,19 +538,19 @@ function PanelNotificationCard({
 
 function PanelPrefToggle({
   label,
-  emoji,
+  icon: Icon,
   checked,
   onChange,
 }: {
   label: string;
-  emoji: string;
+  icon: React.ElementType;
   checked: boolean;
   onChange: (val: boolean) => void;
 }) {
   return (
     <div className="notif-prefs-item">
       <span className="text-[11px] text-[#6b6560] dark:text-[#9b9590] flex items-center gap-1.5">
-        <span className="text-xs">{emoji}</span>
+        <Icon className="h-3 w-3 text-[#9b9590]" aria-hidden="true" />
         {label}
       </span>
       <Switch

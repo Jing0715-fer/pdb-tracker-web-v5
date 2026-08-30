@@ -54,37 +54,31 @@ const DEFAULT_PREFS: NotificationPreferences = {
 const buildCategoryConfig = (locale: 'en' | 'zh'): Record<NotificationCategory, {
   icon: React.ElementType;
   label: string;
-  emoji: string;
   cssClass: string;
 }> => ({
   new_structure: {
     icon: Microscope,
     label: locale === 'zh' ? '新结构' : 'New Structure',
-    emoji: '🔬',
     cssClass: 'new_structure',
   },
   evaluation: {
     icon: FlaskConical,
     label: locale === 'zh' ? '评估' : 'Evaluation',
-    emoji: '📊',
     cssClass: 'evaluation',
   },
   literature: {
     icon: BookOpen,
     label: locale === 'zh' ? '文献' : 'Literature',
-    emoji: '📄',
     cssClass: 'literature',
   },
   high_impact: {
     icon: Star,
     label: locale === 'zh' ? '高影响力' : 'High Impact',
-    emoji: '⭐',
     cssClass: 'high_impact',
   },
   report_published: {
     icon: TrendingUp,
     label: locale === 'zh' ? '报告' : 'Reports',
-    emoji: '📄',
     cssClass: 'report_published',
   },
 });
@@ -367,31 +361,31 @@ export function NotificationBell() {
             <div className="notif-prefs-section">
               <NotifPrefToggle
                 label={locale === 'zh' ? '新结构通知' : 'New structure notifications'}
-                emoji="🔬"
+                icon={Microscope}
                 checked={prefs.showNewStructure}
                 onChange={(v) => setPrefs(p => ({ ...p, showNewStructure: v }))}
               />
               <NotifPrefToggle
                 label={locale === 'zh' ? '评估通知' : 'Evaluation notifications'}
-                emoji="📊"
+                icon={FlaskConical}
                 checked={prefs.showEvaluation}
                 onChange={(v) => setPrefs(p => ({ ...p, showEvaluation: v }))}
               />
               <NotifPrefToggle
                 label={locale === 'zh' ? '文献通知' : 'Literature notifications'}
-                emoji="📄"
+                icon={BookOpen}
                 checked={prefs.showLiterature}
                 onChange={(v) => setPrefs(p => ({ ...p, showLiterature: v }))}
               />
               <NotifPrefToggle
                 label={locale === 'zh' ? '高影响力提醒' : 'High impact alerts'}
-                emoji="⭐"
+                icon={Star}
                 checked={prefs.showHighImpact}
                 onChange={(v) => setPrefs(p => ({ ...p, showHighImpact: v }))}
               />
               <NotifPrefToggle
                 label={locale === 'zh' ? '报告通知' : 'Report notifications'}
-                emoji="📄"
+                icon={TrendingUp}
                 checked={prefs.showReports}
                 onChange={(v) => setPrefs(p => ({ ...p, showReports: v }))}
               />
@@ -475,7 +469,7 @@ export function NotificationBell() {
                       <div className="flex items-center gap-2 mt-1">
                         {/* Category badge */}
                         <span className={`notif-cat-badge notif-cat-badge-${config.cssClass}`}>
-                          {config.emoji} {config.label}
+                          {config.label}
                         </span>
                         <span className="text-[9px] text-claude-text-muted">
                           {getRelativeTime(item.timestamp)}
@@ -515,19 +509,19 @@ export function NotificationBell() {
 
 function NotifPrefToggle({
   label,
-  emoji,
+  icon: Icon,
   checked,
   onChange,
 }: {
   label: string;
-  emoji: string;
+  icon: React.ElementType;
   checked: boolean;
   onChange: (val: boolean) => void;
 }) {
   return (
     <div className="notif-prefs-item">
       <span className="text-[11px] text-claude-text-secondary flex items-center gap-1.5">
-        <span className="text-xs">{emoji}</span>
+        <Icon className="h-3 w-3 text-claude-text-muted" aria-hidden="true" />
         {label}
       </span>
       <Switch

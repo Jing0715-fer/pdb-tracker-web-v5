@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { ExternalLink, BookOpen, ChevronDown, ChevronUp, Link2, Star, Calendar, Users, Quote } from 'lucide-react';
+import { ExternalLink, BookOpen, ChevronDown, ChevronUp, Link2, Star, Calendar, Users, Quote, Check } from 'lucide-react';
 import type { LitPaper, LitPaperPdb } from '@/lib/pdb-types';
 import { getMethodColor, getMethodLabel } from '@/components/pdb-helpers';
 import { AddToListPopover, type ReadingList } from './LiteratureReadingList';
@@ -185,7 +185,7 @@ export function LiteraturePaperCard({
               )}
               {readingProgress >= 100 && (
                 <span className="inline-flex items-center gap-0.5 px-1 sm:px-1.5 py-0.5 rounded-md text-[9px] sm:text-[10px] font-medium bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/30">
-                  ✓ Read
+                  <Check className="h-3 w-3" aria-hidden="true" /> Read
                 </span>
               )}
               {/* Source badge for 结构生物学文献日报 */}

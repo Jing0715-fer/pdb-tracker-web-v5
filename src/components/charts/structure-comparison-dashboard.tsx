@@ -12,6 +12,7 @@ import {
   Check,
   X,
   Download,
+  Star,
 } from "lucide-react";
 import { exportJSON } from "@/components/structure-analysis/chart-export-utils";
 import { useAppStore } from "@/lib/molcraft/store";
@@ -582,6 +583,27 @@ export function StructureComparisonDashboard() {
                             </td>
                           );
                         }
+                        // Bool cells render Yes/No with Lucide icons in the UI;
+                        // formatValue keeps the "✓ Yes"/"✗ No" strings for the
+                        // exported MD/HTML reports (product content, not UI).
+                        if (row.type === "bool" && !comp.error) {
+                          const boolVal = Boolean(value);
+                          const BoolIcon = boolVal ? Check : X;
+                          return (
+                            <td
+                              key={comp.id}
+                              className={`border-b px-2 py-1 text-center font-mono transition-colors ${
+                                comp.error ? "text-muted-foreground/50" : colorClass
+                              }`}
+                            >
+                              <span className="inline-flex items-center gap-0.5">
+                                <BoolIcon className="h-2.5 w-2.5" aria-hidden="true" />
+                                {boolVal ? "Yes" : "No"}
+                              </span>
+                              {isBest && <Star className="ml-0.5 h-2 w-2" aria-hidden="true" />}
+                            </td>
+                          );
+                        }
                         return (
                           <td
                             key={comp.id}
@@ -590,7 +612,7 @@ export function StructureComparisonDashboard() {
                             }`}
                           >
                             {comp.error ? "—" : String(formatted)}
-                            {isBest && <span className="ml-0.5 text-[8px]">★</span>}
+                            {isBest && <Star className="ml-0.5 h-2 w-2" aria-hidden="true" />}
                           </td>
                         );
                       })}
@@ -604,7 +626,7 @@ export function StructureComparisonDashboard() {
             <div className="space-y-1.5">
               <div className="flex items-center gap-3 text-[9px] text-muted-foreground">
                 <div className="flex items-center gap-1">
-                  <span className="grid h-3 w-3 place-items-center rounded bg-emerald-500/15 text-[8px] text-emerald-600">★</span>
+                  <span className="grid h-3 w-3 place-items-center rounded bg-emerald-500/15 text-emerald-600"><Star className="h-2 w-2" aria-hidden="true" /></span>
                   <span>Best value</span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -628,7 +650,7 @@ export function StructureComparisonDashboard() {
             <div className="flex items-start gap-1.5 rounded-md bg-blue-500/5 p-2 text-[10px] text-muted-foreground">
               <Info className="mt-0.5 h-3 w-3 shrink-0 text-blue-500" />
               <div>
-                Runs 8 analyses in parallel (summary / Ramachandran / secondary structure / B-factor / SASA / disulfide / oligomer / validation) × {state.comparisons.length} structures, capturing multi-structure differences in one table. ★ marks the best value in each row.
+                Runs 8 analyses in parallel (summary / Ramachandran / secondary structure / B-factor / SASA / disulfide / oligomer / validation) × {state.comparisons.length} structures, capturing multi-structure differences in one table. <Star className="inline h-2.5 w-2.5 align-[-1px]" aria-hidden="true" /> marks the best value in each row.
               </div>
             </div>
           </div>

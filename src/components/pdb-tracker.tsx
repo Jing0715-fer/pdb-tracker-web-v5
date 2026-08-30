@@ -11,7 +11,7 @@ import {
   Calendar, ArrowRightLeft, LayoutDashboard, Clock, FileDown, Settings,
   Microscope, ArrowUp, RefreshCw, Download, Box, Boxes, Upload, ChevronLeft,
   StickyNote, Tag, Trophy, Eye, AlertTriangle, HelpCircle,
-  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark, RotateCcw,
+  Maximize2, Layers, Info, CheckCircle2, Trash2, Zap, Columns2, FileJson, Bookmark, RotateCcw, Star,
   // R179 (Task 2-b): DSH 报告大纲/配图画廊图标
   ListTree, Image as ImageIcon,
 } from 'lucide-react';
@@ -3327,16 +3327,16 @@ export default function PdbTracker() {
               {paper.journal && (() => {
                 const j = paper.journal.toLowerCase();
                 const prestige = j.includes('nature') && !j.includes('communications') && !j.includes('methods') && !j.includes('structural') ?
-                  { label: 'Nature', color: 'text-red-600 dark:text-red-400', bg: 'bg-red-50 dark:bg-red-900/20', border: 'border-red-200 dark:border-red-800/30', star: '★' } :
+                  { label: 'Nature', color: 'text-red-600 dark:text-red-400', bg: 'bg-red-50 dark:bg-red-900/20', border: 'border-red-200 dark:border-red-800/30' } :
                   j.includes('science') ?
-                  { label: 'Science', color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-50 dark:bg-blue-900/20', border: 'border-blue-200 dark:border-blue-800/30', star: '★' } :
+                  { label: 'Science', color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-50 dark:bg-blue-900/20', border: 'border-blue-200 dark:border-blue-800/30' } :
                   j.includes('cell') && !j.includes('stem') && !j.includes('reports') ?
-                  { label: 'Cell', color: 'text-green-600 dark:text-green-400', bg: 'bg-green-50 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-800/30', star: '★' } :
+                  { label: 'Cell', color: 'text-green-600 dark:text-green-400', bg: 'bg-green-50 dark:bg-green-900/20', border: 'border-green-200 dark:border-green-800/30' } :
                   null;
                 if (!prestige) return null;
                 return (
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border prestige-badge ${prestige.bg} ${prestige.color} ${prestige.border}`}>
-                    {prestige.star} {prestige.label}
+                    <Star className="h-3 w-3" aria-hidden="true" /> {prestige.label}
                   </span>
                 );
               })()}

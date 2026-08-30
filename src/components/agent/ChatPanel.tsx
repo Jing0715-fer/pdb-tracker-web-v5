@@ -36,22 +36,18 @@ import { cn } from '@/lib/utils';
 
 const SUGGESTIONS = [
   {
-    icon: '',
     title: 'Analyze complex',
     prompt: 'Load 1CBS and analyze its structure: get metadata, run hydrogen bond and salt bridge analysis on chain A, and summarize the key interactions.',
   },
   {
-    icon: '',
     title: 'Active site analysis',
     prompt: 'Load 6LU7 (SARS-CoV-2 Mpro) and analyze the ligand binding pocket — run hydrogen bonds and salt bridges between chain A and the ligand, then focus the camera on the ligand.',
   },
   {
-    icon: '',
     title: 'Oligomer analysis',
     prompt: 'Load 4HHB (hemoglobin) and analyze all chain-chain interactions. Set the representation to cartoon with chain coloring.',
   },
   {
-    icon: '',
     title: 'Visualize',
     prompt: 'Load 1CBS, set the representation to ball-and-stick, color by element, then focus on residue ARG30.',
   },
@@ -504,7 +500,6 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
             onClick={() => onPick(s.prompt)}
             className="flex w-full items-start gap-2 rounded-md border border-claude-border-light/40 dark:border-claude-border/40 bg-claude-bg/40 dark:bg-claude-bg-elevated/40 px-2 py-1.5 text-left hover:border-claude-accent/40 hover:bg-claude-accent-light/20 transition-colors"
           >
-            <span className="text-sm shrink-0">{s.icon}</span>
             <div className="min-w-0">
               <div className="text-[10px] font-medium text-claude-text">{s.title}</div>
               <div className="text-[9px] text-claude-text-muted truncate">{s.prompt}</div>

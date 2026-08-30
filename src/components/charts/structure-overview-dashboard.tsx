@@ -19,6 +19,7 @@ import {
   Layers,
   Download,
   Camera,
+  Check,
 } from "lucide-react";
 import { exportJSON } from "@/components/structure-analysis/chart-export-utils";
 import { useAppStore, selectActiveStructure } from "@/lib/molcraft/store";
@@ -664,13 +665,14 @@ export function StructureOverviewDashboard() {
                 return (
                   <div
                     key={i}
-                    className={`flex items-center justify-center rounded border p-1 text-[9px] transition ${
+                    className={`flex items-center justify-center gap-1 rounded border p-1 text-[9px] transition ${
                       done
                         ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-600"
                         : "border-muted bg-muted/20 text-muted-foreground"
                     }`}
                   >
-                    {done ? "✓" : "…"} {label}
+                    {done ? <Check className="h-2.5 w-2.5 shrink-0" aria-hidden="true" /> : <span aria-hidden="true">…</span>}
+                    {label}
                   </div>
                 );
               })}

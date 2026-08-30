@@ -52,29 +52,29 @@ interface AgentSpec {
   extraPaths?: string[];
 }
 
-/** Mirrors CLI_ADAPTERS in llm.ts (same ids/icons/labels as the old scan UI). */
+/** Mirrors CLI_ADAPTERS in llm.ts (same ids/icon keys/labels as the old scan UI). */
 const AGENTS: AgentSpec[] = [
   {
     id: 'hermes',
     label: 'Hermes CLI',
-    icon: '🪶',
+    icon: 'feather',
     bin: 'hermes',
     extraPaths: [join(homedir(), '.local/bin/hermes')],
   },
-  { id: 'claude', label: 'Claude Code CLI', icon: '🟠', bin: 'claude',
+  { id: 'claude', label: 'Claude Code CLI', icon: 'sparkles', bin: 'claude',
     extraPaths: [
       join(homedir(), '.claude/local/claude'),
       '/usr/local/bin/claude',
       '/opt/homebrew/bin/claude',
     ],
   },
-  { id: 'codex', label: 'Codex CLI', icon: '🟢', bin: 'codex' },
-  { id: 'openclaw', label: 'OpenClaw CLI', icon: '🦅', bin: 'openclaw' },
-  { id: 'gemini', label: 'Gemini CLI', icon: '♊', bin: 'gemini' },
+  { id: 'codex', label: 'Codex CLI', icon: 'terminal', bin: 'codex' },
+  { id: 'openclaw', label: 'OpenClaw CLI', icon: 'bird', bin: 'openclaw' },
+  { id: 'gemini', label: 'Gemini CLI', icon: 'gemini', bin: 'gemini' },
   {
     id: 'codebuddy',
     label: 'Codebuddy / WorkBuddy CLI',
-    icon: '🐼',
+    icon: 'panda',
     bin: 'codebuddy',
     extraPaths: [
       process.platform === 'win32'
@@ -87,7 +87,7 @@ const AGENTS: AgentSpec[] = [
   {
     id: 'aider',
     label: 'Aider CLI',
-    icon: '🛠️',
+    icon: 'wrench',
     bin: 'aider',
     extraPaths: [join(homedir(), '.local/bin/aider')],
   },

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAppStore, selectActiveStructure } from "@/lib/molcraft/store";
 import { executeCommand } from "@/lib/molcraft/commands";
-import { Loader2, AlertCircle, FlaskConical } from "lucide-react";
+import { Loader2, AlertCircle, FlaskConical, Check, X, Star } from "lucide-react";
 import { exportJSON, exportCSV } from "@/components/structure-analysis/chart-export-utils";
 
 // ----- Types -----
@@ -70,9 +70,10 @@ function lipinskiBadges(h: RankedHit) {
     <div className="flex flex-wrap items-center gap-0.5">
       <Badge
         variant="outline"
-        className={`text-[8px] ${passes ? "border-emerald-500/40 text-emerald-700" : "border-red-500/40 text-red-700"}`}
+        className={`text-[8px] gap-0.5 ${passes ? "border-emerald-500/40 text-emerald-700" : "border-red-500/40 text-red-700"}`}
       >
-        Ro5 {passes ? "✓" : "✗"}
+        Ro5
+        {passes ? <Check className="h-2.5 w-2.5" aria-hidden="true" /> : <X className="h-2.5 w-2.5" aria-hidden="true" />}
       </Badge>
       <Badge variant="outline" className="text-[8px] font-mono">
         MW {mw.toFixed(0)}
@@ -287,7 +288,10 @@ export function ScreeningChart() {
               <div className="rounded-md border-2 border-emerald-500/50 bg-emerald-500/5 p-3">
                 <div className="mb-1 flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <Badge className="bg-emerald-500 text-white text-[9px]">★ Top Hit</Badge>
+                    <Badge className="bg-emerald-500 text-white text-[9px] gap-0.5">
+                      <Star className="h-2.5 w-2.5" aria-hidden="true" />
+                      Top Hit
+                    </Badge>
                     <span className="text-xs font-bold">{topHit.name ?? "unknown"}</span>
                   </div>
                   <Badge variant="outline" className="text-[9px]">

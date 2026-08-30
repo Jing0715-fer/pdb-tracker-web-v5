@@ -119,8 +119,8 @@ export function ToolStatsPopover({ sessionId, open, onClose, fetchStats }: Props
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 text-[9px] text-claude-text-muted">
-                    <span className="text-emerald-600">✓ {s.successCount}</span>
-                    {s.errorCount > 0 && <span className="text-red-600">✗ {s.errorCount}</span>}
+                    <span className="text-emerald-600 flex items-center gap-0.5"><Check className="h-3 w-3" aria-hidden="true" />{s.successCount}</span>
+                    {s.errorCount > 0 && <span className="text-red-600 flex items-center gap-0.5"><X className="h-3 w-3" aria-hidden="true" />{s.errorCount}</span>}
                   </div>
                 </li>
               ))}

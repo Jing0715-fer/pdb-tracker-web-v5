@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, type RefObject } from 'react';
 import { toast } from 'sonner';
-import { TOUR_STEPS, buildTourSteps, type TourStepConfig } from '@/components/tour-overlay';
+import { buildTourSteps, type TourStepConfig } from '@/components/tour-overlay';
 import { useI18n } from '@/lib/i18n';
 
 export const TOUR_COMPLETED_KEY = 'pdb-tracker:tour-completed';

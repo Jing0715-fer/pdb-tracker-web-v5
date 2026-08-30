@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { CheckCircle2, Circle, CircleDot, Check, Loader2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { Evaluation } from '@/lib/pdb-types';
 import { useI18n } from '@/lib/i18n';
@@ -212,14 +212,17 @@ export function EvalProgressTracker({ evaluation, compact = false }: EvalProgres
                     <div className="text-[10px] text-claude-text-secondary">
                       {step.description}
                     </div>
-                    <div className={`text-[9px] font-medium ${
+                    <div className={`text-[9px] font-medium flex items-center gap-1 ${
                       state.complete
                         ? 'text-emerald-600 dark:text-emerald-400'
                         : state.current
                         ? 'text-amber-600 dark:text-amber-400'
                         : 'text-claude-text-muted'
                     }`}>
-                      {state.complete ? '✓ Complete' : state.current ? '● In Progress' : '○ Pending'}
+                      {state.complete && <Check className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />}
+                      {state.current && <CircleDot className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />}
+                      {!state.complete && !state.current && <Circle className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />}
+                      {state.complete ? 'Complete' : state.current ? 'In Progress' : 'Pending'}
                     </div>
                   </div>
                 </TooltipContent>

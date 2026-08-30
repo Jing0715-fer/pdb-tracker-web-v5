@@ -346,8 +346,9 @@ export function WeeklyStructureCompare({
 
         {/* Footer hint */}
         <div className="px-5 py-2.5 border-t border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] flex items-center justify-between">
-          <span className="text-[10px] text-claude-text-muted">
-            ★ = best value in row &middot; Resolution: lower is better &middot; IF &amp; Quality: higher is better
+          <span className="text-[10px] text-claude-text-muted flex items-center gap-1">
+            <Star className="h-3 w-3 text-[#2d8f8f] fill-[#2d8f8f] flex-shrink-0" aria-hidden="true" />
+            = best value in row &middot; Resolution: lower is better &middot; IF &amp; Quality: higher is better
           </span>
           <Button
             variant="ghost"

@@ -241,7 +241,8 @@ export function AnalysisTour() {
 
     const placement = currentStep.placement ?? "bottom";
     const spacing = 12;
-    const tooltipWidth = 360;
+    // R182: 340px — 与主站 tour 卡片同宽（原先 360）
+    const tooltipWidth = 340;
     const tooltipHeight = 200;
 
     switch (placement) {
@@ -317,7 +318,9 @@ export function AnalysisTour() {
                     clipPath: `polygon(0 0, 0 100%, ${targetRect.left}px 100%, ${targetRect.left}px ${targetRect.top}px, ${targetRect.right}px ${targetRect.top}px, ${targetRect.right}px ${targetRect.bottom}px, ${targetRect.left}px ${targetRect.bottom}px, ${targetRect.left}px 100%, 100% 100%, 100% 0)`,
                   }}
                 />
-                {/* Highlight border */}
+                {/* Highlight border + gentle pulse halo
+                    R182: 原先硬编码 rgba(201,100,66) boxShadow 脉冲不随主题/暗色变化——
+                    改为 border-claude-accent + opacity 呼吸（token 化，与主站 tour 一致） */}
                 <motion.div
                   className="absolute border-2 border-claude-accent rounded-md pointer-events-none"
                   style={{
@@ -326,12 +329,21 @@ export function AnalysisTour() {
                     width: targetRect.width + 8,
                     height: targetRect.height + 8,
                   }}
-                  initial={{ boxShadow: "0 0 0 0 rgba(201, 100, 66, 0.5)" }}
-                  animate={{ boxShadow: "0 0 0 8px rgba(201, 100, 66, 0.15)" }}
+                />
+                <motion.div
+                  className="absolute border-2 border-claude-accent rounded-lg pointer-events-none"
+                  style={{
+                    top: targetRect.top - 7,
+                    left: targetRect.left - 7,
+                    width: targetRect.width + 14,
+                    height: targetRect.height + 14,
+                  }}
+                  initial={{ opacity: 0.5 }}
+                  animate={{ opacity: 0 }}
                   transition={{
                     duration: 1.5,
                     repeat: Infinity,
-                    repeatType: "reverse",
+                    ease: "easeInOut",
                   }}
                 />
               </>
@@ -349,25 +361,26 @@ export function AnalysisTour() {
             exit={{ opacity: 0, y: 10 }}
             transition={{ duration: 0.25 }}
           >
-            <div className="sa-tour-card rounded-xl border border-claude-border bg-claude-surface shadow-2xl p-4 w-[360px] max-w-[90vw]">
+            <div className="sa-tour-card rounded-xl border border-claude-border dark:border-[#3d3832] bg-claude-surface dark:bg-[#242220] shadow-2xl p-4 w-[340px] max-w-[90vw]">
               {/* Header */}
               <div className="flex items-start gap-3 mb-2">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-claude-accent-light">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-claude-accent/20 to-claude-accent/5 border border-claude-accent/25">
                   {currentStep.icon}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-claude-text">
+                  <h3 className="text-sm font-semibold text-claude-text dark:text-[#e8e4dd]">
                     {currentStep.title}
                   </h3>
-                  <p className="text-[9px] text-claude-text-muted mt-0.5">
+                  <p className="text-[10px] text-claude-text-muted dark:text-[#9b9590] mt-0.5 tabular-nums">
                     Step {step + 1} of {TOUR_STEPS.length}
                   </p>
                 </div>
                 <button
                   onClick={handleClose}
-                  className="text-claude-text-muted hover:text-destructive transition-colors"
+                  className="h-6 w-6 rounded-md flex items-center justify-center text-claude-text-muted/60 hover:text-claude-text dark:hover:text-[#e8e4dd] hover:bg-black/[0.05] dark:hover:bg-white/[0.06] transition-colors"
+                  aria-label="Close tour"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               </div>
 
@@ -376,17 +389,17 @@ export function AnalysisTour() {
                 {currentStep.description}
               </p>
 
-              {/* Progress dots */}
-              <div className="flex items-center gap-1 mb-3">
+              {/* Progress dots — R182: 样式与主站 tour 对齐 */}
+              <div className="flex items-center gap-1.5 mb-3">
                 {TOUR_STEPS.map((_, i) => (
                   <div
                     key={i}
-                    className={`h-1 rounded-full transition-all ${
+                    className={`rounded-full transition-all duration-300 ${
                       i === step
-                        ? "w-6 bg-claude-accent"
+                        ? "w-4 h-1.5 bg-claude-accent"
                         : i < step
-                        ? "w-1.5 bg-claude-accent/50"
-                        : "w-1.5 bg-claude-border"
+                        ? "w-1.5 h-1.5 bg-claude-accent/40"
+                        : "w-1.5 h-1.5 bg-black/[0.08] dark:bg-white/[0.1]"
                     }`}
                   />
                 ))}
@@ -415,7 +428,7 @@ export function AnalysisTour() {
                   </Button>
                   <Button
                     size="sm"
-                    className="h-7 text-[11px] gap-1"
+                    className="h-7 text-[11px] gap-1 border-0 bg-claude-accent text-white hover:bg-claude-accent-hover"
                     onClick={handleNext}
                   >
                     {isLastStep ? (
