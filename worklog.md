@@ -4935,3 +4935,19 @@ Stage Summary:
 - 配图：RCSB 多样性分桶（复合物最优先）+ 并行 HEAD + web 查询去上限（仅留 query 去重、每 query ≤2 张近重复保护、护栏 8 条），E2E 实测 5→14 张且复合物结构入选。
 - 大纲：基础评估章节数据驱动强制必含（totalMax 9→14），深挖章节叠加其后；章节写作侧同步双轨 framing（基础章节防聚焦收窄、深挖章节重点服务问题）；outline JSON 失败降级路径也带问题视角（关键词启发式）。
 - 全链路验证：30 单元断言 + 完整 E2E（11/11 章 · 9433 chars · 14 图 · 三级落库 tier-1 直达）+ 历史读取 + 浏览器 4 视图 + VLM 截图复核；lint/tsc 零新增。
+
+---
+Task ID: R186
+Agent: main (Z.ai Code)
+Task: push 到 GitHub
+
+Work Log:
+- git status 检查：25 个文件变更（绝大部分仅为 100644→100755 权限位变化，实际内容变更只有 db/my-pdb-tracker.db 快照与 .zscripts/dev.pid）
+- git fetch 后确认本地领先 origin/main 2 个提交（fb6231a、2d21da9），无落后
+- git add -A 提交为 a65cfc8「R186: 同步运行时状态——db 快照更新（P00533 DSH 评估数据）+ 文件权限位规范化」
+- git push origin main 成功：2177739..a65cfc8
+- 再次 fetch 验证 origin/main 与本地完全同步（0/0）
+
+Stage Summary:
+- 已推送 3 个提交到 https://github.com/Jing0715-fer/pdb-tracker-web-v5 （main 分支）
+- 本地与远端完全同步，工作区干净
