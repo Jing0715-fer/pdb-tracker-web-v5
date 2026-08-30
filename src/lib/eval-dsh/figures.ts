@@ -3,6 +3,15 @@
 // R179 (Task 2-a): DSH 模式配图管线 —— RCSB 结构图 + web 原理图/通路图
 // + VLM 严格校验。原则：宁缺毋滥（figures are ALWAYS optional）。
 //
+// R184: 移除人为配额上限 ——
+//   - RCSB：不再「全局最多 3 张」，改为多样性分桶（复合物/配体结合/apo/NMR
+//     各取代表性结构，桶间去重），配图数量由代表性自然决定（典型 6-10 张）；
+//     HEAD 预检改为并行（10 张以内并发开销可忽略）。
+//   - web：不再「最多 2 个 query / 全报告最多 2 张通过」，改为相关性分析给
+//     出的每个有配图价值的章节各搜一条（仅保留同一 query 内的近重复保护）；
+//     总通过数不再设上限。
+//   - VLM 校验仍逐张串行（峰值内存 = 单张图，与总量无关），质量门槛不变。
+//
 //   collectRcsbFigures()  RCSB CDN 结构图（assembly-1.jpeg，HEAD 预检）
 //   searchWebFigures()    z-ai CLI image-search + VLM 判官（verdict/reason/caption）
 //
@@ -25,10 +34,16 @@ export interface ReportFigure {
 
 /** z-ai image-search CLI 的单次调用超时（宁缺毋滥：超时即放弃该 query）。 */
 const IMAGE_SEARCH_TIMEOUT_MS = 150_000;
-/** 每个 query 最多送 VLM 校验的结果数。 */
-const RESULTS_PER_QUERY_CAP = 3; // R179: 4→3 — VLM 逐张下载+base64 是内存峰值点，收紧候选数
-/** 整份报告最多通过的 web figure 数。 */
-const TOTAL_WEB_FIGURE_CAP = 2;
+/** 每个 query 最多送 VLM 校验的结果数（串行逐张，峰值内存 = 单张图）。 */
+const RESULTS_PER_QUERY_CAP = 4; // R184: 3→4 — 移除总上限后每个 query 的通过机会更充裕
+/**
+ * R184: 同一 query 最多采用的图数（近重复保护 —— 同一搜索的候选图常常
+ * 高度相似，取最佳 ≤2 张即可；全报告总通过数不再设上限）。
+ */
+const VERIFIED_PER_QUERY_CAP = 2;
+/** R184: query 总数安全边界 —— 不再固定 2 条，但相关性分析的输出是 LLM
+ * 产物，防刷量仍留一个宽松护栏（典型输出 2-6 条）。 */
+const MAX_WEB_QUERIES = 8;
 /** 图片下载上限（>3MB 直接拒绝 — 原理图/通路图几乎都 <1MB；大图多为照片，且
  *  base64+请求体会使峰值内存放大 ~4-5 倍，4GB 沙箱下 6MB 上限曾把 dev server 推到 OOM）。 */
 const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
@@ -49,6 +64,19 @@ const VLM_PROMPT = `你是一位严格的科研配图审稿人。请判断这张
 {"verdict":"relevant"|"irrelevant","reason":"一句话中文理由","caption":"给这张图的中文短标题（10-20字）"}`;
 
 /**
+ * 复合物/assembly 标题特征（与 pickRcsbSection 的 interactions 判定共享口径）。
+ * R184: 抽出为模块级常量，分桶选择与挂靠判定共用。
+ */
+const COMPLEX_TITLE_RE = /\bcomplex\b|\bdimer\b|\bheterodimer\b|in complex|complexed|antibody|\bfab\b|scfv|nanobody/i;
+
+/** R184: RCSB 结构图多样性分桶配额 —— 无全局张数上限，总量由各桶代表数之和
+ * （典型 6-10 张）自然决定；桶间按 pdbId 去重且互斥。 */
+const RCSB_COMPLEX_BUCKET_MAX = 4; // 复合物/assembly（互作类问题的核心证据，最优先）
+const RCSB_LIGAND_BUCKET_MAX = 3;  // 有配体的 X-ray/Cryo-EM（非复合物）
+const RCSB_APO_BUCKET_MAX = 2;     // apo X-ray/Cryo-EM
+const RCSB_NMR_BUCKET_MAX = 1;     // NMR 代表（此前被完全排除）
+
+/**
  * R179 (Task 2-a): 为单个 RCSB 结构图挑最匹配的大纲章节。
  * 优先级：配体结构 → ligand_binding（若大纲含）；复合物标题 → interactions
  * （若大纲含）；否则 structure_quality（若含）；最终兜底 pdb_analysis
@@ -58,15 +86,55 @@ function pickRcsbSection(entry: PdbEntryDetail, sectionIds: string[]): string {
   const has = (id: string) => sectionIds.includes(id);
   const title = (entry.title || '').toLowerCase();
   if (entry.ligands && has('ligand_binding')) return 'ligand_binding';
-  if (/\bcomplex\b|\bdimer\b|\bheterodimer\b|in complex|complexed/.test(title) && has('interactions')) return 'interactions';
+  if (COMPLEX_TITLE_RE.test(title) && has('interactions')) return 'interactions';
   if (has('structure_quality')) return 'structure_quality';
   return 'pdb_analysis';
 }
 
+/** 按分辨率升序排序（无分辨率排最后）。 */
+function byResolution<T extends { resolution?: number | null }>(list: T[]): T[] {
+  return [...list].sort((a, b) => (a.resolution ?? 999) - (b.resolution ?? 999));
+}
+
 /**
- * R179 (Task 2-a): RCSB 结构图收集。
- * 选 ≤3 个代表性结构（优先有配体 + 分辨率最好的 X-ray/Cryo-EM），
- * URL 用已验证可用的 CDN assembly-1.jpeg，HEAD 10s 预检。
+ * R184: 多样性分桶选择代表性 RCSB 结构（无全局张数上限）。
+ *
+ * 桶（互斥、按 pdbId 去重，按此优先级取分辨率最好的）：
+ *   1. 复合物/assembly（标题特征）≤4 张 —— 互作类科学问题的核心证据，
+ *      旧版「配体优先 + 分辨率」排序几乎永远轮不到它们；
+ *   2. 有配体的 X-ray/Cryo-EM（非复合物）≤3 张；
+ *   3. apo X-ray/Cryo-EM ≤2 张；
+ *   4. NMR ≤1 张（旧版被方法过滤器完全排除）。
+ */
+function pickRepresentativeRcsbEntries(pdbRows: PdbEntryDetail[]): PdbEntryDetail[] {
+  const seen = new Set<string>();
+  const out: PdbEntryDetail[] = [];
+  const push = (list: PdbEntryDetail[]) => {
+    for (const e of list) {
+      if (!e.pdbId || seen.has(e.pdbId)) continue;
+      seen.add(e.pdbId);
+      out.push(e);
+    }
+  };
+  const isXc = (e: PdbEntryDetail) =>
+    (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON');
+  const xc = pdbRows.filter(isXc);
+  const isComplex = (e: PdbEntryDetail) => COMPLEX_TITLE_RE.test(e.title || '');
+  // 1. 复合物/assembly 最优先（互作问题的直接证据）。
+  push(byResolution(xc.filter(isComplex)).slice(0, RCSB_COMPLEX_BUCKET_MAX));
+  // 2. 配体结合态（非复合物）。
+  push(byResolution(xc.filter(e => !isComplex(e) && e.ligands)).slice(0, RCSB_LIGAND_BUCKET_MAX));
+  // 3. apo 态（非复合物）。
+  push(byResolution(xc.filter(e => !isComplex(e) && !e.ligands)).slice(0, RCSB_APO_BUCKET_MAX));
+  // 4. NMR 代表（方法过滤器不再排除 NMR）。
+  push(byResolution(pdbRows.filter(e => (e.method || '').toUpperCase().includes('NMR'))).slice(0, RCSB_NMR_BUCKET_MAX));
+  return out;
+}
+
+/**
+ * R179 (Task 2-a) / R184: RCSB 结构图收集。
+ * 多样性分桶选代表结构（复合物/配体/apo/NMR，无全局上限），
+ * URL 用已验证可用的 CDN assembly-1.jpeg，HEAD 10s 预检（R184 起并行）。
  *
  * @param pdbRows       已收集的 PDB 结构行
  * @param emit          SSE progress 函数（每个 figure 一条，带 dshFigure 字段）
@@ -80,20 +148,24 @@ export async function collectRcsbFigures(
   const out: ReportFigure[] = [];
   if (!pdbRows || pdbRows.length === 0) return out;
 
-  // 代表性排序：X-ray/Cryo-EM 优先 → 有配体优先 → 分辨率升序。
-  const candidates = [...pdbRows]
-    .filter(e => (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON'))
-    .sort((a, b) => {
-      const aLig = a.ligands ? 1 : 0;
-      const bLig = b.ligands ? 1 : 0;
-      if (aLig !== bLig) return bLig - aLig;
-      return (a.resolution ?? 999) - (b.resolution ?? 999);
-    })
-    .slice(0, 3);
+  const candidates = pickRepresentativeRcsbEntries(pdbRows);
+  if (candidates.length === 0) return out;
 
-  for (const e of candidates) {
-    if (!e.pdbId) continue;
-    const url = `https://cdn.rcsb.org/images/structures/${e.pdbId.toLowerCase()}_assembly-1.jpeg`;
+  // R184: HEAD 预检并行化（旧版逐张串行，≤10 张 × 10s 超时最坏可阻塞
+  // 数分钟；并行后总耗时 ≈ 最慢一张）。结果按原顺序消费，SSE 叙事稳定。
+  const checked = await Promise.all(candidates.map(async (e) => {
+    const url = `https://cdn.rcsb.org/images/structures/${e.pdbId!.toLowerCase()}_assembly-1.jpeg`;
+    let ok = false;
+    try {
+      const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
+      ok = res.ok;
+    } catch {
+      ok = false;
+    }
+    return { entry: e, url, ok };
+  }));
+
+  for (const { entry: e, url, ok } of checked) {
     const resStr = e.resolution != null ? e.resolution.toFixed(1) : '?';
     const caption = `PDB ${e.pdbId} — ${(e.title || '').slice(0, 80)}（${e.method || '未知方法'} ${resStr}Å）`;
     const fig: ReportFigure = {
@@ -104,18 +176,9 @@ export async function collectRcsbFigures(
       source: 'RCSB PDB',
       // R179 (Task 2-a): 每张图按内容挑最匹配的大纲章节（配体/复合物/质量）。
       sectionId: pickRcsbSection(e, sectionIds),
-      status: 'searching',
+      status: ok ? 'verified' : 'failed',
+      ...(ok ? {} : { vlmReason: 'RCSB CDN 预检失败' }),
     };
-    // HEAD 预检（10s 超时）—— CDN 偶发 404（新结构未渲染 assembly 图）。
-    let ok = false;
-    try {
-      const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
-      ok = res.ok;
-    } catch {
-      ok = false;
-    }
-    fig.status = ok ? 'verified' : 'failed';
-    if (!ok) fig.vlmReason = 'RCSB CDN 预检失败';
     emit({
       stage: 'figure-rcsb',
       level: ok ? 'success' : 'warn',
@@ -256,8 +319,10 @@ async function verifyFigureWithVlm(
 }
 
 /**
- * R179 (Task 2-a): web 原理图/通路图搜索 + VLM 校验。
- * 每个报告最多 2 个 query、每 query 最多 4 张送审、总计最多 2 张通过。
+ * R179 (Task 2-a) / R184: web 原理图/通路图搜索 + VLM 校验。
+ * 每个有配图价值的章节各搜一条 query（按 query 文本去重 + 防刷量护栏 8 条）；
+ * 每 query 最多 4 张送审、最多采用 2 张（近重复保护）；全报告总通过数
+ * 不再设上限。VLM 校验逐张串行（峰值内存 = 单张图，与总量无关）。
  * CLI / SDK / VLM 任一环节失败 → emit warn + 返回空数组（绝不 throw）。
  */
 export async function searchWebFigures(
@@ -265,11 +330,20 @@ export async function searchWebFigures(
   emit: (e: SseEvent) => void,
 ): Promise<ReportFigure[]> {
   const out: ReportFigure[] = [];
-  const capped = queries.filter(q => q && q.query && q.sectionId).slice(0, 2);
+  // R184: 移除「最多 2 条 query」配额 —— 仅按 query 文本去重 + 安全护栏。
+  const seenQuery = new Set<string>();
+  const capped = queries
+    .filter(q => q && q.query && q.sectionId)
+    .filter(q => {
+      const key = String(q.query).trim().toLowerCase();
+      if (seenQuery.has(key)) return false;
+      seenQuery.add(key);
+      return true;
+    })
+    .slice(0, MAX_WEB_QUERIES);
   if (capped.length === 0) return out;
 
   for (const { sectionId, query } of capped) {
-    if (out.length >= TOTAL_WEB_FIGURE_CAP) break;
     emit({ stage: 'figure-web', level: 'info', message: `搜索 web 示意图：「${query}」…` });
     let results: ImageSearchResult[] = [];
     try {
@@ -283,8 +357,11 @@ export async function searchWebFigures(
     }
     emit({ stage: 'figure-web', level: 'info', message: `image-search 返回 ${results.length} 条候选，逐张 VLM 校验（宁缺毋滥）…` });
 
+    // R184: 近重复保护改为按 query 计（同一搜索的候选图常常高度相似，
+    // 采用最佳 ≤VERIFIED_PER_QUERY_CAP 张即可）；总量不再设上限。
+    let verifiedThisQuery = 0;
     for (const r of results.slice(0, RESULTS_PER_QUERY_CAP)) {
-      if (out.length >= TOTAL_WEB_FIGURE_CAP) break;
+      if (verifiedThisQuery >= VERIFIED_PER_QUERY_CAP) break;
       const url = r.original_url || r.url || '';
       if (!/^https?:\/\//i.test(url)) continue;
       const fig: ReportFigure = {
@@ -334,7 +411,7 @@ export async function searchWebFigures(
           : `✗ 拒绝（${fig.vlmReason}）`,
         dshFigure: fig,
       });
-      if (fig.status === 'verified') out.push(fig);
+      if (fig.status === 'verified') { out.push(fig); verifiedThisQuery++; }
     }
   }
 

@@ -4913,3 +4913,25 @@ Stage Summary:
 - 用户现场三个问题根治：① Invalid invocation → 三级落库（Prisma → compat 自愈 → raw SQL），stale client/缺表/缺列三类根因全覆盖，错误消息不再截断真因；② 推理模型 JSON 失败 → generateText/llmComplete 出口剥 think + extractJson 四重强化 + maxChars 提升；③ 默认大纲改为数据驱动（pdb_analysis/literature/homology 按数据源补入），文案计数纠正。
 - 2 文件改动（llm.ts +42 行 / agent.ts +137 行 -30 行）；全链路实证：17 单元 + 9 scratch DB + 完整 E2E 9/9 章落库 + 历史读取 + 浏览器 0 错误；tsc/lint 零新增。
 - 用户本地（Windows）若仍见 raw SQL 兜底 warn，提示重跑 prisma generate 即可根治（SSE 消息已自带该提示）。
+
+---
+Task ID: R184
+Agent: main-agent (Z.ai Code)
+Task: 依用户诉求调整 DSH 评估报告两条行为：① 移除配图上限限制；② 即使写了聚焦的科学问题，报告也必须包含基本评估内容（问题只作「额外重点讨论」，不再挤掉基础章节）
+
+Work Log:
+- 需求解读（对应用户原话）：「移除图片上限限制」= 去掉 RCSB 3 张/web 2 query·2 张/figureQueries 2 条等人为配额；「即使写了聚焦的问题，也不应该只讨论聚焦的问题」= 大纲必须永远包含基础评估章节，问题相关章节是叠加而非替换。旧大纲规则「中间章节按与科学问题的相关性选取 2-6 个」正是聚焦问题挤掉基础内容的根因（用户现场 P00533 复合物问题只得到 4-5 个问题相关章节）。
+- 改动 1（section-library.ts）：新增 `OutlineDataInfo`（hasPdb/hasBlast/hasLiterature）+ `baselineSectionIds(data)` —— 基础评估章节数据驱动必含（核心四席 function/pdb_analysis/structure_quality/druggability + 条件席位 literature/homology）；`outlineRules(data)` 增 baselineIds/questionExtraMin/Max 字段，totalMax 9→14（4 强制位 + ≤6 基础 + ≤4 深挖），formatStability 规则重写为「基础必含 + 深挖叠加」。
+- 改动 2（figures.ts 配图去上限）：RCSB 由「配体优先+分辨率 slice(0,3)」改为多样性分桶 `pickRepresentativeRcsbEntries`（复合物/assembly ≤4 最优先——互作类问题的直接证据、非复合物配体态 ≤3、apo ≤2、NMR ≤1 不再被方法过滤器排除；桶间互斥按 pdbId 去重），HEAD 预检并行化（旧串行 ≤10×10s 最坏阻塞数分钟）；web 搜索移除「2 query/全报告 2 张」配额 → query 按文本去重 + 防刷量护栏 8 条、每 query 近重复保护 ≤2 张（VERIFIED_PER_QUERY_CAP）、总量不设上限，RESULTS_PER_QUERY_CAP 3→4；COMPLEX_TITLE_RE 抽为模块级共享。
+- 改动 3（agent.ts 大纲/章节双轨）：Phase B figureQueries prompt 0-2→0-6 + 解析 slice(0,2)→(0,8)；Phase C `dataInfo` 数据驱动 + 大纲 system/user prompt 重写（必含基础章节清单、深挖 1-4 个、基础在前深挖在后）+ outline maxChars 2400→3600；`repairOutline(raw, data)` 强化——基础章节 LLM 漏选时按标准顺序强制补插（focus 带「标准评估章节，不因问题聚焦收窄」提示），深挖章节=LLM 选择超出基础集合的部分（保留 LLM 顺序）clamp 到 totalMax；outline JSON 失败降级路径由 R183 的手工 sections 改为 `guessQuestionSections(question)` 关键词启发式（复合物/通路/突变/表达/配体口袋/结构域 → 对应深挖章节，最多 3 个）+ baseline 自动补齐——双 JSON 失败仍保有完整评估内容与问题视角；Phase E 章节 prompt 区分双轨：基础章节「科学问题（背景参考）——以标准评估内容为主体、顺带联系」，深挖章节（含 question_focus/summary/conclusion）「本章须重点服务于该问题」；章节内嵌图建议 slice(0,3)（其余统一进附录 gallery，防配图增多撑爆 prompt/正文堆图）。
+- 验证 1（单元，bun 直跑真实模块导入）：outline 逻辑 20/20（baselineSectionIds 3 种数据形态 / guessQuestionSections 4 例 / repairOutline 8 例：null+full→10 章强制位与 canonical 顺序、LLM 只给问题章节→12 章且 baseline 排深挖前且 LLM focus 保留、未知 id 去重、clamp 14 截深挖尾部、无 PDB 数据→6 章）；RCSB 分桶 10/10（mock fetch：复合物桶 8A2A/1IVO 优先且 ≤4、配体桶 8A27/8A2D、apo 1M14、NMR 2J6E 不再排除、总数 9=桶配额之和、挂靠 interactions/structure_quality 正确）。
+- 验证 2（完整 DSH E2E，curl SSE，P00533 + 用户原问题，maxPdb=10/maxLit=10）：relevance 成功 → 11 章大纲（基础 5 章 function/pdb_analysis/structure_quality/druggability/literature + 深挖 2 章 interactions/variants——正是用户复合物问题的重点章节）→ 配图 14 张验证（RCSB 4：9NTP/9GHR/9Z9E/9Z2H 复合物结构优先入选，旧版 3 张全是激酶域配体结构；web 10：VLM 判官正常拒 1 拒相关度不足的图、1 query 无结果优雅跳过）→ 11/11 章完成 9433 chars → tier-1 Prisma create 落库（outline 983B/figures 3810B vs 旧 1372B）+ Evaluation 回写 + SkillRunRecord 遥测。报告内容核验：基础章节（靶点功能）覆盖标准评估口径未被问题收窄；深挖章节（分子相互作用与复合物 1177 chars 全文最长 + 3 张内嵌图）直接回答复合物问题并引用具体 PDB/分辨率与功能意义。历史读取 /api/eval-report-file/P00533 返回 mode=dsh + 11 节 outline + 14 张 figures。
+- 验证 3（浏览器 agent-browser）：首页 0 错误；Run Center DSH 历史新条目「11/11 章 · 5m5s · log 29.4KB」展开回放 83 行 SSE 日志正常；Evaluation 页 P00533 详情侧栏「Report outline 11 · DSH」+「Report figures 14」全部缩略图（VERIFIED · RCSB/WEB 徽标）渲染；Report tab 11 个 H2 章节 + §N.M 小节完整渲染；console/error 全程零输出；VLM 截图交叉验证 2 轮均无布局破损。
+- 验证 4：eslint 改动文件 0 error 0 warning；tsc 全项目 120 errors 与 R183 基线完全一致 = 零新增；dev.log 无新增错误。
+- 排障记录：E2E 期间发现 curl 后台进程会在 Bash 工具调用结束时被沙箱回收（nohup/setsid/disown 均无效，两次运行分别死于 sleep 30/sleep 20 的进程组清理）→ 改为单次调用内前台 curl + 10 分钟预算解决；测试产物已清理（.r184-test/）。
+
+Stage Summary:
+- 3 文件改动（section-library +~70 行 / figures 重写选择与配额逻辑 / agent 大纲-章节双轨 +~90 行）；两条用户诉求全链路实证落地。
+- 配图：RCSB 多样性分桶（复合物最优先）+ 并行 HEAD + web 查询去上限（仅留 query 去重、每 query ≤2 张近重复保护、护栏 8 条），E2E 实测 5→14 张且复合物结构入选。
+- 大纲：基础评估章节数据驱动强制必含（totalMax 9→14），深挖章节叠加其后；章节写作侧同步双轨 framing（基础章节防聚焦收窄、深挖章节重点服务问题）；outline JSON 失败降级路径也带问题视角（关键词启发式）。
+- 全链路验证：30 单元断言 + 完整 E2E（11/11 章 · 9433 chars · 14 图 · 三级落库 tier-1 直达）+ 历史读取 + 浏览器 4 视图 + VLM 截图复核；lint/tsc 零新增。

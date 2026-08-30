@@ -3,7 +3,10 @@
 // R179 (Task 2-a): DSH 模式（DeepSeek-Harness-inspired agent mode）章节库。
 //
 // 经典管线（/api/evaluations/run）使用固定 8 章报告模板；DSH 模式改为
-// 「agent 先分析所有数据源 → 按相关性规划 5-9 章大纲 → 逐章撰写」。
+// 「agent 先分析所有数据源 → 规划大纲（基础评估章节必含 + 问题深挖章节）→ 逐章撰写」。
+// R184: 大纲规则变更 —— 即使写了聚焦的科学问题，报告也必须包含基本的
+// 评估内容（功能/PDB 资源/结构质量/成药性等），问题相关章节只是「额外
+// 重点讨论」，不再因聚焦而挤掉基础章节；总章节数上限 9 → 14。
 // 本文件是章节的唯一事实来源（single source of truth）：
 //   - 大纲规划器（agent.ts Phase C）读取 id/中文标题/purpose 来选章节；
 //   - 逐章撰写器（agent.ts Phase E）读取 contentSpec/min-max words 来约束
@@ -327,8 +330,43 @@ export function getSection(id: string): SectionTemplate | undefined {
 }
 
 /**
+ * 数据可用性信号 —— 决定哪些「基础评估章节」有数据支持（R184）。
+ * 由调用方从 CollectResult 导出；repairOutline / 大纲规划 prompt 共用。
+ */
+export interface OutlineDataInfo {
+  hasPdb: boolean;
+  hasBlast: boolean;
+  hasLiterature: boolean;
+}
+
+/**
+ * R184: 基础评估章节（无论科学问题多聚焦都必须包含的标准评估内容）。
+ *
+ * 核心四席：function（生物学背景）/ pdb_analysis（结构资源盘点）/
+ * structure_quality（质量评估）/ druggability（成药性评估）。
+ * 条件席位：literature（有 PubMed 文献时）/ homology（有 BLAST 同源时）。
+ * 数据缺省时保守处理：默认 hasPdb=true（PDB 是本应用核心），
+ * hasBlast/hasLiterature 默认 false（避免生成空章节）。
+ *
+ * 返回顺序即报告中的标准排列顺序（叙事顺序，修复器按此插入）。
+ */
+export function baselineSectionIds(data?: Partial<OutlineDataInfo>): string[] {
+  const hasPdb = data?.hasPdb ?? true;
+  const hasBlast = data?.hasBlast ?? false;
+  const hasLiterature = data?.hasLiterature ?? false;
+  return [
+    'function',
+    ...(hasPdb ? ['pdb_analysis', 'structure_quality'] : []),
+    'druggability',
+    ...(hasLiterature ? ['literature'] : []),
+    ...(hasBlast ? ['homology'] : []),
+  ];
+}
+
+/**
  * 大纲规则（给大纲规划 LLM 的 system prompt 片段 + 本地修复器的依据）。
  * R179 (Task 2-a): question_focus 在 DSH 模式下为强制章节（位置 2）。
+ * R184: 基础评估章节必含（数据驱动）+ 问题深挖章节额外叠加；总上限 14。
  */
 export interface OutlineRules {
   totalMin: number;
@@ -336,25 +374,36 @@ export interface OutlineRules {
   mandatoryFirst: string;
   mandatorySecond: string;
   mandatoryTail: string[];
-  /** 可选中间章节池（19 - 4 个强制位）。 */
+  /** 基础评估章节 id（数据驱动，见 baselineSectionIds()）。 */
+  baselineIds: string[];
+  /** 问题深挖章节的数量区间（在基础章节之外额外叠加）。 */
+  questionExtraMin: number;
+  questionExtraMax: number;
+  /** 可选中间章节池（19 - 4 个强制位，含基础章节与问题深挖章节）。 */
   optionalIds: string[];
   formatStability: string[];
 }
 
-export function outlineRules(): OutlineRules {
+export function outlineRules(data?: Partial<OutlineDataInfo>): OutlineRules {
+  const baselineIds = baselineSectionIds(data);
   return {
     totalMin: 5,
-    totalMax: 9,
+    // R184: 4 个强制位 + 基础章节（最多 6）+ 问题深挖章节（最多 4）= 14。
+    totalMax: 14,
     mandatoryFirst: 'summary',
     // DSH 模式特有：问题聚焦章强制第 2 位。
     mandatorySecond: 'question_focus',
     mandatoryTail: ['references', 'conclusion'],
+    baselineIds,
+    questionExtraMin: 1,
+    questionExtraMax: 4,
     optionalIds: SECTION_LIBRARY
       .filter((s) => !s.fixed && s.id !== 'question_focus')
       .map((s) => s.id),
     formatStability: [
-      '总章节数 5-9：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion',
-      '中间章节只能从章节库的 optional id 中按与科学问题的相关性选取 2-6 个',
+      '总章节数 5-14：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion',
+      '基础评估章节必须全部包含（有数据支持的那些）——科学问题再聚焦，功能背景/PDB 资源/结构质量/成药性等标准评估内容也不可省略，只是顺带联系问题',
+      '在基础章节之外，按与科学问题的相关性从章节库其余 optional id 中额外选取 1-4 个「问题深挖」章节，重点展开问题本身，排在基础章节之后',
       '同一章节不得重复出现；章节顺序一经确定不再改变',
       '每章 H2 标题必须精确使用章节库的中文章节名（一字不差）',
       '不得发明章节库之外的章节 id 或标题',

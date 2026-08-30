@@ -3,10 +3,15 @@
 // R179 (Task 2-a): DSH 模式 agent 编排 ——
 //   Phase A collect     数据收集（collect.ts，进度到 ~56%）
 //   Phase B relevance   agent 先分析所有数据源与科学问题的相关性
-//   Phase C outline     按相关性规划 5-9 章大纲（含本地校验+自动修复）
-//   Phase D figures     配图（RCSB 结构图 + web 原理图 + VLM 验证）
+//   Phase C outline     规划大纲（R184：基础评估章节必含 + 问题深挖章节叠加，
+//                       含本地校验+自动修复）
+//   Phase D figures     配图（RCSB 结构图 + web 原理图 + VLM 验证，配额上限已移除）
 //   Phase E chapters    逐章撰写（chapter / chapter_done SSE 事件）
 //   Phase F assemble    组装报告 + 持久化（SkillEvaluationReport + Evaluation）
+//
+// R184 行为变更（用户诉求）：即使写了聚焦的科学问题，报告也必须包含基本
+// 评估内容（功能/PDB 资源/结构质量/成药性等基础章节由数据驱动强制必含），
+// 问题相关章节只是「额外重点讨论」；配图不再设全局张数上限。
 //
 // 所有 LLM 调用走 src/lib/llm.ts 的 generateText（provider 由调用方传入，
 // 默认 zai 在本 sandbox 可用）。JSON 输出一律经 extractJson 鲁棒解析 +
@@ -20,7 +25,7 @@ import { sanitizeReport } from '@/lib/markdown-renderer';
 import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, type CollectOpts, type CollectResult, type LiteratureRow } from './collect';
-import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint } from './section-library';
+import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint, type OutlineDataInfo } from './section-library';
 import { collectRcsbFigures, searchWebFigures, type ReportFigure } from './figures';
 
 // ─── 类型 ───────────────────────────────────────────────────────────────────
@@ -286,15 +291,37 @@ function buildFilteredContext(c: CollectResult, hints: Array<DataHint>): string 
 export interface RawOutlineSection { id?: string; focus?: string }
 
 /**
- * R179 (Task 2-a): 大纲校验 + 自动修复：
- *   - 丢弃未知 id / 非法条目
- *   - 去重
+ * R184: 关键词启发式 —— outline JSON 失败时按科学问题文本猜测「问题深挖」
+ * 章节作为降级保底（用户现场曾遭 relevance + outline 双 JSON 失败，
+ * 旧版降级大纲完全丢失问题视角）。最多猜 3 个；repairOutline 会自动
+ * 去掉与基础章节重复/无对应模板的项。
+ */
+export function guessQuestionSections(question: string): string[] {
+  const q = String(question || '').toLowerCase();
+  const picks: string[] = [];
+  const add = (re: RegExp, id: string) => { if (re.test(q)) picks.push(id); };
+  add(/复合物|互作|相互作用|complex|dimer|二聚|抗体|antibody/, 'interactions');
+  add(/通路|信号传导|pathway|signaling|上下游/, 'pathway');
+  add(/突变|变异|mutation|variant|耐药|resistance/, 'variants');
+  add(/表达|定位|expression|localization|组织|tissue/, 'expression');
+  add(/口袋|配体|抑制剂|结合位点|ligand|pocket|inhibitor|结合能/, 'ligand_binding');
+  add(/结构域|domain|催化|残基/, 'domains');
+  return [...new Set(picks)].slice(0, 3);
+}
+
+/**
+ * R179 (Task 2-a) / R184: 大纲校验 + 自动修复：
+ *   - 丢弃未知 id / 非法条目；去重
  *   - force-prepend summary、force-insert question_focus 于位置 2、
  *     force-append references + conclusion
- *   - clamp 到 9 章（溢出时从中间章节尾部截断）
+ *   - R184: 基础评估章节（数据驱动，见 baselineSectionIds）必含 ——
+ *     LLM 漏选时按标准顺序补插（聚焦问题不得挤掉基本评估内容）；
+ *     基础章节固定排在前面，LLM 选出的问题深挖章节排在其后
+ *   - clamp 到 totalMax（溢出时从问题深挖章节尾部截断）
  */
-export function repairOutline(raw: any): DshOutlineEntry[] {
-  const rules = outlineRules();
+export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>): DshOutlineEntry[] {
+  const rules = outlineRules(data);
+  const baseline = rules.baselineIds;
   const entries: DshOutlineEntry[] = [];
   const seen = new Set<string>();
   if (Array.isArray(raw?.sections)) {
@@ -311,16 +338,32 @@ export function repairOutline(raw: any): DshOutlineEntry[] {
   }
   // 移除强制位章节（下面按规则重新插入到正确位置）。
   const middles = entries.filter(e => e.id !== rules.mandatoryFirst && e.id !== rules.mandatorySecond && !rules.mandatoryTail.includes(e.id));
-  // clamp：首+问题+中间+尾 ≤ 9 → 中间最多 9-4=5 个（规则允许 2-6，修复器保守 5）。
-  const maxMiddle = Math.max(0, rules.totalMax - 4);
-  const clampedMiddles = middles.slice(0, maxMiddle);
+  // R184: 基础评估章节按标准顺序必含（LLM 漏选 → 用模板 purpose 补插，
+  // focus 提示撰写器「以标准评估内容为主、顺带联系科学问题」）。
+  const baselineMiddles: DshOutlineEntry[] = [];
+  for (const id of baseline) {
+    const found = middles.find(e => e.id === id);
+    if (found) { baselineMiddles.push(found); continue; }
+    const tmpl = getSection(id);
+    if (!tmpl) continue;
+    baselineMiddles.push({
+      id,
+      title: tmpl.titleZh,
+      focus: `${tmpl.purpose}（标准评估章节：完整覆盖常规评估内容，与科学问题自然相关处顺带联系，不因问题聚焦而收窄本章范围）`.slice(0, 300),
+    });
+  }
+  // R184: 问题深挖章节 = LLM 选择中超出基础集合的部分（保持 LLM 给出的顺序）。
+  const extras = middles.filter(e => !baseline.includes(e.id));
+  // clamp：4 强制位 + 基础章节 + 深挖章节 ≤ totalMax。
+  const maxExtras = Math.max(0, rules.totalMax - 4 - baselineMiddles.length);
+  const allMiddles = [...baselineMiddles, ...clippedFocus(extras.slice(0, maxExtras))];
 
   const first = getSection(rules.mandatoryFirst)!;
   const second = getSection(rules.mandatorySecond)!;
   const result: DshOutlineEntry[] = [
     { id: first.id, title: first.titleZh, focus: first.purpose },
     { id: second.id, title: second.titleZh, focus: second.purpose },
-    ...clippedFocus(clampedMiddles),
+    ...allMiddles,
   ];
   for (const tid of rules.mandatoryTail) {
     const t = getSection(tid)!;
@@ -502,7 +545,7 @@ export async function runDshEvaluation(params: {
 
 要求：
 - findings 逐源给出（uniprot/rcsb/blast/literature/scores 各 1-2 条）
-- figureQueries 0-2 条，只在该章节放一张原理图/通路图确有帮助时给出；query 用英文（图片召回更好）；sectionId 必须是：${SECTION_LIBRARY.filter(s => !s.fixed && s.id !== 'question_focus').map(s => s.id).join(' / ')}`;
+- figureQueries 0-6 条：每个确有配图价值的章节最多 1 条（原理图/通路图/机制图对该章确有帮助时才给，宁缺毋滥）；query 用英文（图片召回更好）；sectionId 必须是：${SECTION_LIBRARY.filter(s => !s.fixed && s.id !== 'question_focus').map(s => s.id).join(' / ')}`;
 
   // R183: maxChars 2500→4000 —— 推理模型 think 块已在 generateText 剥离，
   // 但 findings 等字段本身也可能超过 2500（12 条发现 × ~150 字）。
@@ -525,9 +568,11 @@ export async function runDshEvaluation(params: {
       dataGaps: Array.isArray(relevanceRun.parsed.dataGaps) ? (relevanceRun.parsed.dataGaps as any[]).map(String).slice(0, 8) : [],
     };
     if (Array.isArray(relevanceRun.parsed.figureQueries)) {
+      // R184: 2→8 —— 每个有配图价值的章节各一条（searchWebFigures 内部再
+      // 按 query 去重；数量实际由相关性分析的质量决定，不再硬性限制 2 条）。
       figureQueries = (relevanceRun.parsed.figureQueries as any[])
         .filter(q => q && typeof q === 'object' && q.query && q.sectionId)
-        .slice(0, 2)
+        .slice(0, 8)
         .map(q => ({ sectionId: String(q.sectionId), query: String(q.query).slice(0, 120) }));
     }
     emit({
@@ -546,8 +591,20 @@ export async function runDshEvaluation(params: {
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
   // ── Phase C: 大纲规划（62-64%）────────────────────────────────────────
-  emit({ stage: 'outline', level: 'info', message: `按相关性规划报告大纲（5-9 章）…`, progress: 62 });
-  const rules = outlineRules();
+  // R184: 基础评估章节（数据驱动）必含 + 问题深挖章节叠加 —— 聚焦的科学
+  // 问题不再挤掉基本评估内容，只是「额外重点讨论」。
+  const dataInfo: OutlineDataInfo = {
+    hasPdb: (c.pdbRows?.length ?? 0) > 0,
+    hasBlast: !c.skippedBlast && (c.blastRows?.length ?? 0) > 0,
+    hasLiterature: (c.literature?.length ?? 0) > 0,
+  };
+  const rules = outlineRules(dataInfo);
+  const baselineListing = rules.baselineIds
+    .map(id => getSection(id))
+    .filter((s): s is SectionTemplate => !!s)
+    .map(s => `- ${s.id} | ${s.titleZh} | ${s.purpose}`)
+    .join('\n');
+  emit({ stage: 'outline', level: 'info', message: `规划报告大纲（基础评估章节必含 + 问题深挖章节，共 ${rules.totalMin}-${rules.totalMax} 章）…`, progress: 62 });
   const libraryListing = SECTION_LIBRARY.map(s => `- ${s.id} | ${s.titleZh} | ${s.purpose}`).join('\n');
   const outlineSystem = `你是结构生物学报告的大纲规划器。必须遵守的格式稳定性规则：
 ${rules.formatStability.map((r, i) => `${i + 1}. ${r}`).join('\n')}
@@ -556,10 +613,12 @@ ${rules.formatStability.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 ${libraryListing}
 
 硬性约束：
-- 总章节数 5-9
+- 总章节数 ${rules.totalMin}-${rules.totalMax}
 - 第 1 章固定 summary，第 2 章固定 question_focus，倒数第 2 章 references，最后 conclusion
-- 中间章节只能从章节库选取（2-6 个），按与科学问题的相关性选取
-- 只能使用上面的章节 id，不得发明新 id
+- 基础评估章节（下方「必含基础章节」清单的全部）必须包含——无论科学问题多聚焦，功能背景/PDB 资源/结构质量/成药性等标准评估内容都不可省略，只在自然相关处顺带联系问题
+- 在基础章节之外，从章节库其余 optional id 中按与科学问题的相关性额外选 ${rules.questionExtraMin}-${rules.questionExtraMax} 个「问题深挖」章节，重点展开问题本身
+- 排列顺序：基础评估章节在前，问题深挖章节在后
+- 同一章节不得重复；只能使用上面的章节 id，不得发明新 id
 - 只输出 JSON：{"sections": [{"id": "章节id", "focus": "本章要回答什么/用哪些数据，1-2 句"}]}`;
   const outlineUser = `科学问题：${question}
 
@@ -569,36 +628,35 @@ ${libraryListing}
 - 数据缺口：${(rel.dataGaps || []).join('；') || '（无）'}
 
 数据清单：UniProt 元数据 ✓、PDB 结构 ${c.pdbRows.length} 条、BLAST 同源 ${c.blastRows.length} 条（${c.skippedBlast ? '已跳过' : '已运行'}）、文献 ${c.literature.length} 篇、评分 Overall ${c.scores.overall.score}/10。
+
+本次必含的基础评估章节（数据驱动，不可省略；本地校验会自动补齐遗漏）：
+${baselineListing}
 ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节放一张原理图/通路图确有帮助，规划时可优先考虑）：${figureQueries.map(q => `${q.sectionId}（${q.query}）`).join('、')}` : ''}
 
-请规划报告大纲（记住 question_focus 固定第 2 位，只需你决定中间章节的选择与顺序）。`;
+请规划报告大纲（question_focus 固定第 2 位、基础章节必含；你重点决定问题深挖章节的选择与顺序，并为每章写一句 focus）。`;
 
-  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 2400, llm: llmCfg, signal });
+  // R184: maxChars 2400→3600 —— 大纲最多 14 章，JSON 变长。
+  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 3600, llm: llmCfg, signal });
   llmTotalMs += outlineRun.durationMs;
   if (outlineRun.provider) llmProvider = outlineRun.provider;
   if (outlineRun.model) llmModel = outlineRun.model;
 
-  let outline = repairOutline(outlineRun.parsed);
+  let outline = repairOutline(outlineRun.parsed, dataInfo);
   if (outlineRun.parsed) {
     emit({
       stage: 'outline',
       level: 'success',
-      message: `✓ 大纲确定：${outline.length} 章（${outline.map(o => o.title).join(' → ')}）`,
+      message: `✓ 大纲确定：${outline.length} 章（基础 ${rules.baselineIds.length} 章 + 问题深挖 ${Math.max(0, outline.length - 4 - rules.baselineIds.length)} 章；${outline.map(o => o.title).join(' → ')}）`,
       progress: 64,
       dshOutline: { sections: outline, total: outline.length },
     });
   } else {
-    // JSON 完全失败 → 数据驱动默认大纲（R183：按实际可用的数据源补中间
-    // 章节，满足 totalMin=5 的降级保底；repairOutline 负责 4 个强制位）。
-    // 旧版 repairOutline(null) 只有 4 个强制位章节，与「总章节数 5-9」
-    // 的规则自相矛盾，且日志文案误写「默认 5 章」。
+    // JSON 完全失败 → 数据驱动降级大纲（R184：基础章节自动补齐 + 按问题
+    // 文本关键词猜测问题深挖章节，双 JSON 失败时仍保有完整评估内容与
+    // 问题视角；repairOutline 负责 4 个强制位与 clamp）。
     outline = repairOutline({
-      sections: [
-        ...(c.pdbRows.length > 0 ? [{ id: 'pdb_analysis' }] : []),
-        ...(c.literature.length > 0 ? [{ id: 'literature' }] : []),
-        ...(c.blastRows.length > 0 ? [{ id: 'homology' }] : []),
-      ],
-    });
+      sections: guessQuestionSections(question).map(id => ({ id })),
+    }, dataInfo);
     emit({
       stage: 'outline',
       level: 'warn',
@@ -678,11 +736,24 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
       chapterTitle: tmpl.titleZh,
     });
 
-    // 该章可用配图（kind 任意，status verified）。
+    // 该章可用配图（kind 任意，status verified）。R184: 正文嵌入建议最多
+    // 取 3 张（其余统一进报告末尾配图附录，避免配图增多后把章节 prompt
+    // 撑爆 / 正文变成图片堆砌）。
     const figsForSection = figures.filter(f => f.status === 'verified' && f.sectionId === entry.id);
-    const figuresNote = figsForSection.length > 0
-      ? `\n\n## 本章可用配图（图片仅供参考标题使用；URL 必须原样嵌入）\n${figsForSection.map(f => `- ${f.url} ｜ ${f.caption}`).join('\n')}\n\n嵌入格式（单独一行，放在本章合适位置）：\n${figsForSection.map(f => `![${f.caption}](${f.url})`).join('\n')}`
+    const figsToEmbed = figsForSection.slice(0, 3);
+    const figuresNote = figsToEmbed.length > 0
+      ? `\n\n## 本章可用配图（从中选 1-3 张嵌入正文；其余配图会统一出现在报告末尾的配图附录，无需重复嵌入）\n${figsToEmbed.map(f => `- ${f.url} ｜ ${f.caption}`).join('\n')}\n\n嵌入格式（单独一行，放在本章合适位置）：\n${figsToEmbed.map(f => `![${f.caption}](${f.url})`).join('\n')}`
       : '';
+
+    // R184: 基础评估章节与问题深挖章节的科学问题定位不同 ——
+    //   基础章节：以标准评估内容为主体，问题仅作背景参考（防聚焦收窄，
+    //   这正是「即使写了聚焦问题也要包含基本评估内容」的写作侧约束）；
+    //   深挖章节（含 question_focus / summary / conclusion 等强制位）：
+    //   重点服务科学问题。
+    const isBaseline = rules.baselineIds.includes(entry.id);
+    const questionBlock = isBaseline
+      ? `## 科学问题（背景参考）\n${question}\n\n说明：本章是标准评估章节 —— 以本章内容要求为主体、完整覆盖常规评估口径；与上述问题自然相关处可顺带联系，但不要让问题聚焦收窄或替换本章的标准评估内容。`
+      : `## 科学问题（本章须重点服务于该问题）\n${question}`;
 
     const userPrompt = `# 当前任务：撰写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」
 
@@ -690,8 +761,7 @@ ${buildFilteredContext(c, tmpl.dataHints)}
 
 ---
 
-## 科学问题（本章须服务于该问题）
-${question}
+${questionBlock}
 
 ## 本章焦点（大纲规划器指定）
 ${entry.focus}
