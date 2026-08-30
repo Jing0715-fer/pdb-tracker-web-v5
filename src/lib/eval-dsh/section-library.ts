@@ -68,17 +68,20 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     id: 'question_focus',
     titleZh: '问题聚焦与评估范围',
     titleEn: 'Question Focus & Evaluation Scope',
-    purpose: '重述科学问题，界定本次评估 consulted 了哪些数据、哪些在/不在范围内、问题可回答度如何。',
+    purpose: '重述科学问题并开篇直接回答（能答到什么程度答什么），再界定评估数据范围与可回答度。',
     contentSpec: [
-      '- 逐字重述用户的科学问题，并解释其中关键术语的评估口径',
+      // R187: 用户反馈「聚焦问题的讨论太简略、没有直接回答问题」——本章
+      // 必须结论先行，直接给出答案要点，再谈口径与范围。
+      '- 开篇「直接回答」：先用 2-4 句或要点清单直接回答科学问题（数据能答到什么程度就答什么，逐条给出答案；无法回答的部分明确说明缺什么数据），不得只做问题重述/范围界定/可回答度铺垫',
+      '- 随后逐字重述用户的科学问题，并解释其中关键术语的评估口径',
       '- 列出本次实际查询的数据源（UniProt / RCSB / BLAST / PubMed / 评分）与各自规模',
       '- 明确说明哪些问题超出本次数据范围（如临床数据、专利、竞品管线）',
       '- 给出可回答度评级（高/中/低）及理由',
     ].join('\n'),
     dataHints: ['uniprot', 'rcsb', 'blast', 'literature', 'scores'],
     // R179 (Task 2-a): DSH 模式强制章节 —— 永远位于第 2 位（大纲修复器 force-insert）。
-    minWords: 250,
-    maxWords: 500,
+    minWords: 300,
+    maxWords: 700,
   },
   {
     id: 'function',
@@ -183,15 +186,18 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     id: 'interactions',
     titleZh: '分子相互作用与复合物',
     titleEn: 'Molecular Interactions & Complexes',
-    purpose: '描述蛋白-蛋白/蛋白-核酸相互作用与已解析复合物。',
+    purpose: '开篇用伙伴-功能对照表直接回答「与谁有复合物、各自什么功能」，再展开互作界面与靶点可行性。',
     contentSpec: [
-      '- 列出已解析的复合物结构（同源二聚/异源复合/蛋白-核酸）',
-      '- 讨论关键互作界面与热点残基（引用文献证据）',
+      // R187: 结论先行 —— 伙伴清单表格是本章的第一件交付物。
+      '- 开篇直接回答：第一个子节必须是一个 Markdown 表格，列出全部已解析的互作/复合物伙伴，列：互作伙伴 | 结构证据（PDB ID + 方法/分辨率，或 PMID） | 生物学功能（一句话）',
+      '- 每个互作伙伴的生物学功能必须用完整句子明确表述（如「介导 X 信号」「调控 Y 过程」），不能只罗列结构条目或 PDB 编号',
+      '- 表格之后逐个展开关键伙伴：互作界面特征、热点残基（引用文献证据）',
+      '- 区分两类证据：已有复合物结构的（引 PDB）vs 仅文献/数据库支持的（引 PMID 并注明「暂无结构」）',
       '- 评估互作界面作为药物靶点的可行性',
     ].join('\n'),
     dataHints: ['rcsb', 'literature'],
-    minWords: 250,
-    maxWords: 500,
+    minWords: 400,
+    maxWords: 900,
   },
   {
     id: 'variants',

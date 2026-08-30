@@ -26,7 +26,7 @@ import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, type CollectOpts, type CollectResult, type LiteratureRow } from './collect';
 import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint, type OutlineDataInfo } from './section-library';
-import { collectRcsbFigures, searchWebFigures, type ReportFigure } from './figures';
+import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, type ReportFigure } from './figures';
 
 // ─── 类型 ───────────────────────────────────────────────────────────────────
 
@@ -706,7 +706,7 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
 全局格式约束（必须逐条遵守）：
 1. 章节标题：第一行必须是该章的 H2 标题，精确使用指定的中文标题（一字不差），如 \`## 执行摘要\`
 2. 开头 1-2 句小结：直接给出本章核心结论
-3. 正文字数：${250}-${500} 字（references 参考文献章除外，按其列表格式输出）
+3. 正文字数：按任务中的「本章字数要求」执行（references 参考文献章除外，按其列表格式输出）
 4. 子节：可用 §N.M 三级小节（\`### §N.1 ...\`），N 为本章在报告中的章序号
 5. 禁止 emoji：标题、表格、列表中均不使用
 6. 只使用给定数据，不得编造：未在数据上下文出现的 PDB ID / PMID / 数字一律不写
@@ -737,12 +737,13 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     });
 
     // 该章可用配图（kind 任意，status verified）。R184: 正文嵌入建议最多
-    // 取 3 张（其余统一进报告末尾配图附录，避免配图增多后把章节 prompt
-    // 撑爆 / 正文变成图片堆砌）。
+    // 取 3 张。R187: 措辞从「从中选 1-3 张」改为「必须全部嵌入」+
+    // 章末确定性补挂（下方 missingAppendix）——杜绝配图只出现在附录、
+    // 不进正文（用户现场反馈的第二个问题）；alt 已消毒（figureImageMarkdown）。
     const figsForSection = figures.filter(f => f.status === 'verified' && f.sectionId === entry.id);
     const figsToEmbed = figsForSection.slice(0, 3);
     const figuresNote = figsToEmbed.length > 0
-      ? `\n\n## 本章可用配图（从中选 1-3 张嵌入正文；其余配图会统一出现在报告末尾的配图附录，无需重复嵌入）\n${figsToEmbed.map(f => `- ${f.url} ｜ ${f.caption}`).join('\n')}\n\n嵌入格式（单独一行，放在本章合适位置）：\n${figsToEmbed.map(f => `![${f.caption}](${f.url})`).join('\n')}`
+      ? `\n\n## 本章配图（以下 ${figsToEmbed.length} 张必须全部嵌入正文，分别放在本章最合适的小节；漏嵌的图会被自动补挂到章末）\n${figsToEmbed.map(f => `- ${f.url} ｜ ${f.caption}`).join('\n')}\n\n嵌入格式（单独一行，必须原样复制，不要改动方括号内的文本）：\n${figsToEmbed.map(f => figureImageMarkdown(f)).join('\n')}`
       : '';
 
     // R184: 基础评估章节与问题深挖章节的科学问题定位不同 ——
@@ -753,7 +754,9 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     const isBaseline = rules.baselineIds.includes(entry.id);
     const questionBlock = isBaseline
       ? `## 科学问题（背景参考）\n${question}\n\n说明：本章是标准评估章节 —— 以本章内容要求为主体、完整覆盖常规评估口径；与上述问题自然相关处可顺带联系，但不要让问题聚焦收窄或替换本章的标准评估内容。`
-      : `## 科学问题（本章须重点服务于该问题）\n${question}`;
+      // R187: 深挖章节加「结论先行」硬性要求 —— 用户反馈聚焦问题的讨论
+      // 太简略、不直接回答问题；深挖章必须开篇给答案再展开证据。
+      : `## 科学问题（本章须重点服务于该问题）\n${question}\n\n硬性要求：开篇必须先用 2-4 句话或要点清单/表格「直接回答」该问题（结论先行 —— 先给答案，再展开证据与细节），不得只做背景铺垫、范围界定或泛泛而谈。`;
 
     const userPrompt = `# 当前任务：撰写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」
 
@@ -768,6 +771,9 @@ ${entry.focus}
 
 ## 本章内容要求
 ${tmpl.contentSpec}
+
+## 本章字数要求
+正文 ${tmpl.minWords}-${tmpl.maxWords} 字
 ${figuresNote}
 
 ---
@@ -832,6 +838,20 @@ ${figuresNote}
       }
     }
 
+    // R187: 章末确定性补挂 —— LLM 漏嵌的配图直接追加到章末，杜绝
+    // 「配图只在附录、不进正文」（用户现场：6 张配图仅 2 张进正文，其余
+    // 全堆在附录）。挂到该章的图（≤3 张/章）必须出现在正文；附录只收
+    // 未嵌入任何章节的溢出图（见 Phase F gallery 过滤）。
+    if (ok && figsToEmbed.length > 0) {
+      const missing = figsToEmbed.filter(f => !content.includes(f.url));
+      if (missing.length > 0) {
+        const appendix = missing
+          .map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`)
+          .join('\n\n');
+        content = `${content.trimEnd()}\n\n${appendix}\n`;
+      }
+    }
+
     chapters.push({
       id: entry.id,
       title: tmpl.titleZh,
@@ -867,8 +887,16 @@ ${figuresNote}
   const chaptersOk = chapters.filter(ch => ch.ok).length;
   const chaptersFailed = chapters.length - chaptersOk;
 
-  const gallery = verifiedFigures.length > 0
-    ? `\n\n## 附：报告配图\n\n${verifiedFigures.map(f => `![${f.caption}](${f.url})\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`).join('\n\n')}`
+  // R187: 附录只收「未嵌入任何章节正文」的溢出配图（每章 ≤3 张之外的），
+  // 且图片语法统一走消毒后的 figureImageMarkdown —— 旧版把全部图无条件
+  // 堆进附录，造成「附录有、正文无」的错位感；alt 含化学名方括号时还会
+  // 整图渲染失败（markdown 图片语法不允许裸 ]）。
+  const embeddedUrls = new Set(
+    chapters.flatMap(ch => (ch.content.match(/https:\/\/[^\s)]+/g) || []) as string[]),
+  );
+  const galleryFigs = verifiedFigures.filter(f => !embeddedUrls.has(f.url));
+  const gallery = galleryFigs.length > 0
+    ? `\n\n## 附：其余报告配图（未嵌入正文）\n\n${galleryFigs.map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`).join('\n\n')}`
     : '';
   const header = `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — DSH 模式\n\n> 科学问题：${question}\n\n`;
   const rawReport = header + chapters.map(ch => ch.content).join('\n\n') + gallery;

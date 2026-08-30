@@ -64,15 +64,84 @@ const VLM_PROMPT = `你是一位严格的科研配图审稿人。请判断这张
 {"verdict":"relevant"|"irrelevant","reason":"一句话中文理由","caption":"给这张图的中文短标题（10-20字）"}`;
 
 /**
- * 复合物/assembly 标题特征（与 pickRcsbSection 的 interactions 判定共享口径）。
- * R184: 抽出为模块级常量，分桶选择与挂靠判定共用。
+ * R187: 蛋白-蛋白复合物标题判定 —— 修复「小分子复合物挤占复合物桶/错挂
+ * interactions 章」。
+ *
+ * 旧版 COMPLEX_TITLE_RE 只匹配 complex/dimer/antibody 等词，但激酶域
+ * 与小分子抑制剂的 PDB 标题几乎都写成 "kinase domain in complex with
+ * <化学名>"（P00533 现场问题：8A27/8A2D/8A2A/6TFV 四张配体结构全部
+ * 被当作「复合物」错挂到「分子相互作用与复合物」章，LLM 拒嵌后沦为
+ * 附录专属图）。新判定分三档：
+ *   1. 强信号（antibody/fab/scfv/nanobody/dimer/peptide 等）→ 蛋白复合物；
+ *   2. 弱信号（in complex with X）→ 看 X 是否化学名特征（数字/括号密集
+ *      或 inhibitor/compound/covalent 等提示词）→ 是则归配体态；
+ *   3. 无信号 → 非复合物。
  */
-const COMPLEX_TITLE_RE = /\bcomplex\b|\bdimer\b|\bheterodimer\b|in complex|complexed|antibody|\bfab\b|scfv|nanobody/i;
+const STRONG_COMPLEX_TITLE_RE = /\bantibody\b|\bfab\b|\bscfv\b|nanobody|\bdimer\b|\bheterodimer\b|\bhomodimer\b|\bpeptide\b|protein[- ]protein/i;
+const WEAK_COMPLEX_TITLE_RE = /\bcomplex\b|\bcomplexed\b|in complex/i;
+/** 弱信号标题中出现这些小分子提示词 → 按配体态处理（非蛋白复合物）。 */
+const SMALL_MOLECULE_HINT_RE = /inhibitor|inhibitors|compound|fragment|agonist|antagonist|covalent|analog|analogue|derivative|warhead|scaffold/i;
+/**
+ * 药物代号/药名词形（R187b）：紧邻 "in complex with" 之前的词若命中 →
+ * 标题实为「小分子 + 蛋白」复合物（药物写在前的新命名习惯，如
+ * "BDTX-1535 in complex with WT EGFR" / "AZD3759 in complex with
+ * wild-type EGFR" / "Alflutinib in complex with WT EGFR"）。蛋白名几乎
+ * 不用「纯大写字母+数字」代号，也不以 -tinib/-parib 结尾。
+ */
+const DRUG_CODE_TOKEN_RE = /^[A-Z]{2,}-?\d{2,}[a-z]{0,2}$/;  // BDTX-1535 / AZD3759 / TAK-788 / YK-029a
+const DRUG_SUFFIX_TOKEN_RE = /^(?:\w+)?tinib$|^(?:\w+)?parib$|^(?:\w+)?ciclib$/i; // Alflutinib / Limertinib / Poziotinib
+
+/** 化学名特征：数字 ≥2 或含括号（如 2-(6,7-dihydro-5H-pyrrolo[1,2-c]imidazol-1-yl)）。 */
+function looksLikeChemicalName(s: string): boolean {
+  const digits = (s.match(/\d/g) || []).length;
+  const brackets = (s.match(/[([]/g) || []).length;
+  return digits >= 2 || brackets >= 1;
+}
+
+/** R187: 标题是否描述蛋白-蛋白/蛋白-肽复合物（分桶与章节挂靠共用）。 */
+export function isProteinComplexTitle(title: string | null | undefined): boolean {
+  const t = String(title || '');
+  if (!t) return false;
+  if (STRONG_COMPLEX_TITLE_RE.test(t)) return true;
+  if (!WEAK_COMPLEX_TITLE_RE.test(t)) return false;
+  if (SMALL_MOLECULE_HINT_RE.test(t)) return false;
+  // 「in complex with X」双向判定（R187b）：
+  //   右侧 X 为化学名特征 → 小分子复合物；
+  //   左侧紧邻词为药物代号/药名词尾（BDTX-1535 / Alflutinib 类）→ 小分子复合物。
+  const m = t.match(/in complex with ([^,;]{2,90})/i);
+  if (m) {
+    if (looksLikeChemicalName(m[1])) return false;
+    const before = t.slice(0, m.index || 0).trimEnd().replace(/[^\w-]+$/, '');
+    const lastTok = (before.match(/[A-Za-z0-9-]+$/) || [''])[0];
+    if (DRUG_CODE_TOKEN_RE.test(lastTok) || DRUG_SUFFIX_TOKEN_RE.test(lastTok)) return false;
+    return true;
+  }
+  // 兜底：标题尾部 60 字符带化学名特征 → 保守按配体态处理。
+  return !looksLikeChemicalName(t.slice(-60));
+}
+
+/**
+ * R187: 生成 markdown 图片语法，alt 文本消毒。
+ *
+ * RCSB 标题常含化学名方括号/圆括号（pyrrolo[1,2-c]imidazol、
+ * 2-[4-(difluoromethyl)-…），直接进 ![alt](url) 的 alt 会破坏图片
+ * 语法（alt 不允许裸 ]），导致整张图不渲染（用户现场 8A27/8A2D/8A2A
+ * 三张图在正文/附录均不显示的根因）。生成侧统一消毒：去掉 []()
+ * 四类字符并压缩空白。
+ */
+export function figureImageMarkdown(fig: Pick<ReportFigure, 'caption' | 'url'>): string {
+  const alt = String(fig.caption || '')
+    .replace(/[\[\]()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+  return `![${alt}](${fig.url})`;
+}
 
 /** R184: RCSB 结构图多样性分桶配额 —— 无全局张数上限，总量由各桶代表数之和
  * （典型 6-10 张）自然决定；桶间按 pdbId 去重且互斥。 */
-const RCSB_COMPLEX_BUCKET_MAX = 4; // 复合物/assembly（互作类问题的核心证据，最优先）
-const RCSB_LIGAND_BUCKET_MAX = 3;  // 有配体的 X-ray/Cryo-EM（非复合物）
+const RCSB_COMPLEX_BUCKET_MAX = 4; // 蛋白-蛋白/蛋白-肽复合物（互作类问题的核心证据，最优先）
+const RCSB_LIGAND_BUCKET_MAX = 3;  // 有配体的 X-ray/Cryo-EM（非蛋白复合物）
 const RCSB_APO_BUCKET_MAX = 2;     // apo X-ray/Cryo-EM
 const RCSB_NMR_BUCKET_MAX = 1;     // NMR 代表（此前被完全排除）
 
@@ -84,9 +153,10 @@ const RCSB_NMR_BUCKET_MAX = 1;     // NMR 代表（此前被完全排除）
  */
 function pickRcsbSection(entry: PdbEntryDetail, sectionIds: string[]): string {
   const has = (id: string) => sectionIds.includes(id);
-  const title = (entry.title || '').toLowerCase();
+  // R187: 蛋白复合物优先挂 interactions（即使带配体）；小分子「复合物」
+  // 不再错挂 interactions，走配体/质量评估章节。
+  if (isProteinComplexTitle(entry.title) && has('interactions')) return 'interactions';
   if (entry.ligands && has('ligand_binding')) return 'ligand_binding';
-  if (COMPLEX_TITLE_RE.test(title) && has('interactions')) return 'interactions';
   if (has('structure_quality')) return 'structure_quality';
   return 'pdb_analysis';
 }
@@ -97,12 +167,12 @@ function byResolution<T extends { resolution?: number | null }>(list: T[]): T[] 
 }
 
 /**
- * R184: 多样性分桶选择代表性 RCSB 结构（无全局张数上限）。
+ * R184 / R187: 多样性分桶选择代表性 RCSB 结构（无全局张数上限）。
  *
  * 桶（互斥、按 pdbId 去重，按此优先级取分辨率最好的）：
- *   1. 复合物/assembly（标题特征）≤4 张 —— 互作类科学问题的核心证据，
- *      旧版「配体优先 + 分辨率」排序几乎永远轮不到它们；
- *   2. 有配体的 X-ray/Cryo-EM（非复合物）≤3 张；
+ *   1. 蛋白-蛋白/蛋白-肽复合物（isProteinComplexTitle 判定）≤4 张 ——
+ *      互作类科学问题的核心证据；小分子 "in complex" 不再计入此桶；
+ *   2. 有配体的 X-ray/Cryo-EM（非蛋白复合物）≤3 张；
  *   3. apo X-ray/Cryo-EM ≤2 张；
  *   4. NMR ≤1 张（旧版被方法过滤器完全排除）。
  */
@@ -119,10 +189,12 @@ function pickRepresentativeRcsbEntries(pdbRows: PdbEntryDetail[]): PdbEntryDetai
   const isXc = (e: PdbEntryDetail) =>
     (e.method || '').includes('X-RAY') || (e.method || '').includes('ELECTRON');
   const xc = pdbRows.filter(isXc);
-  const isComplex = (e: PdbEntryDetail) => COMPLEX_TITLE_RE.test(e.title || '');
-  // 1. 复合物/assembly 最优先（互作问题的直接证据）。
+  // R187: 复合物桶只收「蛋白-蛋白/蛋白-肽」复合物（强+弱信号判定），
+  // 小分子 "in complex with <化学名>" 归配体桶——不再挤占复合物配额。
+  const isComplex = (e: PdbEntryDetail) => isProteinComplexTitle(e.title);
+  // 1. 蛋白复合物最优先（互作问题的直接证据）。
   push(byResolution(xc.filter(isComplex)).slice(0, RCSB_COMPLEX_BUCKET_MAX));
-  // 2. 配体结合态（非复合物）。
+  // 2. 配体结合态（非蛋白复合物——含小分子 "in complex" 标题）。
   push(byResolution(xc.filter(e => !isComplex(e) && e.ligands)).slice(0, RCSB_LIGAND_BUCKET_MAX));
   // 3. apo 态（非复合物）。
   push(byResolution(xc.filter(e => !isComplex(e) && !e.ligands)).slice(0, RCSB_APO_BUCKET_MAX));
@@ -132,8 +204,8 @@ function pickRepresentativeRcsbEntries(pdbRows: PdbEntryDetail[]): PdbEntryDetai
 }
 
 /**
- * R179 (Task 2-a) / R184: RCSB 结构图收集。
- * 多样性分桶选代表结构（复合物/配体/apo/NMR，无全局上限），
+ * R179 (Task 2-a) / R184 / R187: RCSB 结构图收集。
+ * 多样性分桶选代表结构（蛋白复合物/配体/apo/NMR，无全局上限），
  * URL 用已验证可用的 CDN assembly-1.jpeg，HEAD 10s 预检（R184 起并行）。
  *
  * @param pdbRows       已收集的 PDB 结构行

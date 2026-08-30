@@ -61,12 +61,16 @@ function renderInline(text: string): string {
   // bold/italic/code replacements should not be re-escaped.
   let s = escapeHtml(text);
   // R179 (Task 2-b): images `![alt](url)` — DSH reports embed figures inline.
+  // R187: alt 允许含 `]`（RCSB 化学标题如 pyrrolo[1,2-c]imidazol 带裸
+  // 方括号，旧正则 [^\]]* 在第一个 ] 处失配 → 整图不渲染）。改用惰性
+  // 量纲 [^\n]*? —— 在第一个 "](https…" 处停止，alt 内的 ]/[/( 均安全；
+  // 生成侧（figures.ts figureImageMarkdown）也已消毒，此处为渲染侧兜底。
   // SECURITY: only absolute https:// URLs survive; anything else is dropped
   // (keeping the alt text as italic). The tag is stashed behind a \u0002
   // placeholder so the auto-link pass below cannot corrupt the src attribute.
   const imgStash: string[] = [];
   s = s.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
+    /!\[([^\n]*?)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
     (_m, alt: string, url: string) => {
       imgStash.push(renderImageHtml(alt, url));
       return `\u0002${imgStash.length - 1}\u0002`;
@@ -345,7 +349,8 @@ export function renderMarkdownToHtml(md: string): MarkdownRenderResult {
     // one figure per line between chapter paragraphs. renderInline also
     // handles inline occurrences, but the block pass gives clean block-level
     // <img> markup (no surrounding <p>) for the common case.
-    const imgBlock = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$/);
+    // R187: alt 同步允许裸 ]（化学名方括号），与 renderInline 口径一致。
+    const imgBlock = trimmed.match(/^!\[([^\n]*?)\]\(([^)\s]+)(?:\s+"[^"]*")?\)\s*$/);
     if (imgBlock) {
       out.push(renderImageHtml(escapeHtml(imgBlock[1]), escapeHtml(imgBlock[2])));
       i++;

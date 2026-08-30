@@ -4951,3 +4951,29 @@ Work Log:
 Stage Summary:
 - 已推送 3 个提交到 https://github.com/Jing0715-fer/pdb-tracker-web-v5 （main 分支）
 - 本地与远端完全同步，工作区干净
+
+---
+Task ID: R187
+Agent: main-agent (Z.ai Code)
+Task: 修复用户现场 P00533 DSH 报告两个反馈：① 聚焦问题讨论太简略、不直接回答问题；② 配图 6 张正文只出现 2 张其余堆附录、部分图片不显示
+
+Work Log:
+- 根因分析（读码定位，3 个独立根因）：
+  1. 附录无条件收录全部已验证图：Phase F gallery 把所有图堆附录，正文嵌入依赖 LLM「从中选 1-3 张」自由裁量 → LLM 拒嵌的图沦为附录专属。加重因素：COMPLEX_TITLE_RE 把「kinase domain in complex with <化学名>」的小分子复合物判为蛋白复合物，8A27/8A2D/8A2A/6TFV 四张配体结构错挂 interactions 章（与 PPI 章不匹配，LLM 理性拒嵌）。
+  2. 部分图片不显示：RCSB 标题化学名带方括号（pyrrolo[1,2-c]imidazol、2-[4-(difluoromethyl)…）进入 ![alt](url) 的 alt，渲染器图片正则 [^\]]* 不允许 alt 含 ] → 整图语法解析失败不渲染（8A27/8A2D/8A2A 三张全军覆没）。
+  3. 聚焦问题不直接回答：question_focus 章节模板只要求「重述问题+界定范围+可回答度」，interactions 模板无「结论先行/伙伴-功能表」要求，深挖章节 prompt 无「直接回答」硬约束。
+- 修复 ①（figures.ts 复合物判定重构）：isProteinComplexTitle() 三档判定——强信号（antibody/fab/scfv/nanobody/dimer/peptide）→ 蛋白复合物；弱信号「in complex with X」双向检查（右侧 X 化学名特征=数字≥2/括号；左侧紧邻词药物代号 [A-Z]{2,}-?\d{2,}[a-z]{0,2} 或 -tinib/-parib/-ciclib 词尾，含 YK-029a 尾缀小写与 "(metabolite of AZD9291)" 括号阻挡两个逃逸模式的修补）→ 小分子复合物归配体桶；小分子提示词（inhibitor/compound/covalent 等）直判。分桶与 pickRcsbSection 挂靠共用。
+- 修复 ②（figures.ts + agent.ts 图片必达正文）：figureImageMarkdown() 生成侧 alt 消毒（剥离 []() 四类字符）；figuresNote 从「从中选 1-3 张」改为「必须全部嵌入（≤3 张/章）+ 原样复制消毒格式」；章末确定性补挂——LLM 漏嵌的图按 URL includes 检测后自动追加章末（图+图注 bullet）；附录 gallery 改为只收「未嵌入任何章节正文」的溢出图（embeddedUrls 集合过滤），标题改「附：其余报告配图（未嵌入正文）」，全部图用消毒格式。
+- 修复 ③（section-library.ts + agent.ts 结论先行）：question_focus contentSpec 首条改为「开篇直接回答：2-4 句或要点清单逐条给答案，不得只做重述/范围界定/铺垫」（300-700 字）；interactions contentSpec 首条改为「开篇直接回答：第一个子节必须是 Markdown 表格（互作伙伴 | 结构证据 | 生物学功能）」+ 伙伴功能必须完整成句 + 区分 PDB 结构证据 vs 仅文献支持（400-900 字）；深挖章节 questionBlock 加硬性要求「开篇必须先用 2-4 句话或要点清单/表格直接回答该问题（结论先行）」；章节字数从全局硬编码 250-500 改为按模板 minWords/maxWords 动态注入（本章字数要求块）。
+- 修复 ④（markdown-renderer.ts 渲染侧兜底）：renderInline 与 standalone 行两处图片正则同步改为惰性 ![([^\n]*?)](…url)——在第一个 "](https…" 停止，alt 内 ]/[/( 均安全（负向先行断言方案在 Bun/JSC 有捕获错位怪癖，弃用）。
+- 验证 1（单元，bun 直跑真实模块）：isProteinComplexTitle 11+10 例（8A27/8A2D/6TFV 化学名、9MSR/9MSS/9OU9/9NIS 药物在前、YK-029a/AZ5104 括号逃逸、8S1M peptide/9Z9E antibody/9Z2H Fab/heterodimer 真复合物、EGF/TGF-alpha 蛋白配体不误伤、空/null 安全）；figureImageMarkdown 消毒 3 例；渲染器 7 例（括号 alt 渲染为 img+alt 属性、常规/带 title/同行双图/http 拒绝/未闭合降级/图+图注组合）——合计 31 断言全过。
+- 验证 2（完整 DSH E2E ×3，P00533 + 用户原问题，maxPdb=40）：第 1 次验证结论先行与补挂生效（interactions 1898 chars 开篇伙伴表）但发现药物在前标题逃逸 → 修补；第 2 次 9/10 章（conclusion 因 zai provider 429 限流失败，17 个候选 provider 均不可用沙箱环境所限，与改动无关）+ 又发现 YK-029a/AZ5104 两个逃逸 → 再修补；第 3 次 11/11 章全成功 9002 chars：复合物桶选中 9Z9E/9Z2H/9Z9F 全部三张抗体复合物（正是用户问题的直接证据），药物类正确归 structure_quality/druggability；正文 9 张（structure_quality 2 + druggability 2 + interactions 3 + pathway 4）+ 附录 4 张（溢出+大纲外挂靠，诚实标注「未嵌入正文」）；interactions 开篇即三抗体复合物伙伴-功能表（9Z9E 2.40Å/9Z2H 2.45Å/9Z9F 3.06Å + HER2/HER3 标注「暂无结构」）。
+- 验证 3（浏览器 agent-browser）：首页 0 error/0 console error；Evaluation 页 P00533 → Report tab：.report-markdown 容器 15 张图、视口内图 loaded=true naturalW=500；仅 2 张 web 图（z-cdn CDN 懒加载未进视口，浏览器上下文 fetch 200 确认可达非防盗链）；VLM 截图复核 4 轮——互作伙伴三列表格渲染（含 PDB 编号与功能描述）、正文结构图渲染、无布局破损/空白占位。
+- 验证 4：eslint 4 改动文件 0 error 0 warning；tsc 改动文件 0 错误（136 全项目为既有基线位于无关文件）；dev.log 无新增错误（429 限流除外）。测试产物已清理（.r187-test/）。
+
+Stage Summary:
+- 4 文件改动：figures.ts（复合物三档判定+药物代号识别+alt 消毒助手 ~70 行）/ section-library.ts（question_focus+interactions 结论先行模板与字数 300-700/400-900）/ agent.ts（深挖章结论先行 prompt+章末确定性补挂+附录溢出过滤+动态字数 ~60 行）/ markdown-renderer.ts（两处图片正则惰性硬化）。
+- 三个用户反馈全部根治：聚焦问题开篇直接回答（伙伴-功能对照表）；配图必达正文（确定性补挂）且附录只收溢出（去错位）；化学名方括号不再炸图片语法（生成侧消毒+渲染侧兜底）。
+- 复合物识别从「见 complex 就算」升级为强/弱信号+化学名/药物代号双向甄别——P00533 复合物桶从 4 张小分子结构纠偏为 3 张真抗体复合物。
+- E2E 实证 11/11 章 + 正文 9 图/附录 4 图分层 + VLM 4 轮截图复核；lint/tsc 零新增。
+- 遗留说明：web 配图挂靠的章节（pathway/ligand_binding/variants）若不在最终大纲中则进附录（诚实标注），不做强制重映射（任意映射反而语义错误）。
