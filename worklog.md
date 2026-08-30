@@ -4994,3 +4994,22 @@ Stage Summary:
 - maxPdb 上限从 200 提升到 500，DSH 与经典两条评估管线均已生效
 - 注意：fetchPdbEntryDetails 5/批并发，400 条 ≈ 80 批，元数据拉取耗时线性增长（此前 200 条约 40 批），属预期行为
 - 上一轮遗留任务（配图正文嵌入率/附录去重/caption 方括号转义/聚焦问题直答强化）仍未实施，待用户确认优先级
+
+---
+Task ID: R188
+Agent: main (Z.ai Code)
+Task: 解释并根治 SkillEvaluationReport Prisma 写入失败（用户现场 19:05 再现）
+
+Work Log:
+- 诊断：错误为 PrismaClientValidationError（客户端校验，未触库）。用户机器的 node_modules/.prisma/client 是 R179 之前的旧版生成物，不认识 create({mode/outline/figures}) 三个新参数 → Unknown argument → 三级写入降级到 ③ raw SQL（数据无损写入成功）
+- 报错文本难懂的原因：Prisma 6 校验错误在 invocation 头后嵌入代码帧（行号+WEBPACK_IMPORTED_MODULE 名），真正原因在末段；prismaErrReason 旧逻辑取首空行后正文再 slice(0,240)，恰好截在代码帧上
+- 沙箱验证：本地 client 已是新版（含 mode/outline/figures，delegate 存在）；真实回路测试 path① create→read→delete 16ms 走通
+- 修复①（根治复发）：package.json 增加 "postinstall": "prisma generate" —— bun 默认屏蔽依赖的 postinstall（@prisma/client 的自动 generate 从不执行），但根包 lifecycle 脚本会跑；此后每次 bun install 自动重生成 client
+- 修复②（可读性）：prismaErrReason 优先按语义锚点（Unknown argument/field/input、Argument `、did not match、missing）提取原因行 + 紧随的 Available 行；退化路径改为取最后一段（旧版取 slice(1) 会命中代码帧）；离线复刻用户场景验证：现在输出 "Unknown argument `mode`. Available options…" 而非 "2761 }; 2762…"；P2021 场景回归通过
+- 修复③：raw SQL 兜底提示改为可执行指引（bun install 触发 postinstall / bun run db:generate + 重启）
+- 提交 7d1286e 推送 GitHub（a0e2b8f..7d1286e）
+
+Stage Summary:
+- 用户侧恢复步骤：git pull → bun install（自动 generate）→ 重启 dev server；若 webpack 持久缓存仍用旧 client 则 rm -rf .next 再重启
+- 数据无丢失：所有历史 DSH 报告均已通过 raw SQL 兜底写入 SkillEvaluationReport 表
+- postinstall 仅根包生效；依赖 postinstall 依旧被 bun 屏蔽（安全机制，不改动）
