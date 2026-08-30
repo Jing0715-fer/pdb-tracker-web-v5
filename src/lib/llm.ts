@@ -1412,6 +1412,29 @@ export function resolveLlmConfig(overrides?: LlmConfig): LlmConfig & { resolvedP
 
 // ─── High-level text-in / text-out ────────────────────────────────────────────
 
+/**
+ * R183: Strip reasoning-model thinking blocks from completion text.
+ *
+ * Reasoning models (MiniMax-M3, DeepSeek-R1, …) called through the
+ * non-streaming OpenAI-compat path often inline their chain-of-thought as
+ * `<think>…</think>` inside `content`. Downstream consumers (JSON parsing in
+ * the DSH pipeline, markdown report chapters, the maxChars budget in
+ * generateText) only want the final answer — a long think block otherwise
+ * eats the entire maxChars budget and truncates the real payload.
+ *
+ * Handles multiple closed blocks and an unclosed `<think>` tail (output
+ * truncated before `</think>`). Text without think tags passes through
+ * unchanged (trim only).
+ */
+export function stripReasoning(text: string): string {
+  if (!text || typeof text !== 'string') return text ?? '';
+  let s = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  // Unclosed think block: everything after the opening tag is reasoning.
+  const open = s.search(/<think[\s>]/i);
+  if (open >= 0) s = s.slice(0, open);
+  return s.trim();
+}
+
 export async function generateText(
   systemPrompt: string,
   userPrompt: string,
@@ -1424,7 +1447,9 @@ export async function generateText(
   // disconnect) so the underlying CLI child / SDK call is aborted.
   const r = await callAnyLlm(userPrompt, { ...cfg, system: cfg.system || systemPrompt, signal: opts.signal });
   if (r.ok) {
-    const content = (r.content || '').slice(0, maxChars);
+    // R183: strip inline reasoning BEFORE the maxChars budget so the think
+    // block of reasoning models can't consume the whole output window.
+    const content = stripReasoning(r.content || '').slice(0, maxChars);
     return {
       ok: true,
       content,
@@ -2115,6 +2140,13 @@ export async function llmComplete(prompt: string, cfg?: LlmConfig): Promise<LlmR
   const t0 = Date.now();
   const resolved = resolveLlmConfig(cfg);
   const r = await callAnyLlm(prompt, { ...resolved, system: resolved.system || '' });
+  // R183: strip inline reasoning blocks for the legacy callers too
+  // (pdb-weekly / literature-daily / target-eval) so think text never leaks
+  // into digests or reports.
+  if (r.ok && r.content) {
+    const clean = stripReasoning(r.content);
+    return { ...r, content: clean, text: clean, durationMs: r.durationMs || (Date.now() - t0) };
+  }
   return { ...r, durationMs: r.durationMs || (Date.now() - t0) };
 }
 

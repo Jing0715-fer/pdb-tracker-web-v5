@@ -4886,3 +4886,30 @@ Stage Summary:
 - Tour：两套 tour 视觉统一 + spotlight spring 滑移动画 + 呼吸光环 + 响应式宽度 + token 化；analysis-tour 暗色模式补齐。
 - 验证：eslint 30 文件 0 新增（仅 ToolStatsPopover 1 个 HEAD 既有）；tsc 120 errors 与基线逐条一致=零新增；agent-browser E2E——首页渲染/工具栏/0 错误、Tour 第 1 步卡片与第 2 步 spotlight 像素级对齐（ring (237,4) 323×46 与遮罩挖洞重合、#C96442 边框）、Run Center 结构/DSH 切换/LLM popover 7 行 CLI agent 全部 Lucide 图标（Feather/Sparkles/Terminal/Bird/Sparkle/Panda/Wrench）/周报 tab 周选择器+accent 周期按钮/文献 tab 无错误、analysis tour 卡片+挖洞+脉冲光环全部通过；VLM 截图交叉验证 8 轮均无 emoji 无布局破损。
 - 期间 dev server 一次 OOM-kill（编辑触发的多路由重编译+chromium 叠加所致，R181 修复的同场景复发边界）——清理浏览器进程后重启即恢复，验证全程稳定。
+
+---
+Task ID: R183
+Agent: main-agent (Z.ai Code)
+Task: 修复用户现场 DSH 运行日志暴露的三个问题（P00533 / MiniMax-M3 实跑）：① SkillEvaluationReport 落库 "Invalid invocation"；② relevance/outline 两个 JSON 解析失败（降级运行）；③ 默认大纲「5 章」文案与实际 4 章不符
+
+Work Log:
+- 现场日志解读：4/4 章均恰好 ~4000 chars（maxChars 截断痕迹）+ relevance/outline 双双 JSON 解析失败 + Evaluation/PDB 写入成功但 SkillEvaluationReport create 报 Invalid invocation（错误消息被 slice(0,120) 截断在 Windows 路径处，真因不可见）。
+- 根因分析（读码定位）：
+  1. JSON 失败：MiniMax-M3 为推理模型，非流式 OpenAI-compat 调用会把 <think> 推理文本内联进 content；全 src/ 无任何 think 剥离逻辑；generateText 在 maxChars 处硬截断 → 2500/1200 预算被推理文本耗尽，JSON 永不完整。
+  2. Invalid invocation：run-dsh 路由启动时已跑 applySchemaCompat（表/列应在），最可能是 stale Prisma client——client delegate 生成于 R179 之前则不认识 mode/outline/figures 三参数，客户端校验直接抛 Unknown argument（写库前失败，compat 救不了）；经典管线 SkillRunRecord 曾因同款问题改 raw SQL（route.ts 内有完整注释先例）。次要可能：P2021/P2022（缺表/缺列）。
+- 修复 ①（llm.ts，think 剥离）：新增导出 stripReasoning()（剥多个闭合 <think>…</think> + 未闭合 think 尾部 + 大小写不敏感）；应用在 generateText（maxChars 截断**之前**——推理块不再吃输出预算）与 llmComplete（weekly/literature-daily/target-eval 旧接口同步受益）两个公共入口，覆盖全部 provider 路径。
+- 修复 ②（agent.ts extractJson 强化）：入口先 stripReasoning（第二道防线）→ 快路径整串 JSON.parse → 围栏任意位置提取（```json … ``` 可多段、围栏内容优先）→ 平衡块扫描改为「首个块解析失败继续找下一个块」→ parseJsonLoose 尾逗号容忍（,\s*[}\]] 去除重试）。JSON 阶段 maxChars 提升：relevance 2500→4000、outline 1200→2400、章节 4000→6000（主尝试+救援双处）。
+- 修复 ③（默认大纲）：outline JSON 失败时由 repairOutline(null)（仅 4 个强制位、与 totalMin=5 自相矛盾、文案误写「默认 5 章」）改为数据驱动默认大纲——repairOutline({sections:[pdb_analysis?/literature?/homology?]}) 按实际数据源补中间章节；文案改为动态 `${outline.length} 章`。
+- 修复 ④（agent.ts 三级落库 persistDshReportRecord）：① Prisma create（健康环境零开销）→ ② applySchemaCompat 自愈（缺表 CREATE/缺列 ALTER，治 P2021/P2022）后重试 → ③ raw SQL INSERT 全列参数化（绕过 stale client delegate，经典管线 SkillRunRecord 同款模式与理由）；prismaErrReason() 提取 Prisma 错误首个空行后的真因 + 错误码前缀（[P2021] 等），替代所有 slice(0,120) 截断式错误消息（SkillEvaluationReport 与 Evaluation 回写两处）；SSE 逐级 warn 可见。
+- 验证：
+  1. 单元（bun 直跑真实模块导入）：stripReasoning 6 例（闭合/多段/未闭合/大小写/纯文本/null 安全）+ extractJson 11 例（纯 JSON/think+JSON/仅 think/带前导围栏/锚定围栏/尾逗号/前导裸 JSON/坏块跳次块/截断/字符串内大括号/大纲真实形态）全过（17/17，含 1 例断言本身写错修正后复验）。
+  2. scratch DB 三级写入验证 9/9：场景 A（pre-R179 旧表缺 mode/outline/figures）compat 自愈补列后 raw INSERT 成功落行；场景 B（无表）compat 建表后 INSERT 成功；场景 C prismaErrReason 对用户现场形态错误（Invalid invocation + Windows 路径 + Unknown argument）正确提取真因、P2021 带码、普通错误透传。
+  3. 完整 DSH E2E（curl SSE，P00533 + 用户同款科学问题，maxPdb=10/maxLit=10）：relevance 成功（5 发现/3 洞察，含具体 PDB 9Z9E/9Z9F/9Z2H 与 PMID）→ 9 章问题驱动大纲（interactions 首位中段章，focus 引用具体抗体复合物）→ 配图 5 张验证（RCSB 3 + web 2，VLM 校验理由完整）→ 9/9 章全部成功（内容引用真实 PDB/PMID/分辨率，无 think 块、无失败占位符）→ tier-1 Prisma create 落库（mode=dsh/outline 902B/figures 1372B/report 6370B）→ /api/eval-report-file/P00533 历史读取返回 mode=dsh + outline 9 节 + figures 5 张。对照用户现场：4 项降级（relevance/outline/web 配图/默认 4 章大纲）全部恢复。
+  4. lint：llm.ts + agent.ts eslint 0 error 0 warning（全项目 eslint . 因内存被 SIGKILL，系已知体量问题，改跑改动文件）；tsc 全项目 120 errors 与 R182 基线完全一致 = 零新增。
+  5. 浏览器（agent-browser）：首页加载 0 error / 0 console error；Run Center 打开 + Classic/DSH 切换正常；DSH 历史第一条即本次运行（9/9 章 · LLM ✓ · 1m38s），展开完整回放 SSE 50 行日志（relevance JSON/大纲 JSON/配图事件/逐章内容均正常渲染）。
+- 测试产物已清理（.r183-test/、scratch DB）；dev.log 无新增错误。
+
+Stage Summary:
+- 用户现场三个问题根治：① Invalid invocation → 三级落库（Prisma → compat 自愈 → raw SQL），stale client/缺表/缺列三类根因全覆盖，错误消息不再截断真因；② 推理模型 JSON 失败 → generateText/llmComplete 出口剥 think + extractJson 四重强化 + maxChars 提升；③ 默认大纲改为数据驱动（pdb_analysis/literature/homology 按数据源补入），文案计数纠正。
+- 2 文件改动（llm.ts +42 行 / agent.ts +137 行 -30 行）；全链路实证：17 单元 + 9 scratch DB + 完整 E2E 9/9 章落库 + 历史读取 + 浏览器 0 错误；tsc/lint 零新增。
+- 用户本地（Windows）若仍见 raw SQL 兜底 warn，提示重跑 prisma generate 即可根治（SSE 消息已自带该提示）。

@@ -14,10 +14,11 @@
 
 import type { SseEvent } from '@/lib/sse';
 import type { LlmConfig } from '@/lib/llm';
-import { generateText } from '@/lib/llm';
+import { generateText, stripReasoning } from '@/lib/llm';
 import { buildDetailedPdbTable, buildDetailedBlastTable } from '@/lib/report-template';
 import { sanitizeReport } from '@/lib/markdown-renderer';
-import { db } from '@/lib/db';
+import { db, getActiveDbFsPath } from '@/lib/db';
+import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, type CollectOpts, type CollectResult, type LiteratureRow } from './collect';
 import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint } from './section-library';
 import { collectRcsbFigures, searchWebFigures, type ReportFigure } from './figures';
@@ -77,39 +78,64 @@ export interface DshRunResult {
 // ─── 鲁棒 JSON 提取 ─────────────────────────────────────────────────────────
 
 /**
- * R179 (Task 2-a): 从 LLM 文本鲁棒提取 JSON —— 剥 ```json 围栏、找首个
- * 平衡 {} 块、try/catch。返回 null 表示无法解析。
+ * R179 (Task 2-a): 从 LLM 文本鲁棒提取 JSON；R183 强化——
+ *   - 先剥推理模型内联的 <think>…</think>（MiniMax-M3 / R1 风格；
+ *     generateText 已在 maxChars 截断前剥过，这里是第二道防线）
+ *   - 快路径：整串直接 JSON.parse
+ *   - 代码围栏任意位置提取（```json … ```），围栏内容优先于原文
+ *   - 平衡块扫描：首个块解析失败时继续找下一个块（模型输出多段 JSON 时）
+ *   - 尾逗号容忍（LLM 高频错误：`[1,2,]` / `{"a":1,}`）
+ * 返回 null 表示无法解析。
  */
 export function extractJson(text: string): any | null {
   if (!text) return null;
-  let s = String(text).trim();
-  // 剥代码围栏：```json ... ``` / ``` ... ```
-  const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  if (fence) s = fence[1].trim();
-  const start = s.indexOf('{');
-  if (start < 0) return null;
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i];
-    if (inStr) {
-      if (esc) { esc = false; continue; }
-      if (ch === '\\') { esc = true; continue; }
-      if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') { inStr = true; continue; }
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        const slice = s.slice(start, i + 1);
-        try { return JSON.parse(slice); } catch { return null; }
-      }
-    }
+  const s = stripReasoning(String(text));
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  // 代码围栏：任意位置、可多段（```json … ``` / ``` … ```），围栏内容优先。
+  const fenced = Array.from(s.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi), (m) => m[1]);
+  for (const cand of [...fenced, s]) {
+    const parsed = parseFirstBalancedJson(cand);
+    if (parsed !== null) return parsed;
   }
   return null;
+}
+
+/** 扫描 s 中每个顶层平衡 {} 块并逐个尝试解析；全部失败返回 null。 */
+function parseFirstBalancedJson(s: string): any | null {
+  let start = s.indexOf('{');
+  while (start >= 0) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let end = -1;
+    for (let i = start; i < s.length; i++) {
+      const ch = s[i];
+      if (inStr) {
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { esc = true; continue; }
+        if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    if (end < 0) return null; // 未闭合（输出被截断）——后续不可能再有完整块
+    const parsed = parseJsonLoose(s.slice(start, end + 1));
+    if (parsed !== null) return parsed;
+    start = s.indexOf('{', end + 1); // 首个块非法 → 继续找下一个平衡块
+  }
+  return null;
+}
+
+/** JSON.parse + 尾逗号容忍（两轮均失败返回 null）。 */
+function parseJsonLoose(s: string): any | null {
+  try { return JSON.parse(s); } catch { /* fall through */ }
+  try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1')); } catch { return null; }
 }
 
 /** generateText + extractJson + 一次「只输出 JSON」修复重试。 */
@@ -307,6 +333,114 @@ function clippedFocus(list: DshOutlineEntry[]): DshOutlineEntry[] {
   return list.map(e => ({ ...e, focus: e.focus.slice(0, 300) }));
 }
 
+// ─── R183: SkillEvaluationReport 三级写入 ──────────────────────────────────
+
+/**
+ * R183: 提取 Prisma 错误中真正的原因。
+ *
+ * Prisma 的调用错误形如
+ *   "Invalid `db.x.create()` invocation in <文件路径:行:列>\n\n<真正原因>"
+ * 旧代码 slice(0,120) 恰好把原因截断在文件路径处（Windows 绝对路径
+ * 很长），SSE 日志里只剩无用的 invocation 头。这里取首个空行之后的部分
+ * （即原因正文），并附加 Prisma 错误码（P2021 缺表 / P2022 缺列等）。
+ */
+function prismaErrReason(err: unknown): string {
+  const e = err as { message?: unknown; code?: unknown } | null;
+  if (!e) return 'unknown';
+  const msg = String(e.message ?? '');
+  const parts = msg.split(/\n\s*\n/);
+  const body = parts.length > 1 ? parts.slice(1).join('\n\n').trim() : msg;
+  const code = typeof e.code === 'string' && e.code ? `[${e.code}] ` : '';
+  const out = `${code}${body || msg || 'unknown'}`.replace(/\s+/g, ' ').trim();
+  return out.slice(0, 240) || 'unknown';
+}
+
+/**
+ * R183: DSH 报告记录三级写入。
+ *
+ * 用户现场报告 `Invalid db.skillEvaluationReport.create() invocation`
+ * （MiniMax-M3 完整跑完 4 章后落库失败）。两类根因：
+ *   A. stale Prisma client —— client delegate 由 schema 生成，若运行中的
+ *      client 生成于 R179 之前，则不认识 mode/outline/figures 三个新参数，
+ *      客户端校验直接抛 Unknown argument（写库前就失败，schema-compat
+ *      救不了）；
+ *   B. 库表缺列/缺表（P2021/P2022）—— 运行前 compat 未跑到或失败。
+ *
+ * 三级策略：
+ *   ① Prisma create（常规路径，client 与库都健康时零开销）
+ *   ② applySchemaCompat 自愈（缺表 CREATE / 缺列 ALTER）后重试一次
+ *      （治 B；run-dsh 路由启动时已跑过一次，这里兜重复/失败的场景）
+ *   ③ raw SQL INSERT —— 完全绕过 client delegate（治 A；与经典管线
+ *      SkillRunRecord 的 raw SQL 写入同一模式与理由，见
+ *      api/evaluations/run/route.ts 的注释）
+ */
+async function persistDshReportRecord(
+  row: {
+    uniprotId: string;
+    proteinName: string;
+    overallScore: number;
+    directPdbCount: number;
+    coverage: number;
+    report: string;
+    llmOk: boolean;
+    llmProvider: string;
+    llmModel: string;
+    llmDurationMs: number;
+    outlineJson: string;
+    figuresJson: string;
+  },
+  warn: (msg: string) => void,
+): Promise<boolean> {
+  const data = {
+    uniprotId: row.uniprotId,
+    proteinName: row.proteinName,
+    overallScore: row.overallScore,
+    directPdbCount: row.directPdbCount,
+    coverage: row.coverage,
+    report: row.report,
+    llmOk: row.llmOk,
+    llmProvider: row.llmProvider,
+    llmModel: row.llmModel,
+    llmDurationMs: row.llmDurationMs,
+    mode: 'dsh' as const,
+    outline: row.outlineJson,
+    figures: row.figuresJson,
+  };
+  // ① 常规路径。
+  try {
+    await db.skillEvaluationReport.create({ data });
+    return true;
+  } catch (err: any) {
+    warn(`SkillEvaluationReport Prisma 写入失败：${prismaErrReason(err)}`);
+  }
+  // ② schema-compat 自愈（缺表 CREATE / 缺列 ALTER）后重试一次。
+  try {
+    const compat = await applySchemaCompat(getActiveDbFsPath());
+    if (!compat.ok) warn(`schema-compat 自愈未完成：${compat.error ?? 'unknown'}`);
+  } catch (err: any) {
+    warn(`schema-compat 自愈异常：${err?.message?.slice(0, 120) ?? 'unknown'}`);
+  }
+  try {
+    await db.skillEvaluationReport.create({ data });
+    warn('schema-compat 自愈后重试写入成功');
+    return true;
+  } catch {
+    // 与 ① 同因（stale client 的客户端校验错误在重试中必然复现）——
+    // 直接转 ③ raw SQL 兜底。
+  }
+  // ③ raw SQL：绕过 stale client delegate（经典管线 SkillRunRecord 同款）。
+  try {
+    const id = `dsh_${row.uniprotId}_${Date.now()}`;
+    await db.$executeRaw`INSERT INTO SkillEvaluationReport (id, uniprotId, proteinName, overallScore, directPdbCount, coverage, report, llmOk, llmProvider, llmModel, llmDurationMs, mode, outline, figures, createdAt) VALUES (${id}, ${row.uniprotId}, ${row.proteinName}, ${row.overallScore}, ${row.directPdbCount}, ${row.coverage}, ${row.report}, ${row.llmOk ? 1 : 0}, ${row.llmProvider || null}, ${row.llmModel || null}, ${row.llmDurationMs}, ${'dsh'}, ${row.outlineJson}, ${row.figuresJson}, CURRENT_TIMESTAMP)`;
+    warn('已通过 raw SQL 兜底写入 SkillEvaluationReport（当前 Prisma client 可能是旧版生成物，建议重跑 prisma generate）');
+    return true;
+  } catch (err: any) {
+    warn(`SkillEvaluationReport raw SQL 兜底失败：${prismaErrReason(err)}`);
+    return false;
+  }
+}
+
+
 // ─── 主流程 ─────────────────────────────────────────────────────────────────
 
 export async function runDshEvaluation(params: {
@@ -370,7 +504,9 @@ export async function runDshEvaluation(params: {
 - findings 逐源给出（uniprot/rcsb/blast/literature/scores 各 1-2 条）
 - figureQueries 0-2 条，只在该章节放一张原理图/通路图确有帮助时给出；query 用英文（图片召回更好）；sectionId 必须是：${SECTION_LIBRARY.filter(s => !s.fixed && s.id !== 'question_focus').map(s => s.id).join(' / ')}`;
 
-  const relevanceRun = await generateJson(relevanceSystem, relevanceUser, { maxChars: 2500, llm: llmCfg, signal });
+  // R183: maxChars 2500→4000 —— 推理模型 think 块已在 generateText 剥离，
+  // 但 findings 等字段本身也可能超过 2500（12 条发现 × ~150 字）。
+  const relevanceRun = await generateJson(relevanceSystem, relevanceUser, { maxChars: 4000, llm: llmCfg, signal });
   llmTotalMs += relevanceRun.durationMs;
   if (relevanceRun.provider) llmProvider = relevanceRun.provider;
   if (relevanceRun.model) llmModel = relevanceRun.model;
@@ -437,7 +573,7 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
 
 请规划报告大纲（记住 question_focus 固定第 2 位，只需你决定中间章节的选择与顺序）。`;
 
-  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 1200, llm: llmCfg, signal });
+  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 2400, llm: llmCfg, signal });
   llmTotalMs += outlineRun.durationMs;
   if (outlineRun.provider) llmProvider = outlineRun.provider;
   if (outlineRun.model) llmModel = outlineRun.model;
@@ -452,12 +588,21 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
       dshOutline: { sections: outline, total: outline.length },
     });
   } else {
-    // JSON 完全失败 → 默认最小大纲（5 章）。
-    outline = repairOutline(null);
+    // JSON 完全失败 → 数据驱动默认大纲（R183：按实际可用的数据源补中间
+    // 章节，满足 totalMin=5 的降级保底；repairOutline 负责 4 个强制位）。
+    // 旧版 repairOutline(null) 只有 4 个强制位章节，与「总章节数 5-9」
+    // 的规则自相矛盾，且日志文案误写「默认 5 章」。
+    outline = repairOutline({
+      sections: [
+        ...(c.pdbRows.length > 0 ? [{ id: 'pdb_analysis' }] : []),
+        ...(c.literature.length > 0 ? [{ id: 'literature' }] : []),
+        ...(c.blastRows.length > 0 ? [{ id: 'homology' }] : []),
+      ],
+    });
     emit({
       stage: 'outline',
       level: 'warn',
-      message: `⚠ 大纲 JSON 解析失败，使用默认 5 章大纲（${outline.map(o => o.title).join(' → ')}）`,
+      message: `⚠ 大纲 JSON 解析失败，使用数据驱动默认大纲（${outline.length} 章：${outline.map(o => o.title).join(' → ')}）`,
       progress: 64,
       dshOutline: { sections: outline, total: outline.length },
     });
@@ -571,7 +716,7 @@ ${figuresNote}
       const prompt = attempt === 0
         ? userPrompt
         : `${userPrompt}\n\n【重试】上次输出未通过校验（${lastErr || '格式不符'}）。请严格输出：第一行为 \`## ${tmpl.titleZh}\`，正文 ≥150 字符，不得包含失败占位符。`;
-      const r = await generateText(chapterSystem, prompt, { maxChars: 4000, llm: llmCfg, signal });
+      const r = await generateText(chapterSystem, prompt, { maxChars: 6000, llm: llmCfg, signal });
       llmTotalMs += r.durationMs;
       if (r.provider) llmProvider = r.provider;
       if (r.model) llmModel = r.model;
@@ -599,7 +744,7 @@ ${figuresNote}
 可用数据要点：直接 PDB ${c.directPdbCount} 条、BLAST ${c.blastHitCount} 条、文献 ${c.literature.length} 篇、Overall 评分 ${c.scores.overall.score}/10。
 
 第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 250-500 字。只输出本章内容。`;
-        const r = await generateText(chapterSystem, rescuePrompt, { maxChars: 4000, llm: llmCfg, signal });
+        const r = await generateText(chapterSystem, rescuePrompt, { maxChars: 6000, llm: llmCfg, signal });
         llmTotalMs += r.durationMs;
         if (r.provider) llmProvider = r.provider;
         if (r.model) llmModel = r.model;
@@ -660,30 +805,31 @@ ${figuresNote}
   const finalReport = sanitizeReport(rawReport);
   const reportOk = chaptersOk > 0;
 
-  // 持久化 1/2：SkillEvaluationReport（Prisma create —— mode/outline/figures
-  // 为 R179 新增列，schema-compat 已确保存在）。
+  // 持久化 1/2：SkillEvaluationReport。R183 三级写入（Prisma → compat
+  // 自愈重试 → raw SQL 兜底）——治 stale client 的 Unknown argument 与
+  // 缺表/缺列两类 Invalid invocation（见 persistDshReportRecord 注释）。
   let dbSaved = false;
-  try {
-    await db.skillEvaluationReport.create({
-      data: {
-        uniprotId: uniprot,
-        proteinName: c.uniprotInfo.proteinName,
-        overallScore: c.scores.overall.score,
-        directPdbCount: c.directPdbCount,
-        coverage: c.coverage,
-        report: finalReport,
-        llmOk: reportOk,
-        llmProvider,
-        llmModel,
-        llmDurationMs: llmTotalMs,
-        mode: 'dsh',
-        outline: JSON.stringify(outline),
-        figures: JSON.stringify(verifiedFigures),
-      },
-    });
+  const persistOk = await persistDshReportRecord(
+    {
+      uniprotId: uniprot,
+      proteinName: c.uniprotInfo.proteinName,
+      overallScore: c.scores.overall.score,
+      directPdbCount: c.directPdbCount,
+      coverage: c.coverage,
+      report: finalReport,
+      llmOk: reportOk,
+      llmProvider,
+      llmModel,
+      llmDurationMs: llmTotalMs,
+      outlineJson: JSON.stringify(outline),
+      figuresJson: JSON.stringify(verifiedFigures),
+    },
+    (msg) => emit({ stage: 'write-db', level: 'warn', message: msg, progress: 97 }),
+  );
+  if (persistOk) {
     dbSaved = true;
-  } catch (err: any) {
-    emit({ stage: 'write-db', level: 'warn', message: `SkillEvaluationReport 写入失败：${err?.message?.slice(0, 120) ?? 'unknown'}`, progress: 97 });
+  } else {
+    emit({ stage: 'write-db', level: 'warn', message: 'SkillEvaluationReport 三级写入均失败（报告内容仍随 done 帧交付并回写 Evaluation）', progress: 97 });
   }
 
   // 持久化 2/2：Evaluation.report + provenance-lite（raw SQL，schema-drift 免疫）。
@@ -705,7 +851,7 @@ ${figuresNote}
     await db.$executeRaw`UPDATE Evaluation SET report = ${reportOk ? finalReport : null}, provenance = ${provenanceLite}, updatedAt = CURRENT_TIMESTAMP WHERE uniprotId = ${uniprot}`;
     dbSaved = true;
   } catch (err: any) {
-    emit({ stage: 'write-db', level: 'warn', message: `Evaluation 报告回写失败：${err?.message?.slice(0, 120) ?? 'unknown'}`, progress: 97 });
+    emit({ stage: 'write-db', level: 'warn', message: `Evaluation 报告回写失败：${prismaErrReason(err)}`, progress: 97 });
   }
 
   emit({
