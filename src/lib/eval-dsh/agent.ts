@@ -384,16 +384,38 @@ function clippedFocus(list: DshOutlineEntry[]): DshOutlineEntry[] {
  * Prisma 的调用错误形如
  *   "Invalid `db.x.create()` invocation in <文件路径:行:列>\n\n<真正原因>"
  * 旧代码 slice(0,120) 恰好把原因截断在文件路径处（Windows 绝对路径
- * 很长），SSE 日志里只剩无用的 invocation 头。这里取首个空行之后的部分
- * （即原因正文），并附加 Prisma 错误码（P2021 缺表 / P2022 缺列等）。
+ * 很长），SSE 日志里只剩无用的 invocation 头。Prisma 6 校验错误还会在
+ * invocation 头后嵌入代码帧（行号 + webpack 模块名），真正原因在末段。
+ * 这里优先提取原因行（Unknown argument 等），并附加 Prisma 错误码
+ * （P2021 缺表 / P2022 缺列等）。
  */
 function prismaErrReason(err: unknown): string {
   const e = err as { message?: unknown; code?: unknown } | null;
   if (!e) return 'unknown';
   const msg = String(e.message ?? '');
-  const parts = msg.split(/\n\s*\n/);
-  const body = parts.length > 1 ? parts.slice(1).join('\n\n').trim() : msg;
   const code = typeof e.code === 'string' && e.code ? `[${e.code}] ` : '';
+  // R188: Prisma 6 校验错误在 invocation 头之后先嵌【代码帧】（行号 +
+  // WEBPACK_IMPORTED_MODULE 名），真正的 "Unknown argument …" 原因在末段。
+  // 旧逻辑取首个空行后的正文再 slice(0,240)，恰好截在代码帧上——SSE 日志
+  // 只剩 "2761 }; 2762 …" 这类行号噪音。这里优先提取原因行（Unknown
+  // argument/field、missing、did not match 等语义锚点），退化为取最后一段。
+  const lines = msg.split('\n').map(l => l.trim()).filter(Boolean);
+  const reasonIdx = lines.findIndex(l =>
+    /Unknown (argument|field|input)/i.test(l)
+    || /^Argument [`']/.test(l)
+    || /did not match/i.test(l)
+    || /^missing/i.test(l)
+    || /is missing/i.test(l)
+  );
+  let body: string;
+  if (reasonIdx >= 0) {
+    // 原因行 + 紧随的 "Available …" 行（合起来才是完整可读的原因）。
+    const next = lines[reasonIdx + 1] || '';
+    body = /^Available/i.test(next) ? `${lines[reasonIdx]} ${next}` : lines[reasonIdx];
+  } else {
+    const parts = msg.split(/\n\s*\n/);
+    body = parts.length > 1 ? parts[parts.length - 1].trim() : msg;
+  }
   const out = `${code}${body || msg || 'unknown'}`.replace(/\s+/g, ' ').trim();
   return out.slice(0, 240) || 'unknown';
 }
@@ -475,7 +497,7 @@ async function persistDshReportRecord(
   try {
     const id = `dsh_${row.uniprotId}_${Date.now()}`;
     await db.$executeRaw`INSERT INTO SkillEvaluationReport (id, uniprotId, proteinName, overallScore, directPdbCount, coverage, report, llmOk, llmProvider, llmModel, llmDurationMs, mode, outline, figures, createdAt) VALUES (${id}, ${row.uniprotId}, ${row.proteinName}, ${row.overallScore}, ${row.directPdbCount}, ${row.coverage}, ${row.report}, ${row.llmOk ? 1 : 0}, ${row.llmProvider || null}, ${row.llmModel || null}, ${row.llmDurationMs}, ${'dsh'}, ${row.outlineJson}, ${row.figuresJson}, CURRENT_TIMESTAMP)`;
-    warn('已通过 raw SQL 兜底写入 SkillEvaluationReport（当前 Prisma client 可能是旧版生成物，建议重跑 prisma generate）');
+    warn('已通过 raw SQL 兜底写入 SkillEvaluationReport（数据无损）。常规路径失败多为本地 Prisma client 旧版生成物：执行 `bun install`（触发 postinstall 自动 generate）或 `bun run db:generate` 后重启 dev server 即可恢复');
     return true;
   } catch (err: any) {
     warn(`SkillEvaluationReport raw SQL 兜底失败：${prismaErrReason(err)}`);
