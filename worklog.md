@@ -5030,3 +5030,20 @@ Stage Summary:
 - 空问题=classic 口径基础评估（跳过 relevance/深挖/审稿，确定性大纲，节省 LLM 调用）；有问题=深挖 6 章+重点数据点名充分讨论+每章审稿重写
 - 预期成本：有问题模式 LLM 调用数增加（每深挖章 +1 审查，不合格再 +1 重写），MiniMax-M3 下总时长约 9→14 分钟属正常
 - 配图逻辑未动（R187 的必达正文/附录去重保持）；maxPdb 500（R187）保持
+
+---
+Task ID: R190
+Agent: main (Z.ai Code)
+Task: 解释用户现场 21:36 SkillEvaluationReport Prisma 写入失败再现 + 把该场景的日志从「吓人的 warn」升级为「平静的预检测提示」
+
+Work Log:
+- 诊断：仍是 R188 已根治的同一根因——用户本地（Windows）node_modules/.prisma/client 为 R179 前旧版生成物，create 在客户端校验阶段即抛 Unknown argument `mode`（与数据库无关，schema-compat 自愈无效）；raw SQL 兜底写入成功，数据全程无损。错误文本已是 R188 的可读版本（含 Unknown argument 原因行），说明用户已 pull 新代码但未重新生成 client
+- 实证 bun postinstall 行为（/tmp 隔离包测试）：① 依赖全量安装时根包 postinstall 执行；② 依赖零变化重装（git pull 后的场景）postinstall 依然执行；③ 本项目内 `bun install`（no changes）后 node_modules/.prisma/client/index.js mtime 更新 = prisma generate 确实被触发。结论：postinstall 机制可靠，用户侧大概率只做了 git pull + 重启 dev server，未跑 bun install
+- 改进（agent.ts）：新增 prismaClientKnows/modelssKnowFields（纯逻辑抽出便于单测）——写库前查运行时 client 内嵌 DMMF，SkillEvaluationReport 缺 mode/outline/figures 即判 stale；stale 时跳过注定失败的 ① Prisma create 与 ② schema-compat 重试，先平静 info 提示（非代码错误/数据无损/一次性修复指引：bun install 或 bun run db:generate → 删 .next → 重启）再走 ③ raw SQL；stale 分支仍尽力跑一次 applySchemaCompat（防启动时 compat 失败+旧 client 双重叠加导致 ③ 无列可写）；③ 成功消息区分 stale/兜底两种来路；persistDshReportRecord 回调 warn→notify（支持 level，info/warn）
+- 验证：① 单测 10/10（真实 client 三例 + 模拟 stale DMMF 两例 + 模型缺失/models 缺失 null/无 fields 数组/空字段清单边界五例；Prisma.dmmf 为只读命名空间属性无法 monkey-patch，故抽 modelsKnowFields 纯函数注入假 DMMF）；② tsc eval-dsh 相关 0 错误；③ eslint agent.ts 0 error 0 warning；④ dev server 热编译后 POST run-dsh 空参返回 400 参数校验（模块加载正常，新增 `import { Prisma }` 未破坏 webpack server bundle）；⑤ dev.log 无新增错误
+- 提交 5dc00b8 推送 GitHub（ba0eb68..5dc00b8）
+
+Stage Summary:
+- 用户侧一次性修复步骤（Windows）：git pull → bun install（postinstall 自动 prisma generate；或手动 bun run db:generate）→ 删除 .next → 重启 dev server；修复后「Prisma 写入失败」warn 与 stale info 提示均消失，恢复 tier-1 Prisma 直达
+- 数据安全确认：该错误从头到尾不影响任何报告数据（三级落库兜底 + Evaluation 回写独立 raw SQL）
+- 经典管线不受影响：其 skillEvaluationReport.create 只用 R179 前旧字段（无 mode/outline/figures），stale client 也能通过校验，无需改动
