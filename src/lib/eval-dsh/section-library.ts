@@ -41,6 +41,10 @@ export interface SectionTemplate {
   minWords: number;
   /** 正文最多字数（references 章豁免）。 */
   maxWords: number;
+  /** R189: 该章作为「问题深挖」章节撰写时的字数要求（缺失则用 min/maxWords
+   * 的 1.6x/1.8x 兜底）。加大聚焦问题的回答篇幅 —— 用户诉求：深挖章必须
+   * 充分展开而非点到为止。基础评估模式（无科学问题）仍用 min/maxWords。 */
+  deepWords?: { min: number; max: number };
 }
 
 /**
@@ -63,6 +67,8 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     fixed: 'first',
     minWords: 250,
     maxWords: 500,
+    // R189: 有科学问题时摘要也要加长（开篇直接回答问题的空间）。
+    deepWords: { min: 350, max: 700 },
   },
   {
     id: 'question_focus',
@@ -82,6 +88,8 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     // R179 (Task 2-a): DSH 模式强制章节 —— 永远位于第 2 位（大纲修复器 force-insert）。
     minWords: 300,
     maxWords: 700,
+    // R189: 加大聚焦问题的直接回答篇幅。
+    deepWords: { min: 500, max: 1000 },
   },
   {
     id: 'function',
@@ -111,6 +119,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     figureHint: '信号通路示意图',
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'topology',
@@ -125,6 +134,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['uniprot', 'rcsb'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'domains',
@@ -139,6 +149,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['uniprot', 'rcsb', 'literature'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'pdb_analysis',
@@ -181,6 +192,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['rcsb', 'literature'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'interactions',
@@ -198,6 +210,8 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['rcsb', 'literature'],
     minWords: 400,
     maxWords: 900,
+    // R189: 复合物/互作章是聚焦问题的核心展开位，篇幅进一步加大。
+    deepWords: { min: 700, max: 1600 },
   },
   {
     id: 'variants',
@@ -212,6 +226,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['uniprot', 'literature'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'expression',
@@ -226,6 +241,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['uniprot', 'literature'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'homology',
@@ -240,6 +256,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['blast'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'druggability',
@@ -254,6 +271,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['rcsb', 'scores', 'literature'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 400, max: 800 },
   },
   {
     id: 'experimental',
@@ -268,6 +286,7 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     dataHints: ['rcsb', 'scores', 'blast'],
     minWords: 250,
     maxWords: 500,
+    deepWords: { min: 450, max: 900 },
   },
   {
     id: 'literature',
@@ -327,6 +346,8 @@ export const SECTION_LIBRARY: SectionTemplate[] = [
     fixed: 'last',
     minWords: 250,
     maxWords: 500,
+    // R189: 有问题时结论章须收束问题的最终回答，篇幅加长。
+    deepWords: { min: 400, max: 800 },
   },
 ];
 
@@ -373,16 +394,20 @@ export function baselineSectionIds(data?: Partial<OutlineDataInfo>): string[] {
  * 大纲规则（给大纲规划 LLM 的 system prompt 片段 + 本地修复器的依据）。
  * R179 (Task 2-a): question_focus 在 DSH 模式下为强制章节（位置 2）。
  * R184: 基础评估章节必含（数据驱动）+ 问题深挖章节额外叠加；总上限 14。
+ * R189: ① 科学问题可为空 —— noQuestion 模式下无 question_focus、无深挖
+ * 章节，大纲确定性生成（基础评估口径，与 classic 对齐）；② 有问题时深挖
+ * 章节上限 4→6（加大聚焦问题的回答篇幅），总上限 14→16。
  */
 export interface OutlineRules {
   totalMin: number;
   totalMax: number;
   mandatoryFirst: string;
+  /** 无问题模式为空串（不插入 question_focus）。 */
   mandatorySecond: string;
   mandatoryTail: string[];
   /** 基础评估章节 id（数据驱动，见 baselineSectionIds()）。 */
   baselineIds: string[];
-  /** 问题深挖章节的数量区间（在基础章节之外额外叠加）。 */
+  /** 问题深挖章节的数量区间（在基础章节之外额外叠加；无问题模式为 0/0）。 */
   questionExtraMin: number;
   questionExtraMax: number;
   /** 可选中间章节池（19 - 4 个强制位，含基础章节与问题深挖章节）。 */
@@ -390,26 +415,52 @@ export interface OutlineRules {
   formatStability: string[];
 }
 
-export function outlineRules(data?: Partial<OutlineDataInfo>): OutlineRules {
+export function outlineRules(data?: Partial<OutlineDataInfo>, opts?: { noQuestion?: boolean }): OutlineRules {
   const baselineIds = baselineSectionIds(data);
+  const noQuestion = !!opts?.noQuestion;
+  // 无问题模式：大纲确定性 = 1 summary + 基础章节 + 2 tail（无深挖空间）。
+  const fixedCount = noQuestion ? 3 : 4;
+  const baseTotal = fixedCount + baselineIds.length;
+  if (noQuestion) {
+    return {
+      totalMin: baseTotal,
+      totalMax: baseTotal,
+      mandatoryFirst: 'summary',
+      mandatorySecond: '',
+      mandatoryTail: ['references', 'conclusion'],
+      baselineIds,
+      questionExtraMin: 0,
+      questionExtraMax: 0,
+      optionalIds: SECTION_LIBRARY
+        .filter((s) => !s.fixed)
+        .map((s) => s.id),
+      formatStability: [
+        `总章节数 ${baseTotal}：首章 summary，倒数第 2 章 references，末章 conclusion`,
+        '基础评估模式（未提供科学问题）：只含基础评估章节，不插入问题聚焦章',
+        '同一章节不得重复出现；章节顺序一经确定不再改变',
+        '每章 H2 标题必须精确使用章节库的中文章节名（一字不差）',
+      ],
+    };
+  }
   return {
     totalMin: 5,
-    // R184: 4 个强制位 + 基础章节（最多 6）+ 问题深挖章节（最多 4）= 14。
-    totalMax: 14,
+    // R189: 4 个强制位 + 基础章节（最多 6）+ 问题深挖章节（最多 6）= 16。
+    totalMax: 16,
     mandatoryFirst: 'summary',
     // DSH 模式特有：问题聚焦章强制第 2 位。
     mandatorySecond: 'question_focus',
     mandatoryTail: ['references', 'conclusion'],
     baselineIds,
+    // R189: 4→6 —— 用户要求加大聚焦问题回答占报告的篇幅。
     questionExtraMin: 1,
-    questionExtraMax: 4,
+    questionExtraMax: 6,
     optionalIds: SECTION_LIBRARY
       .filter((s) => !s.fixed && s.id !== 'question_focus')
       .map((s) => s.id),
     formatStability: [
-      '总章节数 5-14：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion',
+      '总章节数 5-16：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion',
       '基础评估章节必须全部包含（有数据支持的那些）——科学问题再聚焦，功能背景/PDB 资源/结构质量/成药性等标准评估内容也不可省略，只是顺带联系问题',
-      '在基础章节之外，按与科学问题的相关性从章节库其余 optional id 中额外选取 1-4 个「问题深挖」章节，重点展开问题本身，排在基础章节之后',
+      '在基础章节之外，按与科学问题的相关性从章节库其余 optional id 中额外选取 1-6 个「问题深挖」章节，重点展开问题本身，排在基础章节之后；问题深挖章节的总字数应占报告正文的 50% 以上',
       '同一章节不得重复出现；章节顺序一经确定不再改变',
       '每章 H2 标题必须精确使用章节库的中文章节名（一字不差）',
       '不得发明章节库之外的章节 id 或标题',

@@ -41,6 +41,11 @@ export interface DshRelevance {
   findings?: Array<{ source: string; relevance: string; note: string }>;
   keyInsights?: string[];
   dataGaps?: string[];
+  /** R189: 重点数据挑选 —— 相关性 agent 从全量数据中点名必须充分讨论的
+   * 重点结构（PDB ID + 一句话理由），逐章注入深挖章节 prompt。 */
+  keyPicks?: Array<{ pdbId: string; why: string }>;
+  /** R189: 重点文献 PMID（与 keyPicks 同理，限真实存在于文献数据）。 */
+  keyLiterature?: string[];
 }
 
 export interface DshChapterResult {
@@ -50,6 +55,10 @@ export interface DshChapterResult {
   content: string;
   attempts?: number;
   error?: string;
+  /** R189: 审查环 —— 本章是否经过审稿 agent 审查。 */
+  reviewed?: boolean;
+  /** R189: 审查后是否触发过重写（最终内容为重写版）。 */
+  rewritten?: boolean;
 }
 
 export interface DshRunResult {
@@ -310,17 +319,19 @@ export function guessQuestionSections(question: string): string[] {
 }
 
 /**
- * R179 (Task 2-a) / R184: 大纲校验 + 自动修复：
+ * R179 (Task 2-a) / R184 / R189: 大纲校验 + 自动修复：
  *   - 丢弃未知 id / 非法条目；去重
- *   - force-prepend summary、force-insert question_focus 于位置 2、
+ *   - force-prepend summary；有问题时 force-insert question_focus 于位置 2；
  *     force-append references + conclusion
  *   - R184: 基础评估章节（数据驱动，见 baselineSectionIds）必含 ——
  *     LLM 漏选时按标准顺序补插（聚焦问题不得挤掉基本评估内容）；
  *     基础章节固定排在前面，LLM 选出的问题深挖章节排在其后
+ *   - R189: opts.noQuestion —— 空科学问题模式不插 question_focus（基础评估
+ *     口径）；extras 仍只来自 LLM raw（无问题时调用方传空 sections）
  *   - clamp 到 totalMax（溢出时从问题深挖章节尾部截断）
  */
-export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>): DshOutlineEntry[] {
-  const rules = outlineRules(data);
+export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>, opts?: { noQuestion?: boolean }): DshOutlineEntry[] {
+  const rules = outlineRules(data, opts);
   const baseline = rules.baselineIds;
   const entries: DshOutlineEntry[] = [];
   const seen = new Set<string>();
@@ -336,8 +347,8 @@ export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>): DshOut
       entries.push({ id, title: tmpl.titleZh, focus: String(s.focus || tmpl.purpose).slice(0, 300) });
     }
   }
-  // 移除强制位章节（下面按规则重新插入到正确位置）。
-  const middles = entries.filter(e => e.id !== rules.mandatoryFirst && e.id !== rules.mandatorySecond && !rules.mandatoryTail.includes(e.id));
+  // 移除强制位章节（下面按规则重新插入到正确位置；无问题模式 mandatorySecond 为空）。
+  const middles = entries.filter(e => e.id !== rules.mandatoryFirst && (!rules.mandatorySecond || e.id !== rules.mandatorySecond) && !rules.mandatoryTail.includes(e.id));
   // R184: 基础评估章节按标准顺序必含（LLM 漏选 → 用模板 purpose 补插，
   // focus 提示撰写器「以标准评估内容为主、顺带联系科学问题」）。
   const baselineMiddles: DshOutlineEntry[] = [];
@@ -354,17 +365,21 @@ export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>): DshOut
   }
   // R184: 问题深挖章节 = LLM 选择中超出基础集合的部分（保持 LLM 给出的顺序）。
   const extras = middles.filter(e => !baseline.includes(e.id));
-  // clamp：4 强制位 + 基础章节 + 深挖章节 ≤ totalMax。
-  const maxExtras = Math.max(0, rules.totalMax - 4 - baselineMiddles.length);
+  // clamp：固定位（3 或 4）+ 基础章节 + 深挖章节 ≤ totalMax，且深挖数 ≤
+  // questionExtraMax（R189：两者独立约束，取 min——曾出现 16-4-5=7 > 上限 6）。
+  const fixedCount = rules.mandatorySecond ? 4 : 3;
+  const maxExtras = Math.max(0, Math.min(rules.questionExtraMax, rules.totalMax - fixedCount - baselineMiddles.length));
   const allMiddles = [...baselineMiddles, ...clippedFocus(extras.slice(0, maxExtras))];
 
   const first = getSection(rules.mandatoryFirst)!;
-  const second = getSection(rules.mandatorySecond)!;
   const result: DshOutlineEntry[] = [
     { id: first.id, title: first.titleZh, focus: first.purpose },
-    { id: second.id, title: second.titleZh, focus: second.purpose },
-    ...allMiddles,
   ];
+  if (rules.mandatorySecond) {
+    const second = getSection(rules.mandatorySecond)!;
+    result.push({ id: second.id, title: second.titleZh, focus: second.purpose });
+  }
+  result.push(...allMiddles);
   for (const tid of rules.mandatoryTail) {
     const t = getSection(tid)!;
     result.push({ id: t.id, title: t.titleZh, focus: t.purpose });
@@ -521,6 +536,9 @@ export async function runDshEvaluation(params: {
   const t0 = Date.now();
   const sessionId = `dsh-${uniprot}-${Date.now()}`;
   const llmCfg: LlmConfig = { ...(params.llm || {}), sessionId };
+  // R189: 科学问题可为空 —— 空问题 = 基础评估口径（无 relevance 阶段、
+  // 无 question_focus 章、无深挖章节、无审查环），与 classic 模式对齐。
+  const hasQuestion = question.trim().length > 0;
 
   let llmProvider = '';
   let llmModel = '';
@@ -533,6 +551,15 @@ export async function runDshEvaluation(params: {
   const c = collected;
 
   // ── Phase B: 相关性分析（58-62%）──────────────────────────────────────
+  // R189: ① 空问题跳过（基础评估模式）；② 有问题时数据样本扩大（PDB
+  // top10→top20、文献 top10→top15）+ 新增 keyPicks / keyLiterature 重点
+  // 数据挑选（后续注入深挖章节 prompt，确保重点数据被充分讨论）。
+  let relevance: DshRelevance | null = null;
+  let figureQueries: Array<{ sectionId: string; query: string }> = [];
+  let relevanceRunParsed = false;
+  if (!hasQuestion) {
+    emit({ stage: 'relevance', level: 'info', message: `未提供科学问题 — 跳过相关性分析，按基础评估口径执行（功能/PDB/质量/成药性等标准章节）`, progress: 58 });
+  } else {
   emit({ stage: 'relevance', level: 'info', message: `Agent 分析全部数据源与科学问题的相关性…`, progress: 58 });
   const compact = [
     `科学问题：${question}`,
@@ -540,20 +567,20 @@ export async function runDshEvaluation(params: {
     `## UniProt 元数据`,
     `${c.uniprotInfo.proteinName}（${c.uniprotInfo.uniprotId} / ${c.uniprotInfo.entryName}）· 基因 ${c.uniprotInfo.geneNames} · ${c.uniprotInfo.organism} · ${c.uniprotInfo.sequenceLength} aa`,
     ``,
-    `## PDB 结构（top 10 / ${c.pdbRows.length} 条直接命中）`,
-    c.pdbRows.slice(0, 10).map(e => `- ${e.pdbId} · ${e.method || '?'} · ${e.resolution != null ? e.resolution.toFixed(1) + 'Å' : '?'} · 配体: ${e.ligands || '无'} · ${(e.title || '').slice(0, 60)}`).join('\n') || '（无）',
+    `## PDB 结构（top 20 / ${c.pdbRows.length} 条直接命中）`,
+    c.pdbRows.slice(0, 20).map(e => `- ${e.pdbId} · ${e.method || '?'} · ${e.resolution != null ? e.resolution.toFixed(1) + 'Å' : '?'} · 配体: ${e.ligands || '无'} · ${(e.title || '').slice(0, 50)}`).join('\n') || '（无）',
     ``,
     `## BLAST 同源（top 10 / ${c.blastRows.length} 条）`,
     c.blastRows.slice(0, 10).map(h => `- ${h.pdbId || h.uniprotRef} · identity ${h.identity?.toFixed(1) ?? '?'}% · e=${h.evalue} · ${(h.description || '').slice(0, 50)}`).join('\n') || '（BLAST 已跳过）',
     ``,
-    `## 文献（top 10 / ${c.literature.length} 篇，IF 降序）`,
-    c.literature.slice(0, 10).map(l => `- PMID ${l.pmid} · ${l.journal}${l.journalIf != null ? ` (IF ${l.journalIf.toFixed(1)})` : ''} · ${l.title}`).join('\n') || '（无）',
+    `## 文献（top 15 / ${c.literature.length} 篇，IF 降序）`,
+    c.literature.slice(0, 15).map(l => `- PMID ${l.pmid} · ${l.journal}${l.journalIf != null ? ` (IF ${l.journalIf.toFixed(1)})` : ''} · ${l.title}`).join('\n') || '（无）',
     ``,
     `## 评分`,
     `X-ray ${c.scores.xray.score}/10 (${c.scores.xray.structures}条) · Cryo-EM ${c.scores.cryoem.score}/10 (${c.scores.cryoem.structures}条) · NMR ${c.scores.nmr.score}/10 (${c.scores.nmr.structures}条) · Overall ${c.scores.overall.score}/10 · 覆盖率 ${c.coverage}%`,
   ].join('\n');
 
-  const relevanceSystem = `你是一位严谨的生物信息数据分析师。请基于给定的真实数据，分析与科学问题相关的证据。只输出 JSON，不要其他文字。`;
+  const relevanceSystem = `你是一位严谨的生物信息数据分析师。请基于给定的真实数据，分析与科学问题相关的证据，并从全量数据中挑选「回答该问题最重要的重点数据」。只输出 JSON，不要其他文字。`;
   const relevanceUser = `${compact}
 
 请输出 JSON（字段如下）：
@@ -562,23 +589,27 @@ export async function runDshEvaluation(params: {
   "findings": [{"source": "uniprot|rcsb|blast|literature|scores", "relevance": "high|medium|low", "note": "具体发现，引用数据中的具体数字/ID"}],
   "keyInsights": ["关键洞察 1", "关键洞察 2"],
   "dataGaps": ["数据缺口 1", "数据缺口 2"],
+  "keyPicks": [{"pdbId": "PDB ID", "why": "该结构对回答科学问题的价值，一句话"}],
+  "keyLiterature": ["PMID1", "PMID2"],
   "figureQueries": [{"sectionId": "章节id", "query": "英文图片搜索查询，如 EGFR signaling pathway diagram"}]
 }
 
 要求：
 - findings 逐源给出（uniprot/rcsb/blast/literature/scores 各 1-2 条）
+- keyPicks 4-12 条：从上方 PDB 表中挑选对回答问题最重要的结构（代表性复合物/最高分辨率/关键配体态/关键方法学），why 必须点明它与问题的具体关系；pdbId 只能来自表中真实存在的 ID，不得编造
+- keyLiterature 0-8 条：与问题最直接相关的 PMID，必须来自上方文献清单
 - figureQueries 0-6 条：每个确有配图价值的章节最多 1 条（原理图/通路图/机制图对该章确有帮助时才给，宁缺毋滥）；query 用英文（图片召回更好）；sectionId 必须是：${SECTION_LIBRARY.filter(s => !s.fixed && s.id !== 'question_focus').map(s => s.id).join(' / ')}`;
 
   // R183: maxChars 2500→4000 —— 推理模型 think 块已在 generateText 剥离，
   // 但 findings 等字段本身也可能超过 2500（12 条发现 × ~150 字）。
-  const relevanceRun = await generateJson(relevanceSystem, relevanceUser, { maxChars: 4000, llm: llmCfg, signal });
+  // R189: 4000→5000 —— 新增 keyPicks/keyLiterature 字段后 JSON 变长。
+  const relevanceRun = await generateJson(relevanceSystem, relevanceUser, { maxChars: 5000, llm: llmCfg, signal });
   llmTotalMs += relevanceRun.durationMs;
   if (relevanceRun.provider) llmProvider = relevanceRun.provider;
   if (relevanceRun.model) llmModel = relevanceRun.model;
 
-  let relevance: DshRelevance | null = null;
-  let figureQueries: Array<{ sectionId: string; query: string }> = [];
   if (relevanceRun.parsed) {
+    relevanceRunParsed = true;
     relevance = {
       questionRestated: String(relevanceRun.parsed.questionRestated || ''),
       findings: Array.isArray(relevanceRun.parsed.findings)
@@ -588,6 +619,20 @@ export async function runDshEvaluation(params: {
         : [],
       keyInsights: Array.isArray(relevanceRun.parsed.keyInsights) ? (relevanceRun.parsed.keyInsights as any[]).map(String).slice(0, 8) : [],
       dataGaps: Array.isArray(relevanceRun.parsed.dataGaps) ? (relevanceRun.parsed.dataGaps as any[]).map(String).slice(0, 8) : [],
+      // R189: 重点数据挑选 —— 注入前过滤到真实存在于收集数据中的条目
+      // （LLM 可能幻觉出不存在的 PDB ID / PMID，宁缺毋滥）。
+      keyPicks: Array.isArray(relevanceRun.parsed.keyPicks)
+        ? (relevanceRun.parsed.keyPicks as any[])
+            .filter(k => k && typeof k === 'object' && k.pdbId)
+            .map(k => ({ pdbId: String(k.pdbId).trim().toUpperCase().slice(0, 4), why: String(k.why || '').slice(0, 200) }))
+            .filter(k => c.pdbRows.some(e => e.pdbId.toUpperCase() === k.pdbId))
+            .slice(0, 12)
+        : [],
+      keyLiterature: Array.isArray(relevanceRun.parsed.keyLiterature)
+        ? (relevanceRun.parsed.keyLiterature as any[]).map(String)
+            .filter(pmid => c.literature.some(l => String(l.pmid) === pmid))
+            .slice(0, 8)
+        : [],
     };
     if (Array.isArray(relevanceRun.parsed.figureQueries)) {
       // R184: 2→8 —— 每个有配图价值的章节各一条（searchWebFigures 内部再
@@ -600,16 +645,16 @@ export async function runDshEvaluation(params: {
     emit({
       stage: 'relevance',
       level: 'success',
-      message: `✓ 相关性分析完成：${(relevance.findings || []).length} 条发现 · ${(relevance.keyInsights || []).length} 个洞察 · ${(relevance.dataGaps || []).length} 个数据缺口`,
+      message: `✓ 相关性分析完成：${(relevance.findings || []).length} 条发现 · ${(relevance.keyInsights || []).length} 个洞察 · 重点结构 ${(relevance.keyPicks || []).length} 个 · 重点文献 ${(relevance.keyLiterature || []).length} 篇 · ${(relevance.dataGaps || []).length} 个数据缺口`,
       progress: 62,
       dshRelevance: relevance,
     });
   } else {
     emit({ stage: 'relevance', level: 'warn', message: `⚠ 相关性分析 JSON 解析失败（用问题本身作为 relevance 上下文继续）`, progress: 62 });
-    relevance = { questionRestated: question, findings: [], keyInsights: [], dataGaps: [] };
+    relevance = { questionRestated: question, findings: [], keyInsights: [], dataGaps: [], keyPicks: [], keyLiterature: [] };
   }
-  // 此处 relevance 一定非空（两个分支都赋值）。
-  const rel: DshRelevance = relevance;
+  } // end hasQuestion（Phase B else 块闭合）
+  const rel: DshRelevance | null = relevance;
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
   // ── Phase C: 大纲规划（62-64%）────────────────────────────────────────
@@ -620,12 +665,26 @@ export async function runDshEvaluation(params: {
     hasBlast: !c.skippedBlast && (c.blastRows?.length ?? 0) > 0,
     hasLiterature: (c.literature?.length ?? 0) > 0,
   };
-  const rules = outlineRules(dataInfo);
+  const rules = outlineRules(dataInfo, { noQuestion: !hasQuestion });
   const baselineListing = rules.baselineIds
     .map(id => getSection(id))
     .filter((s): s is SectionTemplate => !!s)
     .map(s => `- ${s.id} | ${s.titleZh} | ${s.purpose}`)
     .join('\n');
+  let outline: DshOutlineEntry[];
+  if (!hasQuestion) {
+    // R189: 基础评估模式 —— 大纲确定性生成（不调 LLM）：summary + 基础章节
+    // + references + conclusion，与 classic 口径对齐。
+    emit({ stage: 'outline', level: 'info', message: `规划报告大纲（基础评估模式，共 ${rules.totalMin} 章）…`, progress: 62 });
+    outline = repairOutline({ sections: [] }, dataInfo, { noQuestion: true });
+    emit({
+      stage: 'outline',
+      level: 'success',
+      message: `✓ 大纲确定（基础评估模式，未提供科学问题）：${outline.length} 章（${outline.map(o => o.title).join(' → ')}）`,
+      progress: 64,
+      dshOutline: { sections: outline, total: outline.length },
+    });
+  } else {
   emit({ stage: 'outline', level: 'info', message: `规划报告大纲（基础评估章节必含 + 问题深挖章节，共 ${rules.totalMin}-${rules.totalMax} 章）…`, progress: 62 });
   const libraryListing = SECTION_LIBRARY.map(s => `- ${s.id} | ${s.titleZh} | ${s.purpose}`).join('\n');
   const outlineSystem = `你是结构生物学报告的大纲规划器。必须遵守的格式稳定性规则：
@@ -645,9 +704,10 @@ ${libraryListing}
   const outlineUser = `科学问题：${question}
 
 相关性分析：
-- 问题重述：${rel.questionRestated}
-- 关键发现：${(rel.findings || []).map(f => `[${f.source}/${f.relevance}] ${f.note}`).join('；').slice(0, 800) || '（无）'}
-- 数据缺口：${(rel.dataGaps || []).join('；') || '（无）'}
+- 问题重述：${rel?.questionRestated || question}
+- 关键发现：${(rel?.findings || []).map(f => `[${f.source}/${f.relevance}] ${f.note}`).join('；').slice(0, 800) || '（无）'}
+- 数据缺口：${(rel?.dataGaps || []).join('；') || '（无）'}
+- 重点结构（相关性分析点名，深挖章节必须充分讨论）：${(rel?.keyPicks || []).map(k => k.pdbId).join('、') || '（无）'}
 
 数据清单：UniProt 元数据 ✓、PDB 结构 ${c.pdbRows.length} 条、BLAST 同源 ${c.blastRows.length} 条（${c.skippedBlast ? '已跳过' : '已运行'}）、文献 ${c.literature.length} 篇、评分 Overall ${c.scores.overall.score}/10。
 
@@ -658,12 +718,13 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
 请规划报告大纲（question_focus 固定第 2 位、基础章节必含；你重点决定问题深挖章节的选择与顺序，并为每章写一句 focus）。`;
 
   // R184: maxChars 2400→3600 —— 大纲最多 14 章，JSON 变长。
-  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 3600, llm: llmCfg, signal });
+  // R189: 3600→4000 —— 深挖章节上限 6 后 JSON 变长。
+  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 4000, llm: llmCfg, signal });
   llmTotalMs += outlineRun.durationMs;
   if (outlineRun.provider) llmProvider = outlineRun.provider;
   if (outlineRun.model) llmModel = outlineRun.model;
 
-  let outline = repairOutline(outlineRun.parsed, dataInfo);
+  outline = repairOutline(outlineRun.parsed, dataInfo);
   if (outlineRun.parsed) {
     emit({
       stage: 'outline',
@@ -687,6 +748,7 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
       dshOutline: { sections: outline, total: outline.length },
     });
   }
+  } // end hasQuestion（Phase C else 块闭合）
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
   // ── Phase D: 配图（64-72%）────────────────────────────────────────────
@@ -773,12 +835,49 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     //   这正是「即使写了聚焦问题也要包含基本评估内容」的写作侧约束）；
     //   深挖章节（含 question_focus / summary / conclusion 等强制位）：
     //   重点服务科学问题。
+    // R189: deep = 有问题且非基础章 —— 字数用模板 deepWords（加大聚焦问题
+    // 的回答篇幅）；isExtra = 真正的「问题深挖」中间章节 —— 额外注入重点
+    // 数据与深度要求（summary/question_focus/conclusion 有各自的职责约束，
+    // 不注入重点清单以免与其内容要求冲突）。无问题时均为 false。
     const isBaseline = rules.baselineIds.includes(entry.id);
-    const questionBlock = isBaseline
-      ? `## 科学问题（背景参考）\n${question}\n\n说明：本章是标准评估章节 —— 以本章内容要求为主体、完整覆盖常规评估口径；与上述问题自然相关处可顺带联系，但不要让问题聚焦收窄或替换本章的标准评估内容。`
-      // R187: 深挖章节加「结论先行」硬性要求 —— 用户反馈聚焦问题的讨论
-      // 太简略、不直接回答问题；深挖章必须开篇给答案再展开证据。
-      : `## 科学问题（本章须重点服务于该问题）\n${question}\n\n硬性要求：开篇必须先用 2-4 句话或要点清单/表格「直接回答」该问题（结论先行 —— 先给答案，再展开证据与细节），不得只做背景铺垫、范围界定或泛泛而谈。`;
+    const deep = hasQuestion && !isBaseline;
+    const isExtra = deep && entry.id !== 'question_focus' && !tmpl.fixed;
+    const questionBlock = !hasQuestion
+      ? ''
+      : isBaseline
+        ? `## 科学问题（背景参考）\n${question}\n\n说明：本章是标准评估章节 —— 以本章内容要求为主体、完整覆盖常规评估口径；与上述问题自然相关处可顺带联系，但不要让问题聚焦收窄或替换本章的标准评估内容。`
+        // R187: 深挖章节加「结论先行」硬性要求 —— 用户反馈聚焦问题的讨论
+        // 太简略、不直接回答问题；深挖章必须开篇给答案再展开证据。
+        : `## 科学问题（本章须重点服务于该问题）\n${question}\n\n硬性要求：开篇必须先用 2-4 句话或要点清单/表格「直接回答」该问题（结论先行 —— 先给答案，再展开证据与细节），不得只做背景铺垫、范围界定或泛泛而谈。`;
+
+    // R189: 重点数据注入（仅 isExtra 章）—— 相关性 agent 点名的结构/文献
+    // 必须逐一充分讨论（keyPicks 已在解析时消毒到真实存在的条目）。
+    const keyPicksBlock = isExtra && rel && rel.keyPicks && rel.keyPicks.length > 0
+      ? `\n\n## 重点结构（相关性分析点名，本章必须逐一充分讨论）\n${rel.keyPicks.map(k => {
+          const row = c.pdbRows.find(e => e.pdbId.toUpperCase() === k.pdbId);
+          return row
+            ? `- ${row.pdbId} · ${row.method || '?'} · ${row.resolution != null ? row.resolution.toFixed(1) + 'Å' : '?'} · 配体: ${row.ligands || '无'} · ${(row.title || '').slice(0, 70)} ｜ 挑选理由：${k.why}`
+            : `- ${k.pdbId} ｜ 挑选理由：${k.why}`;
+        }).join('\n')}`
+      : '';
+    const keyLitBlock = isExtra && rel && rel.keyLiterature && rel.keyLiterature.length > 0
+      ? (() => {
+          const rows = rel.keyLiterature
+            .map(pmid => c.literature.find(l => String(l.pmid) === pmid))
+            .filter((l): l is LiteratureRow => !!l)
+            .slice(0, 8);
+          return rows.length > 0
+            ? `\n\n## 重点文献（相关性分析点名，本章必须引用讨论）\n${rows.map(l => `- PMID ${l.pmid} | ${l.title} | ${l.journal}${l.journalIf != null ? ` (IF: ${l.journalIf.toFixed(1)})` : ''} | ${l.year}`).join('\n')}`
+            : '';
+        })()
+      : '';
+    // R189: 深度要求（仅 isExtra 章）—— 用户要求「所有讨论都要有深度」。
+    const depthBlock = isExtra
+      ? `\n\n## 深度要求（问题深挖章节，必须全部满足）\n- 论证链完整：每个结论按「结论 → 证据 → 机制解释 → 含义」展开，不得只罗列条目\n- 多证据交叉：关键论点至少两条独立证据（不同结构 / 结构+文献 / 不同方法学），并说明证据间是否一致\n- 量化对比：用分辨率、identity%、IF、年份等具体数字支撑判断\n- 主动指出证据冲突或数据空白，给出你的裁决与理由，而非回避`
+      : '';
+    // R189: 深挖字数（模板 deepWords，缺失则 1.6x/1.8x 兜底）。
+    const minW = deep ? (tmpl.deepWords?.min ?? Math.round(tmpl.minWords * 1.6)) : tmpl.minWords;
+    const maxW = deep ? (tmpl.deepWords?.max ?? Math.round(tmpl.maxWords * 1.8)) : tmpl.maxWords;
 
     const userPrompt = `# 当前任务：撰写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」
 
@@ -786,16 +885,17 @@ ${buildFilteredContext(c, tmpl.dataHints)}
 
 ---
 
-${questionBlock}
+${questionBlock}${keyPicksBlock}${keyLitBlock}${depthBlock}
 
 ## 本章焦点（大纲规划器指定）
 ${entry.focus}
 
 ## 本章内容要求
 ${tmpl.contentSpec}
+${!hasQuestion ? '\n（本次未提供科学问题 —— 按标准评估口径撰写，内容要求中提及「科学问题/用户问题」的条目按靶点整体评估理解）' : ''}
 
 ## 本章字数要求
-正文 ${tmpl.minWords}-${tmpl.maxWords} 字
+正文 ${minW}-${maxW} 字
 ${figuresNote}
 
 ---
@@ -814,7 +914,7 @@ ${figuresNote}
       const prompt = attempt === 0
         ? userPrompt
         : `${userPrompt}\n\n【重试】上次输出未通过校验（${lastErr || '格式不符'}）。请严格输出：第一行为 \`## ${tmpl.titleZh}\`，正文 ≥150 字符，不得包含失败占位符。`;
-      const r = await generateText(chapterSystem, prompt, { maxChars: 6000, llm: llmCfg, signal });
+      const r = await generateText(chapterSystem, prompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
       llmTotalMs += r.durationMs;
       if (r.provider) llmProvider = r.provider;
       if (r.model) llmModel = r.model;
@@ -837,8 +937,7 @@ ${figuresNote}
         const rescuePrompt = `请为蛋白靶点评估报告撰写章节「${tmpl.titleZh}」。
 
 靶点：${c.uniprotInfo.proteinName}（${c.uniprotInfo.uniprotId}，${c.uniprotInfo.organism}）
-科学问题：${question}
-本章要求：${tmpl.contentSpec}
+${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.contentSpec}
 可用数据要点：直接 PDB ${c.directPdbCount} 条、BLAST ${c.blastHitCount} 条、文献 ${c.literature.length} 篇、Overall 评分 ${c.scores.overall.score}/10。
 
 第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 250-500 字。只输出本章内容。`;
@@ -857,6 +956,88 @@ ${figuresNote}
         }
       } catch {
         // 救援也失败 —— 记录失败章节，不中止整体。
+      }
+    }
+
+    // ── R189: 审查环（agent 式多轮审查与思考）─────────────────────────
+    // 有问题模式下，所有非基础章节（深挖章 + question_focus/summary/
+    // conclusion）在初稿通过格式校验后，由「审稿 agent」评估三维度：
+    // 是否直接回答问题 / 论证深度 / 数据支撑。任一不达标 → 注入审稿
+    // 意见重写一次（一轮为限，重写版只做格式校验；失败保留原版，绝不
+    // 倒退）。空问题模式跳过整个审查环（无问题可审）。
+    let reviewed = false;
+    let rewritten = false;
+    if (ok && deep) {
+      try {
+        emit({ stage: 'chapter-review', level: 'info', message: `审稿 agent 审查第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
+        const reviewSystem = `你是结构生物学报告的严格审稿人。评估某一章草稿是否达到「直接回答科学问题 + 论证有深度 + 数据支撑充分」的标准。只输出 JSON，不要其他文字。`;
+        const reviewUser = `科学问题：${question}
+
+章节标题：${tmpl.titleZh}
+
+章节草稿：
+${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按已见内容评估）' : ''}
+
+请输出 JSON：
+{
+  "directlyAnswers": true/false,
+  "depth": "deep"|"adequate"|"shallow",
+  "dataGrounded": true/false,
+  "verdict": "pass"|"rewrite",
+  "rewriteHints": ["改进要点 1", "改进要点 2", "改进要点 3"]
+}
+
+判定规则：
+- directlyAnswers=false（未直接回答问题，只做背景铺垫/罗列）→ rewrite
+- depth=shallow（论证链不完整、只有罗列无机制解释、无量化对比）→ rewrite
+- dataGrounded=false（结论未引用具体 PDB ID/PMID/数字）→ rewrite
+- rewriteHints 最多 3 条，每条必须是具体可执行的指令（如「补充 X 与 Y 的分辨率对比」）`;
+        const reviewRun = await generateJson(reviewSystem, reviewUser, { maxChars: 1200, llm: llmCfg, signal });
+        llmTotalMs += reviewRun.durationMs;
+        const rv = reviewRun.parsed;
+        if (rv && typeof rv === 'object') {
+          reviewed = true;
+          const verdict = String(rv.verdict || 'pass');
+          const depth = String(rv.depth || 'adequate');
+          const hints = Array.isArray(rv.rewriteHints)
+            ? (rv.rewriteHints as any[]).map(String).filter(h => h.trim()).slice(0, 3)
+            : [];
+          if (verdict === 'rewrite' && hints.length > 0) {
+            emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审稿未通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）→ 按意见重写：${hints.join('；').slice(0, 160)}`, progress: pct, chapter: entry.id });
+            emit({ stage: 'chapter-rewrite', level: 'info', message: `按审稿意见重写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
+            const rewritePrompt = `${userPrompt}
+
+---
+
+【审稿意见】上一版草稿未通过审查，问题：
+${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
+
+请重写本章：逐条解决上述问题，直接回答科学问题、论证链完整（结论→证据→机制→含义）、关键论点至少两条独立证据交叉验证、引用具体 PDB ID/PMID/数字。第一行仍必须是\`## ${tmpl.titleZh}\`。`;
+            const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
+            llmTotalMs += r2.durationMs;
+            if (r2.provider) llmProvider = r2.provider;
+            if (r2.model) llmModel = r2.model;
+            if (r2.ok) {
+              const v2 = validateDshChapter(tmpl.titleZh, r2.content);
+              if (v2.ok) {
+                content = normalizeDshChapter(r2.content, tmpl.titleZh);
+                rewritten = true;
+                attempts++;
+              } else {
+                emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写版未通过格式校验（${v2.reason}），保留原版`, progress: pct, chapter: entry.id });
+              }
+            } else {
+              emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写调用失败，保留原版`, progress: pct, chapter: entry.id });
+            }
+          } else {
+            emit({ stage: 'chapter-review', level: 'success', message: `✓ 审稿通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）`, progress: pct, chapter: entry.id });
+          }
+        } else {
+          emit({ stage: 'chapter-review', level: 'info', message: `审稿 JSON 解析失败，跳过本章审查（保留原稿）`, progress: pct, chapter: entry.id });
+        }
+      } catch (err: any) {
+        // 审查环绝不能阻截章节交付 —— 任何异常都降级为保留原稿。
+        emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审查环异常（保留原稿）：${err?.message?.slice(0, 100) ?? 'unknown'}`, progress: pct, chapter: entry.id });
       }
     }
 
@@ -881,6 +1062,8 @@ ${figuresNote}
       content: ok ? content : `_(本章生成失败：${lastErr || 'LLM 调用失败'})_`,
       attempts,
       error: ok ? undefined : lastErr,
+      reviewed,
+      rewritten,
     });
     // R179 (Task 2-a): done 事件的 stage 统一为 `chapter_done`（spec + 经典
     // 管线同名约定），章节 id 经 `chapter`/`chapterId` 字段携带。
@@ -888,7 +1071,7 @@ ${figuresNote}
       stage: 'chapter_done',
       level: ok ? 'success' : 'warn',
       message: ok
-        ? `✓ 第 ${chapterIndex}/${chapterTotal} 章完成（${content.length} chars）`
+        ? `✓ 第 ${chapterIndex}/${chapterTotal} 章完成（${content.length} chars${rewritten ? ' · 审稿后重写' : reviewed ? ' · 审稿通过' : ''}）`
         : `✗ 第 ${chapterIndex}/${chapterTotal} 章失败：${lastErr}`,
       progress: 72 + Math.round(((i + 1) / Math.max(1, chapterTotal)) * 24),
       chapter: entry.id,
@@ -920,7 +1103,10 @@ ${figuresNote}
   const gallery = galleryFigs.length > 0
     ? `\n\n## 附：其余报告配图（未嵌入正文）\n\n${galleryFigs.map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`).join('\n\n')}`
     : '';
-  const header = `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — DSH 模式\n\n> 科学问题：${question}\n\n`;
+  // R189: 空问题时标题不含「科学问题」引用块，标注基础评估口径。
+  const header = hasQuestion
+    ? `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — DSH 模式\n\n> 科学问题：${question}\n\n`
+    : `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — DSH 模式（基础评估）\n\n`;
   const rawReport = header + chapters.map(ch => ch.content).join('\n\n') + gallery;
   const finalReport = sanitizeReport(rawReport);
   const reportOk = chaptersOk > 0;
@@ -953,17 +1139,23 @@ ${figuresNote}
   }
 
   // 持久化 2/2：Evaluation.report + provenance-lite（raw SQL，schema-drift 免疫）。
+  // R189: 审查环统计（done 消息 / provenance 共用）；relevanceRun 已移入
+  // hasQuestion 分支，这里用 relevanceRunParsed 标量替代作用域外的引用。
+  const reviewedCount = chapters.filter(ch => ch.reviewed).length;
+  const rewrittenCount = chapters.filter(ch => ch.rewritten).length;
   try {
     const provenanceLite = JSON.stringify({
       mode: 'dsh',
+      questionDriven: hasQuestion,
       question,
       sessionId,
       phases: {
         collect: { directPdbCount: c.directPdbCount, blastHitCount: c.blastHitCount, literatureCount: c.literature.length },
-        relevance: { ok: !!relevanceRun.parsed, findings: relevance?.findings?.length ?? 0 },
+        relevance: { ok: relevanceRunParsed, findings: relevance?.findings?.length ?? 0, keyPicks: relevance?.keyPicks?.length ?? 0 },
         outline: { total: outline.length, ids: outline.map(o => o.id) },
         figures: { verified: verifiedFigures.length },
         chapters: { ok: chaptersOk, failed: chaptersFailed },
+        review: { reviewed: reviewedCount, rewritten: rewrittenCount },
       },
       llm: { provider: llmProvider, model: llmModel, durationMs: llmTotalMs },
       generatedAt: new Date().toISOString(),
@@ -978,7 +1170,7 @@ ${figuresNote}
     stage: 'done',
     level: reportOk ? 'success' : 'error',
     message: reportOk
-      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张`
+      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount}）` : ' · 基础评估模式'}`
       : `✗ 全部章节生成失败`,
     progress: 100,
   });

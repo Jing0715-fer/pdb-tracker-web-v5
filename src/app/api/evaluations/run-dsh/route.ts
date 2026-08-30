@@ -3,8 +3,10 @@
 // R179 (Task 2-a): DSH 模式（DeepSeek-Harness-inspired agent mode）SSE 路由。
 //
 // 与经典 /api/evaluations/run 的区别：
-//   - 请求必须带 `question`（科学问题，8-1000 字）—— DSH 是问题驱动的
-//     agent 评估模式（相关性分析 → 大纲规划 → 配图 → 逐章撰写）；
+//   - 请求可带 `question`（科学问题，8-1000 字）—— DSH 是问题驱动的
+//     agent 评估模式（相关性分析 → 大纲规划 → 配图 → 逐章撰写 → 审稿重写）；
+//   - R189: question 可为空 —— 空问题 = 基础评估口径（与 classic 一致的
+//     标准章节，无相关性分析/深挖章节/审稿环）；
 //   - 不支持批量 targets / 序列模式 / 结构分析 recipe（宁精勿滥）；
 //   - done 载荷带 relevance / outline / figures / chapters 结构。
 //
@@ -43,10 +45,13 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  // R189: 科学问题改为可选 —— 空问题 = 基础评估口径（与 classic 一致）。
+  // 非空时仍要求 ≥8 字符（过短的问题无法驱动聚焦评估）。
   const question = String(body?.question || '').trim();
-  if (!question || question.length < 8 || question.length > 1000) {
+  const hasQuestionPart = question.length > 0;
+  if (question.length > 1000 || (hasQuestionPart && question.length < 8)) {
     return NextResponse.json(
-      { error: `Invalid or missing 'question': must be 8-1000 characters after trim (got ${question.length}). DSH mode is question-driven.` },
+      { error: `Invalid 'question': must be empty (basic evaluation) or 8-1000 characters after trim (got ${question.length}).` },
       { status: 400 },
     );
   }
@@ -87,7 +92,7 @@ export async function POST(req: Request) {
         llm.source === 'run-override' ? '（Run Center 本地 CLI Agent）'
         : llm.source === 'explicit' ? '（显式指定）'
         : '（与 Agent 聊天共享）';
-      emit({ stage: 'init', level: 'info', message: `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`, progress: 2 });
+      emit({ stage: 'init', level: 'info', message: hasQuestionPart ? `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}` : `启动 DSH 模式评估（基础评估口径，未提供科学问题）· uniprot=${uniprot} · LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`, progress: 2 });
       if (llm.source !== 'run-override' && !llm.shared.available) {
         emit({ stage: 'init', level: 'warn', message: `共享 LLM「${llm.shared.displayName}」未配置 API Key，实际调用将回退到可用 provider（zai SDK 兜底）。可在 Run Center 的 LLM 设置或 Agent 聊天供应商面板中配置。`, progress: 2 });
       }
@@ -125,7 +130,7 @@ export async function POST(req: Request) {
       // ── SkillRunRecord 遥测（best-effort：绝不因遥测失败报 error）─────
       try {
         const durationMs = Date.now() - t0;
-        const summary = `DSH：${result.uniprotInfo.proteinName} · ${result.directPdbCount} PDB · overall=${result.scores.overall.score}/10 · ${result.report.chaptersOk}/${result.report.chapters.length} 章${result.report.ok ? ' · LLM ✓' : ' · LLM ✗'}`;
+        const summary = `DSH${hasQuestionPart ? '' : '（基础评估）'}：${result.uniprotInfo.proteinName} · ${result.directPdbCount} PDB · overall=${result.scores.overall.score}/10 · ${result.report.chaptersOk}/${result.report.chapters.length} 章${hasQuestionPart ? ` · 审稿 ${result.report.chapters.filter(ch => ch.reviewed).length} 章` : ''}${result.report.ok ? ' · LLM ✓' : ' · LLM ✗'}`;
         const details = JSON.stringify({
           mode: 'dsh',
           question,

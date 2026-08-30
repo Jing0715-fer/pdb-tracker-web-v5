@@ -5013,3 +5013,20 @@ Stage Summary:
 - 用户侧恢复步骤：git pull → bun install（自动 generate）→ 重启 dev server；若 webpack 持久缓存仍用旧 client 则 rm -rf .next 再重启
 - 数据无丢失：所有历史 DSH 报告均已通过 raw SQL 兜底写入 SkillEvaluationReport 表
 - postinstall 仅根包生效；依赖 postinstall 依旧被 bun 屏蔽（安全机制，不改动）
+
+---
+Task ID: R189
+Agent: main (Z.ai Code)
+Task: DSH 评估逻辑四项升级——聚焦问题回答篇幅加大 / 科学问题可选（空=基础评估）/ 重点数据挑选与充分讨论 / agent 式多轮审稿重写
+
+Work Log:
+- section-library.ts：① 模板新增 deepWords 可选字段（深挖字数：interactions 700-1600、pathway/ligand_binding/variants/domains/expression/homology/topology/experimental 450-900、question_focus 500-1000、summary 350-700、conclusion 400-800，缺失时 1.6x/1.8x 兜底）；② outlineRules 加 opts.noQuestion——空问题模式 totalMin=totalMax=基础章节数、questionExtra 0/0、mandatorySecond 为空串；有问题模式深挖上限 4→6、总上限 14→16、formatStability 加「深挖章节总字数应占正文 50% 以上」
+- agent.ts：① repairOutline 支持 noQuestion（不插 question_focus；maxExtras 修复：与 questionExtraMax 取 min，曾出现 16-4-5=7>6 的 clamp 漏洞）；② DshRelevance 加 keyPicks/keyLiterature、DshChapterResult 加 reviewed/rewritten；③ Phase B 空问题跳过 relevance（无 LLM 调用）；有问题时数据样本扩大（PDB top10→20、文献 top10→15）+ keyPicks(4-12)/keyLiterature(0-8) 输出，注入前过滤到真实存在条目（防幻觉）；④ Phase C 空问题确定性大纲（不调 LLM）；有问题时 outlineUser 注入 keyPicks 提示；⑤ Phase E：deep/isExtra 判定（deep=有问题且非基础章→deepWords 字数+maxChars 6000→9000；isExtra=真深挖中间章→注入重点结构/重点文献/深度要求块——论证链完整/多证据交叉/量化对比/主动指出证据冲突）；⑥ 审查环：有问题模式下所有非基础章（深挖+question_focus/summary/conclusion）初稿通过格式校验后由审稿 agent 评估 directlyAnswers/depth/dataGrounded 三维度，不达标→注入 rewriteHints 重写一次（重写版仅格式校验，失败保留原版绝不倒退）；SSE 新 stage：chapter-review/chapter-rewrite；⑦ Phase F：空问题标题「DSH 模式（基础评估）」无科学问题引用块；done 消息带审稿统计；provenance 加 questionDriven/review 统计
+- run-dsh/route.ts：question 校验改为「空 或 8-1000 字符」（空=基础评估口径）；init 消息区分两种模式；SkillRunRecord summary 带审稿统计
+- settings-run-panel.tsx + i18n(zh/en)：科学问题改可选——去掉必填拦截与红色 *，label 加「可选 · 留空则执行基础评估」，placeholder 更新，仅保留非空时 <8 字符提示
+- 验证：① 纯函数单测——有问题模式 8 个深挖候选被 clamp 到 6（15 章）、空问题模式 8 章无 question_focus、规则两模式正确；② tsc 全项目检查：改动文件 0 错误（存量错误均为其他文件历史问题）；③ API 端到端——空 question 请求通过校验，SSE init 帧显示「基础评估口径，未提供科学问题」并正常进入 Phase A；6 字符问题正确 400；④ agent-browser 冒烟——DSH 面板渲染正常、question 输入框显示可选标注、空问题点击 Run 启动评估流（StreamFeed 显示基础评估口径 init 事件）、Stop 正常中止、无 console/page errors
+
+Stage Summary:
+- 空问题=classic 口径基础评估（跳过 relevance/深挖/审稿，确定性大纲，节省 LLM 调用）；有问题=深挖 6 章+重点数据点名充分讨论+每章审稿重写
+- 预期成本：有问题模式 LLM 调用数增加（每深挖章 +1 审查，不合格再 +1 重写），MiniMax-M3 下总时长约 9→14 分钟属正常
+- 配图逻辑未动（R187 的必达正文/附录去重保持）；maxPdb 500（R187）保持

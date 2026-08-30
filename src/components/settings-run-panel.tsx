@@ -2281,16 +2281,12 @@ export function SettingsRunPanel({
         toast.error(locale === 'zh' ? '请输入至少一个 UniProt ID' : 'Please enter a UniProt ID');
         return;
       }
+      // R189: 科学问题改为可选 —— 空问题 = 基础评估口径（与 classic 一致，
+      // 后端跳过 relevance/深挖章节/审稿环）。仅保留非空时的最短长度提示。
       const question = evalDshQuestion.trim();
-      if (!question) {
+      if (question.length > 0 && question.length < 8) {
         setDshQuestionError(true);
-        toast.error(t.evalDshQuestionRequired);
-        return;
-      }
-      // Mirror the backend contract (8–1000 chars after trim) for early UX feedback.
-      if (question.length < 8) {
-        setDshQuestionError(true);
-        toast.error(locale === 'zh' ? '科学问题至少需要 8 个字符' : 'Scientific question must be at least 8 characters');
+        toast.error(locale === 'zh' ? '科学问题至少需要 8 个字符（留空则执行基础评估）' : 'Scientific question must be at least 8 characters (leave empty for basic evaluation)');
         return;
       }
       setDshQuestionError(false);
@@ -2913,7 +2909,7 @@ export function SettingsRunPanel({
                       <Label htmlFor="dsh-question-input" className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                         <Sparkles className="h-3 w-3 text-claude-cryoem" />
                         {t.evalDshQuestion}
-                        <span className="text-red-500" aria-hidden="true">*</span>
+                        <span className="text-muted-foreground/70 font-normal normal-case">（{locale === 'zh' ? '可选 · 留空则执行基础评估' : 'optional · empty = basic evaluation'}）</span>
                       </Label>
                       <textarea
                         id="dsh-question-input"
@@ -2922,7 +2918,7 @@ export function SettingsRunPanel({
                         placeholder={t.evalDshQuestionPlaceholder}
                         rows={3}
                         maxLength={1000}
-                        aria-required="true"
+                        aria-required="false"
                         aria-invalid={dshQuestionError}
                         aria-describedby={dshQuestionError ? 'dsh-question-error' : undefined}
                         className={`mt-1 w-full px-2 py-1.5 rounded-md border bg-background text-xs resize-y thin-scroll ${dshQuestionError ? 'border-red-500/60' : 'border-border/60'}`}
