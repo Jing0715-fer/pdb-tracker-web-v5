@@ -22,8 +22,11 @@ import { resolveRunLlmConfig } from '@/lib/agent/eval-llm';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** API-01 同款钳制（与经典 route 的常量一致）。 */
-const MAX_PDB_CAP = 200;
+/** API-01 同款钳制（与经典 route 的常量一致）。
+ * R187: 200 → 500，对齐 Run Center UI 的 PDB 上限输入框（max={500}）。
+ * RCSB Search API paginate.rows 官方支持到 10000，500 远在安全范围内；
+ * 真正的成本在 fetchPdbEntryDetails（5/批并发），400 条 ≈ 80 批，耗时线性增长。 */
+const MAX_PDB_CAP = 500;
 const MAX_BLAST_HITS_CAP = 100;
 const MAX_LIT_COUNT_CAP = 200;
 

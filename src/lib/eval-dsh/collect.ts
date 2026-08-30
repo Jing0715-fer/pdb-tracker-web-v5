@@ -15,7 +15,7 @@
 //   uniprot-meta 4-10% → rcsb-pdbs 12-28% → blast 30-44%（若运行）→
 //   pubmed 46-56%。Phase B（relevance）从 58% 开始。
 //
-// 上限：PDB ≤200、BLAST hits ≤100、文献 ≤ maxLitCount（调用方钳制）。
+// 上限：PDB ≤500（R187，对齐 UI）、BLAST hits ≤100、文献 ≤ maxLitCount（调用方钳制）。
 
 import type { SseEvent } from '@/lib/sse';
 import { fetchUniprotMeta, fetchPdbIdsForUniprot, fetchPdbEntryDetails, type PdbEntryDetail, type UniprotMeta } from '@/lib/rcsb';
@@ -33,7 +33,7 @@ function safeInPlaceholders(values: Array<string | number>): Prisma.Sql {
 }
 
 export interface CollectOpts {
-  /** RCSB 直接检索上限（route 已钳制 ≤200）。 */
+  /** RCSB 直接检索上限（route 已钳制 ≤500，R187）。 */
   maxPdb?: number;
   /** BLAST 命中上限（route 已钳制 ≤100）。 */
   maxBlastHits?: number;
@@ -233,7 +233,7 @@ export async function collectEvaluationData(
   opts: CollectOpts = {},
   emit: (e: SseEvent) => void = () => {},
 ): Promise<CollectResult> {
-  const maxPdb = Math.max(1, Math.min(200, opts.maxPdb ?? 80));
+  const maxPdb = Math.max(1, Math.min(500, opts.maxPdb ?? 80)); // R187: 200→500，对齐 UI
   const maxBlastHits = Math.max(0, Math.min(100, opts.maxBlastHits ?? 50));
   const maxLitCount = Math.max(0, Math.min(200, opts.maxLitCount ?? 20));
   const forceBlast = !!opts.forceBlast;

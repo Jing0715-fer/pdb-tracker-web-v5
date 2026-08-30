@@ -23,7 +23,8 @@ export const dynamic = 'force-dynamic';
  *  storm (the per-target loop near the end of this route iterates them all). */
 const MAX_TARGETS = 20;
 /** API-01: clamp for maxPdb (RCSB detail fetches per target). */
-const MAX_PDB_CAP = 200;
+// R187: 200 → 500，对齐 Run Center UI 的 PDB 上限输入框（max={500}）。
+const MAX_PDB_CAP = 500;
 /** API-01: clamp for maxBlastHits (NCBI BLAST result rows). */
 const MAX_BLAST_HITS_CAP = 100;
 

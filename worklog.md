@@ -4977,3 +4977,20 @@ Stage Summary:
 - 复合物识别从「见 complex 就算」升级为强/弱信号+化学名/药物代号双向甄别——P00533 复合物桶从 4 张小分子结构纠偏为 3 张真抗体复合物。
 - E2E 实证 11/11 章 + 正文 9 图/附录 4 图分层 + VLM 4 轮截图复核；lint/tsc 零新增。
 - 遗留说明：web 配图挂靠的章节（pathway/ligand_binding/variants）若不在最终大纲中则进附录（诚实标注），不做强制重映射（任意映射反而语义错误）。
+
+---
+Task ID: R187
+Agent: main (Z.ai Code)
+Task: 修复 maxPdb=400 实际被 200 截断的问题
+
+Work Log:
+- 定位根因：三层硬编码 200 钳制 vs UI 允许 500 —— ① run-dsh/route.ts:26 MAX_PDB_CAP=200（实际截断点，用户填 400 进管线前被 Math.min(200,400)=200）；② run/route.ts:26 同款 200（经典模式）；③ eval-dsh/collect.ts:236 Math.min(200,...) 二次钳制；而 settings-run-panel.tsx:2871 输入框 max={500}
+- 修复：三处上限统一 200 → 500（R187），对齐 UI；collect.ts 头部注释与 CollectOpts.maxPdb 注释同步更新
+- 验证：① 三文件无残留 200 钳制（node 脚本确认）；② run-dsh 路由热编译正常（curl 缺参请求返回 400 参数校验，非 500 模块错误）；③ 端到端：fetchPdbIdsForUniprot('P00533', 400) 实际返回 392 条（EGFR 全部结构，RCSB Search API paginate.rows 支持到 10000，底层无瓶颈）
+- 排查确认无其他隐藏截断：agent.ts 的 slice 均为 prompt 展示裁剪；rcsb.ts 的 ids.slice(0,max) 正确跟随上限；target-evaluation.ts 仅被 report/run 使用（不走用户 maxPdb 入参）
+- lint 全量被沙箱 SIGKILL（内存限制，与本次改动无关），改用针对性验证
+
+Stage Summary:
+- maxPdb 上限从 200 提升到 500，DSH 与经典两条评估管线均已生效
+- 注意：fetchPdbEntryDetails 5/批并发，400 条 ≈ 80 批，元数据拉取耗时线性增长（此前 200 条约 40 批），属预期行为
+- 上一轮遗留任务（配图正文嵌入率/附录去重/caption 方括号转义/聚焦问题直答强化）仍未实施，待用户确认优先级
