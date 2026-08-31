@@ -138,6 +138,83 @@ export function figureImageMarkdown(fig: Pick<ReportFigure, 'caption' | 'url'>):
   return `![${alt}](${fig.url})`;
 }
 
+// ─── R191: 图片 URL 突变修复 ────────────────────────────────────────────────
+
+/** R191: 带上限的 Levenshtein 距离（超出 max 即早退返回 max+1，剪枝省 CPU）。 */
+function editDistanceAtMost(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  if (a === b) return 0;
+  const prev = new Array<number>(b.length + 1);
+  const cur = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1; // 整行已超限，剪枝
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+export interface FigureUrlRepair {
+  content: string;
+  /** 被修复的 URL 数（字符突变 → 就近纠正回清单内的正确 URL）。 */
+  fixed: number;
+  /** 被移除的图片数（找不到清单内近邻 = 纯幻觉 URL，整图剔除）。 */
+  removed: number;
+}
+
+/**
+ * R191: 修复 LLM 复制图片 URL 时的字符突变。
+ *
+ * 真实 E2E（P00533 带问题模式）实测：模型在「原样复制」指令下仍会把
+ * 哈希抄错 1 个字符（867ea61**4**c6a7 → 867ea61**R**c6a7、
+ * 19c451a91**f**94 → 19c451a91**e**94）——突变 URL 大概率 404（用户
+ * 现场「部分图片不显示」的又一根因），且骗过 content.includes(url)
+ * 的补挂检查导致同图重复嵌入（成药性章 4 图 = 突变版 + 补挂版并存）。
+ *
+ * 策略：正文里每个图片 URL，① 在已验证清单内 → 保留；② 与清单内某 URL
+ * 编辑距离 ≤2（同 host 且长度接近）→ 纠正为清单 URL；③ 无近邻 → 整图
+ * 剔除（幻觉）。z-cdn 十六进制哈希两两距离 ≤2 的碰撞概率可忽略；若 RCSB
+ * PDB ID 突变后恰好命中清单内另一条（如 9z9e→9z9f 都已验证），① 已判
+ * 有效保留（仍是真图，语义偏差可接受），修复分支只处理清单外 URL。
+ */
+export function repairFigureUrls(content: string, allowedUrls: string[]): FigureUrlRepair {
+  if (!content || allowedUrls.length === 0) return { content, fixed: 0, removed: 0 };
+  const allowed = [...new Set(allowedUrls)];
+  const byHost = new Map<string, string[]>();
+  for (const u of allowed) {
+    const host = u.replace(/^https?:\/\//, '').split('/')[0];
+    if (!byHost.has(host)) byHost.set(host, []);
+    byHost.get(host)!.push(u);
+  }
+  let fixed = 0;
+  let removed = 0;
+  // 图片 token 独立成行（生成侧约定），删除时顺带吞掉行尾换行避免空洞。
+  const out = content.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)(\n?)/g, (full, _alt: string, url: string, nl: string) => {
+    if (allowed.includes(url)) return full;
+    const host = url.replace(/^https?:\/\//, '').split('/')[0];
+    const candidates = byHost.get(host) ?? [];
+    let best: string | null = null;
+    let bestDist = 3; // 阈值 2
+    for (const cand of candidates) {
+      const d = editDistanceAtMost(url, cand, 2);
+      if (d <= 2 && d < bestDist) { best = cand; bestDist = d; }
+    }
+    if (best) { fixed++; return `![${_alt}](${best})${nl}`; }
+    removed++;
+    return '';
+  });
+  // 剔除整图后可能留下连续空行，压回单空行（只处理图片区域，全文无害）。
+  const cleaned = removed > 0 ? out.replace(/\n{3,}/g, '\n\n') : out;
+  return { content: cleaned, fixed, removed };
+}
+
 /** R184: RCSB 结构图多样性分桶配额 —— 无全局张数上限，总量由各桶代表数之和
  * （典型 6-10 张）自然决定；桶间按 pdbId 去重且互斥。 */
 const RCSB_COMPLEX_BUCKET_MAX = 4; // 蛋白-蛋白/蛋白-肽复合物（互作类问题的核心证据，最优先）

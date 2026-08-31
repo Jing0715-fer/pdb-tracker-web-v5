@@ -27,7 +27,7 @@ import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, type CollectOpts, type CollectResult, type LiteratureRow } from './collect';
 import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint, type OutlineDataInfo } from './section-library';
-import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, type ReportFigure } from './figures';
+import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, type ReportFigure } from './figures';
 
 // ─── 类型 ───────────────────────────────────────────────────────────────────
 
@@ -589,6 +589,40 @@ async function persistDshReportRecord(
 }
 
 
+// ─── R191: 瞬态 LLM 错误退避 + 短占位符 ───────────────────────────────
+
+/** R191: 判定 LLM 错误是否瞬态（429 限流/过载/5xx）——值得退避后重试。
+ * 真实 E2E 实测：连续跑三轮评估后 zai provider 进入 429 窗口，第 11-15
+ * 章 3 连试 + rescue 全部秒败（同一窗口内连发必然全败）；等几十秒窗口
+ * 滑过即可恢复。 */
+function isTransientLlmError(err: string): boolean {
+  return /\b429\b|too many requests|rate ?limit|overloaded|temporarily|status 5\d\d/i.test(err);
+}
+
+/** R191: 提取首个 provider 的错误段并压到 120 字符 —— 报告占位符不需要
+ * 17-provider 全量堆栈（旧占位符约 800 字/章，5 章失败灌 4KB 噪音进
+ * 正文）；完整错误已在 SSE chapterError 字段与日志中。 */
+function shortLlmErr(err: string): string {
+  const first = err.split(';')[0].trim();
+  return (first || err || 'LLM 调用失败').replace(/\s+/g, ' ').slice(0, 120);
+}
+
+/** R191: 可中止的退避等待（每秒检查 signal；退避前向 SSE 发一条可见
+ * 事件，防止客户端长时间无数据误判断流）。 */
+async function backoffWait(
+  ms: number,
+  signal: AbortSignal | undefined,
+  reason: string,
+  emitEvent: (msg: string) => void,
+): Promise<void> {
+  emitEvent(reason);
+  const t1 = Date.now();
+  while (Date.now() - t1 < ms) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    await new Promise(res => setTimeout(res, Math.min(1000, ms - (Date.now() - t1))));
+  }
+}
+
 // ─── 主流程 ─────────────────────────────────────────────────────────────────
 
 export async function runDshEvaluation(params: {
@@ -978,6 +1012,11 @@ ${figuresNote}
     const chapterT0 = Date.now();
     for (let attempt = 0; attempt <= 2 && !ok; attempt++) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      // R191: 瞬态错误退避 —— 429 限流窗口内连发必然全败，等窗口滑过再试。
+      if (attempt > 0 && isTransientLlmError(lastErr)) {
+        const waitMs = Math.min(45000, 20000 + attempt * 10000);
+        await backoffWait(waitMs, signal, `LLM 瞬态错误（${shortLlmErr(lastErr)}），${Math.round(waitMs / 1000)}s 后退避重试（第 ${attempts + 1} 次尝试）`, (message) => emit({ stage: `chapter-${entry.id}`, level: 'warn', message, progress: pct, chapter: entry.id }));
+      }
       attempts++;
       const prompt = attempt === 0
         ? userPrompt
@@ -1002,6 +1041,10 @@ ${figuresNote}
     // 救援 pass：简化 prompt（最小上下文，只要标题+基础要求）。
     if (!ok) {
       try {
+        // R191: rescue 前同样退避 —— 限流窗口未过时 rescue 也是白打。
+        if (isTransientLlmError(lastErr)) {
+          await backoffWait(30000, signal, `LLM 瞬态错误持续（${shortLlmErr(lastErr)}），30s 后用简化 prompt 最后救援`, (message) => emit({ stage: `chapter-${entry.id}`, level: 'warn', message, progress: pct, chapter: entry.id }));
+        }
         const rescuePrompt = `请为蛋白靶点评估报告撰写章节「${tmpl.titleZh}」。
 
 靶点：${c.uniprotInfo.proteinName}（${c.uniprotInfo.uniprotId}，${c.uniprotInfo.organism}）
@@ -1028,14 +1071,17 @@ ${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.conten
     }
 
     // ── R189: 审查环（agent 式多轮审查与思考）─────────────────────────
-    // 有问题模式下，所有非基础章节（深挖章 + question_focus/summary/
+    // 有问题模式下，非基础章节（深挖章 + question_focus/summary/
     // conclusion）在初稿通过格式校验后，由「审稿 agent」评估三维度：
     // 是否直接回答问题 / 论证深度 / 数据支撑。任一不达标 → 注入审稿
     // 意见重写一次（一轮为限，重写版只做格式校验；失败保留原版，绝不
     // 倒退）。空问题模式跳过整个审查环（无问题可审）。
+    // R191: references（参考文献）为固定格式列表章，不适用「直接回答
+    // 问题」的审稿口径 —— 真实 E2E 实测审稿人曾要求它改名成讨论章，
+    // 重写后正文段落挤进了文献列表开头（格式被污染），故排除。
     let reviewed = false;
     let rewritten = false;
-    if (ok && deep) {
+    if (ok && deep && entry.id !== 'references') {
       try {
         emit({ stage: 'chapter-review', level: 'info', message: `审稿 agent 审查第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
         const reviewSystem = `你是结构生物学报告的严格审稿人。评估某一章草稿是否达到「直接回答科学问题 + 论证有深度 + 数据支撑充分」的标准。只输出 JSON，不要其他文字。`;
@@ -1059,6 +1105,7 @@ ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按�
 - directlyAnswers=false（未直接回答问题，只做背景铺垫/罗列）→ rewrite
 - depth=shallow（论证链不完整、只有罗列无机制解释、无量化对比）→ rewrite
 - dataGrounded=false（结论未引用具体 PDB ID/PMID/数字）→ rewrite
+- verdict 必须与三维度一致：三个维度全部达标（directlyAnswers=true 且 dataGrounded=true 且 depth≠shallow）时 verdict 必须为 pass，不得 rewrite
 - rewriteHints 最多 3 条，每条必须是具体可执行的指令（如「补充 X 与 Y 的分辨率对比」）`;
         const reviewRun = await generateJson(reviewSystem, reviewUser, { maxChars: 1200, llm: llmCfg, signal });
         llmTotalMs += reviewRun.durationMs;
@@ -1071,9 +1118,19 @@ ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按�
             ? (rv.rewriteHints as any[]).map(String).filter(h => h.trim()).slice(0, 3)
             : [];
           if (verdict === 'rewrite' && hints.length > 0) {
-            emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审稿未通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）→ 按意见重写：${hints.join('；').slice(0, 160)}`, progress: pct, chapter: entry.id });
-            emit({ stage: 'chapter-rewrite', level: 'info', message: `按审稿意见重写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
-            const rewritePrompt = `${userPrompt}
+            // R191: verdict 合理性钳制 —— 真实 E2E 实测 2/9 章「深度=adequate ·
+            // 直接回答=是 · 数据支撑=是」仍被 LLM 审稿人给了 rewrite（自相
+            // 矛盾），白白多一轮重写（+1 LLM 调用/章）。三维度全部达标时
+            // 以维度为准覆盖 verdict，只对真不达标的章节重写。
+            const dimsPass = (rv.directlyAnswers === true || rv.directlyAnswers === 'true')
+              && (rv.dataGrounded === true || rv.dataGrounded === 'true')
+              && depth !== 'shallow';
+            if (dimsPass) {
+              emit({ stage: 'chapter-review', level: 'success', message: `✓ 审稿通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}；三维度达标，覆盖审稿人矛盾的 rewrite 判定）`, progress: pct, chapter: entry.id });
+            } else {
+              emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审稿未通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）→ 按意见重写：${hints.join('；').slice(0, 160)}`, progress: pct, chapter: entry.id });
+              emit({ stage: 'chapter-rewrite', level: 'info', message: `按审稿意见重写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
+              const rewritePrompt = `${userPrompt}
 
 ---
 
@@ -1081,21 +1138,22 @@ ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按�
 ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
 
 请重写本章：逐条解决上述问题，直接回答科学问题、论证链完整（结论→证据→机制→含义）、关键论点至少两条独立证据交叉验证、引用具体 PDB ID/PMID/数字。第一行仍必须是\`## ${tmpl.titleZh}\`。`;
-            const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
-            llmTotalMs += r2.durationMs;
-            if (r2.provider) llmProvider = r2.provider;
-            if (r2.model) llmModel = r2.model;
-            if (r2.ok) {
-              const v2 = validateDshChapter(tmpl.titleZh, r2.content);
-              if (v2.ok) {
-                content = normalizeDshChapter(r2.content, tmpl.titleZh);
-                rewritten = true;
-                attempts++;
+              const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
+              llmTotalMs += r2.durationMs;
+              if (r2.provider) llmProvider = r2.provider;
+              if (r2.model) llmModel = r2.model;
+              if (r2.ok) {
+                const v2 = validateDshChapter(tmpl.titleZh, r2.content);
+                if (v2.ok) {
+                  content = normalizeDshChapter(r2.content, tmpl.titleZh);
+                  rewritten = true;
+                  attempts++;
+                } else {
+                  emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写版未通过格式校验（${v2.reason}），保留原版`, progress: pct, chapter: entry.id });
+                }
               } else {
-                emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写版未通过格式校验（${v2.reason}），保留原版`, progress: pct, chapter: entry.id });
+                emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写调用失败，保留原版`, progress: pct, chapter: entry.id });
               }
-            } else {
-              emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写调用失败，保留原版`, progress: pct, chapter: entry.id });
             }
           } else {
             emit({ stage: 'chapter-review', level: 'success', message: `✓ 审稿通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）`, progress: pct, chapter: entry.id });
@@ -1106,6 +1164,20 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       } catch (err: any) {
         // 审查环绝不能阻截章节交付 —— 任何异常都降级为保留原稿。
         emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审查环异常（保留原稿）：${err?.message?.slice(0, 100) ?? 'unknown'}`, progress: pct, chapter: entry.id });
+      }
+    }
+
+    // ── R191: 图片 URL 突变修复 ─────────────────────────────────────
+    // LLM 在「原样复制」指令下仍会抄错哈希 1 个字符（真实 E2E 实测：
+    // 867ea614c6a7 → 867ea61Rc6a7），突变 URL 大概率 404 且骗过下方
+    // 补挂的 includes 检查造成同图重复。放在补挂前：修复后 includes
+    // 命中 → 不再追加正确版 → 无重复；幻觉 URL（清单无近邻）整图剔除。
+    if (ok && figures.length > 0) {
+      const allowedUrls = figures.filter(f => f.status === 'verified').map(f => f.url);
+      const rep = repairFigureUrls(content, allowedUrls);
+      if (rep.fixed > 0 || rep.removed > 0) {
+        content = rep.content;
+        emit({ stage: 'figures', level: 'info', message: `配图 URL 自愈（${tmpl.titleZh}）：纠正 ${rep.fixed} 处字符突变、剔除 ${rep.removed} 张幻觉图片`, progress: pct, chapter: entry.id });
       }
     }
 
@@ -1127,7 +1199,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       id: entry.id,
       title: tmpl.titleZh,
       ok,
-      content: ok ? content : `_(本章生成失败：${lastErr || 'LLM 调用失败'})_`,
+      content: ok ? content : `_(本章生成失败：${shortLlmErr(lastErr || 'LLM 调用失败')})_`,
       attempts,
       error: ok ? undefined : lastErr,
       reviewed,
