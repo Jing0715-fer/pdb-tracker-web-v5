@@ -34,6 +34,10 @@ export interface ReportFigure {
 
 /** z-ai image-search CLI 的单次调用超时（宁缺毋滥：超时即放弃该 query）。 */
 const IMAGE_SEARCH_TIMEOUT_MS = 150_000;
+/** R193: 首次调用的独立短超时 —— CLI 冷启动挂死时 60s 即放弃，而非白等
+ * 150s（R192 实测首查空转 55s；首查即失败说明 CLI 本身不可用，后续
+ * query 逐条等满超时纯属浪费）。 */
+const FIRST_QUERY_TIMEOUT_MS = 60_000;
 /** 每个 query 最多送 VLM 校验的结果数（串行逐张，峰值内存 = 单张图）。 */
 const RESULTS_PER_QUERY_CAP = 4; // R184: 3→4 — 移除总上限后每个 query 的通过机会更充裕
 /**
@@ -377,30 +381,40 @@ interface ImageSearchResult {
   source?: string;
 }
 
-/** 以 execFile 方式调 z-ai image-search（无 shell 注入面），150s 超时。 */
-async function runImageSearchCli(query: string): Promise<ImageSearchResult[]> {
+/**
+ * R193: 会话级 image-search 结果缓存（进程生命周期）。同一 query 重复
+ * 评估（常见：反复测试同一靶点）直接命中，省去 CLI 冷启动 ~55s；命中
+ * 后仍逐张 VLM 校验（图片可达性可能变化，缓存只省搜索不省校验）。
+ * 上限 200 条防内存无限增长（超出即清空重建，简单且足够）。 */
+const imageSearchCache = new Map<string, ImageSearchResult[]>();
+
+/** 以 execFile 方式调 z-ai image-search（无 shell 注入面）。R193: 超时可
+ * 调（首查短超时）+ 返回 ok 区分「调用失败（CLI 挂/超时）」与「正常返回
+ * 但零结果」（后者不代表 CLI 不可用，不应短路后续 query）。 */
+async function runImageSearchCli(query: string, timeoutMs: number): Promise<{ ok: boolean; results: ImageSearchResult[] }> {
   const { execFile } = await import('node:child_process');
   const args = ['-q', query, '--count', '5', '--gl', 'us'];
-  return new Promise<ImageSearchResult[]>((resolve) => {
+  return new Promise<{ ok: boolean; results: ImageSearchResult[] }>((resolve) => {
     const child = execFile(
       'z-ai',
       ['image-search', ...args],
-      { timeout: IMAGE_SEARCH_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {
-          resolve([]);
+          resolve({ ok: false, results: [] });
           return;
         }
         const parsed = extractFirstJsonObject(String(stdout || ''));
         if (!parsed || parsed.success === false || !Array.isArray(parsed.results)) {
-          resolve([]);
+          // 正常返回但无结果 —— ok=true（query 可能真没结果，CLI 本身可用）。
+          resolve({ ok: true, results: [] });
           return;
         }
-        resolve(parsed.results as ImageSearchResult[]);
+        resolve({ ok: true, results: parsed.results as ImageSearchResult[] });
       },
     );
     // execFile 的 timeout 会发 SIGTERM；再兜底 kill 防僵尸。
-    child.on('error', () => resolve([]));
+    child.on('error', () => resolve({ ok: false, results: [] }));
   });
 }
 
@@ -492,16 +506,46 @@ export async function searchWebFigures(
     .slice(0, MAX_WEB_QUERIES);
   if (capped.length === 0) return out;
 
+  // R193: 首查短路标记（函数级 —— 本次评估内 CLI 首查即挂则后续 query
+  // 全部跳过；下次评估重新尝试，CLI 可能已恢复）+ 首查标志（短超时）。
+  let cliBrokenThisRun = false;
+  let cliCalled = false;
+
   for (const { sectionId, query } of capped) {
-    emit({ stage: 'figure-web', level: 'info', message: `搜索 web 示意图：「${query}」…` });
-    let results: ImageSearchResult[] = [];
-    try {
-      results = await runImageSearchCli(query);
-    } catch {
-      results = [];
+    if (cliBrokenThisRun) {
+      emit({ stage: 'figure-web', level: 'info', message: `image-search 本次运行不可用，跳过 query：「${query}」` });
+      continue;
+    }
+    let results: ImageSearchResult[];
+    const cacheKey = String(query).trim().toLowerCase();
+    const cached = imageSearchCache.get(cacheKey);
+    if (cached) {
+      // R193: 会话级缓存命中 —— 免重复搜索（含 CLI 冷启动 ~55s），仍逐张 VLM。
+      results = cached;
+      emit({ stage: 'figure-web', level: 'info', message: `命中会话缓存（${results.length} 条候选，免重复搜索）：「${query}」` });
+    } else {
+      emit({ stage: 'figure-web', level: 'info', message: `搜索 web 示意图：「${query}」…` });
+      const isFirstCliCall = !cliCalled;
+      const run = await runImageSearchCli(query, isFirstCliCall ? FIRST_QUERY_TIMEOUT_MS : IMAGE_SEARCH_TIMEOUT_MS);
+      cliCalled = true;
+      if (!run.ok) {
+        if (isFirstCliCall) {
+          // 首查即失败：CLI 挂死/不可用 —— 本次评估内短路后续所有 query
+          //（后续 query 大概率同样挂死，逐条等满 150s 纯属浪费）。
+          cliBrokenThisRun = true;
+          emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 首次调用即失败（CLI 挂起或不可用），本次评估跳过 web 配图搜索（宁缺毋滥）` });
+          continue;
+        }
+        emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 调用失败（跳过该 query，继续）` });
+        continue;
+      }
+      results = run.results;
+      // R193: 写入会话缓存（含零结果 —— 零结果同样是有效答案，防重复搜索）。
+      if (imageSearchCache.size > 200) imageSearchCache.clear();
+      imageSearchCache.set(cacheKey, results);
     }
     if (results.length === 0) {
-      emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 无结果或 CLI 不可用（跳过该 query，继续）` });
+      emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 无结果（跳过该 query，继续）` });
       continue;
     }
     emit({ stage: 'figure-web', level: 'info', message: `image-search 返回 ${results.length} 条候选，逐张 VLM 校验（宁缺毋滥）…` });
