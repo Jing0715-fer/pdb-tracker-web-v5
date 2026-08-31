@@ -5047,3 +5047,27 @@ Stage Summary:
 - 用户侧一次性修复步骤（Windows）：git pull → bun install（postinstall 自动 prisma generate；或手动 bun run db:generate）→ 删除 .next → 重启 dev server；修复后「Prisma 写入失败」warn 与 stale info 提示均消失，恢复 tier-1 Prisma 直达
 - 数据安全确认：该错误从头到尾不影响任何报告数据（三级落库兜底 + Evaluation 回写独立 raw SQL）
 - 经典管线不受影响：其 skillEvaluationReport.create 只用 R179 前旧字段（无 mode/outline/figures），stale client 也能通过校验，无需改动
+
+---
+Task ID: R191
+Agent: main (Z.ai Code)
+Task: 真实测试 DSH 评估全链路（R189/R190 新逻辑）并根据结果修复问题
+
+Work Log:
+- 测试 A（P00533 + 复合物聚焦问题，maxPdb=40，561s）：14/14 章成功。R189 全部达标——深挖占比 59.4%（目标 50%+）、interactions 单章 3021 chars、问题聚焦章开篇直答、keyPicks 8+keyLiterature 8 注入、正文 24 个 PDB ID + 10 PMID、审稿环 9 章 review（question_focus 初稿确实没直答被抓出重写）、tier-1 Prisma 直达落库
+- 测试 B（空问题，32s）：基础评估降级路径全对——确定性 8 章大纲、跳过 relevance/审稿、0 次 LLM 审查调用、落库正常
+- 测试 A/C 暴露 4 个问题，全部定位根因并修复：
+  1. LLM 复制图片 URL 时单字符突变（867ea614c6a7→867ea61Rc6a7、19c451a91f94→19c451a91e94，字节级对比实锤）→ 突变 URL 404（用户此前「部分图片不显示」的又一根因）+ 骗过补挂 includes 检查致同图重复（成药性章 4 图）→ figures.ts 新增 repairFigureUrls（同 host Levenshtein≤2 就近纠正、无近邻整图剔除、空行压缩），agent.ts 在补挂前统一收口
+  2. references 被审稿环污染：审稿人要求列表章「改名回答科学问题」，重写后正文段落挤进文献列表开头 → 审查条件加 entry.id !== 'references'
+  3. 审稿 verdict 自相矛盾：adequate+直答=是+数据=是 仍判 rewrite（2/9 章）→ 三维度全达标时以维度为准覆盖 verdict + 审稿 prompt 加「verdict 必须与三维度一致」规则
+  4. 测试 C 第 11-15 章全部死于 zai 429 限流（连续三轮 E2E 耗尽配额，17 个候选 provider 沙箱均不可用）：① 瞬态错误（429/5xx/overloaded）退避重试（loop 内 20-45s、rescue 前 30s，可中止、SSE 可见）；② 失败占位符从 17-provider 全量堆栈（约 800 字/章）短化为首段 120 字摘要（完整错误保留在 chapterError 与日志）
+- 单测：repairFigureUrls 20/20（含两轮 E2E 捕获的真实突变样本、跨 host 防误纠、距离>2 剔除、空行压缩）；瞬态判定/短占位符 11/11（含真实 429 错误串）
+- 测试 D（限流窗口过后最终验证，430s）：13/13 章全成功、URL 自愈再捕获 3 处突变并纠正（0 残留 0 重复）、references 未被审查且格式纯净、0 失败占位符、深挖占比 59.8%、23 PDB ID + 8 PMID、互作章 2535 chars
+- 浏览器验证（agent-browser）：Evaluation 页 → P00533 → Report tab 渲染正常（大纲+DSH 标签+13 张 VERIFIED 配图缩略图+14 章 H2）；全页 43 张 img 全部 loaded、0 broken、0 突变 URL 残留；0 页面错误、0 控制台错误；截图 2 张复核
+- tsc eval-dsh 0 错误；eslint 改动文件 0 error 0 warning；dev.log 无新增错误
+- 提交 535a425 推送 GitHub
+
+Stage Summary:
+- 四轮真实 E2E（A 问题模式 561s / B 空问题 32s / C 限流压力 / D 最终验证 430s）完整验证 R189+R190 行为并驱动 4 个新修复，全部实测生效
+- 遗留观察（非缺陷）：zai 沙箱配额有限（连续 2-3 轮完整评估会触发 429，退避机制已兜住）；审稿人对深挖章的 rewriteHints 偶尔要求「改章节标题」但重写后标题仍由模板锁定（validateDshChapter 校验第一行 H2 一字不差），无实际影响
+- 改进建议池（未实施，待用户定优先级）：① 审稿环可扩展为多轮（当前 1 轮重写上限）；② 评估完成后可加「终审 pass」对全文一致性（章间引用/术语统一）做一次整体审查；③ 参考文献章可改为从 keyLiterature+全量文献确定性生成（不经 LLM，零幻觉）；④ maxPdb 大时（>200）可对 RCSB 元数据拉取加进度细分
