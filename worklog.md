@@ -5144,3 +5144,31 @@ Stage Summary:
   4. 外科修正上限的动态化：本轮 4 个 high 问题修正 2 章后余 2 条仅记录。若矛盾涉及不同 consensus（修一章消一条），上限 2 或许可按「每条 high 的少数派章互不相同时放宽到 3」
   5. E2E 工具链改进：评估全程 560-590s 贴近 Bash 工具 600s 硬限，第三轮险些截断。可把 run-dsh 拆为「启动+轮询」两段式（POST 返回 runId + GET 轮询进度），既解决工具超时也支持断线续看
   6. 审查环计数入 chapter_done 细分：done/provenance 已有 reviewed/rewritten/rounds，可加「降级跳过章数」便于事后质量归因
+
+---
+Task ID: R194
+Agent: main (Z.ai Code)
+Task: 修复用户反馈「运行过程中部分文字偏大、字体不统一」+ 按 R193 建议池实施四项审查环改进 → 真实 E2E 验证（受 zai 日级配额耗尽限制部分完成）
+
+Work Log:
+- 诊断（用户截图 + VLM 两轮聚焦分析 → 代码定位）：截图中的大字区域（LIVE PROGRESS 的 processing·86%、StageTimeline 芯片 init→collect→…、阶段指示行）在代码里全部用 text-3xs —— 但该类从未在 Tailwind 主题中定义（Tailwind 4 默认最小 text-xs=12px），34 处 text-3xs + 8 处 text-4xs 全部静默失效，元素继承父级 14-16px 字号 → 「字大且不一致」
+- 第二根因（运行中浏览器 computed style 断言发现）：layout.tsx 的 geistSans/geistMono 是纯 JS 桩对象（非真实 next/font），--font-geist-sans/mono 变量从未被赋值；globals.css 里 15 处 var(--font-geist-*) 无 fallback —— CSS 规范中未定义 var 且无 fallback 时整条 font-family 声明作废 → 所有 font-mono utility 实际渲染 body 的 sans 栈 → 「字体不统一」的另一半（等宽日志行渲染为比例字体）
+- 第三根因（顺手排查）：组件用 .thin-scroll（11 处）但 CSS 只定义 .thin-scrollbar → 滚动条样式失效
+- 修复（globals.css，+100/-27）：① @theme 新增 --text-2xs/3xs/4xs（11/10/9px 含 line-height）；② thin-scrollbar 全部选择器加 .thin-scroll 别名；③ --font-sans/--font-mono 的 var() 加 ui-sans-serif/ui-monospace fallback + 13 处字面 font-family 引用同步加 fallback（保持未来接入真实 Geist webfont 的前向兼容）
+- R193 建议池实施（agent.ts）：① 复审锚（round>1 时注入上一轮 rewriteHints + 「只需评估上轮意见解决程度」，防意见漂移——R193 实测第 8/9 章连续 2 轮 rewrite 每轮换意见）；② 篇幅带宽软性提示（深挖章超模板上限 60% 时给审稿人篇幅观察：有冗余才给压缩建议，有效论证不因篇幅判 rewrite）；③ 终审 termFixes 加奥希替尼/Osimertinib 示例提高输出率；④ 外科上限动态化（high 矛盾分散 ≥3 组时 2→3）；⑥ skippedReviewChapters/skippedReReviewChapters 计数入 provenance.review 与 done 消息
+- 验证 ①：dev server CSS 生成 .text-3xs{font-size:var(--text-3xs)}（10px）；agent-browser 实测——历史 DSH 展开 19 个 text-3xs 全 10px、11 行日志全 12px；运行中状态（agent-browser 触发真实评估 75s 后）60 个 text-3xs 全 10px、53 行日志全 12px、StageTimeline 芯片采样全 10px；font-mono 修复后 20 个元素全 mono 栈（ui-monospace, Source Han Mono SC, …）；0 页面错误 0 控制台错误；VLM 截图复核通过（运行中截图的 VLM 复核因配额耗尽未做，computed style 断言更精确已替代）
+- 验证 ②：tsc 全项目 eval-dsh 0 错误；eslint agent.ts 0 error 0 warning；dev.log 无新增错误（429 除外）
+- 验证 ③（E2E 受限如实记录）：zai 日级配额耗尽（80 分钟持续 429，含 LLM/VLM 全线）——第一轮 E2E 595s 被工具超时杀（SSE 客户端断开 → route abort → 未落库，教训：E2E 驱动改为事件实时落盘）；第二轮限流逆境 E2E 落盘 49 事件：Phase A-D 全正常（collect 40 PDB/score/13 文献/relevance 429 降级默认大纲/5 RCSB 配图验证）、每章 3 次退避（30/40/30s）+ rescue + 失败占位符全部按设计工作、429 计数喂入配额压力机制实测触发（R193 遗留的「降级路径真实触发」空白首次部分补齐——但章节全灭故 skippedReview 计数的端到端痕迹与复审锚/篇幅观察/termFixes/外科动态上限的 LLM 行为验证留待配额恢复后下轮补做）
+- 提交 295f884 推送 GitHub（30b1344..295f884）；测试产物已清理（.r194-test/）
+
+Stage Summary:
+- 用户反馈的字大/字体不统一两个表象共三个独立根因（未定义字号类 42 处 / geist var 失效 15 处 / thin-scroll 别名 11 处），全部根治且浏览器 computed style 硬断言验证
+- 复审锚是审查环从「能重写」到「能收敛」的关键补丁：意见漂移是 R193 实测唯一未解决的质量问题模式
+- E2E 验证受 zai 日级配额限制（约 80 分钟持续 429，此前 R191-193 每天多轮完整 E2E 累积耗尽）：字体/退避/占位符/降级计数已实测，LLM 行为类改进（复审锚命中、篇幅压缩建议、termFixes 输出、外科第 3 章）逻辑由代码与单测保证、真实触发留待下轮
+- 新建议池（按价值排序，待用户定优先级）：
+  1. E2E 两段式（R193 建议 5 仍未做，本轮教训加深其必要性）：POST 返回 runId + GET 轮询进度 —— 本轮两连败的直接死因都是「SSE 长连接被工具/网络超时斩断导致 route abort、9.9 分钟成果归零」；两段式天然免疫客户端断开（后台任务 + 轮询重连 + 断线续看）
+  2. 配额日历与配额感知 UI：zai 429 呈日级耗尽模式（连续三轮完整 E2E + 探测即触顶）。可在启动前发一个 3-token 探测调用预检配额（失败直接告知「配额耗尽，评估需等待」而非让用户看 12 章全灭）；UI 上把 transientHits 降级消息聚合成醒目状态条
+  3. 复审锚的效果度量：provenance.review 增 roundsSaved 或 per-chapter round trajectory（如 [1,1,2,1]），下轮 E2E 用真实数据验证锚是否把「2 轮 rewrite 保留」比例显著降低
+  4. 篇幅观察的进阶：当前只是提示文本；可在 provenance.chapters 记录每章 chars/deepWords.max 比值分布，超 60% 的章数作为「膨胀率」指标输出 done 消息，供趋势观察
+  5. figure-web 的 image-search 依赖检查：本轮 Phase E 配图 5 张全部来自 RCSB（web 0——image-search CLI 首查 60s 短路或空结果），pathway/ligand_binding 章无 pathway 示意图可挂；可考虑 RCSB 图不足时降级用 UniProt/文献图（PMC open access 图）补
+  6. 字体微调观察项：ui-monospace 在 Windows 渲染为 Consolas（无中文等宽字回退时中文用系统默认），若用户反馈中文对齐问题，可显式加 "Microsoft YaHei Mono" 或改 Sarasa Mono SC 优先
