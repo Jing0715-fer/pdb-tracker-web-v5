@@ -5172,3 +5172,40 @@ Stage Summary:
   4. 篇幅观察的进阶：当前只是提示文本；可在 provenance.chapters 记录每章 chars/deepWords.max 比值分布，超 60% 的章数作为「膨胀率」指标输出 done 消息，供趋势观察
   5. figure-web 的 image-search 依赖检查：本轮 Phase E 配图 5 张全部来自 RCSB（web 0——image-search CLI 首查 60s 短路或空结果），pathway/ligand_binding 章无 pathway 示意图可挂；可考虑 RCSB 图不足时降级用 UniProt/文献图（PMC open access 图）补
   6. 字体微调观察项：ui-monospace 在 Windows 渲染为 Consolas（无中文等宽字回退时中文用系统默认），若用户反馈中文对齐问题，可显式加 "Microsoft YaHei Mono" 或改 Sarasa Mono SC 优先
+
+---
+Task ID: R195
+Agent: main (Z.ai Code)
+Task: 按 R194 建议池推进迭代循环：新建议（两段式运行架构/配额预检/度量补强）→ 实施 → 真实 E2E → 再建议
+
+Work Log:
+- 实施建议池（R194 建议 1/2/3/4 全量落地）：
+  ① 两段式运行架构（核心）：新建 run-registry.ts（globalThis 单例 Map——防 Next dev webpack 多入口模块实例分裂，与 Prisma client 同款模式）——运行生命周期与 HTTP 请求解耦：事件带单调 seq、NDJSON log 累积、订阅者扇出、AbortController 独立于请求信号、已完成运行保留 8 条后淘汰；新建 run-service.ts 共享 validateDshRunBody/probeLlmQuota/launchDshRun（runDshEvaluation + done 载荷 + SkillRunRecord 遥测全部从旧 SSE route 迁移，ctx.logLines() 替代 withLog）；SSE route 重构为「订阅转发层」——新运行返回 X-Run-Id 头 + attach 订阅、body {runId, after} 重连模式回放游标后事件、req.signal abort 只 detach 不中止运行（R194 两连败死因根治）；新增 start（返回 runId 即启动）/status（?runId=&after= 增量轮询 + list 模式）/stop（注册表级中止）三端点
+  ② 配额预检（R194 建议 2）：启动前 3-token 探测调用（12s 超时+15s race 双保险，超时视为不可结论放行）；瞬态失败 → 503 平静拒绝「配额暂不可用…请稍后再试」（替代旧版 12 章逐个全灭 10 分钟）；非瞬态失败同样拒绝（全链失败时快速失败）；force=true API 逃生口（调用方显式承担风险，流水线退避/降级机制兜底；UI 不发送该字段）
+  ③ 度量补强（R194 建议 3/4）：DshChapterResult 增 reviewCapped；provenance.review.trajectory（每被审章 {id,rounds,rewritten,capped}——复审锚效果度量）；provenance.chapters.lengthStats（每章 chars/maxWords 比值，ratio>1.6 计膨胀章）+ done 消息「篇幅超限 N 章（观察项）」
+  ④ 前端：useRunStream 增强——X-Run-Id 头捕获入 state.runId、seq 游标追踪、网络错误（非用户取消）时自动重连（POST {runId, after=lastSeq+1}，上限 3 次，无 runId 时保持经典管线旧语义）；503 JSON 错误体只展示 message 字段（不再砸 JSON 包络）；settings-run-panel Stop 按钮接线——DSH 路径先 POST stop 端点再断开视图（runId 未到时 600ms 重试一次），经典管线保持 cancel 语义
+- E2E 中发现并修复的缺陷：
+  a) BLAST 轮询 Stop 缺口（预存 bug 被新 Stop 语义暴露）：blast.ts while(true) 轮询无信号检查，NCBI 队列拥挤时 pdbaa 可轮询 3+ 分钟，Stop 后最长无效数分钟；collect.ts 的 BLAST catch 还会把 AbortError 按「BLAST 失败继续」吞掉。修复：runBlastDb/runBlast 增 signal 参数（每轮轮询前检查，延迟 ≤ 轮询间隔）、collect 传 opts.signal、AbortError 直接上抛
+  b) abort 终态误标 error：registry 的 'aborted' 状态没被任务 abort 路径使用——DshRunTaskCtx 增 abort(msg) 方法，task 未捕获 AbortError 也归 aborted
+  c) dev server 反复被杀定位：bunx tsc 全项目检查与 next-server 并存触发 OOM（进程消失+dev.log 截断行实证）——本轮 3 次重启，教训：tsc/eslint 与 E2E 分时段跑
+- 真实 E2E（zai 日配额耗尽的逆境验证，全部通过）：
+  - 配额预检：探测 429 → 503 + 平静消息（curl 与浏览器双端验证；浏览器点击 Run → 20s 内显示「LLM 配额暂不可用…请稍后再试」——对旧版「10 分钟看 12 章全灭」的直接替换）
+  - 断线免疫（headline）：SSE 新建运行 25s 后砍断连接 → 运行继续推进（45s 后仍在写章节）→ 429 全灭场景下跑完全程 9 章（16m43s）→ 终局 done 载荷齐全（mode/uniprotInfo/outline/figures/report/scores/dbSaved）+ SkillRunRecord 遥测落库（log 32488 chars = 82 条 NDJSON 事件，ctx.logLines() 验证）+ provenance quota/trajectory/lengthStats 字段齐全
+  - 跨工具窗口轮询：poll 脚本游标持久化，3 个 ≤560s 的 Bash 窗口无缝续接（R194 两连败场景根治）
+  - stop：BLAST 轮询中途 stop → 12s 生效（修复前永不胜出）→ 终态 aborted + abort 事件 + 「已中止（用户 Stop）」消息
+  - SSE 重连：POST {runId, after:10} → 精确回放 seq 10-13 + 实时续流（seq 游标无丢失无重复——attach 回放与订阅注册间无 await，单线程无竞态）
+  - 429 降级链路完整复现：32 次瞬态 → level-3 跳过终审、每章 3 退避+救援占位符、references 确定性章照常成功
+- 浏览器验证（agent-browser）：页面 0 page errors 0 console errors；历史列表出现「8/31 07:11 DSH（基础评估）… 1/9 章 16m43s log 31.7KB」可展开（log 渲染 + done 帧）；配额 503 提示两次验证（优化前 JSON 包络直出 → 优化后只显 message）
+- 验证：tsc 全项目 120 错误与基线持平（改动文件 0 新增）；eslint 11 个改动文件 0 error 0 warning；dev.log 无新增错误（429 探测噪音除外）
+- 提交推送 GitHub
+
+Stage Summary:
+- R194 建议池核心四项全部落地且逆境 E2E 实测通过；「SSE 长连接被斩断 = 运行归零」类问题根治（架构层面：运行永不依附连接）
+- zai 日配额仍耗尽（R193/R194 连续多轮全量 E2E 烧完当日额度）→ 本轮 LLM 行为类验证（R194 遗留的复审锚命中/篇幅压缩建议/termFixes 输出/外科第 3 章 + R195 trajectory 真实数据）顺延至配额恢复后下轮；配额预检在本轮恰好以「生产条件」验证了它的价值
+- 新建议池（按价值排序，待用户定优先级）：
+  1. 配额恢复后的完整 UI E2E 补做：浏览器发起带问题 DSH 运行 → StreamFeed 实时渲染 + Stop 真实点击 + 重连场景（本轮只有 curl 端与 503 路径的浏览器验证）；同时补 R194/R195 遗留的 LLM 行为类验证（trajectory 真实数据看复审锚是否把 2 轮 rewrite 保留比例压下来）
+  2. probe 的 17-provider 链探测耗时 5.9s 且每次冷启动（zai 429 时 SDK 逐个试完全链）：可缓存「最近一次探测结果 + TTL 60s」（配额死窗口内连续点击 Run 不重复烧 6s），或探测只试主 provider（失败即拒，不等全链）
+  3. 注册表运行可考虑给 Run Center UI 加「后台运行中」状态条（status list 端点已有数据：页面刷新后 evalStream 丢失，但运行还在后台跑——UI 目前感知不到，只有历史里事后可见；可在面板加载时查 list 端点显示「有 1 个运行进行中」+ 重连按钮）
+  4. useRunStream 的 log 上限 300 条与 seq 游标在超长运行（>300 事件）下的组合行为：state.log slice(-300) 不影响游标（游标跟 seq），但重连回放会补齐错过的事件——若 UI 需要完整历史仍受 300 条 UI 限制；可按需提高或分页
+  5. E2E 工具链固化：poll.mjs 模式（游标持久化 + 多窗口续接）已验证有效，可把 start/poll/verify 固化成一个脚本进 scripts/ 目录供后续轮次复用（含 quota 探测预检与自动 force 逃生）
+  6. dev server OOM 规避：tsc 全项目检查与 next-server 并存会被 OOM 杀（本轮 3 次重启实证）——后续轮次先跑 tsc 再起 server，或 tsc 用 --incremental
