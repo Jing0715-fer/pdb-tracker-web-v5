@@ -5106,3 +5106,41 @@ Stage Summary:
   5. 深挖占比口径明确化：references 确定性生成后列表变长（3751 chars）把占比从 59% 拉到 49%，建议口径改为「深挖章节/(总长−参考文献)」（本口径 66.3%）或 UI 分开展示
   6. image-search 首查 55s 空转（figure-web 第一个 query 冷启动等 55s 返回 0 结果）：加超时短路或会话级结果缓存
 - 遗留观察（非缺陷）：终审/多轮审稿使总时长 430→580s（+35%），属质量换时长的预期取舍；附录 3 张溢出图为 RCSB 结构图未嵌入正文（每章 3 张上限的正常溢出）
+
+---
+Task ID: R193
+Agent: main (Z.ai Code)
+Task: 按 R192 建议池实施六项改进 → 真实 E2E 三轮重测 → 提出新建议
+
+Work Log:
+- 实施建议池六项（用户指示「按照建议进行修改」）：
+  ① 审稿口径与章节职责对齐（agent.ts 审查环）：reviewUser 注入本章职责块（tmpl.purpose + contentSpec）；question_focus/summary 保持严格直答口径（strictAnswer），其余被审章（实验策略建议/总结展望/各深挖章）directlyAnswers 改为「与问题相关部分是否在职责范围内做到位」；判定规则同步改写；rewriteHints 明确「不得要求删除或改名职责性内容」；重写 prompt 对非 strict 章注入「保持职责内容，只改进问题相关部分」
+  ② 配额感知分级降级（agent.ts 主流程）：transientHits 计数器 + noteTransient 喂入（章节生成失败/rescue 失败/重写失败/外科失败）；分级：≥2 重写完成后跳过复审（level-1）、≥4 跳过整章审查环（level-2）、≥6 跳过终审（level-3）；降级消息 level=info 前缀「配额降级」；provenance 增 phases.quota（transientHits + 三档布尔痕迹）+ llm.transientHits；done 消息增「限流退避 N 次（已自动降级审查深度）」
+  ③ 终审 termFixes 确定性术语统一：frUser JSON schema 增 termFixes [{from,to}] 字段与规则（纯术语字符串/文中精确出现/≤5 条）；抽 applyTermFixes 纯函数（图片行逐字保护、from/to 含 URL 跳过、from≥2、from!==to、零命中不进 applied）；执行顺序在外科修正之后（收尾统一，防外科重写重新引入旧叫法）；finalReview 增 termFixes 字段
+  ④ 外科修正多数派共识：frUser 要求 chapterTitle 指向「与多数章节矛盾的少数派章」+ consensus 给出多数派确切表述（含数字/ID）；issues 解析带 consensus；surgTargets 改按 chapterTitle 分组（同一章多条意见合并一次外科修正，共享 consensusList，防多次重写互相覆盖省配额），组数上限 2（超出 emit「仅记录」提示）；surgPrompt 注入「修正后必须与多数章节一致表述对齐」
+  ⑤ 深挖占比口径明确化：抽 deepShareStats 纯函数（deepChars 排除 references & baseline 章 / bodyChars = 全部 ok 章 − references）；done 消息自动输出「深挖占比 N%（排除参考文献口径）」；provenance chapters 增 deepChars/bodyChars/deepShare
+  ⑥ image-search 首查短路+会话缓存（figures.ts）：FIRST_QUERY_TIMEOUT_MS=60s 首查独立短超时；runImageSearchCli 改 {ok,results} 返回（区分「调用失败」与「零结果」）+ timeout 参数化；首查 ok=false → cliBrokenThisRun 短路本次全部 query（函数级，下次评估重试）；模块级 imageSearchCache（query 归一化 key，200 条上限清空重建，含零结果缓存）；缓存命中仍逐张 VLM 校验
+- E2E 中发现的 bug 与修复（第一轮真实测试驱动）：
+  a) deepShareStats 初版把 references 算进 deepChars（占比 65%→98% 失真）——单测抓到后修复（ch.id !== 'references' 条件）
+  b) generateJson 吞错误：终审/审稿死于 429 却报「JSON 解析失败」且不进配额计数器 → 降级机制对该场景失效。修复：generateJson 返回 error 字段（区分 llm-failed/json-parse）；审稿环与终审失败分支按 isTransientLlmError 归因（瞬态→noteTransient + 「LLM 调用失败（限流/瞬态，已计入配额压力）」消息；解析失败→原消息）
+- 单测：applyTermFixes 16 例（多章替换/图片行保护/URL 防御/无效项/失败章豁免/非数组输入/零命中/5 条上限）+ deepShareStats 8 例（新口径 vs 旧口径对比/references 双向排除/无问题模式 null/失败章豁免/除零兜底/无 references 章正常/混入 bug 回归）= 24/24 通过（初版 7 失败：1 真 bug + 3 测试断言设计错误，全部修正）
+- 真实 E2E 三轮（P00533，问题各不相同）：
+  第一轮（exon 20 插入 vs 经典突变问题，maxPdb=150，433s，14/14 章全成功）：⑥ 首查 60s 失败立即短路 4 个 query（旧行为 150s×4≈600s 白等，省 ~540s）；① 实验策略建议 1 轮重写通过（R192 时连续 2 轮错判）；⑤ 深挖占比 69% 自动输出；终审与第 14 章审稿死于 429（驱动发现 bug b）；审稿 7 章（重写 4 · 11 轮）
+  第二轮（C797S 耐药问题，maxPdb=120，590s 工具超时截断于外科第 2 组）：终审发现 5 个跨章问题（4 high：9NTP 分辨率 1.55Å/7ZYM 2.5Å 章间不一致等真实数字冲突）；④ 外科分组生效（「1 条意见合并处理」），第 1 组修正成功
+  第三轮（C797S 聚焦问题，maxPdb=60，560s，13/13 章全成功，完整闭环）：终审 4 high + 1 low（9VOX 2.69Å TAS-2913/9XU9 三重突变/9D3V 结合亲和力章间矛盾）；外科 2 组全部修正成功 + 「外科修正章数达上限（2），其余意见仅记录」提示正确；落库验证 finalReview={ok,issues:5,high:4,rewrites:2,termFixes:0} + deepShare 72% + quota 痕迹齐全；跨章一致性抽查 9VOX/9D3V/9XU9 全文统一；termFixes 本轮 LLM 未输出（其 low 问题非纯术语类，属正常——逻辑由单测覆盖）
+  写库：三轮均 tier-1 直达；done 消息「审稿 7 章（重写 4 · 共 10 轮）· 深挖占比 72% · 终审 5 项问题（外科修正 2 章）」与 provenance/DB 三方一致
+- 浏览器验证（agent-browser）：Run Center 5 条 DSH 历史正常（最新 03:38 · 13/13 章 · 9m20s 与第三轮吻合）；点击展开 StreamFeed 完整渲染（done 帧含深挖占比/终审/外科统计）；评估详情面板正常（P00533 · EGFR 6.0 · 60 PDB · 结构列表/成药性评分）；报告 API 通路正常（13144 chars · 13 H2 · 5 图 · DSH 头部/科学问题块）；0 页面错误 0 控制台错误
+- 验证：tsc 改动文件 0 错误；eslint agent.ts/figures.ts 0 error 0 warning；dev.log 无新增错误
+- 提交 8042935 推送 GitHub（0a0d898..8042935）
+
+Stage Summary:
+- 六项建议全部落地且三轮 E2E 实测生效；终审本轮抓出的全是真实章间数字冲突（分辨率/突变型/亲和力数据不一致）并被外科修正对齐——「多数派共识」机制首次完整跑通
+- 值得注意的实证：image-search 首查短路在本轮 E2E 恰好遇到 CLI 挂死场景，实测止损 ~540s（单轮评估最长节省来源）
+- 配额降级的三档阈值逻辑已就绪且有 429 计数修复兜底，但三轮中仅第一轮遇到 429（发生在修复前）——降级路径的「真实触发验证」仍是空白（逻辑正确性由代码保证，真实触发留待下次限流窗口）
+- 新建议池（按价值排序，待用户定优先级）：
+  1. 审稿意见的「复审锚」问题（本轮实测 2 章）：第 8/9 章连续 2 轮 rewrite 后达上限保留——每轮 hints 都不同（第 1 轮要求「删除直答段落」、第 2 轮又要求「补充拓扑细节」），审稿人每轮重新全量评估而非评估「上轮意见是否已解决」。改进：复审轮 prompt 注入上一轮意见与「本次只需评估上轮问题的解决程度」，防意见漂移
+  2. 章节篇幅的「深挖章膨胀」观察（本轮实测）：第 10 章分子相互作用 2783-2918 chars（模板 deepWords max 1600），deep 章超写约 80%，挤占其他章篇幅。改进：validateDshChapter 增加软性字数带宽（超出 max 30% 时重写提示）或接受现状（质量优先）
+  3. 终审 termFixes 的真实触发（本轮 LLM 两轮均未输出 termFixes，其 low 问题均非纯术语类）：可在终审 prompt 给 1 个 termFixes 示例（如「奥希替尼/Osimertinib 混用」）提高输出率；或接受现状（宁缺毋滥）
+  4. 外科修正上限的动态化：本轮 4 个 high 问题修正 2 章后余 2 条仅记录。若矛盾涉及不同 consensus（修一章消一条），上限 2 或许可按「每条 high 的少数派章互不相同时放宽到 3」
+  5. E2E 工具链改进：评估全程 560-590s 贴近 Bash 工具 600s 硬限，第三轮险些截断。可把 run-dsh 拆为「启动+轮询」两段式（POST 返回 runId + GET 轮询进度），既解决工具超时也支持断线续看
+  6. 审查环计数入 chapter_done 细分：done/provenance 已有 reviewed/rewritten/rounds，可加「降级跳过章数」便于事后质量归因
