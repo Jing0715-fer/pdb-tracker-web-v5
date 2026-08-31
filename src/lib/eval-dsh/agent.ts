@@ -1069,6 +1069,12 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
   // R192: 审查环轮次上限 —— 重写版会再次送审（复审），达此上限后不再重写
   // （防「怎么改都不满意」的章节吃掉整条流水线的时间与配额预算）。
   const MAX_REVIEW_ROUNDS = 2;
+  // R194 建议 6: 审查环配额降级痕迹计数（provenance / done 消息共用）——
+  // skippedReviewChapters = 整章审查环被跳过（level-2，≥4 次瞬态）；
+  // skippedReReviewChapters = 重写完成后不复审（level-1，≥2 次）。
+  // 事后质量归因时可区分「没审」与「审了但没复审」。
+  let skippedReviewChapters = 0;
+  let skippedReReviewChapters = 0;
   for (let i = 0; i < outline.length; i++) {
     const entry = outline[i];
     const tmpl = getSection(entry.id)!;
@@ -1298,6 +1304,7 @@ ${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.conten
     let reviewRounds = 0;
     if (ok && deep && entry.id !== 'references') {
       if (transientHits >= 4) {
+        skippedReviewChapters++;
         emit({ stage: 'chapter-review', level: 'info', message: `配额降级：已遇 ${transientHits} 次限流/瞬态错误，跳过「${tmpl.titleZh}」审查环（保留原稿，终审仍会通读全文）`, progress: pct, chapter: entry.id });
       } else {
       // R193: 本章职责注入 —— question_focus/summary 的职责就是直答问题，
@@ -1312,17 +1319,43 @@ ${tmpl.contentSpec}
 
 注意：本章以其自身职责为主体，不要求通篇直接回答科学问题 —— directlyAnswers 应评估「与科学问题相关的部分是否在职责范围内做到位」（问题相关内容缺失/错误/该答未答才判 false），而非要求全章直答。`;
       const reviewSystem = `你是结构生物学报告的严格审稿人。评估某一章草稿在其章节职责范围内是否达到「服务于科学问题 + 论证有深度 + 数据支撑充分」的标准。只输出 JSON，不要其他文字。`;
+      // R194 建议 1（复审锚）：记录上一轮审稿意见，复审轮注入「上轮意见 +
+      // 只评估解决程度」—— R193 实测第 8/9 章连续 2 轮 rewrite 的根因是
+      // 审稿人每轮重新全量评估、每轮换一套意见（第 1 轮要求删直答段落、
+      // 第 2 轮又要求补拓扑细节），意见漂移导致永远审不完。锚定上轮意见
+      // 后，复审只判断「上轮问题是否解决」，达标即 pass。
+      let lastRoundHints: string[] = [];
       for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
         try {
           if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
           emit({ stage: 'chapter-review', level: 'info', message: `审稿 agent 审查第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」${round > 1 ? `（第 ${round} 轮 —— 复审重写版）` : ''}…`, progress: pct, chapter: entry.id });
+          // R194 建议 1: 复审轮注入上轮意见锚（详见循环前注释）。
+          const reanchorBlock = round > 1 && lastRoundHints.length > 0
+            ? `【复审锚】上一轮审稿意见（针对重写前的版本）：
+${lastRoundHints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
+
+本次是第 ${round} 轮复审：只需评估上述上一轮意见是否已在当前草稿中解决 ——
+- 上轮意见全部解决且未引入新的严重问题 → verdict=pass
+- 仍有未解决项 → verdict=rewrite，rewriteHints 只列仍未解决的项（或当前草稿新引入的严重问题），不要提出与上一轮意见无关的新要求
+
+`
+            : '';
+          // R194 建议 2（篇幅带宽·软性）：深挖章超出模板字数上限约 60%
+          //（余量吸收 markdown 语法/表格线）时给审稿人一条篇幅观察 ——
+          // 是否可无损压缩由审稿人判断（存在明显冗余才给压缩建议，有效
+          // 论证不因篇幅判 rewrite），不设硬性字数墙。R193 实测：深挖章
+          // 膨胀 ~80%（2783 chars vs 1600 字上限），挤占报告整体篇幅平衡。
+          const deepMaxWords = tmpl.deepWords?.max ?? 0;
+          const lengthNote = deep && deepMaxWords > 0 && content.length > deepMaxWords * 1.6
+            ? `【篇幅观察】本章 ${content.length} chars，超出模板字数上限（${deepMaxWords} 字）约 ${Math.round((content.length / deepMaxWords - 1) * 100)}%。若存在明显冗余（重复论证/无效罗列/可合并表格），在 rewriteHints 中给出压缩建议；若均为有效论证则忽略本观察，不因篇幅单独判 rewrite。\n\n`
+            : '';
           const reviewUser = `科学问题：${question}
 
 ${roleBlock}
 
 章节标题：${tmpl.titleZh}
 
-章节草稿：
+${reanchorBlock}${lengthNote}章节草稿：
 ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按已见内容评估）' : ''}
 
 请输出 JSON：
@@ -1339,7 +1372,7 @@ ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按�
 - depth=shallow（论证链不完整、只有罗列无机制解释、无量化对比）→ rewrite
 - dataGrounded=false（结论未引用具体 PDB ID/PMID/数字）→ rewrite
 - verdict 必须与三维度一致：三个维度全部达标（directlyAnswers=true 且 dataGrounded=true 且 depth≠shallow）时 verdict 必须为 pass，不得 rewrite
-- rewriteHints 最多 3 条，每条必须是具体可执行的指令（如「补充 X 与 Y 的分辨率对比」），不得要求删除或改名本章的职责性内容`;
+${reanchorBlock ? '- 复审轮：评估口径以【复审锚】为准 —— 上轮意见已解决即 pass，不引入新要求\n' : ''}- rewriteHints 最多 3 条，每条必须是具体可执行的指令（如「补充 X 与 Y 的分辨率对比」），不得要求删除或改名本章的职责性内容`;
           const reviewRun = await generateJson(reviewSystem, reviewUser, { maxChars: 1200, llm: llmCfg, signal });
           llmTotalMs += reviewRun.durationMs;
           const rv = reviewRun.parsed;
@@ -1413,10 +1446,12 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
                 rewritten = true;
                 attempts++;
                 rewriteDone = true; // 进入下一轮复审
+                lastRoundHints = hints; // R194 建议 1: 复审锚 —— 下轮复审只评这份意见的解决程度
                 // R193 建议 2（配额感知降级 level-1）：重写已完成，但限流
                 // 压力高（≥2 次瞬态错误）时不再复审 —— 重写成果直接采用，
                 // 把剩余配额留给后续章节的初稿（主目标）。
                 if (transientHits >= 2) {
+                  skippedReReviewChapters++;
                   emit({ stage: 'chapter-review', level: 'info', message: `配额降级：已遇 ${transientHits} 次限流/瞬态错误，重写完成但不再复审（直接采用重写版）`, progress: pct, chapter: entry.id });
                   break;
                 }
@@ -1542,6 +1577,7 @@ ${docForReview}
 - high = 必须修正（矛盾 / 数字冲突）；low = 建议性（术语统一）
 - 章间矛盾/数字冲突时：chapterTitle 必须指向「与多数章节说法不一致的少数派章节」（修正少数派即对齐全局），并在 consensus 给出多数派的确切表述（含具体数字/ID）
 - low 的术语不统一若可全局安全替换（纯术语字符串、无歧义、不是句子片段），额外给出 termFixes；from 必须是文中出现过的精确字符串；termFixes 最多 5 条
+- termFixes 示例：全文中「奥希替尼」与「Osimertinib」两种叫法混用时 → {"from": "奥希替尼", "to": "奥希替尼（Osimertinib）"}（from 逐字取自文中实际出现的写法，to 是统一后的写法）
 - 没有跨章问题时 verdict=pass、issues=[]、termFixes=[]`;
       const frRun = await generateJson(frSystem, frUser, { maxChars: 1600, llm: llmCfg, signal });
       llmTotalMs += frRun.durationMs;
@@ -1598,9 +1634,14 @@ ${docForReview}
             surgGroups.set(ch.title, g);
           }
           let surgDone = 0;
+          // R194 建议 4（外科上限动态化）：R193 实测 4 个 high 修 2 章后余
+          // 2 条仅记录。若 high 矛盾分散在互不相同的少数派章（分组 ≥3），
+          // 每修一章消一条矛盾 —— 上限放宽到 3；矛盾集中（分组 ≤2）保持
+          // 2，防连环外科吃配额。
+          const surgCap = surgGroups.size >= 3 ? 3 : 2;
           for (const [, g] of surgGroups) {
-            if (surgDone >= 2) {
-              emit({ stage: 'final-review', level: 'info', message: `外科修正章数达上限（2），其余意见仅记录（终审意见已存 provenance）`, progress: 95 });
+            if (surgDone >= surgCap) {
+              emit({ stage: 'final-review', level: 'info', message: `外科修正章数达上限（${surgCap}${surgCap === 3 ? ' · 矛盾分散已放宽' : ''}），其余意见仅记录（终审意见已存 provenance）`, progress: 95 });
               break;
             }
             if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
@@ -1753,7 +1794,7 @@ ${ch.content}
         outline: { total: outline.length, ids: outline.map(o => o.id) },
         figures: { verified: verifiedFigures.length },
         chapters: { ok: chaptersOk, failed: chaptersFailed, deepChars: ds.deepChars, bodyChars: ds.bodyChars, deepShare: ds.deepShare },
-        review: { reviewed: reviewedCount, rewritten: rewrittenCount, rounds: chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0) },
+        review: { reviewed: reviewedCount, rewritten: rewrittenCount, rounds: chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0), skippedReview: skippedReviewChapters, skippedReReview: skippedReReviewChapters },
         finalReview: { ...finalReview },
         // R193 建议 2: 配额压力与降级痕迹入 provenance（事后可追溯哪次运行
         // 被降级、降了哪几档）。
@@ -1772,7 +1813,7 @@ ${ch.content}
     stage: 'done',
     level: reportOk ? 'success' : 'error',
     message: reportOk
-      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮）· 深挖占比 ${deepShare}%（排除参考文献口径）` : ' · 基础评估模式'}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 处` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
+      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）` : ' · 基础评估模式'}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 处` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
       : `✗ 全部章节生成失败`,
     progress: 100,
   });
