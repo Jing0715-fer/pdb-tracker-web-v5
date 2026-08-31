@@ -62,8 +62,12 @@ async function fetchWithRetry(url: string, opts: RequestInit, cfg: BlastDbConfig
  * @param maxHits Maximum number of hits
  * @param database NCBI database name ('pdbaa' for PDB, 'nr' for non-redundant)
  * @param onProgress Optional progress callback
+ * @param signal R195: 可选中止信号 —— NCBI 队列拥挤时 pdbaa 可轮询 3+ 分钟，
+ *   旧实现 while(true) 无信号检查，Stop 后最长无效数分钟（两段式架构下
+ *   Stop 语义明确，此缺口被实测暴露）。每轮轮询前检查一次，延迟 ≤ 一个
+ *   轮询间隔（~5s）。
  */
-export async function runBlastDb(sequence: string, maxHits = 20, database = 'pdbaa', onProgress?: (msg: string) => void): Promise<BlastHit[]> {
+export async function runBlastDb(sequence: string, maxHits = 20, database = 'pdbaa', onProgress?: (msg: string) => void, signal?: AbortSignal): Promise<BlastHit[]> {
   const cfg = BLAST_DB_CONFIG[database] ?? DEFAULT_DB_CONFIG;
   if (!sequence || sequence.length < 30) { onProgress?.('序列过短（<30 aa），跳过 BLAST'); return []; }
   onProgress?.(`提交 BLASTp 任务到 NCBI (数据库: ${database})…`);
@@ -88,6 +92,8 @@ export async function runBlastDb(sequence: string, maxHits = 20, database = 'pdb
   let attempts = 0;
   const startedAt = Date.now();
   while (true) {
+    // R195: Stop 检查点 —— 每轮轮询前检查（延迟 ≤ 轮询间隔）。
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     // First poll: respect RTOE. Subsequent: cap at minPollIntervalMs so we
     // don't hammer NCBI when RTOE was small but the actual job is still running.
     const waitMs = attempts === 0 ? rtoe * 1000 : cfg.minPollIntervalMs;
@@ -130,8 +136,8 @@ export async function runBlastDb(sequence: string, maxHits = 20, database = 'pdb
 }
 
 /** Backward-compatible wrapper: BLASTp against pdbaa (PDB database). */
-export async function runBlast(sequence: string, maxHits = 20, onProgress?: (msg: string) => void): Promise<BlastHit[]> {
-  return runBlastDb(sequence, maxHits, 'pdbaa', onProgress);
+export async function runBlast(sequence: string, maxHits = 20, onProgress?: (msg: string) => void, signal?: AbortSignal): Promise<BlastHit[]> {
+  return runBlastDb(sequence, maxHits, 'pdbaa', onProgress, signal);
 }
 
 function parseBlastXml(xml: string, database: 'pdbaa' | 'nr' = 'pdbaa'): BlastHit[] {

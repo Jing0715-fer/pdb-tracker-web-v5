@@ -328,7 +328,7 @@ export async function collectEvaluationData(
       emit({ stage: 'blast', level: 'info', message: `序列长度 ${sequence.length} aa，提交 BLASTp（上限 ${maxBlastHits} 条）…`, progress: 32 });
       blastRows = await runBlast(sequence, maxBlastHits, (msg) => {
         emit({ stage: 'blast', level: 'info', message: msg, progress: 33 });
-      });
+      }, opts.signal);
       if (blastRows.length > 0) {
         const top = blastRows[0];
         emit({ stage: 'blast', level: 'success', message: `✓ BLAST 命中 ${blastRows.length}/${maxBlastHits} 条同源（最高 identity=${top.identity}% · ${top.pdbId || top.uniprotRef}）`, progress: 44 });
@@ -336,6 +336,8 @@ export async function collectEvaluationData(
         emit({ stage: 'blast', level: 'warn', message: `BLAST 完成，无同源命中`, progress: 44 });
       }
     } catch (err: any) {
+      // R195: 用户 Stop（AbortError）不得被「BLAST 失败继续」吞掉 —— 直接上抛。
+      if (err?.name === 'AbortError') throw err;
       // BLAST 失败绝不中止评估（与经典 route 一致）。
       emit({ stage: 'blast', level: 'error', message: `✗ BLAST 失败：${err?.message}（继续后续评分）`, progress: 44 });
       skippedBlast = true;

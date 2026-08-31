@@ -2410,6 +2410,37 @@ export function SettingsRunPanel({
     });
   };
 
+  /** R195: Stop 按钮接线 —— DSH 运行已与 SSE 连接解耦（客户端断开不再
+   * 中止运行），必须先调 stop 端点真正中止后台任务，再断开视图连接；
+   * 经典管线保持旧的 cancel 语义（请求信号即运行信号）。runId 在启动后
+   * ~1s 内从响应头到达 —— 窗口期内点 Stop 时短暂等待重试一次。 */
+  const stopEvalRun = () => {
+    const doCancel = () => evalStream.cancel();
+    const callStop = (runId: string) => {
+      fetch('/api/evaluations/run-dsh/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId }),
+      })
+        .catch(() => { /* stop 端点不可达时仍断开视图 */ })
+        .finally(doCancel);
+    };
+    const pipeline = evalRunPipeline ?? evalPipeline;
+    if (pipeline === 'dsh') {
+      const rid = evalStream.state.runId;
+      if (rid) callStop(rid);
+      else {
+        setTimeout(() => {
+          const rid2 = evalStream.state.runId;
+          if (rid2) callStop(rid2);
+          else doCancel();
+        }, 600);
+      }
+    } else {
+      doCancel();
+    }
+  };
+
   const runWeekly = (maxCycles: 1 | 2 | 3) => {
     markRunning('weekly');
     weeklyStream.reset();
@@ -2836,7 +2867,7 @@ export function SettingsRunPanel({
                         </Field>
                       </div>
                       <div className="ml-auto shrink-0">
-                        <RunButton running={isRunning('eval')} onClick={runEvaluation} onCancel={() => evalStream.cancel()} />
+                        <RunButton running={isRunning('eval')} onClick={runEvaluation} onCancel={stopEvalRun} />
                       </div>
                     </div>
                   </div>
@@ -2897,7 +2928,7 @@ export function SettingsRunPanel({
                           <RunButton
                             running={isRunning('eval')}
                             onClick={runEvaluation}
-                            onCancel={() => evalStream.cancel()}
+                            onCancel={stopEvalRun}
                           />
                         </div>
                       )}
