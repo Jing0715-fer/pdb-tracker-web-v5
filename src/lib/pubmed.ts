@@ -94,23 +94,42 @@ function parseArticle(xml: string): FetchedPaper | null {
   const doi = xml.match(/<ArticleId[^>]*IdType="doi"[^>]*>([\s\S]*?)<\/ArticleId>/)?.[1]?.trim() || '';
   return { pmid, title, authors: authors.join(', '), journal, abstract, pubYear: year, pubMonth: month, pubDay: day, doi };
 }
-export async function efetch(pmids: string[]): Promise<FetchedPaper[]> {
+export async function efetch(pmids: string[], signal?: AbortSignal): Promise<FetchedPaper[]> {
   if (pmids.length === 0) return [];
   const out: FetchedPaper[] = [];
   for (let i = 0; i < pmids.length; i += 50) {
+    // R196: 批间 Stop 检查 + 与每批 60s 超时合并（大批量时可达数分钟，
+    // 旧版期间 Stop 完全无效）。无 signal 的既有调用方行为不变。
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     const batch = pmids.slice(i, i + 50);
     const url = new URL(`${EUTILS}/efetch.fcgi`);
     url.searchParams.set('db', 'pubmed'); url.searchParams.set('id', batch.join(','));
     url.searchParams.set('rettype', 'xml'); url.searchParams.set('retmode', 'xml');
-    const res = await fetch(url.toString(), { headers: { 'User-Agent': 'pdb-tracker-web-v3/1.0' }, signal: AbortSignal.timeout(60000) });
-    if (!res.ok) throw new Error(`eFetch ${res.status}: ${await res.text().catch(() => '')}`);
-    const xml = await res.text();
-    const articleChunks = xml.split('<PubmedArticle>').slice(1);
-    for (const chunk of articleChunks) {
-      const end = chunk.indexOf('</PubmedArticle>');
-      if (end < 0) continue;
-      const paper = parseArticle('<PubmedArticle>' + chunk.slice(0, end));
-      if (paper) out.push(paper);
+    const callerSignal = signal;
+    const combo = new AbortController();
+    const timer = setTimeout(() => combo.abort(new DOMException('timeout after 60000ms', 'TimeoutError')), 60_000);
+    const onAbort = () => combo.abort(callerSignal?.reason);
+    if (callerSignal) {
+      if (callerSignal.aborted) combo.abort(callerSignal.reason);
+      else callerSignal.addEventListener('abort', onAbort, { once: true });
+    }
+    try {
+      const res = await fetch(url.toString(), { headers: { 'User-Agent': 'pdb-tracker-web-v3/1.0' }, signal: combo.signal });
+      if (!res.ok) throw new Error(`eFetch ${res.status}: ${await res.text().catch(() => '')}`);
+      const xml = await res.text();
+      const articleChunks = xml.split('<PubmedArticle>').slice(1);
+      for (const chunk of articleChunks) {
+        const end = chunk.indexOf('</PubmedArticle>');
+        if (end < 0) continue;
+        const paper = parseArticle('<PubmedArticle>' + chunk.slice(0, end));
+        if (paper) out.push(paper);
+      }
+    } catch (err: any) {
+      if (signal?.aborted || (err?.name === 'AbortError' && !/timeout/i.test(String(err?.message)))) throw new DOMException('aborted', 'AbortError');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
     }
     if (i + 50 < pmids.length) await new Promise(r => setTimeout(r, 350));
   }

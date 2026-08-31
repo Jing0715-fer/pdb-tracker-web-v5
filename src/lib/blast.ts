@@ -34,15 +34,54 @@ const BLAST_DB_CONFIG: Record<string, BlastDbConfig> = {
 
 const DEFAULT_DB_CONFIG: BlastDbConfig = { minPollIntervalMs: 5000, fetchTimeoutMs: 30_000, maxFetchRetries: 3 };
 
-function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
+/** R196: 信号元数据齐全时毫秒上限墙钟 —— 无 signal 的经典管线调用方
+ *  （run/route.ts 四处）在 NCBI 持续 503/429 时旧版会永久轮询；15 分钟
+ *  远超真实最长等待（pdbaa 拥挤实测 ~3 分钟），只兑底不死循环。 */
+const MAX_POLL_WALL_MS = 15 * 60_000;
+
+/** R196: 可中止 sleep —— Stop 信号即刻生效（旧版 sleep 不感知 signal，
+ *  首轮 RTOE 等待可达 10-60s，Stop 延迟远超「一个轮询间隔」的承诺）。 */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException('aborted', 'AbortError')); return; }
+    const onAbort = () => { clearTimeout(t); reject(new DOMException('aborted', 'AbortError')); };
+    const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** R196: 合并调用方 signal 与超时（沿用 llm.ts withSdkTimeout 的手动
+ * controller 接线模式 —— 不依赖 Node 20.3+ 的 AbortSignal.any）。
+ * 导出供 rcsb.ts / collect.ts / figures.ts 等数据层共用（Stop 全链路即刻生效）。 */
+export function combineSignals(callerSignal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException(`timeout after ${timeoutMs}ms`, 'TimeoutError')), timeoutMs);
+  const onCallerAbort = () => controller.abort(callerSignal?.reason);
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort(callerSignal.reason);
+    else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', onCallerAbort);
+    },
+  };
+}
 
 /** Fetch a URL with bounded retries on transient 'fetch failed' / network errors. */
-async function fetchWithRetry(url: string, opts: RequestInit, cfg: BlastDbConfig): Promise<Response> {
+async function fetchWithRetry(url: string, opts: RequestInit, cfg: BlastDbConfig, signal?: AbortSignal): Promise<Response> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= cfg.maxFetchRetries; attempt++) {
+    // R196: 调用方 Stop 与每请求超时合并 —— 旧版只挂 AbortSignal.timeout，
+    // Stop 只能在当前 in-flight fetch 自然结束后才生效（nr 最长 60s）。Stop
+    // 中止的 fetch 会抛 AbortError，与重试语义区分后直接上抛。
+    const combo = combineSignals(signal, cfg.fetchTimeoutMs);
     try {
-      return await fetch(url, { ...opts, signal: AbortSignal.timeout(cfg.fetchTimeoutMs) });
+      return await fetch(url, { ...opts, signal: combo.signal });
     } catch (err: any) {
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       lastErr = err;
       // undici / Node fetch wraps network errors as 'fetch failed' (TypeError)
       // or 'network error' / 'aborted'. Treat all as retryable.
@@ -51,6 +90,8 @@ async function fetchWithRetry(url: string, opts: RequestInit, cfg: BlastDbConfig
       if (!retryable || attempt === cfg.maxFetchRetries) throw err;
       const backoff = Math.min(15_000, 1000 * 2 ** attempt);
       await sleep(backoff);
+    } finally {
+      combo.dispose();
     }
   }
   throw lastErr;
@@ -72,7 +113,7 @@ export async function runBlastDb(sequence: string, maxHits = 20, database = 'pdb
   if (!sequence || sequence.length < 30) { onProgress?.('序列过短（<30 aa），跳过 BLAST'); return []; }
   onProgress?.(`提交 BLASTp 任务到 NCBI (数据库: ${database})…`);
   const submitBody = new URLSearchParams({ CMD: 'Put', PROGRAM: 'blastp', DATABASE: database, QUERY: sequence, HITLIST_SIZE: String(maxHits), EXPECT: '1e-5', FILTER: 'F' });
-  const submitRes = await fetchWithRetry(BLAST_URL, { method: 'POST', body: submitBody }, cfg);
+  const submitRes = await fetchWithRetry(BLAST_URL, { method: 'POST', body: submitBody }, cfg, signal);
   if (!submitRes.ok) throw new Error(`BLAST submit ${submitRes.status}`);
   const submitText = await submitRes.text();
   const ridMatch = submitText.match(/RID\s*=\s*(\S+)/);
@@ -92,19 +133,26 @@ export async function runBlastDb(sequence: string, maxHits = 20, database = 'pdb
   let attempts = 0;
   const startedAt = Date.now();
   while (true) {
-    // R195: Stop 检查点 —— 每轮轮询前检查（延迟 ≤ 轮询间隔）。
+    // R195: Stop 检查点 —— 每轮轮询前检查。
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    // R196: 墙钟上限 —— 无 signal 的调用方（经典管线）在 NCBI 持续
+    // 503/429 时旧版永久轮询；有 signal 时由 Stop 端点兜底。
+    if (Date.now() - startedAt > MAX_POLL_WALL_MS) {
+      throw new Error(`BLAST 轮询超过 ${Math.round(MAX_POLL_WALL_MS / 60000)} 分钟墙钟上限（RID=${rid}）`);
+    }
     // First poll: respect RTOE. Subsequent: cap at minPollIntervalMs so we
     // don't hammer NCBI when RTOE was small but the actual job is still running.
     const waitMs = attempts === 0 ? rtoe * 1000 : cfg.minPollIntervalMs;
-    await sleep(waitMs);
+    // R196: sleep 可中止 —— Stop 在等待期即刻生效（旧版需等完 RTOE/间隔）。
+    await sleep(waitMs, signal);
     attempts++;
     const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
     onProgress?.(`轮询 BLAST 结果 (第 ${attempts} 次, 已等待 ${elapsedSec}s)…`);
     let pollRes: Response;
     try {
-      pollRes = await fetchWithRetry(`${BLAST_URL}?CMD=Get&FORMAT_TYPE=XML&RID=${rid}`, {}, cfg);
+      pollRes = await fetchWithRetry(`${BLAST_URL}?CMD=Get&FORMAT_TYPE=XML&RID=${rid}`, {}, cfg, signal);
     } catch (err: any) {
+      if (signal?.aborted || err?.name === 'AbortError') throw new DOMException('aborted', 'AbortError');
       // Transient network error — log and keep polling. NCBI occasionally
       // returns 'fetch failed' under load; we never give up on these.
       onProgress?.(`轮询网络抖动：${err?.message ?? err}（已等待 ${elapsedSec}s，继续轮询）`);
@@ -207,11 +255,17 @@ export function classifyBlastHits(hits: BlastHit[]): BlastHit[] {
   }
   return hits;
 }
-export async function fetchUniprotSequence(uniprotId: string): Promise<string> {
-  const res = await fetch(`https://rest.uniprot.org/uniprotkb/${uniprotId}.fasta`, { signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`UniProt fetch ${res.status} for ${uniprotId}`);
-  const fasta = await res.text();
-  const seq = fasta.split('\n').slice(1).join('');
-  if (!seq || seq.length < 30) throw new Error(`UniProt sequence too short for ${uniprotId}`);
-  return seq;
+export async function fetchUniprotSequence(uniprotId: string, signal?: AbortSignal): Promise<string> {
+  // R196: signal 透传 —— Phase A 收集期的 Stop 即刻生效（与 blast/RCSB 同口径）。
+  const combo = combineSignals(signal, 15_000);
+  try {
+    const res = await fetch(`https://rest.uniprot.org/uniprotkb/${uniprotId}.fasta`, { signal: combo.signal });
+    if (!res.ok) throw new Error(`UniProt fetch ${res.status} for ${uniprotId}`);
+    const fasta = await res.text();
+    const seq = fasta.split('\n').slice(1).join('');
+    if (!seq || seq.length < 30) throw new Error(`UniProt sequence too short for ${uniprotId}`);
+    return seq;
+  } finally {
+    combo.dispose();
+  }
 }

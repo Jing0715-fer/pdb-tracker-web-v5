@@ -2274,6 +2274,10 @@ export function SettingsRunPanel({
   }, []);
 
   const runEvaluation = () => {
+    // R196: 重复 Run 防护 —— 运行中再次点击直接忽略（双击旧版会并行启动
+    // 两场评估：服务端 409 守卫 + 前端 genRef 代际令牌双保险，此处是最
+    // 早拦截点）。旧流若有残留，start() 的 abort + 代际失效机制会静默接管。
+    if (isRunning('eval')) return;
     // R179 (Task 2-b): DSH 模式 — 问题驱动智能体流水线（单靶点 + 必填科学问题）。
     // Posts to /api/evaluations/run-dsh with the same SSE frame contract as
     // classic; progress events additionally carry dshRelevance/dshOutline/
@@ -2412,8 +2416,12 @@ export function SettingsRunPanel({
 
   /** R195: Stop 按钮接线 —— DSH 运行已与 SSE 连接解耦（客户端断开不再
    * 中止运行），必须先调 stop 端点真正中止后台任务，再断开视图连接；
-   * 经典管线保持旧的 cancel 语义（请求信号即运行信号）。runId 在启动后
-   * ~1s 内从响应头到达 —— 窗口期内点 Stop 时短暂等待重试一次。 */
+   * 经典管线保持旧的 cancel 语义（请求信号即运行信号）。
+   * R196: runId 到达窗口修正 —— 启动前有 schema 迁移 + LLM 配额探测
+   * （探测链最长 ~15s），旧版 600ms 重试读的还是渲染时闭包里的旧
+   * state（结构性失效），窗口内 Stop 会变成「只断视图」的孤儿运行。
+   * 改为轮询 hook 的 getRunId()（ref 直读，无闭包失效），最长 ~16s
+   * 覆盖整个启动窗口；期间到达即调 stop 端点真正中止。 */
   const stopEvalRun = () => {
     const doCancel = () => evalStream.cancel();
     const callStop = (runId: string) => {
@@ -2427,15 +2435,14 @@ export function SettingsRunPanel({
     };
     const pipeline = evalRunPipeline ?? evalPipeline;
     if (pipeline === 'dsh') {
-      const rid = evalStream.state.runId;
-      if (rid) callStop(rid);
-      else {
-        setTimeout(() => {
-          const rid2 = evalStream.state.runId;
-          if (rid2) callStop(rid2);
-          else doCancel();
-        }, 600);
-      }
+      const deadline = Date.now() + 16_000; // 覆盖配额探测全窗口
+      const poll = () => {
+        const rid = evalStream.getRunId();
+        if (rid) { callStop(rid); return; }
+        if (Date.now() > deadline) { doCancel(); return; }
+        setTimeout(poll, 300);
+      };
+      poll();
     } else {
       doCancel();
     }
@@ -2867,7 +2874,7 @@ export function SettingsRunPanel({
                         </Field>
                       </div>
                       <div className="ml-auto shrink-0">
-                        <RunButton running={isRunning('eval')} onClick={runEvaluation} onCancel={stopEvalRun} />
+                        <RunButton disabled={isRunning('eval')} running={isRunning('eval')} onClick={runEvaluation} onCancel={stopEvalRun} />
                       </div>
                     </div>
                   </div>
@@ -2926,6 +2933,7 @@ export function SettingsRunPanel({
                       {i === 0 && (
                         <div className="ml-auto shrink-0">
                           <RunButton
+                            disabled={isRunning('eval')}
                             running={isRunning('eval')}
                             onClick={runEvaluation}
                             onCancel={stopEvalRun}

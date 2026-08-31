@@ -14,7 +14,7 @@ import { runDshEvaluation } from './agent';
 import { isTransientLlmError, shortLlmErr } from './agent';
 import { generateText } from '@/lib/llm';
 import { resolveRunLlmConfig } from '@/lib/agent/eval-llm';
-import { createDshRun, type DshRunRecord } from './run-registry';
+import { createDshRun, findRunningDshRunByUniprot, type DshRunRecord } from './run-registry';
 
 /** API-01 同款钳制（与经典 route 的常量一致；R187: 200 → 500）。 */
 export const MAX_PDB_CAP = 500;
@@ -22,6 +22,14 @@ export const MAX_BLAST_HITS_CAP = 100;
 export const MAX_LIT_COUNT_CAP = 200;
 
 const UNIPROT_RE = /^[A-Z0-9_]{3,10}$/i;
+
+/** R196: 数值入参锢制 —— Number("abc")=NaN 会穿透 Math.min/max 双层钳制
+ *  （NaN 传播），导致 maxPdb=NaN → ids.slice(0,NaN) → 0 PDB 的静默空报告。
+ *  非有限数一律回退默认值。 */
+function clampInt(raw: unknown, def: number, min: number, max: number): number {
+  const n = Number(raw ?? def);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.trunc(n))) : def;
+}
 
 export interface DshLaunchParams {
   uniprot: string;
@@ -60,9 +68,9 @@ export function validateDshRunBody(body: unknown): DshValidateResult {
       error: `Invalid 'question': must be empty (basic evaluation) or 8-1000 characters after trim (got ${question.length}).`,
     };
   }
-  const maxPdb = Math.max(1, Math.min(MAX_PDB_CAP, Number(b.maxPdb ?? 80)));
-  const maxBlastHits = Math.max(0, Math.min(MAX_BLAST_HITS_CAP, Number(b.maxBlastHits ?? 50)));
-  const maxLitCount = Math.max(0, Math.min(MAX_LIT_COUNT_CAP, Number(b.maxLitCount ?? 20)));
+  const maxPdb = clampInt(b.maxPdb, 80, 1, MAX_PDB_CAP);
+  const maxBlastHits = clampInt(b.maxBlastHits, 50, 0, MAX_BLAST_HITS_CAP);
+  const maxLitCount = clampInt(b.maxLitCount, 20, 0, MAX_LIT_COUNT_CAP);
   const forceBlast = !!b.forceBlast;
   const skipBlast = !!b.skipBlast;
   const llm = resolveRunLlmConfig(b.llm);
@@ -92,6 +100,9 @@ export function validateDshRunBody(body: unknown): DshValidateResult {
 export async function probeLlmQuota(
   llm: DshLaunchParams['llm'],
 ): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
+  // R196: race 计时器必须清理 —— 探测提前成功时 15s 定时器仍挂着
+  // （成功路径每窗口保活事件循环 + 高频探测下定时器堆积）。
+  let raceTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const r = await Promise.race([
       generateText('You are a health probe. Reply with the single word: ok', 'ping', {
@@ -99,7 +110,7 @@ export async function probeLlmQuota(
         llm: { provider: llm.provider, ...(llm.model ? { model: llm.model } : {}) },
         signal: AbortSignal.timeout(12_000),
       }),
-      new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), 15_000)),
+      new Promise<'timeout'>((res) => { raceTimer = setTimeout(() => res('timeout'), 15_000); }),
     ]);
     if (r === 'timeout') return { ok: true };
     if (r.ok) return { ok: true };
@@ -119,6 +130,8 @@ export async function probeLlmQuota(
   } catch {
     // 探测调用自身异常（网络/超时）—— 结论不可靠，放行。
     return { ok: true };
+  } finally {
+    if (raceTimer) clearTimeout(raceTimer);
   }
 }
 
@@ -246,4 +259,31 @@ export async function ensureSchemaCompatBeforeRun(): Promise<void> {
   } catch (e: any) {
     console.warn(`[eval/run-dsh] schema-compat skipped: ${e?.message ?? e}`);
   }
+}
+
+/**
+ * R196: 启动前守卫（SSE / start 两端点共用）：
+ *   ① 客户端已断开（探测/迁移等待期间 Stop/网络断开）→ 不启动，返回
+ *     499（孤儿运行只会无观察者白烧 10+ 分钟配额）；
+ *   ② 同一 UniProt 已有运行中的评估 → 409 拒绝（双击/刷新后重复 Run
+ *     会烧双份配额且旧运行对 UI 不可见）。
+ */
+export function preLaunchGuard(
+  params: { uniprot: string },
+  reqSignal: AbortSignal,
+): { ok: true } | { ok: false; status: number; error: string; runId?: string; duplicate?: boolean } {
+  if (reqSignal.aborted) {
+    return { ok: false, status: 499, error: '客户端已断开，评估未启动。' };
+  }
+  const running = findRunningDshRunByUniprot(params.uniprot);
+  if (running) {
+    return {
+      ok: false,
+      status: 409,
+      duplicate: true,
+      runId: running.runId,
+      error: `${params.uniprot} 已有一场 DSH 评估正在后台运行（runId: ${running.runId}）。请等待其完成，或先停止后再启动。`,
+    };
+  }
+  return { ok: true };
 }

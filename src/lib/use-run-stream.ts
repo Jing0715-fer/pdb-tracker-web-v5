@@ -13,6 +13,21 @@
  *     `{ runId, after }` and resume without duplicate or lost events;
  *   - on network errors (NOT user cancellation) auto re-attaches up to 3
  *     times — the run keeps executing server-side, only the view reconnects.
+ *
+ * R196 fixes:
+ *   - generation token (genRef): a superseded stream's async teardown can no
+ *     longer clobber the successor run's state or kill its flush timer
+ *     (start() while an old stream is mid-flight used to leave the new run
+ *     showing a spurious "cancelled" error with a frozen live log);
+ *   - re-attach works before the first parsed frame (after=0 full replay —
+ *     a drop between response headers and frame #1 used to terminate with
+ *     "多次中断" after zero attempts);
+ *   - fetch()-level rejections (server restart blip) consume the same 3-attempt
+ *     re-attach budget instead of falling straight to a terminal OOM message;
+ *   - the budget resets whenever a frame (incl. server heartbeat pings) is
+ *     successfully received — long runs survive >3 scattered drops;
+ *   - classic-pipeline reader failures are reported as errors instead of a
+ *     bogus green "done" with no result.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -60,7 +75,9 @@ const INITIAL: StreamState = {
   ok: false,
 };
 
-/** Max auto re-attach attempts after a dropped connection (R195). */
+/** Max auto re-attach attempts after a dropped connection (R195).
+ * R196: budget resets on every successfully received frame, so this is
+ * effectively "3 *consecutive* failures" — not 3 total per run. */
 const MAX_REATTACH = 3;
 
 export function useRunStream() {
@@ -69,6 +86,11 @@ export function useRunStream() {
   // R195: server run id + consumed-event cursor for re-attach.
   const runIdRef = useRef<string | null>(null);
   const lastSeqRef = useRef<number>(-1);
+  // R196: generation token — bumped by start()/reset(). The async loop (and
+  // its teardown paths) capture the token and must silently exit once it no
+  // longer matches: their setState/stopFlushTimer calls would otherwise land
+  // on the NEW run's state/timer (the old-run teardown bug).
+  const genRef = useRef(0);
   // Buffer for incoming log events — flushed to state on an interval to
   // avoid re-rendering on every single SSE frame (which can be 10+/second
   // during chapter streaming and causes UI jank / perceived "page refresh").
@@ -98,6 +120,7 @@ export function useRunStream() {
   }, []);
 
   const reset = useCallback(() => {
+    genRef.current++; // R196: supersede any in-flight stream's teardown.
     abortRef.current?.abort();
     abortRef.current = null;
     runIdRef.current = null;
@@ -111,16 +134,28 @@ export function useRunStream() {
    * R195: pump one SSE response body to completion.
    * Returns 'done' | 'error' (terminal frame received), 'ended' (stream
    * closed without a terminal frame) or 'network' (reader threw).
+   *
+   * R196 options:
+   *   - isStale: when the owning start() generation has been superseded, the
+   *     pump stops writing to the shared log buffer / state (late frames from
+   *     an aborted old connection would otherwise pollute the new run's log)
+   *     and skips state mutations in terminal branches;
+   *   - onFrame: invoked per parsed frame (heartbeat pings included) so the
+   *     caller can reset its re-attach budget on evidence the connection is
+   *     alive.
    */
   const pump = useCallback(async (
     reader: ReadableStreamDefaultReader<Uint8Array>,
     ctrl: AbortController,
+    opts?: { isStale?: () => boolean; onFrame?: () => void },
   ): Promise<'done' | 'error' | 'ended' | 'network'> => {
     const decoder = new TextDecoder();
     let buf = '';
+    const isStale = opts?.isStale ?? (() => false);
 
     const handleFrame = (eventName: string, payload: any): 'done' | 'error' | 'continue' => {
       if (eventName === 'progress' || eventName === 'log' || eventName === 'message') {
+        if (isStale()) return 'continue'; // R196: superseded stream — no writes.
         // Strip the noise (ts is generated server-side; everything else from payload).
         // R179 (Task 2-b): spread the raw payload FIRST so caller-defined
         // extras (dshRelevance / dshOutline / dshFigure on DSH-mode eval
@@ -152,6 +187,7 @@ export function useRunStream() {
         return 'continue';
       }
       if (eventName === 'done' || eventName === 'result') {
+        if (isStale()) return 'done'; // R196: report outcome only — no state writes.
         stopFlushTimer();
         setState(s => ({
           ...s,
@@ -163,6 +199,7 @@ export function useRunStream() {
         return 'done';
       }
       if (eventName === 'error') {
+        if (isStale()) return 'error';
         stopFlushTimer();
         setState(s => ({
           ...s,
@@ -200,6 +237,7 @@ export function useRunStream() {
           try { payload = JSON.parse(dataStr); } catch { /* keep as string */ }
 
           const r = handleFrame(eventName, payload);
+          opts?.onFrame?.(); // R196: any parsed frame (pings included) = alive connection.
           if (r !== 'continue') return r;
         }
       }
@@ -214,6 +252,7 @@ export function useRunStream() {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const gen = ++genRef.current; // R196: this loop's generation token.
     runIdRef.current = null;
     lastSeqRef.current = -1;
 
@@ -228,12 +267,27 @@ export function useRunStream() {
         // R195: loop supports auto re-attach — first iteration is the normal
         // POST; later iterations POST { runId, after } to resume.
         while (true) {
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-            body: JSON.stringify(currentBody ?? {}),
-            signal: ctrl.signal,
-          });
+          let res: Response;
+          try {
+            res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+              body: JSON.stringify(currentBody ?? {}),
+              signal: ctrl.signal,
+            });
+          } catch (fetchErr: any) {
+            // R196: fetch()-level rejection (server restart / network blip —
+            // "TypeError: Failed to fetch") previously bypassed the re-attach
+            // budget entirely and terminated with a misleading OOM-crash
+            // message while the DSH run was still alive server-side. Route it
+            // through the same budget.
+            if (fetchErr?.name === 'AbortError' || ctrl.signal.aborted) throw fetchErr;
+            if (runIdRef.current && ++reattachAttempts <= MAX_REATTACH) {
+              await new Promise(r => setTimeout(r, 800));
+              continue;
+            }
+            throw fetchErr;
+          }
 
           if (!res.ok) {
             const text = await res.text().catch(() => '');
@@ -244,6 +298,7 @@ export function useRunStream() {
               const j = JSON.parse(text);
               if (j && typeof j.error === 'string') friendly = j.error;
             } catch { /* not JSON — keep raw */ }
+            if (gen !== genRef.current) return; // R196: superseded — stay silent.
             stopFlushTimer();
             setState(s => ({
               ...s,
@@ -256,6 +311,7 @@ export function useRunStream() {
           }
 
           if (!res.body) {
+            if (gen !== genRef.current) return;
             stopFlushTimer();
             setState(s => ({ ...s, running: false, done: true, ok: false, error: 'No response body' }));
             return;
@@ -269,7 +325,12 @@ export function useRunStream() {
             setState(s => (s.runId === rid ? s : { ...s, runId: rid }));
           }
 
-          const outcome = await pump(res.body.getReader(), ctrl);
+          const outcome = await pump(res.body.getReader(), ctrl, {
+            isStale: () => gen !== genRef.current,
+            onFrame: () => { reattachAttempts = 0; }, // R196: frames received → budget resets.
+          });
+
+          if (gen !== genRef.current) return; // R196: superseded — exit silently.
 
           if (outcome === 'done' || outcome === 'error') return; // terminal frame
 
@@ -280,9 +341,14 @@ export function useRunStream() {
             setState(s => ({ ...s, running: false, done: true, ok: false, error: 'cancelled' }));
             return;
           }
-          if (runIdRef.current && lastSeqRef.current >= 0 && ++reattachAttempts <= MAX_REATTACH) {
+          // R196: re-attach also when no frame was parsed yet (lastSeq=-1 →
+          // after=0 full replay — nothing was consumed, so nothing repeats).
+          // Previously the `lastSeqRef.current >= 0` guard made a drop between
+          // response headers and frame #1 fall straight through to the
+          // "多次中断" error with zero re-attach attempts.
+          if (runIdRef.current && ++reattachAttempts <= MAX_REATTACH) {
             // R195: run continues server-side — re-attach from the cursor.
-            currentBody = { runId: runIdRef.current, after: lastSeqRef.current + 1 };
+            currentBody = { runId: runIdRef.current, after: Math.max(0, lastSeqRef.current + 1) };
             continue;
           }
           if (runIdRef.current) {
@@ -297,13 +363,29 @@ export function useRunStream() {
             }));
             return;
           }
-          // Legacy semantics (classic pipeline): stream ended without
+          if (outcome === 'network') {
+            // R196: classic pipelines — a reader-level network failure used to
+            // be reported as a bogus green success with no result; only a
+            // clean close without a terminal frame keeps the legacy
+            // implicit-success semantics.
+            stopFlushTimer();
+            setState(s => ({
+              ...s,
+              running: false,
+              done: true,
+              ok: false,
+              error: '服务器连接中断（可能因内存不足崩溃）。请稍候重试 — 服务器会自动重启。',
+            }));
+            return;
+          }
+          // Legacy semantics (classic pipeline): stream ended cleanly without
           // explicit done/error — treat as success.
           stopFlushTimer();
           setState(s => ({ ...s, running: false, done: true, ok: true }));
           return;
         }
       } catch (err: any) {
+        if (gen !== genRef.current) return; // R196: superseded — exit silently.
         stopFlushTimer();
         if (err?.name === 'AbortError') {
           setState(s => ({ ...s, running: false, done: true, ok: false, error: 'cancelled' }));
@@ -332,7 +414,16 @@ export function useRunStream() {
     abortRef.current?.abort();
   }, []);
 
+  /**
+   * R196: stable accessor for the CURRENT runId (ref-based — immune to the
+   * stale-render-closure problem that made the old 600ms Stop retry read a
+   * dead state object). Used by the panel's Stop flow to outlast the LLM
+   * quota-probe window (up to ~15s) before the id arrives.
+   */
+  const getRunId = useCallback((): string | null => runIdRef.current, []);
+
   useEffect(() => () => {
+    genRef.current++; // R196: unmount supersedes any in-flight loop.
     abortRef.current?.abort();
     if (flushTimerRef.current) {
       clearInterval(flushTimerRef.current);
@@ -340,5 +431,5 @@ export function useRunStream() {
     }
   }, []);
 
-  return { state, start, reset, cancel };
+  return { state, start, reset, cancel, getRunId };
 }

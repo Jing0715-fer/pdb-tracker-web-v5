@@ -58,12 +58,23 @@ export interface DshRunRecord {
   errorMessage?: string;
   abort: AbortController;
   subscribers: Set<DshSubscriber>;
+  /** R196 内部字段：超时安全网 timer（finishRun 时清除）。 */
+  reaper?: ReturnType<typeof setTimeout>;
 }
 
 /** 保留的已完成运行数（防内存无限增长；运行中永不淘汰）。 */
 const MAX_FINISHED_RUNS = 8;
 
+/** R196: 运行时长安全网上限 —— task 内部某个非 LLM await 点卡死（如 SQLite
+ *  锁等待）时，记录会永远停留 running（状态列表/409 守卫均受污染）。
+ *  60 分钟远超最长真实运行（E2E 实测 ≤17 分钟），只兜底不死循环。 */
+const MAX_RUN_DURATION_MS = 60 * 60_000;
+
 type RegistryMap = Map<string, DshRunRecord>;
+
+/** R196: runId 防碰撞 —— 同毫秒内两次启动（脚本重试/双击）会生成相同 id，
+ *  runs.set 会覆盖仍在执行的旧运行（不可观测且不可停止）。追加进程级计数器。 */
+let runSeqCounter = 0;
 
 const g = globalThis as unknown as { __dshRunRegistry?: RegistryMap };
 const runs: RegistryMap = g.__dshRunRegistry ?? new Map();
@@ -72,6 +83,7 @@ if (!g.__dshRunRegistry) g.__dshRunRegistry = runs;
 /** 状态终局化（幂等）：通知订阅者并淘汰旧记录。 */
 function finishRun(rec: DshRunRecord, status: DshRunStatus, payload?: unknown, errorMessage?: string): void {
   if (rec.status !== 'running') return;
+  if (rec.reaper) { clearTimeout(rec.reaper); rec.reaper = undefined; }
   rec.status = status;
   rec.finishedAt = Date.now();
   if (payload !== undefined) rec.donePayload = payload;
@@ -115,7 +127,7 @@ export interface DshRunTaskCtx {
  * 由 attach 回放）。
  */
 export function createDshRun(meta: DshRunMeta, task: (ctx: DshRunTaskCtx) => Promise<void>): DshRunRecord {
-  const runId = `dsh-${meta.uniprot}-${Date.now().toString(36)}`;
+  const runId = `dsh-${meta.uniprot}-${Date.now().toString(36)}-${(runSeqCounter++).toString(36)}`;
   const rec: DshRunRecord = {
     runId,
     meta,
@@ -127,6 +139,13 @@ export function createDshRun(meta: DshRunMeta, task: (ctx: DshRunTaskCtx) => Pro
     subscribers: new Set(),
   };
   runs.set(runId, rec);
+
+  // R196: 超时安全网 —— 60 分钟未见终局强制收尾（unref 不阻进程退出）。
+  const reaper = setTimeout(() => {
+    finishRun(rec, 'error', undefined, '运行超时（60 分钟未见终局，注册表安全网强制收尾）');
+  }, MAX_RUN_DURATION_MS);
+  (reaper as unknown as { unref?: () => void }).unref?.();
+  rec.reaper = reaper;
 
   const emit = (ev: SseEvent): void => {
     const full: DshRunEvent = { ts: new Date().toISOString(), ...ev, seq: rec.events.length };
@@ -146,18 +165,34 @@ export function createDshRun(meta: DshRunMeta, task: (ctx: DshRunTaskCtx) => Pro
     logLines: () => [...rec.ndjson],
   };
 
-  task(ctx).catch((err: unknown) => {
-    // task 自身未捕获的异常（正常路径 task 内部已调 fail/abort）。
-    const isAbort = (err as any)?.name === 'AbortError' || ctx.signal.aborted;
-    const msg = err instanceof Error ? err.message : String(err);
-    finishRun(rec, isAbort ? 'aborted' : 'error', undefined, isAbort ? '已中止' : msg);
-  });
+  task(ctx)
+    .then(() => {
+      // R196: task 正常 resolve 却没调任何终局（succeed/fail/abort）——
+      // 旧版会把记录永远留在 running。标 error 防泄漏（正常路径不触发）。
+      if (rec.status === 'running') {
+        finishRun(rec, 'error', undefined, '任务结束但未上报终局（注册表安全网）');
+      }
+    })
+    .catch((err: unknown) => {
+      // task 自身未捕获的异常（正常路径 task 内部已调 fail/abort）。
+      const isAbort = (err as any)?.name === 'AbortError' || ctx.signal.aborted;
+      const msg = err instanceof Error ? err.message : String(err);
+      finishRun(rec, isAbort ? 'aborted' : 'error', undefined, isAbort ? '已中止' : msg);
+    });
 
   return rec;
 }
 
 export function getDshRun(runId: string): DshRunRecord | undefined {
   return runs.get(runId);
+}
+
+/** R196: 查找同一 UniProt 正在运行的记录（重复启动守卫用）。 */
+export function findRunningDshRunByUniprot(uniprot: string): DshRunRecord | undefined {
+  for (const r of runs.values()) {
+    if (r.status === 'running' && r.meta.uniprot === uniprot) return r;
+  }
+  return undefined;
 }
 
 /** 概要列表（status 端点 list 模式 / 调试用）。 */

@@ -18,6 +18,7 @@ import {
   probeLlmQuota,
   launchDshRun,
   ensureSchemaCompatBeforeRun,
+  preLaunchGuard,
 } from '@/lib/eval-dsh/run-service';
 
 export const runtime = 'nodejs';
@@ -31,6 +32,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: v.error }, { status: v.status });
   }
 
+  // R196: 重复启动守卫（先于探测，双击/并发启动立即拒绝）。
+  const guard = preLaunchGuard(v.params, req.signal);
+  if (!guard.ok) {
+    return NextResponse.json(
+      { error: guard.error, ...(guard.duplicate ? { duplicate: true, runId: guard.runId } : {}) },
+      { status: guard.status },
+    );
+  }
+
   await ensureSchemaCompatBeforeRun();
 
   // R195: force=true 跳过配额预检（API 调用方显式承担风险，流水线退避/
@@ -40,6 +50,16 @@ export async function POST(req: Request) {
     if (!probe.ok) {
       return NextResponse.json({ error: probe.message, quotaBlocked: true }, { status: probe.status });
     }
+  }
+
+  // R196: 探测等待期间调用方可能已断开/并发启动了同蛋白运行 —— 启动前
+  // 最后检查（同 SSE 路由）。
+  const guard2 = preLaunchGuard(v.params, req.signal);
+  if (!guard2.ok) {
+    return NextResponse.json(
+      { error: guard2.error, ...(guard2.duplicate ? { duplicate: true, runId: guard2.runId } : {}) },
+      { status: guard2.status },
+    );
   }
 
   const rec = launchDshRun(v.params);

@@ -13,6 +13,13 @@
 //     落库（R194 教训：长连接被工具/网络超时斩断 = 9.9 分钟成果归零）；
 //   - 唯一中止路径 = POST /api/evaluations/run-dsh/stop { runId }。
 //
+// R196:
+//   - 启动前守卫：客户端在探测/迁移等待窗口内断开（499）或同一 UniProt
+//     已有运行中的评估（409）时拒绝启动 —— 防孤儿运行白烧配额；
+//   - SSE 心跳：评估的章节生成/终审/退避等待期间可能 30-90s 无事件，
+//     20s 一帧 ping（客户端解析器忽略未知事件名）防中间层按空闲连接
+//     斩断（每次斩断消耗前端重连预算之一）。
+//
 // 与经典 /api/evaluations/run 的区别（沿用 R179 注释）：
 //   - 请求可带 `question`（科学问题，8-1000 字；空 = 基础评估口径）；
 //   - 不支持批量 targets / 序列模式 / 结构分析 recipe（宁精勿滥）；
@@ -25,15 +32,30 @@ import {
   probeLlmQuota,
   launchDshRun,
   ensureSchemaCompatBeforeRun,
+  preLaunchGuard,
 } from '@/lib/eval-dsh/run-service';
 import { attachDshRun, getDshRun } from '@/lib/eval-dsh/run-registry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** R196: SSE 心跳间隔 —— 章节生成/终审等静默期保活。 */
+const HEARTBEAT_MS = 20_000;
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
-  const { stream, progress, done, error } = sseStream();
+  const { stream, send, progress, done, error } = sseStream();
+
+  // R196: 心跳管理 —— 终局（done/error 帧）或客户端断开时停止。
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const stopHeartbeat = () => {
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = undefined; }
+  };
+  const startHeartbeat = () => {
+    if (heartbeat) return;
+    heartbeat = setInterval(() => { send('ping', Date.now()); }, HEARTBEAT_MS);
+    (heartbeat as unknown as { unref?: () => void }).unref?.();
+  };
 
   const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
 
@@ -48,9 +70,18 @@ export async function POST(req: Request) {
       );
     }
     const after = Math.max(0, Number(b.after ?? 0) || 0);
-    const detach = attachDshRun(attachRunId, { after, onEvent: progress, onDone: done, onError: (msg) => error(msg) });
+    const detach = attachDshRun(attachRunId, {
+      after,
+      onEvent: progress,
+      onDone: (p) => { stopHeartbeat(); done(p); },
+      onError: (msg) => { stopHeartbeat(); error(msg); },
+    });
+    startHeartbeat();
     // 客户端断开只 detach —— 运行继续（R195 核心语义）。
-    req.signal.addEventListener('abort', () => { detach(); }, { once: true });
+    // R196: signal 可能早已 aborted（等待 body/probe 期间断开）——
+    // addEventListener 不会对已 abort 的信号触发，需补同步检查防订阅泄漏。
+    req.signal.addEventListener('abort', () => { detach(); stopHeartbeat(); }, { once: true });
+    if (req.signal.aborted) { detach(); stopHeartbeat(); }
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -68,6 +99,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: v.error }, { status: v.status });
   }
 
+  // R196: 重复启动守卫 —— 先于探测做（双击场景立即拒绝，不等 15s 探测）。
+  const guard = preLaunchGuard(v.params, req.signal);
+  if (!guard.ok) {
+    return NextResponse.json(
+      { error: guard.error, ...(guard.duplicate ? { duplicate: true, runId: guard.runId } : {}) },
+      { status: guard.status },
+    );
+  }
+
   // 幂等 schema 迁移（含 R179 新增的 mode/outline/figures 列）。
   await ensureSchemaCompatBeforeRun();
 
@@ -81,11 +121,29 @@ export async function POST(req: Request) {
     }
   }
 
+  // R196: 探测/迁移等待最长 ~15s —— 期间客户端可能已 Stop/断开。此时启动
+  // 只会产出「无观察者的孤儿运行」白烧 10+ 分钟配额（前端 Stop 重试窗口
+  // 覆盖不到这个时段）。启动前最后检查请求信号 + 重复守卫（探测期间并发
+  // 启动的另一场同蛋白运行）。
+  const guard2 = preLaunchGuard(v.params, req.signal);
+  if (!guard2.ok) {
+    return NextResponse.json(
+      { error: guard2.error, ...(guard2.duplicate ? { duplicate: true, runId: guard2.runId } : {}) },
+      { status: guard2.status },
+    );
+  }
+
   // 后台启动（init 帧在 task 内同步发出，由下面的 attach 回放给本连接）。
   const rec = launchDshRun(v.params);
-  const detach = attachDshRun(rec.runId, { onEvent: progress, onDone: done, onError: (msg) => error(msg) });
+  const detach = attachDshRun(rec.runId, {
+    onEvent: progress,
+    onDone: (p) => { stopHeartbeat(); done(p); },
+    onError: (msg) => { stopHeartbeat(); error(msg); },
+  });
+  startHeartbeat();
   // 客户端断开只 detach —— 运行继续（R194 两连败死因根治）。
-  req.signal.addEventListener('abort', () => { detach(); }, { once: true });
+  req.signal.addEventListener('abort', () => { detach(); stopHeartbeat(); }, { once: true });
+  if (req.signal.aborted) { detach(); stopHeartbeat(); }
 
   return new Response(stream, {
     headers: {
