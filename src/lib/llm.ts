@@ -2122,8 +2122,11 @@ async function callZai(prompt: string, system?: string, model?: string, signal?:
       }
       return resp.choices?.[0]?.message?.content || '';
     } catch (err: any) {
-      const is429 = err?.message?.includes('429') || err?.message?.includes('Too many');
-      if (is429 && attempt < MAX_RETRIES - 1) {
+      // R197: 瞬态判定与 agent.ts isTransientLlmError 同口径 —— 旧版
+      // includes('Too many') 匹配不到 'Too Many Requests'（HTTP 规范大小写），
+      // rate limit/overloaded/temporarily/5xx 全部漏判 → 丢失 callZai 内部退避重试机会。
+      const isTransient = /\b429\b|too many requests|rate ?limit|overloaded|temporarily|status 5\d\d/i.test(String(err?.message || err || ''));
+      if (isTransient && attempt < MAX_RETRIES - 1) {
         const delay = BASE_DELAY * Math.pow(2, attempt); // 5s, 10s
         await new Promise(r => setTimeout(r, delay));
         continue;

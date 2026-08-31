@@ -655,7 +655,8 @@ function EvalDshFiguresGallery({ figures }: { figures: DshReportFigure[] }) {
             title={f.caption}
           >
             {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
-            <img src={f.url} alt={f.caption} loading="lazy" className="h-28 w-full object-cover bg-muted/30" />
+            {/* R197: 图片失效时隐藏（不永久显示破图占位，标题/caption 仍可读） */}
+            <img src={f.url} alt={f.caption} loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="h-28 w-full object-cover bg-muted/30" />
             <div className="p-1.5 space-y-0.5">
               <p className="text-[10px] text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
               <p className="text-[9px] font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
@@ -740,7 +741,11 @@ export default function PdbTracker() {
   const [allEvaluations, setAllEvaluations] = useState<Evaluation[]>([]);
   const [evalBatches, setEvalBatches] = useState<EvalBatch[]>([]);
   const [batchSubTargets, setBatchSubTargets] = useState<Record<string, EvalBatchSubTarget[]>>({});
+  // R197: selectedEvalId 的 ref 镜像（render 期同步，幂等无副作用，
+  // 不驱动渲染输出） —— fetchEvalDetail 的迟到响应用它比对当前选中靶点。
   const [selectedEvalId, setSelectedEvalId] = useState<string | null>(null);
+  const selectedEvalIdRef = useRef<string | null>(null);
+  selectedEvalIdRef.current = selectedEvalId; // R197: render 期同步镜像
   const [selectedEval, setSelectedEval] = useState<Evaluation | null>(null);
   const [evalLoading, setEvalLoading] = useState(true);
   // Batch detail integration — when a batch is selected (and no individual
@@ -1259,11 +1264,14 @@ export default function PdbTracker() {
     }
   }, []);
 
+  // R197: selectedEvalId 的 ref 镜像 — — fetchEvalDetail 的迟到响应需比对「当前选中靶点」
+  // （超时重试的旧请求会在新请求之后完成，旧版数据会覆盖新选择的整个详情面板）。
   const fetchEvalDetail = useCallback(async (uniprotId: string) => {
     try {
       const res = await queuedFetchWithRetry(`/api/evaluations/${uniprotId}`);
       if (res.ok) {
         const data = await res.json();
+        if (uniprotId !== selectedEvalIdRef.current) return; // R197: 已切换 —— 丢弃
         setSelectedEval({
           ...data,
           pdbStructures: data.pdbStructures || [],
@@ -1277,6 +1285,7 @@ export default function PdbTracker() {
     // Fallback: try to find the evaluation in already-loaded data
     const found = allEvaluations.find(e => e.uniprotId === uniprotId);
     if (found) {
+      if (uniprotId !== selectedEvalIdRef.current) return; // R197: 已切换 —— 丢弃
       setSelectedEval({
         ...found,
         pdbStructures: found.pdbStructures || [],
@@ -1812,11 +1821,20 @@ export default function PdbTracker() {
   }, [mode, evaluations, selectedEvalId, evalLoading]);
 
   // Fetch evaluation report markdown from file when selectedEval is available
+  // R197: 竞态守卫 —— 旧靶点的迟到响应不再覆盖新选择；
+  // 无报告的靶点（404→null）也不再残留上一个靶点的报告正文
+  // （旧版 evalReportContent 非空会压制 selectedEval.report 兜底分支）。
   useEffect(() => {
-    if (selectedEval?.uniprotId) {
-      queuedFetchWithRetry(`/api/eval-report-file/${selectedEval.uniprotId}`)
+    const uid = selectedEval?.uniprotId;
+    if (!uid) return;
+    let cancelled = false;
+    queuedFetchWithRetry(`/api/eval-report-file/${uid}`)
         .then(r => r.ok ? r.json() : null)
         .then(data => {
+          if (cancelled) return; // R197: 已切换到别的靶点 —— 丢弃迟到响应
+          if (!data?.content) {
+            setEvalReportContent(''); // R197: 无报告时清空旧靶点残留
+          }
           if (data?.content) {
             // Strip LLM-leaked Hermes/CLI preamble (e.g. "Write tool requires
             // approval which isn't available in this mode. Here's the chapter
@@ -1868,8 +1886,10 @@ export default function PdbTracker() {
           // mode/outline/figures 字段（classic 行缺失这些字段 → null）。
           setEvalReportDsh(parseEvalReportDshMeta(data));
         })
-        .catch(() => {});
-    }
+        .catch(() => {
+          if (!cancelled) setEvalReportContent('');
+        });
+    return () => { cancelled = true; }; // R197: 卸载/切换时使旧请求失效
   }, [selectedEval?.uniprotId]);
 
   // Fetch AI analysis when entry selected

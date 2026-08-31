@@ -117,10 +117,12 @@ function fillJournalIf(d: PdbEntryDetail): void {
 /**
  * R179 (Task 2-a): PubMedArticle 回填（复刻经典 route 的 backfillPubMedArticles，
  * 后者未导出故本地实现；同为 best-effort，失败绝不中断评估）。
+ * R197: signal 透传 —— Stop 在 efetch（大批量可达数分钟）期间即刻生效。
  */
 async function backfillPubMedArticles(
   pdbDetails: PdbEntryDetail[],
   emit: (e: SseEvent) => void,
+  signal?: AbortSignal,
 ): Promise<{ fetched: number; skipped: number }> {
   const pmids = Array.from(new Set(
     pdbDetails.map(e => (e.pubmedId || '').toString().trim()).filter(Boolean),
@@ -139,9 +141,11 @@ async function backfillPubMedArticles(
 
   let papers: Array<{ pmid: string; title: string; authors: string; journal: string; abstract: string; pubYear: string; pubMonth: string; pubDay: string; doi: string }> = [];
   try {
-    const fetched = await efetch(missing);
+    const fetched = await efetch(missing, signal);
     papers = fetched.map(p => ({ pmid: p.pmid, title: p.title, authors: p.authors, journal: p.journal, abstract: p.abstract, pubYear: p.pubYear, pubMonth: p.pubMonth, pubDay: p.pubDay, doi: p.doi }));
   } catch (err: any) {
+    // R197: Stop 信号不得被「efetch 失败继续」吞掉（同 BLAST catch 口径）。
+    if (err?.name === 'AbortError' || signal?.aborted) throw err;
     emit({ stage: 'pubmed', level: 'warn', message: `PubMed efetch 失败（${missing.length} 篇）：${err?.message ?? 'unknown'}`, progress: 50 });
     return { fetched: 0, skipped: existingPmids.size };
   }
@@ -241,7 +245,9 @@ export async function collectEvaluationData(
 
   // ── 1. UniProt 元数据（4-10%）──────────────────────────────────────────
   emit({ stage: 'uniprot-meta', level: 'info', message: `拉取 UniProt 元数据 (${uniprot})`, progress: 4 });
-  const meta: UniprotMeta | null = await fetchUniprotMeta(uniprot);
+  // R197: signal 接线 —— R196 给 rcsb/blast/pubmed helper 全部加了 signal 形参，
+  // 但本编排层 5 处调用点未传（Stop 在 Phase A 的长拉取期间无效，最长数分钟）。
+  const meta: UniprotMeta | null = await fetchUniprotMeta(uniprot, opts.signal);
   const uniprotInfo = meta
     ? {
         uniprotId: uniprot,
@@ -269,7 +275,7 @@ export async function collectEvaluationData(
 
   // ── 2. RCSB 直接 PDB（12-28%）─────────────────────────────────────────
   emit({ stage: 'rcsb-pdbs', level: 'info', message: `RCSB 检索 UniProt=${uniprot}（真实 API · 上限 ${maxPdb}）`, progress: 12 });
-  const pdbIds = await fetchPdbIdsForUniprot(uniprot, maxPdb);
+  const pdbIds = await fetchPdbIdsForUniprot(uniprot, maxPdb, opts.signal); // R197: signal
   const directPdbCount = pdbIds.length;
   if (directPdbCount === 0) {
     emit({ stage: 'rcsb-pdbs', level: 'warn', message: `RCSB 返回 0 条`, progress: 20 });
@@ -283,6 +289,7 @@ export async function collectEvaluationData(
     // 数分钟，此前全程静默停在 18%（用户侧表现为「卡住」）。每 25 条或
     // 完成时发一条，进度映射到 18-28% 区间。
     const metaT0 = Date.now();
+    // R197: signal（第 4 形参）—— maxPdb=500 → 100 批数分钟期间 Stop 即刻生效。
     pdbRows = await fetchPdbEntryDetails(pdbIds, undefined, (done, total) => {
       if (total > 100 && (done % 25 === 0 || done === total)) {
         const pctDone = Math.round((done / total) * 100);
@@ -293,7 +300,7 @@ export async function collectEvaluationData(
           progress: 18 + Math.floor((done / total) * 10),
         });
       }
-    });
+    }, opts.signal);
     for (const d of pdbRows) fillJournalIf(d);
     emit({ stage: 'rcsb-pdbs', level: 'success', message: `✓ 获取 ${pdbRows.length} 条结构元数据（含 IF 补齐）`, progress: 28 });
   }
@@ -324,7 +331,7 @@ export async function collectEvaluationData(
       : `自动判定需要 BLAST：直接 PDB ${directPdbCount} < ${MIN_PDB_FOR_SKIP} 或覆盖率 ${coverage}% < ${MIN_COVERAGE_FOR_SKIP}%`, progress: 30 });
     try {
       emit({ stage: 'blast', level: 'info', message: `从 UniProt 拉取 ${uniprot} 蛋白序列…`, progress: 31 });
-      const sequence = await fetchUniprotSequence(uniprot);
+      const sequence = await fetchUniprotSequence(uniprot, opts.signal); // R197: signal
       emit({ stage: 'blast', level: 'info', message: `序列长度 ${sequence.length} aa，提交 BLASTp（上限 ${maxBlastHits} 条）…`, progress: 32 });
       blastRows = await runBlast(sequence, maxBlastHits, (msg) => {
         emit({ stage: 'blast', level: 'info', message: msg, progress: 33 });
@@ -368,7 +375,7 @@ export async function collectEvaluationData(
   emit({ stage: 'pubmed', level: 'info', message: `PubMed 文献回填与按 IF 排序（上限 ${maxLitCount}）…`, progress: 48 });
   let literature: LiteratureRow[] = [];
   try {
-    const pmRes = await backfillPubMedArticles(pdbRows, emit);
+    const pmRes = await backfillPubMedArticles(pdbRows, emit, opts.signal); // R197: signal
     if (pmRes.fetched > 0) {
       emit({ stage: 'pubmed', level: 'info', message: `PubMed 文献回填：${pmRes.fetched} 篇新获取，${pmRes.skipped} 篇已存在`, progress: 50 });
     }
@@ -382,6 +389,8 @@ export async function collectEvaluationData(
       progress: 56,
     });
   } catch (err: any) {
+    // R197: Stop 信号上抛（否则要等 write-db 后 agent 的下一检查点才生效）。
+    if (err?.name === 'AbortError' || opts.signal?.aborted) throw err;
     emit({ stage: 'pubmed', level: 'warn', message: `文献收集失败（不影响评估）：${err?.message ?? 'unknown'}`, progress: 56 });
   }
 

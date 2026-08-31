@@ -20,6 +20,7 @@
 
 import type { SseEvent } from '@/lib/sse';
 import type { PdbEntryDetail } from '@/lib/rcsb';
+import { combineSignals } from '@/lib/blast'; // R197: Stop 信号与超时合并（与 blast/rcsb 同口径）
 
 export interface ReportFigure {
   kind: 'rcsb' | 'web';
@@ -297,6 +298,7 @@ export async function collectRcsbFigures(
   pdbRows: PdbEntryDetail[],
   emit: (e: SseEvent) => void,
   sectionIds: string[] = [],
+  signal?: AbortSignal, // R197: Stop 在 HEAD 预检期间即刻生效（配图可选，中止即返回已收集图）
 ): Promise<ReportFigure[]> {
   const out: ReportFigure[] = [];
   if (!pdbRows || pdbRows.length === 0) return out;
@@ -306,19 +308,24 @@ export async function collectRcsbFigures(
 
   // R184: HEAD 预检并行化（旧版逐张串行，≤10 张 × 10s 超时最坏可阻塞
   // 数分钟；并行后总耗时 ≈ 最慢一张）。结果按原顺序消费，SSE 叙事稳定。
+  // R197: 每张 HEAD 与 Stop 信号合并（combineSignals）。
   const checked = await Promise.all(candidates.map(async (e) => {
     const url = `https://cdn.rcsb.org/images/structures/${e.pdbId!.toLowerCase()}_assembly-1.jpeg`;
     let ok = false;
+    const combo = combineSignals(signal, 10_000);
     try {
-      const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
+      const res = await fetch(url, { method: 'HEAD', signal: combo.signal });
       ok = res.ok;
     } catch {
       ok = false;
+    } finally {
+      combo.dispose();
     }
     return { entry: e, url, ok };
   }));
 
   for (const { entry: e, url, ok } of checked) {
+    if (signal?.aborted) return out; // R197: 配图可选 —— 中止即返回已收集图
     const resStr = e.resolution != null ? e.resolution.toFixed(1) : '?';
     const caption = `PDB ${e.pdbId} — ${(e.title || '').slice(0, 80)}（${e.method || '未知方法'} ${resStr}Å）`;
     const fig: ReportFigure = {
@@ -390,38 +397,58 @@ const imageSearchCache = new Map<string, ImageSearchResult[]>();
 
 /** 以 execFile 方式调 z-ai image-search（无 shell 注入面）。R193: 超时可
  * 调（首查短超时）+ 返回 ok 区分「调用失败（CLI 挂/超时）」与「正常返回
- * 但零结果」（后者不代表 CLI 不可用，不应短路后续 query）。 */
-async function runImageSearchCli(query: string, timeoutMs: number): Promise<{ ok: boolean; results: ImageSearchResult[] }> {
+ * 但零结果」（后者不代表 CLI 不可用，不应短路后续 query）。
+ * R197: signal 可选 —— Stop 时 kill 子进程立即返回（不等满超时）。 */
+async function runImageSearchCli(query: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; results: ImageSearchResult[] }> {
   const { execFile } = await import('node:child_process');
   const args = ['-q', query, '--count', '5', '--gl', 'us'];
   return new Promise<{ ok: boolean; results: ImageSearchResult[] }>((resolve) => {
+    let settled = false;
+    let onAbort: (() => void) | undefined;
+    const settle = (v: { ok: boolean; results: ImageSearchResult[] }) => {
+      if (settled) return;
+      settled = true;
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+      resolve(v);
+    };
     const child = execFile(
       'z-ai',
       ['image-search', ...args],
       { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {
-          resolve({ ok: false, results: [] });
+          settle({ ok: false, results: [] });
           return;
         }
         const parsed = extractFirstJsonObject(String(stdout || ''));
         if (!parsed || parsed.success === false || !Array.isArray(parsed.results)) {
           // 正常返回但无结果 —— ok=true（query 可能真没结果，CLI 本身可用）。
-          resolve({ ok: true, results: [] });
+          settle({ ok: true, results: [] });
           return;
         }
-        resolve({ ok: true, results: parsed.results as ImageSearchResult[] });
+        settle({ ok: true, results: parsed.results as ImageSearchResult[] });
       },
     );
     // execFile 的 timeout 会发 SIGTERM；再兜底 kill 防僵尸。
-    child.on('error', () => resolve({ ok: false, results: [] }));
+    child.on('error', () => settle({ ok: false, results: [] }));
+    // R197: Stop —— kill 子进程（SIGTERM，与 execFile 超时同口径）。
+    onAbort = () => {
+      try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
+      settle({ ok: false, results: [] });
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 
-/** 下载图片并校验（≤3MB、image/*，content-length 预检），返回 base64 dataUri；任何失败返回 null。 */
-async function downloadImageAsDataUri(url: string): Promise<string | null> {
+/** 下载图片并校验（≤3MB、image/*，content-length 预检），返回 base64 dataUri；任何失败返回 null。
+ * R197: signal 可选 —— 与每张 20s 下载超时合并（Stop 即刻生效）。 */
+async function downloadImageAsDataUri(url: string, signal?: AbortSignal): Promise<string | null> {
+  const combo = combineSignals(signal, IMAGE_DOWNLOAD_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS) });
+    const res = await fetch(url, { signal: combo.signal });
     if (!res.ok) return null;
     const ctype = (res.headers.get('content-type') || '').toLowerCase();
     if (!ctype.startsWith('image/')) return null;
@@ -433,13 +460,18 @@ async function downloadImageAsDataUri(url: string): Promise<string | null> {
     return `data:${ctype.split(';')[0]};base64,${buf.toString('base64')}`;
   } catch {
     return null;
+  } finally {
+    combo.dispose();
   }
 }
 
-/** VLM 严格校验：relevant + reason 非空才通过；55s 超时 + 1 次重试。 */
+/** VLM 严格校验：relevant + reason 非空才通过；55s 超时 + 1 次重试。
+ * R197: race 的超时定时器在快速返回后清理（旧版每次校验遗留一个 55s
+ * 悬挂 timer，重试叠加）；另接受可选 signal（中止即退出重试循环）。 */
 async function verifyFigureWithVlm(
   dataUri: string,
   query: string,
+  signal?: AbortSignal,
 ): Promise<{ verdict: 'relevant' | 'irrelevant'; reason: string; caption?: string } | null> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
@@ -456,13 +488,25 @@ async function verifyFigureWithVlm(
     thinking: { type: 'disabled' as const },
   };
   for (let attempt = 0; attempt <= VLM_RETRIES; attempt++) {
+    if (signal?.aborted) return null; // R197: Stop —— 不再重试
+    // 与 /api/vlm/select-best 相同的调用形态；SDK 可能不支持 signal 参数，
+    // 用 Promise.race 施加硬超时（挂死调用不再阻塞管线）。
+    // R197: 定时器句柄保留 —— race 结束（无论输赢）即 clearTimeout，
+    // 快速成功的校验不再遗留 55s 悬挂 timer；并用 signal 竞速让 Stop
+    // 在 VLM 等待期内即刻生效（aborted 拒绝不会被下方 catch 吞掉重试）。
+    let vlmTimer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const signalRace = signal ? new Promise<never>((_, rej) => {
+      onAbort = () => rej(new DOMException('aborted', 'AbortError'));
+      signal.addEventListener('abort', onAbort, { once: true });
+    }) : null;
     try {
-      // 与 /api/vlm/select-best 相同的调用形态；SDK 可能不支持 signal 参数，
-      // 用 Promise.race 施加硬超时（挂死调用不再阻塞管线）。
       const resp: any = await Promise.race([
         (zai.chat.completions.createVision as unknown as (body: unknown) => Promise<any>)(visionBody),
-        new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error('VLM timeout')), VLM_TIMEOUT_MS)),
+        new Promise<never>((_, rej) => {
+          vlmTimer = setTimeout(() => rej(new Error('VLM timeout')), VLM_TIMEOUT_MS);
+        }),
+        ...(signalRace ? [signalRace] : []),
       ]);
       const text: string = resp?.choices?.[0]?.message?.content || '';
       const parsed = extractFirstJsonObject(text);
@@ -476,6 +520,11 @@ async function verifyFigureWithVlm(
       // JSON 无效 —— 视为本次尝试失败，进入重试。
     } catch {
       // 超时/网络错误 —— 重试一次。
+      // R197: 用户 Stop（signalRace 拒绝）直接退出，不再浪费重试。
+      if (signal?.aborted) return null;
+    } finally {
+      if (vlmTimer) clearTimeout(vlmTimer);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
     }
   }
   return null;
@@ -487,12 +536,18 @@ async function verifyFigureWithVlm(
  * 每 query 最多 4 张送审、最多采用 2 张（近重复保护）；全报告总通过数
  * 不再设上限。VLM 校验逐张串行（峰值内存 = 单张图，与总量无关）。
  * CLI / SDK / VLM 任一环节失败 → emit warn + 返回空数组（绝不 throw）。
+ * R197: signal 可选 —— 配图是可选产物，中止不抛错而是返回已收集的图；
+ * 跨 query 同 URL 去重（相邻语义 query 常返回重叠 top 结果，旧版会把
+ * 同一张图嵌入两个章节并双计 verifiedFigures）。
  */
 export async function searchWebFigures(
   queries: Array<{ sectionId: string; query: string }>,
   emit: (e: SseEvent) => void,
+  signal?: AbortSignal,
 ): Promise<ReportFigure[]> {
   const out: ReportFigure[] = [];
+  // R197: run 级已采用 URL 集合 —— 跨 query 去重（含省一次 VLM 配额）。
+  const adoptedUrls = new Set<string>();
   // R184: 移除「最多 2 条 query」配额 —— 仅按 query 文本去重 + 安全护栏。
   const seenQuery = new Set<string>();
   const capped = queries
@@ -512,6 +567,10 @@ export async function searchWebFigures(
   let cliCalled = false;
 
   for (const { sectionId, query } of capped) {
+    if (signal?.aborted) { // R197: 配图可选 —— 中止即返回已收集图
+      emit({ stage: 'figure-web', level: 'info', message: `已中止，返回已收集的 ${out.length} 张 web 配图` });
+      return out;
+    }
     if (cliBrokenThisRun) {
       emit({ stage: 'figure-web', level: 'info', message: `image-search 本次运行不可用，跳过 query：「${query}」` });
       continue;
@@ -526,7 +585,7 @@ export async function searchWebFigures(
     } else {
       emit({ stage: 'figure-web', level: 'info', message: `搜索 web 示意图：「${query}」…` });
       const isFirstCliCall = !cliCalled;
-      const run = await runImageSearchCli(query, isFirstCliCall ? FIRST_QUERY_TIMEOUT_MS : IMAGE_SEARCH_TIMEOUT_MS);
+      const run = await runImageSearchCli(query, isFirstCliCall ? FIRST_QUERY_TIMEOUT_MS : IMAGE_SEARCH_TIMEOUT_MS, signal);
       cliCalled = true;
       if (!run.ok) {
         if (isFirstCliCall) {
@@ -555,8 +614,11 @@ export async function searchWebFigures(
     let verifiedThisQuery = 0;
     for (const r of results.slice(0, RESULTS_PER_QUERY_CAP)) {
       if (verifiedThisQuery >= VERIFIED_PER_QUERY_CAP) break;
+      if (signal?.aborted) return out; // R197: 图片循环内中止
       const url = r.original_url || r.url || '';
       if (!/^https?:\/\//i.test(url)) continue;
+      // R197: 跨 query 同 URL 跳过（已在前一 query 被采用 —— 同图不重复嵌章）。
+      if (adoptedUrls.has(url)) continue;
       const fig: ReportFigure = {
         kind: 'web',
         url,
@@ -571,11 +633,11 @@ export async function searchWebFigures(
       let verdict: { verdict: 'relevant' | 'irrelevant'; reason: string; caption?: string } | null = null;
       let downloadFailed = false;
       try {
-        const dataUri = await downloadImageAsDataUri(url);
+        const dataUri = await downloadImageAsDataUri(url, signal);
         if (!dataUri) {
           downloadFailed = true;
         } else {
-          verdict = await verifyFigureWithVlm(dataUri, query);
+          verdict = await verifyFigureWithVlm(dataUri, query, signal);
         }
       } catch {
         downloadFailed = true;
@@ -604,7 +666,7 @@ export async function searchWebFigures(
           : `✗ 拒绝（${fig.vlmReason}）`,
         dshFigure: fig,
       });
-      if (fig.status === 'verified') { out.push(fig); verifiedThisQuery++; }
+      if (fig.status === 'verified') { out.push(fig); verifiedThisQuery++; adoptedUrls.add(url); }
     }
   }
 

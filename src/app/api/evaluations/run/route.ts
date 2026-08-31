@@ -300,17 +300,27 @@ export async function POST(req: Request) {
   }
   const primaryTarget = targets[0] || {};
   const uniprot = (body.uniprot || primaryTarget.uniprot || 'P00533').trim().toUpperCase();
+  // R197: uniprot 格式校验（DSH / report 两个兄弟入口均有护栏，经典主管线此前会用任意字符串直打外部 API 并产垃圾行；空 body 仍默认 P00533 演示靶点，保持 UI 兼容）。
+  if (!/^[A-Z0-9_]{3,10}$/.test(uniprot)) {
+    return NextResponse.json({ error: `Invalid 'uniprot': "${uniprot}" (expected 3-10 chars of [A-Z0-9_]).` }, { status: 400 });
+  }
   const forceBlast = !!(body.forceBlast ?? primaryTarget.forceBlast);
   const skipBlast = !!(body.skipBlast ?? primaryTarget.skipBlast);
+  // R197: NaN 防护 —— Number("abc")=NaN 会穿透 Math.min/max 双层钳制（NaN 传播），
+  // 导致 maxPdb=NaN → 0 PDB 静默空报告（R196 在 DSH 侧已修同款失败模式；与 run-service.ts clampInt 同实现）。
+  const clampInt = (raw: unknown, def: number, min: number, max: number): number => {
+    const n = Number(raw ?? def);
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.trunc(n))) : def;
+  };
   // API-01: upper-clamp the request-driven external-API fan-out (same clamp
   // style as maxLitCount below — clamp, don't reject, for consistency).
-  const maxPdb = Math.max(0, Math.min(MAX_PDB_CAP, Number(body.maxPdb ?? primaryTarget.maxPdb ?? 80)));
+  const maxPdb = clampInt(body.maxPdb ?? primaryTarget.maxPdb ?? 80, 80, 0, MAX_PDB_CAP);
   // BLAST homolog cap. Default 50 (NCBI BLAST pdbaa typical sensible max). UI-configurable.
   // API-01: clamped to MAX_BLAST_HITS_CAP.
-  const maxBlastHits = Math.max(0, Math.min(MAX_BLAST_HITS_CAP, Number(body.maxBlastHits ?? primaryTarget.maxBlastHits ?? body.maxBlast ?? 50)));
+  const maxBlastHits = clampInt(body.maxBlastHits ?? primaryTarget.maxBlastHits ?? body.maxBlast ?? 50, 50, 0, MAX_BLAST_HITS_CAP);
   // Literature cap for LLM prompt context (PubMed articles surfaced alongside PDB details).
   // Default 20. UI-configurable. Papers beyond this are filtered by journal IF desc.
-  const maxLitCount = Math.max(0, Math.min(200, Number(body.maxLitCount ?? 20)));
+  const maxLitCount = clampInt(body.maxLitCount ?? 20, 20, 0, 200);
   const generateReport = body.generateReport !== false;
   const saveReportFile = body.saveReportFile !== false;
   // Round 36: Allow opting out of structural analysis for faster report generation
@@ -913,6 +923,15 @@ ${overlapSummary}${crossLitBlock}
       else emit({ stage: 'rcsb-direct', level: 'success', message: `✓ RCSB 返回 ${directPdbCount} 条真实 PDB`, progress: 24 });
 
       // ── Cache check: skip re-fetch + re-report if params + PDB count unchanged ──
+      // R197 bug 修复：缓存判定与写入值的 blastWasSkipped 口径不一致 —— 存储值是「实际生效」
+      // （shouldSkipBlast，含 autoShouldSkip 自动跳过），旧比较却用「用户标志」（skipBlast && !forceBlast）——
+      // 结构覆盖良好的常见靶点（≥5 PDB 且覆盖率 ≥50%）存 true 却比出 false → 永远 cache-miss，
+      // 每次重跑都重拉全量 RCSB + 重写 8-9 章 LLM 报告。把 autoShouldSkip 计算前置（只依赖 directPdbCount，该值 911 行起已可得）。
+      const coverage = directPdbCount > 0 ? Math.min(100, directPdbCount * 5) : 0;
+      const MIN_PDB_FOR_SKIP = 5;
+      const MIN_COVERAGE_FOR_SKIP = 50;
+      const autoShouldSkip = directPdbCount >= MIN_PDB_FOR_SKIP && coverage >= MIN_COVERAGE_FOR_SKIP;
+      const shouldSkipBlast = !forceBlast && (skipBlast || autoShouldSkip);
       let cachedEval: any = null;
       let pdbDetails: PdbEntryDetail[] = [];
       let skipReportGeneration = false;
@@ -923,7 +942,7 @@ ${overlapSummary}${crossLitBlock}
 
       if (cachedEval
           && cachedEval.maxPdbUsed === maxPdb
-          && !!cachedEval.blastWasSkipped === (skipBlast && !forceBlast)
+          && !!cachedEval.blastWasSkipped === shouldSkipBlast // R197: 与写入值（Evaluation 落库处）同口径
           && cachedEval.pdbCountAtEval === directPdbCount
           && cachedEval.report) {
         // Cache hit — same params + same PDB count + existing report. Skip re-fetch.
@@ -979,30 +998,14 @@ ${overlapSummary}${crossLitBlock}
 
       emit({ stage: 'sifts-coverage', level: 'info', message: 'SIFTS 残基覆盖率计算', progress: 38 });
       await sleep(300);
-      // Estimate structural coverage: each PDB structure covers ~5% of the target
-      // (capped at 100%). This is a heuristic since we don't have residue-level
-      // SIFTS mapping data. More structures = better coverage.
-      const coverage = directPdbCount > 0 ? Math.min(100, directPdbCount * 5) : 0;
+      // coverage / autoShouldSkip / shouldSkipBlast 已前置到缓存检查之前（R197 缓存口径修复；
+      // Estimate: each PDB structure covers ~5% of the target, capped at 100%).
       emit({ stage: 'sifts-coverage', level: 'success', message: `覆盖率 ${coverage}%`, progress: 42 });
 
       let blastHitCount = 0, skippedBblast = false, blastHits: any[] = [];
-      // ── Auto-decide whether BLAST is needed ──────────────────────────────
-      // Previously BLAST ran whenever the user didn't tick "skip" — even for
-      // targets with 50+ direct PDB structures at 100% coverage, where BLAST
-      // adds no value. Now we auto-skip when the target is already
-      // well-covered, and only run BLAST when it would actually find new
-      // structural homologs:
-      //
-      //   Run BLAST when:  directPdbCount < 5  OR  coverage < 50%
-      //   Skip BLAST when: directPdbCount >= 5 AND coverage >= 50%
-      //
-      // forceBlast=true overrides the auto-skip and ALWAYS runs BLAST.
-      // skipBlast=true (user explicitly ticked "skip") is kept for backward
-      // compat — it still skips unless forceBlast is also set.
-      const MIN_PDB_FOR_SKIP = 5;
-      const MIN_COVERAGE_FOR_SKIP = 50;
-      const autoShouldSkip = directPdbCount >= MIN_PDB_FOR_SKIP && coverage >= MIN_COVERAGE_FOR_SKIP;
-      const shouldSkipBlast = !forceBlast && (skipBlast || autoShouldSkip);
+      // ── Auto-decide whether BLAST is needed ─────────────────
+      // Run BLAST when: directPdbCount < 5 OR coverage < 50%. forceBlast overrides → always run;
+      // skipBlast overrides → never run. （判定变量已在缓存检查前算好，见上方 R197 注释）
 
       if (shouldSkipBlast) {
         if (autoShouldSkip && !skipBlast) {
@@ -1911,19 +1914,22 @@ ${overlapSummary}${crossLitBlock}
           try {
             const bMeta = await fetchUniprotMeta(bUid);
             const bInfo = bMeta ? { uniprotId: bUid, entryName: bMeta.entryName, proteinName: bMeta.proteinName, geneNames: bMeta.geneNames || '—', organism: bMeta.organism || '—', sequenceLength: bMeta.sequenceLength || 0 } : { uniprotId: bUid, entryName: bUid, proteinName: `Unknown`, geneNames: '—', organism: '—', sequenceLength: 0 };
-            // API-01: per-target maxPdb gets the same 200 cap as the global one.
-            const bMaxPdb = Math.min(bt.maxPdb || maxPdb, MAX_PDB_CAP);
+            // API-01: per-target maxPdb gets the same cap as the global one.
+            // R197: NaN/负数防护（bt.maxPdb 为非数值字符串时旧版 NaN 穿透且无下界；clampInt 在顶部入参区已定义）。
+            const bMaxPdb = clampInt(bt.maxPdb || maxPdb, maxPdb, 0, MAX_PDB_CAP);
             const bSkipBlast = !!(bt.skipBlast ?? skipBlast);
             const bForceBlast = !!(bt.forceBlast ?? forceBlast);
             const bPdbIds = await fetchPdbIdsForUniprot(bUid, bMaxPdb);
             const bDirectPdbCount = bPdbIds.length;
             const bCoverage = bDirectPdbCount > 0 ? Math.min(100, bDirectPdbCount * 5) : 0;
+            // R197: bAutoShouldSkip 前置（缓存谓词与落库写入值同口径，同主靶点修复；旧比较用户标志口径会对自动跳过靶点永远 cache-miss）。
+            const bAutoShouldSkip = bDirectPdbCount >= 5 && bCoverage >= 50;
             // Cache check for batch target
             let bCached: any = null;
             try { bCached = (await db.$queryRaw<any[]>`SELECT maxPdbUsed, blastWasSkipped, pdbCountAtEval, report FROM Evaluation WHERE uniprotId = ${bUid}`)[0] || null; } catch {}
             let bPdbDetails: PdbEntryDetail[] = [];
             let bCacheHit = false;
-            if (bCached && bCached.maxPdbUsed === bMaxPdb && !!bCached.blastWasSkipped === (bSkipBlast && !bForceBlast) && bCached.pdbCountAtEval === bDirectPdbCount) {
+            if (bCached && bCached.maxPdbUsed === bMaxPdb && !!bCached.blastWasSkipped === (!bForceBlast && (bSkipBlast || bAutoShouldSkip)) && bCached.pdbCountAtEval === bDirectPdbCount) {
               bCacheHit = true;
               emit({ stage: `batch-${bi}`, level: 'success', message: `✓ [Target ${bi + 1}] ${bUid} 缓存命中（参数+PDB数未变），跳过重新获取`, progress: 30 });
               try {
@@ -1938,9 +1944,9 @@ ${overlapSummary}${crossLitBlock}
             // Run BLAST when: directPdbCount < 5 OR coverage < 50%.
             // forceBlast overrides → always run. skipBlast overrides → never run.
             // Cache hit skips BLAST (cached row already has blastResults if any).
+            // bAutoShouldSkip 已前置（R197 缓存口径修复）。
             const B_MIN_PDB = 5;
             const B_MIN_COV = 50;
-            const bAutoShouldSkip = bDirectPdbCount >= B_MIN_PDB && bCoverage >= B_MIN_COV;
             const bShouldSkipBlast = bCacheHit || (!bForceBlast && (bSkipBlast || bAutoShouldSkip));
             let bBlastHits: any[] = [];
             let bBlastHitCount = 0;
@@ -2031,7 +2037,14 @@ ${overlapSummary}${crossLitBlock}
                   ? buildDetailedBlastTable(bBlastHits, BLAST_CAP)
                   : (bShouldSkipBlast
                     ? '| PDB ID | UniProt | Identity | E-value | Description |\n|--------|---------|----------|---------|-------------|\n| (BLAST 已跳过) | - | - | - | - |'
-                    : (bCached?.blastResults ? buildDetailedBlastTable(bCached.blastResults, BLAST_CAP) : '| PDB ID | UniProt | Identity | E-value | Description |\n|--------|---------|----------|---------|-------------|\n| (无 BLAST 数据) | - | - | - | - |'));
+                    : await (async () => {
+                      // R197 bug 修复：bCached 的 SELECT 只取 4 列，bCached.blastResults 恒 undefined（死代码）。
+                      // 同一 uniprot 的历史 BLAST 行改从 EvaluationBlastResult 表读（与 cache-hit 路径同款）。
+                      try {
+                        const hist = await db.$queryRaw<any[]>`SELECT pdbId, uniprotRef, description, identity, evalue, queryCoverage FROM EvaluationBlastResult WHERE uniprotId = ${bUid} ORDER BY identity DESC`;
+                        return hist && hist.length > 0 ? buildDetailedBlastTable(hist, BLAST_CAP) : '| PDB ID | UniProt | Identity | E-value | Description |\n|--------|---------|----------|---------|-------------|\n| (无 BLAST 数据) | - | - | - | - |';
+                      } catch { return '| PDB ID | UniProt | Identity | E-value | Description |\n|--------|---------|----------|---------|-------------|\n| (无 BLAST 数据) | - | - | - | - |'; }
+                    })());
                 // Round 52: Backfill PubMed before building literature info for batch targets
                 await backfillPubMedArticles(bPdbDetails, emit);
                 const bLitInfo = await buildLiteratureInfo(bPdbDetails, maxLitCount);
@@ -2331,8 +2344,10 @@ ${overlapSummary}${crossLitBlock}
           const cnt = (batchResults[i].pdbDetails || []).length;
           emit({ stage: 'cross-analysis', level: 'info', message: `  · 靶点 ${i + 1} ${batchResults[i].uniprot}: ${cnt} 个 PDB 结构`, progress: 97 });
         }
-        // Now safe to free the primary target's array.
-        pdbDetails.length = 0;
+        // R197 bug 修复：移除 `pdbDetails.length = 0` —— batchResults[0].pdbDetails
+        // 与外层 pdbDetails 是同一数组引用，原地清空会让靶点 1 在跨靶点报告
+        // prompt（top5/PDB 数/文献聚合）与 done 载荷（pdbCount）中全部变空。
+        // 数组随请求作用域自然释放，无需手动清空。
         if (typeof global.gc === 'function') { try { global.gc(); } catch { /* ignore */ } }
         // Find PDB IDs present in ALL targets
         const commonPdbIds = allPdbSets.length > 0

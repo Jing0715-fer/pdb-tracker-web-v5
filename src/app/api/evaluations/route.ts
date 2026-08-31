@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     const evalRows = q
       ? await db.$queryRaw<any[]>`
           SELECT e.* FROM Evaluation e
-          WHERE e.batchId IS NULL
+          WHERE (e.batchId IS NULL OR e.batchId = '') -- R197: 与无 q 分支同谓词（旧版搜索不到 batchId='' 的行）
           AND (e.uniprotId LIKE ${'%' + q.toUpperCase() + '%'} OR e.proteinName LIKE ${'%' + q + '%'} OR e.geneNames LIKE ${'%' + q + '%'})
           ORDER BY e.updatedAt DESC
           LIMIT 100

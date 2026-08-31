@@ -68,7 +68,11 @@ export async function GET(
     `;
     evaluation.blastResults = (blastResults as any[]).map((b: any) => {
       const row = toCamelCase(b);
-      row.pubmedAbstract = b.pubmedAbstract || row.pubmedAbstract || null;
+      // R197 bug 修复：JOIN 别名 pubmedAbstract 与 b.pubmedAbstract 是同一列值，
+      // `b.pubmedAbstract || row.pubmedAbstract` 永远取不到 PubMedArticle 表的摘要。
+      // 正确口径：优先取 JOIN 别名 pubmedAbstractJoined（PubMedArticle.abstract 富化），
+      // 目标列为空时回退原列。
+      row.pubmedAbstract = row.pubmedAbstractJoined || b.pubmedAbstract || null; // R197: JOIN 富化优先
       row.pubmedTitle = b.pubmedTitle || row.pubmedTitle || null;
       row.pubmedAuthors = b.pubmedAuthors || row.pubmedAuthors || null;
       delete row.pubmedAbstractJoined;

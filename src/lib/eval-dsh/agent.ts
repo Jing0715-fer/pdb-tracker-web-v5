@@ -1043,11 +1043,14 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
   const figures: ReportFigure[] = [];
   try {
     // RCSB 结构图（图事件由 wrapper 注入 64-66% 区间进度）。
+    // R197: signal 透传 —— 配图是可选产物，中止返回已收集图（不抛错）。
     const rcsbFigs = await collectRcsbFigures(c.pdbRows, (e) => {
       emit({ ...e, progress: e.progress ?? 65 });
-    }, sectionIds);
+    }, sectionIds, signal);
     figures.push(...rcsbFigs);
   } catch (err: any) {
+    // R197: Stop 信号上抛（不被「配图失败跳过」吞掉）。
+    if (err?.name === 'AbortError' || signal?.aborted) throw err;
     emit({ stage: 'figure-rcsb', level: 'warn', message: `⚠ RCSB 配图收集失败（跳过）：${err?.message ?? 'unknown'}`, progress: 65 });
   }
   try {
@@ -1056,9 +1059,11 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     const webFigs = await searchWebFigures(figureQueries, (e) => {
       webStep++;
       emit({ ...e, progress: e.progress ?? Math.min(72, 66 + webStep) });
-    });
+    }, signal);
     figures.push(...webFigs);
   } catch (err: any) {
+    // R197: Stop 信号上抛（同上）。
+    if (err?.name === 'AbortError' || signal?.aborted) throw err;
     emit({ stage: 'figure-web', level: 'warn', message: `⚠ web 配图搜索失败（宁缺毋滥，跳过）：${err?.message ?? 'unknown'}`, progress: 71 });
   }
   emit({

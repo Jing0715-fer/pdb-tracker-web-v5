@@ -5209,3 +5209,43 @@ Stage Summary:
   4. useRunStream 的 log 上限 300 条与 seq 游标在超长运行（>300 事件）下的组合行为：state.log slice(-300) 不影响游标（游标跟 seq），但重连回放会补齐错过的事件——若 UI 需要完整历史仍受 300 条 UI 限制；可按需提高或分页
   5. E2E 工具链固化：poll.mjs 模式（游标持久化 + 多窗口续接）已验证有效，可把 start/poll/verify 固化成一个脚本进 scripts/ 目录供后续轮次复用（含 quota 探测预检与自动 force 逃生）
   6. dev server OOM 规避：tsc 全项目检查与 next-server 并存会被 OOM 杀（本轮 3 次重启实证）——后续轮次先跑 tsc 再起 server，或 tsc 用 --incremental
+
+---
+Task ID: R197
+Agent: main (Z.ai Code)
+Task: 全面代码审查（用户指令「全面进行代码审查，寻找bug并修复」）—— 三个并行审查代理覆盖 DSH 数据层 / API 路由 / 前端组件，26 项发现逐一验证修复
+
+Work Log:
+- 背景补记：R196（前一会话）已深审 run-registry/agent/blast/pubmed/rcsb/use-run-stream/run-service/routes 并修复（commit 3abbf55，会话耗尽上下文未留 worklog——本条目补记其存在；改动清单见 git show 3abbf55）
+- 审查方式：3 个并行 general-purpose 代理（数据层/路由层/前端）+ 人工逐项验证，共 26 项发现，修复 22 项 + 4 项低优先级延后（见 Stage Summary）
+- DSH 流水线 signal 断链修复（high）：
+  1. collect.ts 5 处调用点全部透传 opts.signal（fetchUniprotMeta/fetchPdbIdsForUniprot/fetchPdbEntryDetails 第4参/efetch 经 backfillPubMedArticles 透传/fetchUniprotSequence）—— R196 给 helper 加了 signal 形参但编排层没接线，Stop 在 Phase A 长拉取（maxPdb=500 → 100 批数分钟 / efetch 大批量）期间无效
+  2. 两处文献 catch（backfill 内层 + collect 外层）加 AbortError 上抛（防新接入的 signal 被「文献失败继续」吞掉）
+  3. figures.ts 配图管线（Phase D）全线可中止：collectRcsbFigures/searchWebFigures 加 signal 形参（配图是可选产物——中止返回已收集图不抛错）、HEAD 预检 combineSignals、VLM 调用 signal 竞速（AbortError 拒绝后不再重试）、downloadImageAsDataUri signal 合并、runImageSearchCli Stop 时 SIGTERM kill 子进程（旧版 Stop 后最长白等 150s）；agent.ts Phase D 两个 catch 加 AbortError rethrow
+  4. VLM race 超时定时器泄漏修复（快速成功的校验也遗留 55s 悬挂 timer，重试叠加）—— clearTimeout + signal listener 清理
+  5. web 配图跨 query 同 URL 去重（adoptedUrls run 级集合——相邻语义 query 返回重叠 top 结果时旧版会同图嵌两章并双计 verifiedFigures，也浪费 VLM 配额）
+- 经典管线（run/route.ts，2512 行）五项修复：
+  1.（high）batch pdbDetails.length=0 原地清空污染 batchResults[0] 引用——靶点 1 在跨靶点报告 prompt（top5/PDB 数/文献聚合）与 done 载荷（pdbCount）全部变空，每次批量评估必现；删除该行（数组随请求作用域自然释放）
+  2. NaN 穿透：clampInt（与 run-service.ts 同实现）应用于 maxPdb/maxBlastHits/maxLitCount 与 batch bMaxPdb——Number("abc")=NaN 穿透旧版 Math.min/max 双层钳制导致 0 PDB 静默空报告
+  3.（medium）blastWasSkipped 缓存口径：判定用「用户标志」（skipBlast&&!forceBlast）但写入用「实际生效」（含 autoShouldSkip）→ 结构覆盖良好的常见靶点永远 cache-miss、每次重跑都重拉全量 RCSB + 重写 8-9 章 LLM 报告；autoShouldSkip/shouldSkipBlast 前置到缓存判定之前（主靶点 + batch 同修）
+  4. uniprot 格式校验（[A-Z0-9_]{3,10}，空 body 仍默认 P00533 保 UI 兼容）
+  5. bCached.blastResults 死分支（SELECT 未取该列恒 undefined）改为从 EvaluationBlastResult 表读历史行
+- [uniprotId] 路由：pubmedAbstractJoined 死代码修复——JOIN 别名与目标列同名导致 `b.pubmedAbstract || row.pubmedAbstract` 永远取不到 PubMedArticle 表摘要；改为优先取 JOIN 富化值
+- run-service.ts：probeLlmQuota 超时放行路径修复（12s AbortSignal.timeout 中止的错误串不匹配任何瞬态模式 → 落入非瞬态分支 503 硬拒，与注释声明的「超时→不可结论→放行」矛盾——健康但慢的 provider（本地 CLI 冷启动）被误拒；超时/中止特征正则 → 放行，让流水线退避机制兜底）
+- 前端七项修复：
+  1.（high）provenance-panel DSH 分支：旧版 version===1 守卫把 DSH lite 结构整条拒绝——DSH 评估的溯源面板永远显示「无溯源记录（重新评估即可生成）」误导用户重跑 10+ 分钟评估；新增 DshProvView（mode==='dsh' 识别，含 question/phases 四卡/审稿环 trajectory 表/终审+篇幅 lengthStats/配额压力——R195 落地的度量首次前端可见）；无 version 的旧 DSH 行也能渲染；浏览器实测注入样例数据全字段渲染正确后还原
+  2. eval-report-generator XSS：reportHtml 字符串拼接的所有动态字段（用户输入标题/UniProt/RCSB/BLAST 元数据/LLM 报告片段）escapeHtml——Print 按钮 document.write 进同源新窗口可执行脚本（可读 localStorage 的共享 LLM 配置）；Overall 评分 0-10 制阈值归一化（旧版 1-4/10 低分也绿色+「High overall quality」）
+  3. pdb-tracker 报告获取竞态：cancelled 守卫（旧靶点迟到响应不再覆盖新选择）+ 无报告时清空旧内容（旧版 evalReportContent 非空会压制 selectedEval.report 兜底——A 的报告永久挂在 B 名下）；fetchEvalDetail 加 selectedEvalIdRef 比对（超时重试的旧请求会乱序覆盖新选择的详情面板）
+  4. RunHistoryPanel 展开日志竞态：expandedIdRef 比对 + 渲染处 expandedLog.id === r.id 双保险（晚到的旧行响应不再挂到新展开行下）
+  5. 300 条 log 截断补偿：stickyDshRef 见到即存累积（seq 游标 + 无 seq 事件的 WeakSet 追踪；relevance/outline/figure/chapter_done）——超长运行早期事件被 slice(-300) 逐出后相关性卡/大纲卡消失、合成报告丢早章、计时跳变；log 清空（start/reset）自动重置
+  6. lit/weekly 重复 Run 防护（isRunning 早退 + disabled，与 R196 的 eval 同款——双击会 abort 第一场，周报 5-15 分钟 LLM 任务最易受害）
+  7. img onError 降级（DshFigureThumb useState 切换占位 / 画廊隐藏破图）+ viewLitDigest 过期响应守卫
+- evaluations 列表：q 搜索分支 batchId 谓词与全量分支统一（含空串行——旧版搜索不到列表里看得见的目标）；batch DELETE 先解除成员 batchId 归属（旧版孤儿行从主列表「凭空消失」且无法重删）
+- llm.ts callZai 瞬态判定与 agent.ts isTransientLlmError 同口径（大小写不敏感正则 + rate limit/overloaded/temporarily/5xx 全模式——旧版 includes('Too many') 匹配不到 'Too Many Requests'，丢失退避重试机会）
+- 验证：eslint 13 个改动文件 0 error 0 warning；tsc 改动文件 0 错误（pdb-tracker 2 处为 HEAD 基线同款存量）；dev server 全路由编译通过；curl 验证（uniprot 校验 400 / 配额 503 平静拒绝 / status list / uniprotId 详情 / eval-report-file）；agent-browser 端到端（主页面 0 error 0 console error、评估详情、DSH 溯源视图全字段渲染、Report markdown 渲染、Run Center 面板）；zai 配额窗口 429（真实 E2E 留待配额恢复）
+
+Stage Summary:
+- 26 项发现修复 22 项：high 3/3（collect signal 断链、batch pdbDetails 污染、DSH provenance 前端死链）+ medium 13/15 + low 6/8
+- 延后 4 项（下轮建议池）：① 经典管线 req.signal 全链接线（底层 blast/LLM 已就绪，只差路由层；改动面大单独做）；② 单序列模式 SkillRunRecord 遥测补齐；③ markdown-renderer ``` 围栏支持；④ lazy-markdown img onError（主路径已修，次要路径留观）
+- R196 遗留 worklog 缺口已在本条目补记；「python 字节级编辑 CRLF 文件」成为本仓库大文件（run/route.ts 2512 行）安全修改的可靠路径
+- 真实 E2E（配额恢复后补做）：DSH 全流程跑一轮验证 collect/figures signal 接线 + sticky 累积在超长运行下的表现 + provenance DSH 视图真实数据渲染

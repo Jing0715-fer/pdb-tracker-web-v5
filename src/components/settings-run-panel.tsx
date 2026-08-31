@@ -664,6 +664,13 @@ function RunHistoryPanel({
   }>>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // R197: expandedId 的 ref 镜像 —— 历史日志抓取回调用它判断「展开行是否仍是
+  // 发起请求的那一行」（闭包里的 expandedId 是旧 state，判断不了）。
+  const expandedIdRef = useRef<string | null>(null);
+  const setExpandedIdSafe = (id: string | null) => {
+    expandedIdRef.current = id;
+    setExpandedId(id);
+  };
   // The full SSE log for the currently-expanded row. Loaded lazily from
   // /api/skill-runs/[id]/log so the panel doesn't fetch 100KB of NDJSON
   // for every row in the history list.
@@ -734,22 +741,32 @@ function RunHistoryPanel({
                   // Collapse if already open; otherwise expand and lazily
                   // fetch the full SSE log for this run.
                   if (isOpen) {
-                    setExpandedId(null);
+                    setExpandedIdSafe(null);
                     setExpandedLog(null);
                     setExpandedLogError(null);
                   } else {
-                    setExpandedId(r.id);
+                    setExpandedIdSafe(r.id);
                     setExpandedLog(null);
                     setExpandedLogError(null);
                     if ((r.logBytes ?? 0) > 0) {
                       setExpandedLogLoading(true);
+                      // R197: 竞态防护 —— 晚到的旧响应不再覆盖新展开行的日志
+                      //（展开 A（日志大）→收起→快速展开 B：旧 A 响应后到时会把
+                      // A 的日志挂在 B 行下）。回调落地前先验「当前展开行仍是本行」。
+                      const rowId = r.id;
                       fetch(`/api/skill-runs/${r.id}/log`)
                         .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
                         .then((d) => {
+                          if (rowId !== expandedIdRef.current) return; // 已切到别的行/收起
                           setExpandedLog({ id: d.id, lines: d.lines, bytes: d.bytes, text: d.log ?? '' });
                         })
-                        .catch((err) => setExpandedLogError(err?.message ?? 'fetch failed'))
-                        .finally(() => setExpandedLogLoading(false));
+                        .catch((err) => {
+                          if (rowId !== expandedIdRef.current) return;
+                          setExpandedLogError(err?.message ?? 'fetch failed');
+                        })
+                        .finally(() => {
+                          if (rowId === expandedIdRef.current) setExpandedLogLoading(false);
+                        });
                     }
                   }
                 }}
@@ -817,7 +834,7 @@ function RunHistoryPanel({
                           {expandedLogError && (
                             <div className="text-3xs text-rose-600 dark:text-rose-300">log fetch failed: {expandedLogError}</div>
                           )}
-                          {expandedLog && (
+                          {expandedLog && expandedLog.id === r.id && (
                             <pre className="max-h-60 overflow-y-auto rounded border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-bg/40 dark:bg-[#1a1917]/40 p-1.5 text-3xs font-mono leading-snug text-claude-text-muted/80 dark:text-[#9b9590]/80 whitespace-pre-wrap break-all">
                               {expandedLog.text}
                             </pre>
@@ -1565,14 +1582,16 @@ function DshFigureThumb({
 }) {
   const { t } = useI18n();
   const rejected = f.status === 'rejected' || f.status === 'failed';
+  // R197: 图片加载失败降级 —— 404/失效 URL 不再永久显示浏览器破图占位。
+  const [imgFailed, setImgFailed] = useState(false);
   return (
     <div
       className={`rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
       title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
     >
       {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
-      {/^https:\/\//i.test(f.url) ? (
-        <img src={f.url} alt={f.caption} loading="lazy" className={`${imageHeight} w-full object-cover bg-muted/30`} />
+      {/^https:\/\//i.test(f.url) && !imgFailed ? (
+        <img src={f.url} alt={f.caption} loading="lazy" onError={() => setImgFailed(true)} className={`${imageHeight} w-full object-cover bg-muted/30`} />
       ) : (
         <div className={`${imageHeight} w-full flex items-center justify-center bg-muted/30`} aria-hidden="true">
           <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
@@ -2052,30 +2071,59 @@ export function SettingsRunPanel({
   //   • dshOutline   — LAST event carrying it wins (may be re-planned).
   //   • dshFigures   — accumulated map keyed by url, latest status wins
   //     (figures emit multiple events: searching → verified/rejected).
-  const dshRelevance = useMemo(() => {
-    for (let i = evalStream.state.log.length - 1; i >= 0; i--) {
-      const r = asDshRelevance(evalStream.state.log[i].dshRelevance);
-      if (r) return r;
+  // R197: 300 条 log 截断的补偿性累积 —— relevance/outline/chapter_done/figure
+  // 等关键事件「见到即存」（seq 游标 + 无 seq 事件的 WeakSet 身份追踪），
+  // 不再依赖完整 log 重扫（超长运行的早期事件被 slice(-300) 逐出后，
+  // 派生态会丢失数据 —— 相关性卡片/大纲卡片消失、合成报告丢早期章节、
+  // 配图回退化）。log 清空（start/reset）时自动重置。
+  const stickyDshRef = useRef<{
+    lastSeq: number;
+    seen: WeakSet<object>;
+    relevance: ReturnType<typeof asDshRelevance>;
+    outline: ReturnType<typeof asDshOutline>;
+    figures: Map<string, DshFigurePayload>;
+    chapterOrder: string[];
+    chapters: Record<string, string>;
+    chapterMs: number;
+    allOk: boolean;
+  }>({} as never);
+  if (typeof stickyDshRef.current.lastSeq !== 'number') {
+    stickyDshRef.current = { lastSeq: -1, seen: new WeakSet(), relevance: null, outline: null, figures: new Map(), chapterOrder: [], chapters: {}, chapterMs: 0, allOk: true };
+  }
+  useEffect(() => {
+    const log = evalStream.state.log;
+    const st = stickyDshRef.current;
+    if (log.length === 0) {
+      // 新运行/reset（state.log 一旦为空即新生命令周期的开始）。
+      stickyDshRef.current = { lastSeq: -1, seen: new WeakSet(), relevance: null, outline: null, figures: new Map(), chapterOrder: [], chapters: {}, chapterMs: 0, allOk: true };
+      return;
     }
-    return null;
+    for (const ev of log) {
+      const isNew = (typeof ev.seq === 'number' && ev.seq > st.lastSeq) || (ev.seq == null && !st.seen.has(ev as object));
+      if (!isNew) continue;
+      if (typeof ev.seq === 'number' && ev.seq > st.lastSeq) st.lastSeq = ev.seq;
+      if (ev.seq == null) st.seen.add(ev as object);
+      const r = asDshRelevance(ev.dshRelevance); if (r) st.relevance = r;
+      const o = asDshOutline(ev.dshOutline); if (o) st.outline = o;
+      const f = asDshFigure(ev.dshFigure); if (f) st.figures.set(f.url, f);
+      if (ev.stage === 'chapter_done' && ev.chapter && ev.chapterContent) {
+        const key = ev.chapter as string;
+        if (!(key in st.chapters)) st.chapterOrder.push(key);
+        st.chapters[key] = ev.chapterContent as string;
+        if (ev.chapterDurationMs) st.chapterMs += ev.chapterDurationMs as number;
+        if (ev.level !== 'success') st.allOk = false;
+      }
+    }
   }, [evalStream.state.log]);
 
-  const dshOutline = useMemo(() => {
-    for (let i = evalStream.state.log.length - 1; i >= 0; i--) {
-      const o = asDshOutline(evalStream.state.log[i].dshOutline);
-      if (o) return o;
-    }
-    return null;
-  }, [evalStream.state.log]);
+  const dshRelevance = useMemo(() => stickyDshRef.current.relevance, [evalStream.state.log]);
 
-  const dshFiguresFromLog = useMemo(() => {
-    const byUrl = new Map<string, DshFigurePayload>();
-    for (const e of evalStream.state.log) {
-      const f = asDshFigure(e.dshFigure);
-      if (f) byUrl.set(f.url, f); // latest event for a url wins
-    }
-    return Array.from(byUrl.values());
-  }, [evalStream.state.log]);
+  const dshOutline = useMemo(() => stickyDshRef.current.outline, [evalStream.state.log]); // R197: sticky
+
+  const dshFiguresFromLog = useMemo(
+    () => Array.from(stickyDshRef.current.figures.values()), // R197: sticky（latest-wins 在累积时已保证）
+    [evalStream.state.log],
+  );
 
   // ── Effective DSH figures: MERGE the log-derived accumulation (searching →
   // verified/rejected, per-url latest-wins — keeps rejected figures visible
@@ -2105,22 +2153,15 @@ export function SettingsRunPanel({
   // in the log. Once the run completes, the final `result.report` payload
   // (which has the real provider/model metadata) takes precedence.
   const primaryReportFromStream = useMemo(() => {
-    const chapterDones = evalStream.state.log.filter(
-      (e) => e.stage === 'chapter_done' && e.chapter && e.chapterContent,
-    );
-    if (chapterDones.length === 0) return null;
+    // R197: 从 sticky 累积读（旧版每次重扫整个 log，早期 chapter_done 被 300 条
+    // 截断逐出后合成报告会从完整变成残缺版，\n(done 载荷恢复后又闪烁））。
+    const st = stickyDshRef.current;
+    const chapters = st.chapters;
+    if (st.chapterOrder.length === 0) return null;
     const canonical = ['summary', 'function', 'topology', 'pdb_analysis', 'feasibility', 'experimental', 'references', 'conclusion'];
-    const chapters: Record<string, string> = {};
-    const chapterOrder: string[] = []; // first-seen order (DSH outline ids are arbitrary)
-    let totalMs = 0;
-    let allOk = true;
-    for (const e of chapterDones) {
-      const key = e.chapter as string;
-      if (!(key in chapters)) chapterOrder.push(key);
-      chapters[key] = e.chapterContent as string;
-      if (e.chapterDurationMs) totalMs += e.chapterDurationMs as number;
-      if (e.level !== 'success') allOk = false;
-    }
+    const chapterOrder = st.chapterOrder; // first-seen order (DSH outline ids are arbitrary)
+    const totalMs = st.chapterMs;
+    const allOk = st.allOk;
     // R179 (Task 2-b): DSH 模式 — chapter ids come from the agent-planned
     // outline (arbitrary section-library ids), so order chapters by the
     // dshOutline event when present (unknown/extra chapters append after,
@@ -2234,6 +2275,7 @@ export function SettingsRunPanel({
   };
   /* ── run triggers ───────────────────────────────────────────────────── */
   const runLiterature = () => {
+    if (isRunning('lit')) return; // R197: 重复 Run 防护（同 eval；双击会 abort 第一场）
     markRunning('lit');
     litStream.reset();
     setLitViewingDigest(null);
@@ -2250,12 +2292,17 @@ export function SettingsRunPanel({
   };
 
   /** Fetch a past day's LLM digest from the literature reports API and show it inline. */
+  // R197: 旧日期摘要过期响应守卫 —— 连点两个日期时后返回的旧摘要会覆盖用户最后点选的日期。
+  const litDigestDateRef = useRef<string | null>(null);
   const viewLitDigest = useCallback(async (date: string) => {
+    litDigestDateRef.current = date;
     setLitViewingDigest({ date, content: '', loading: true });
+    const isStale = () => litDigestDateRef.current !== date;
     try {
       const res = await fetch('/api/literature/daily/reports');
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
+        if (isStale()) return;
         setLitViewingDigest({ date, content: '', loading: false, error: (locale === 'zh' ? '服务器无响应' : 'Server not responding') });
         return;
       }
@@ -2264,12 +2311,14 @@ export function SettingsRunPanel({
       const reports: any[] = Array.isArray(data) ? data : (data.reports || []);
       const found = reports.find((r: any) => (r.weekId || r.date) === date);
       if (found && found.content) {
+        if (isStale()) return;
         setLitViewingDigest({ date, content: found.content, loading: false });
       } else {
+        if (isStale()) return;
         setLitViewingDigest({ date, content: '', loading: false, error: `No LLM digest archived for ${date}. Run a literature search to generate a digest first.` });
       }
     } catch (err: any) {
-      setLitViewingDigest({ date, content: '', loading: false, error: err?.message || (locale === 'zh' ? '网络错误' : 'Network error') });
+      if (!isStale()) setLitViewingDigest({ date, content: '', loading: false, error: err?.message || (locale === 'zh' ? '网络错误' : 'Network error') });
     }
   }, []);
 
@@ -2449,6 +2498,7 @@ export function SettingsRunPanel({
   };
 
   const runWeekly = (maxCycles: 1 | 2 | 3) => {
+    if (isRunning('weekly')) return; // R197: 重复 Run 防护（周报 5-15 分钟 LLM 任务最易受害）
     markRunning('weekly');
     weeklyStream.reset();
     const weekLabel = weeklyCustomWeek || weeklyWindow?.weekId || '?';
@@ -3151,6 +3201,7 @@ export function SettingsRunPanel({
                     {locale === 'zh' ? '仅入库（不生成 LLM-Wiki 文件）' : 'DB only (no LLM-Wiki file)'}
                   </label>
                   <RunButton
+                    disabled={isRunning('lit')}
                     running={isRunning('lit')}
                     onClick={runLiterature}
                     onCancel={() => litStream.cancel()}
@@ -3330,6 +3381,7 @@ export function SettingsRunPanel({
                   </div>
 
                   <RunButton
+                    disabled={isRunning('weekly')}
                     running={isRunning('weekly')}
                     onClick={() => runWeekly(weeklyCycles)}
                     onCancel={() => weeklyStream.cancel()}

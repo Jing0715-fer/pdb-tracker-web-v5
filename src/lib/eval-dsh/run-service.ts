@@ -115,6 +115,12 @@ export async function probeLlmQuota(
     if (r === 'timeout') return { ok: true };
     if (r.ok) return { ok: true };
     const err = r.error || '';
+    // R197 bug 修复：12s 探测超时中止的错误串（'aborted due to timeout'
+    // 等）不匹配 isTransientLlmError 任何模式 —— 健康但响应慢的 provider（本地 CLI 冷启动正是
+    // 注释点名场景）落入非瞬态分支 → 503 硬拒，
+    // 与注释声明的「超时→结论不可靠→放行」矛盾接矛盾。超时/中止特征 → 放行，
+    // 让流水线的退避/降级机制兜底（UI 不发 force，此路径必须放行）。
+    if (/abort|timed?[- ]?out|timeout|cancelled|timeout after/i.test(err)) return { ok: true };
     if (isTransientLlmError(err)) {
       return {
         ok: false,

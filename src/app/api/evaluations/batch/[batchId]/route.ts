@@ -15,6 +15,11 @@ export async function DELETE(
     // by the caller via /api/evaluations/[uniprotId] DELETE. Here we just
     // clean up the EvaluationBatch row (cascade will handle related rows
     // like EvaluationReport if FK is set to cascade).
+    // R197 bug 修复：先解除成员 Evaluation 的 batchId 归属 —— 旧版只删 batch
+    // 行，成员行保留 batchId 指向已删除的 batch，导致其既不进 batch 列表也
+    // 不进主列表（列表谓词排除非空 batchId），评估从 UI「凭空消失」且无法
+    // 通过列表重删。解除归属后回到主列表，可独立查看/删除。
+    await db.$executeRaw`UPDATE Evaluation SET batchId = NULL, updatedAt = CURRENT_TIMESTAMP WHERE batchId = ${batchId}`;
     const deleted = await db.evaluationBatch.deleteMany({
       where: { batchId },
     });

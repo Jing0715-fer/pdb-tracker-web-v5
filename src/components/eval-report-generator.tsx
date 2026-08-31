@@ -52,10 +52,29 @@ function parseScores(scoresStr: string | null): Record<string, ScoreEntry> {
   }
 }
 
-function getScoreColor(score: number): string {
-  if (score >= 0.8) return '#16a34a';
-  if (score >= 0.5) return '#c9872e';
+/** R197 bug 修复：阈值口径 —— Overall 评分是 0-10 制（服务端
+ *  min(10, max(1, …))），旧版按 0-1 制（0.8/0.5）判定：1-4 分低分评估
+ *  也会绿色 + 「High overall quality」。传入值需先归一化（score / 10）。 */
+function getScoreColor(scoreNormalized: number): string {
+  if (scoreNormalized >= 0.8) return '#16a34a';
+  if (scoreNormalized >= 0.5) return '#c9872e';
   return '#dc2626';
+}
+
+/** R197 bug 修复：HTML 转义 —— reportHtml 用字符串拼接构建，动态字段
+ * （用户输入的标题、UniProt/RCSB/BLAST 外部元数据、LLM 报告片段）未经
+ * 转义直接插入；Print 按钮把结果 document.write 进同源新窗口（脚本可
+ * 执行，可读 localStorage 的共享 LLM 配置），导出的 .html 同样携带载荷。 */
+function escapeHtml(s: unknown): string {
+  return String(s ?? '').replace(/[&<>"']/g, (ch) => {
+    switch (ch) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      default: return '&#39;';
+    }
+  });
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -109,7 +128,7 @@ export function EvalReportGenerator({
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${reportTitle}</title>
+  <title>${escapeHtml(reportTitle)}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #2d2d2d; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 40px 32px; }
@@ -148,14 +167,14 @@ export function EvalReportGenerator({
 </head>
 <body>`;
 
-    // Header
+    // Header（动态字段全部转义 —— R197 XSS 修复）
     html += `
-  <h1>${reportTitle}</h1>
+  <h1>${escapeHtml(reportTitle)}</h1>
   <div class="meta">
-    <span>Protein: ${eval_.proteinName || '—'}</span>
-    <span>UniProt: ${eval_.uniprotId}</span>
-    ${eval_.organism ? `<span>Organism: ${eval_.organism}</span>` : ''}
-    <span>Date: ${date}</span>
+    <span>Protein: ${escapeHtml(eval_.proteinName || '—')}</span>
+    <span>UniProt: ${escapeHtml(eval_.uniprotId)}</span>
+    ${eval_.organism ? `<span>Organism: ${escapeHtml(eval_.organism)}</span>` : ''}
+    <span>Date: ${escapeHtml(date)}</span>
   </div>`;
 
     // Summary
@@ -168,7 +187,7 @@ export function EvalReportGenerator({
       <div class="label">Coverage</div>
     </div>
     <div class="stat-card">
-      <div class="value" style="color: ${getScoreColor(overallScore)}">${overallScore.toFixed(1)}</div>
+      <div class="value" style="color: ${getScoreColor(overallScore / 10)}">${overallScore.toFixed(1)}</div>
       <div class="label">Overall Score</div>
     </div>
     <div class="stat-card">
@@ -200,7 +219,7 @@ export function EvalReportGenerator({
     if (enabledSections.find(s => s.id === 'coverage')?.enabled) {
       html += `
   <h2>Coverage Analysis</h2>
-  <p>Structural coverage of <strong>${eval_.proteinName || eval_.uniprotId}</strong> (${eval_.uniprotId}) is <strong style="color: ${coverageColor}">${coverage.toFixed(0)}%</strong>${eval_.sequenceLength ? ` across ${eval_.sequenceLength} residues` : ''}.</p>`;
+  <p>Structural coverage of <strong>${escapeHtml(eval_.proteinName || eval_.uniprotId)}</strong> (${escapeHtml(eval_.uniprotId)}) is <strong style="color: ${coverageColor}">${coverage.toFixed(0)}%</strong>${eval_.sequenceLength ? ` across ${eval_.sequenceLength} residues` : ''}.</p>`;
 
       if (eval_.sequenceLength && eval_.pdbStructures.length > 0) {
         const ranges: [number, number][] = eval_.pdbStructures
@@ -267,11 +286,11 @@ export function EvalReportGenerator({
           : (s.method || '').toLowerCase().includes('x-ray') || (s.method || '').toLowerCase().includes('xray') ? 'method-xray'
           : 'method-nmr';
         html += `<tr>
-          <td><strong>${s.pdbId}</strong></td>
-          <td><span class="method-badge ${methodClass}">${s.method || '—'}</span></td>
+          <td><strong>${escapeHtml(s.pdbId)}</strong></td>
+          <td><span class="method-badge ${methodClass}">${escapeHtml(s.method || '—')}</span></td>
           <td>${s.resolution != null ? `${s.resolution.toFixed(2)}Å` : '—'}</td>
-          <td>${s.title || '—'}</td>
-          <td>${s.organism || '—'}</td>
+          <td>${escapeHtml(s.title || '—')}</td>
+          <td>${escapeHtml(s.organism || '—')}</td>
         </tr>`;
       });
       html += `</tbody></table>`;
@@ -289,10 +308,10 @@ export function EvalReportGenerator({
             : evalueNum.toFixed(2)
           : '—';
         html += `<tr>
-          <td><strong>${b.pdbId}</strong></td>
+          <td><strong>${escapeHtml(b.pdbId)}</strong></td>
           <td>${b.identity != null ? `${b.identity.toFixed(1)}%` : '—'}</td>
           <td>${evalueStr}</td>
-          <td>${b.description || '—'}</td>
+          <td>${escapeHtml(b.description || '—')}</td>
         </tr>`;
       });
       html += `</tbody></table>`;
@@ -310,9 +329,10 @@ export function EvalReportGenerator({
         html += `<div class="recommendation rec-warning">Low structural coverage — significant portions of the protein lack structural data. Consider homology modeling for uncovered regions.</div>`;
       }
 
-      if (overallScore >= 0.8) {
+      // R197: 0-10 制阈值归一化（旧版 1-4/10 低分也命中「高质量」分支）。
+      if (overallScore / 10 >= 0.8) {
         html += `<div class="recommendation rec-success">High overall quality score — available structures are generally well-suited for analysis.</div>`;
-      } else if (overallScore < 0.5) {
+      } else if (overallScore / 10 < 0.5) {
         html += `<div class="recommendation rec-warning">Low quality score — structures may have limited resolution or relevance. Exercise caution in interpretation.</div>`;
       }
 
@@ -325,14 +345,15 @@ export function EvalReportGenerator({
       }
 
       if (eval_.report) {
-        html += `<div class="recommendation rec-info">${eval_.report.slice(0, 500)}${eval_.report.length > 500 ? '...' : ''}</div>`;
+        // R197: LLM 输出原文同样过 escapeHtml（报告片段可能含任意字符）。
+        html += `<div class="recommendation rec-info">${escapeHtml(eval_.report.slice(0, 500))}${eval_.report.length > 500 ? '...' : ''}</div>`;
       }
     }
 
     // Footer
     html += `
   <div class="footer">
-    Generated by PDB Structure Tracker · ${date} · ${eval_.uniprotId}
+    Generated by PDB Structure Tracker · ${escapeHtml(date)} · ${escapeHtml(eval_.uniprotId)}
   </div>
 </body>
 </html>`;
