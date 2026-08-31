@@ -279,7 +279,21 @@ export async function collectEvaluationData(
   let pdbRows: PdbEntryDetail[] = [];
   if (directPdbCount > 0) {
     emit({ stage: 'rcsb-pdbs', level: 'info', message: `拉取详细元数据（5/批并发）…`, progress: 18 });
-    pdbRows = await fetchPdbEntryDetails(pdbIds);
+    // R192: 大批量（>100 条）时细分拉取进度 —— maxPdb=500 → 100 批 ≈
+    // 数分钟，此前全程静默停在 18%（用户侧表现为「卡住」）。每 25 条或
+    // 完成时发一条，进度映射到 18-28% 区间。
+    const metaT0 = Date.now();
+    pdbRows = await fetchPdbEntryDetails(pdbIds, undefined, (done, total) => {
+      if (total > 100 && (done % 25 === 0 || done === total)) {
+        const pctDone = Math.round((done / total) * 100);
+        emit({
+          stage: 'rcsb-pdbs',
+          level: 'info',
+          message: `结构元数据拉取中 ${done}/${total}（${pctDone}% · 已用 ${Math.round((Date.now() - metaT0) / 1000)}s）`,
+          progress: 18 + Math.floor((done / total) * 10),
+        });
+      }
+    });
     for (const d of pdbRows) fillJournalIf(d);
     emit({ stage: 'rcsb-pdbs', level: 'success', message: `✓ 获取 ${pdbRows.length} 条结构元数据（含 IF 补齐）`, progress: 28 });
   }

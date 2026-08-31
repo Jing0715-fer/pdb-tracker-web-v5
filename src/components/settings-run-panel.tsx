@@ -395,6 +395,9 @@ function dshStageLabel(stage: string, locale: string): string {
     case 'write-db': return zh ? '写入数据库' : 'Write DB';
     case 'chapter': return zh ? '章节' : 'Chapters';
     case 'chapter_done': return zh ? '章节完成' : 'Chapters done';
+    case 'chapter-review': return zh ? '章节审稿' : 'Chapter review';
+    case 'chapter-rewrite': return zh ? '章节重写' : 'Chapter rewrite';
+    case 'final-review': return zh ? '终审' : 'Final review';
     default: return stage;
   }
 }

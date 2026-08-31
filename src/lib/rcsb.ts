@@ -35,7 +35,11 @@ export async function fetchPdbEntryDetail(pdbId: string): Promise<PdbEntryDetail
     return { pdbId, method, resolution: typeof resolution === 'number' ? resolution : null, title: struct.title || null, authors: (cit.rcsb_authors || []).slice(0, 10).join(', ') || null, journal: cit.rcsb_journal_abbrev || null, journalIf: typeof cit.rcsb_journal_impact_factor === 'number' ? cit.rcsb_journal_impact_factor : null, doi: cit.pdbx_database_id_DOI || null, pubmedId: cit.pdbx_database_id_PubMed != null ? String(cit.pdbx_database_id_PubMed) : null, releaseDate: accession.initial_release_date ? accession.initial_release_date.slice(0, 10) : null, depositDate: accession.deposit_date ? accession.deposit_date.slice(0, 10) : null, organisms, ligands };
   } catch { return null; }
 }
-export async function fetchPdbEntryDetails(pdbIds: string[], max?: number): Promise<PdbEntryDetail[]> {
+export async function fetchPdbEntryDetails(
+  pdbIds: string[],
+  max?: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<PdbEntryDetail[]> {
   const results: PdbEntryDetail[] = [];
   const ids = max ? pdbIds.slice(0, max) : pdbIds;
   const chunkSize = 5;
@@ -43,6 +47,11 @@ export async function fetchPdbEntryDetails(pdbIds: string[], max?: number): Prom
     const chunk = ids.slice(i, i + chunkSize);
     const details = await Promise.all(chunk.map(id => fetchPdbEntryDetail(id)));
     for (const d of details) { if (d) results.push(d); }
+    // R192: 每批完成回调一次 —— 大批量（maxPdb=500 → 100 批）此前全程
+    // 静默数分钟，调用方借该回调向 SSE 发细分进度。回调异常不影响拉取。
+    if (onProgress) {
+      try { onProgress(Math.min(ids.length, i + chunkSize), ids.length); } catch { /* ignore */ }
+    }
   }
   return results;
 }

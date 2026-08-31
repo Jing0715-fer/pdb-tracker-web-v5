@@ -60,6 +60,10 @@ export interface DshChapterResult {
   reviewed?: boolean;
   /** R189: 审查后是否触发过重写（最终内容为重写版）。 */
   rewritten?: boolean;
+  /** R192: 本章实际经历的审稿轮数（含通过的那轮；0 = 未进入审查环）。 */
+  reviewRounds?: number;
+  /** R192: 确定性生成（未经 LLM —— 目前仅 references 章）。 */
+  deterministic?: boolean;
 }
 
 export interface DshRunResult {
@@ -197,6 +201,94 @@ function validateDshChapter(expectedTitle: string, content: string): { ok: boole
     return { ok: false, reason: `缺少期望标题「${expectedTitle}」` };
   }
   return { ok: true };
+}
+
+// ─── R192: 参考文献章确定性生成 ─────────────────────────────────────────────
+
+/**
+ * R192: references 章从真实文献数据直接构建（零 LLM、零幻觉、零配额、
+ * 零延迟）。此前该章由 LLM 从文献表「转抄」，存在漏抄/错抄 PMID 风险
+ * （R191 还需专门把它排除出审稿环，防止审稿人要求列表章改成讨论章）。
+ *
+ * 排序：keyLiterature（relevance agent 点名的重点文献，保持点名顺序）
+ * 置顶加 ★ 标记，其余按期刊 IF 降序、同年份新者优先；PMID 去重。
+ * 纯函数（可单测）：literature 行、重点 PMID 清单 → 完整章节 Markdown。
+ */
+export function buildDeterministicReferences(
+  literature: LiteratureRow[],
+  keyLiterature: string[] | undefined,
+): string {
+  const keySet = new Set((keyLiterature || []).map(String));
+  const seen = new Set<string>();
+  const rows = (literature || []).filter(l => {
+    const k = String(l.pmid);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (rows.length === 0) {
+    return `## 参考文献
+
+暂无可靠文献数据 —— 本次 PubMed 检索未返回任何记录（可能原因：该靶点文献覆盖稀疏，或检索词与收录库无交集）。本报告的结论均基于 RCSB PDB 结构元数据与 UniProt 功能注释，未引用具体文献；如需文献支撑，建议补充检索策略后重跑评估。`;
+  }
+  const line = (l: LiteratureRow, star: boolean) =>
+    `- PMID ${l.pmid} | ${l.title} — ${l.journal || '未知期刊'}${l.journalIf != null ? ` (IF ${l.journalIf.toFixed(1)})` : ''} (${l.year || '?'})${star ? ' ★' : ''}`;
+  // 重点文献按 relevance agent 的点名顺序（重要性序）排列，而非文献表
+  // 顺序；点名但不在文献表中的 PMID 直接丢弃（上游已消毒，防御双重保险）。
+  const keyed = keySet.size > 0
+    ? (keyLiterature || [])
+        .map(String)
+        .map(pmid => rows.find(l => String(l.pmid) === pmid))
+        .filter((l): l is LiteratureRow => !!l)
+    : [];
+  const rest = rows
+    .filter(l => !keySet.has(String(l.pmid)))
+    .sort((a, b) =>
+      (b.journalIf ?? -1) - (a.journalIf ?? -1)
+      || String(b.year || '').localeCompare(String(a.year || '')));
+  if (keyed.length > 0 && rest.length > 0) {
+    return `## 参考文献
+
+### 与科学问题最相关的文献（相关性分析点名）
+
+${keyed.map(l => line(l, true)).join('\n')}
+
+### 其他文献（按期刊影响因子排序）
+
+${rest.map(l => line(l, false)).join('\n')}`;
+  }
+  return `## 参考文献
+
+${(keyed.length > 0 ? keyed : rest).map(l => line(l, keyed.length > 0)).join('\n')}`;
+}
+
+/** R192: 章节图片维护 —— URL 突变修复（R191）+ 章末确定性补挂（R187）。
+ * 逐章环与终审外科修正（Phase E+）共用；返回维护后的正文与自愈统计。 */
+function maintainChapterFigures(
+  content: string,
+  figsToEmbed: ReportFigure[],
+  allFigures: ReportFigure[],
+): { content: string; fixed: number; removed: number } {
+  let out = content;
+  let fixed = 0;
+  let removed = 0;
+  const verified = allFigures.filter(f => f.status === 'verified');
+  if (verified.length > 0) {
+    const rep = repairFigureUrls(out, verified.map(f => f.url));
+    out = rep.content;
+    fixed = rep.fixed;
+    removed = rep.removed;
+  }
+  if (figsToEmbed.length > 0) {
+    const missing = figsToEmbed.filter(f => !out.includes(f.url));
+    if (missing.length > 0) {
+      const appendix = missing
+        .map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`)
+        .join('\n\n');
+      out = `${out.trimEnd()}\n\n${appendix}\n`;
+    }
+  }
+  return { content: out, fixed, removed };
 }
 
 /** 规范化：标题层级修正（含期望标题的标题 → H2；§N.M → H3）+ 去重标题。 */
@@ -902,6 +994,9 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
 
   const chapters: DshChapterResult[] = [];
   const chapterTotal = outline.length;
+  // R192: 审查环轮次上限 —— 重写版会再次送审（复审），达此上限后不再重写
+  // （防「怎么改都不满意」的章节吃掉整条流水线的时间与配额预算）。
+  const MAX_REVIEW_ROUNDS = 2;
   for (let i = 0; i < outline.length; i++) {
     const entry = outline[i];
     const tmpl = getSection(entry.id)!;
@@ -921,6 +1016,40 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
       chapterId: entry.id,
       chapterTitle: tmpl.titleZh,
     });
+
+    // ── R192: references 章确定性生成（零 LLM）──────────────────────
+    // 固定格式列表章直接从真实文献数据构建：零幻觉（不可能出现编造
+    // PMID）、零配额、零延迟；也不再需要「审稿环排除 references」的特判
+    // 之外的其余豁免逻辑（字数/格式校验天然满足）。
+    if (entry.id === 'references') {
+      const refT0 = Date.now();
+      const refContent = buildDeterministicReferences(c.literature, rel?.keyLiterature);
+      chapters.push({
+        id: entry.id,
+        title: tmpl.titleZh,
+        ok: true,
+        content: refContent,
+        attempts: 0,
+        reviewed: false,
+        rewritten: false,
+        reviewRounds: 0,
+        deterministic: true,
+      });
+      emit({
+        stage: 'chapter_done',
+        level: 'success',
+        message: `✓ 第 ${chapterIndex}/${chapterTotal} 章完成（${refContent.length} chars · 确定性生成：${c.literature.length} 篇真实文献，未经 LLM）`,
+        progress: 72 + Math.round(((i + 1) / Math.max(1, chapterTotal)) * 24),
+        chapter: entry.id,
+        chapterIndex,
+        chapterTotal,
+        chapterId: entry.id,
+        chapterTitle: tmpl.titleZh,
+        chapterContent: refContent,
+        chapterDurationMs: Date.now() - refT0,
+      });
+      continue;
+    }
 
     // 该章可用配图（kind 任意，status verified）。R184: 正文嵌入建议最多
     // 取 3 张。R187: 措辞从「从中选 1-3 张」改为「必须全部嵌入」+
@@ -1070,22 +1199,27 @@ ${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.conten
       }
     }
 
-    // ── R189: 审查环（agent 式多轮审查与思考）─────────────────────────
+    // ── R189/R192: 审查环（agent 式多轮审查与思考）───────────────────
     // 有问题模式下，非基础章节（深挖章 + question_focus/summary/
     // conclusion）在初稿通过格式校验后，由「审稿 agent」评估三维度：
     // 是否直接回答问题 / 论证深度 / 数据支撑。任一不达标 → 注入审稿
-    // 意见重写一次（一轮为限，重写版只做格式校验；失败保留原版，绝不
-    // 倒退）。空问题模式跳过整个审查环（无问题可审）。
-    // R191: references（参考文献）为固定格式列表章，不适用「直接回答
-    // 问题」的审稿口径 —— 真实 E2E 实测审稿人曾要求它改名成讨论章，
-    // 重写后正文段落挤进了文献列表开头（格式被污染），故排除。
+    // 意见重写。R192: 由「一轮为限」升级为多轮 —— 重写版会再次送审，
+    // 达标即止（常态 1 轮通过，1 轮重写后复审通过也很常见）；轮次上限
+    // MAX_REVIEW_ROUNDS=2（防 ping-pong 与配额失控）。重写版只做格式
+    // 校验；校验/调用失败保留原版，绝不倒退。空问题模式跳过整个审查环
+    // （无问题可审）。
+    // R191: references 为固定格式列表章不适用该审稿口径（R192 起该章
+    // 已确定性生成、根本不走 LLM，此处的 id 判断仅为防御性保留）。
     let reviewed = false;
     let rewritten = false;
+    let reviewRounds = 0;
     if (ok && deep && entry.id !== 'references') {
-      try {
-        emit({ stage: 'chapter-review', level: 'info', message: `审稿 agent 审查第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
-        const reviewSystem = `你是结构生物学报告的严格审稿人。评估某一章草稿是否达到「直接回答科学问题 + 论证有深度 + 数据支撑充分」的标准。只输出 JSON，不要其他文字。`;
-        const reviewUser = `科学问题：${question}
+      const reviewSystem = `你是结构生物学报告的严格审稿人。评估某一章草稿是否达到「直接回答科学问题 + 论证有深度 + 数据支撑充分」的标准。只输出 JSON，不要其他文字。`;
+      for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
+        try {
+          if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+          emit({ stage: 'chapter-review', level: 'info', message: `审稿 agent 审查第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」${round > 1 ? `（第 ${round} 轮 —— 复审重写版）` : ''}…`, progress: pct, chapter: entry.id });
+          const reviewUser = `科学问题：${question}
 
 章节标题：${tmpl.titleZh}
 
@@ -1107,30 +1241,49 @@ ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按�
 - dataGrounded=false（结论未引用具体 PDB ID/PMID/数字）→ rewrite
 - verdict 必须与三维度一致：三个维度全部达标（directlyAnswers=true 且 dataGrounded=true 且 depth≠shallow）时 verdict 必须为 pass，不得 rewrite
 - rewriteHints 最多 3 条，每条必须是具体可执行的指令（如「补充 X 与 Y 的分辨率对比」）`;
-        const reviewRun = await generateJson(reviewSystem, reviewUser, { maxChars: 1200, llm: llmCfg, signal });
-        llmTotalMs += reviewRun.durationMs;
-        const rv = reviewRun.parsed;
-        if (rv && typeof rv === 'object') {
+          const reviewRun = await generateJson(reviewSystem, reviewUser, { maxChars: 1200, llm: llmCfg, signal });
+          llmTotalMs += reviewRun.durationMs;
+          const rv = reviewRun.parsed;
+          if (!(rv && typeof rv === 'object')) {
+            emit({ stage: 'chapter-review', level: 'info', message: `审稿 JSON 解析失败，跳过本章审查（保留原稿）`, progress: pct, chapter: entry.id });
+            break;
+          }
           reviewed = true;
+          reviewRounds = round;
           const verdict = String(rv.verdict || 'pass');
           const depth = String(rv.depth || 'adequate');
           const hints = Array.isArray(rv.rewriteHints)
             ? (rv.rewriteHints as any[]).map(String).filter(h => h.trim()).slice(0, 3)
             : [];
-          if (verdict === 'rewrite' && hints.length > 0) {
-            // R191: verdict 合理性钳制 —— 真实 E2E 实测 2/9 章「深度=adequate ·
-            // 直接回答=是 · 数据支撑=是」仍被 LLM 审稿人给了 rewrite（自相
-            // 矛盾），白白多一轮重写（+1 LLM 调用/章）。三维度全部达标时
-            // 以维度为准覆盖 verdict，只对真不达标的章节重写。
-            const dimsPass = (rv.directlyAnswers === true || rv.directlyAnswers === 'true')
-              && (rv.dataGrounded === true || rv.dataGrounded === 'true')
-              && depth !== 'shallow';
-            if (dimsPass) {
-              emit({ stage: 'chapter-review', level: 'success', message: `✓ 审稿通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}；三维度达标，覆盖审稿人矛盾的 rewrite 判定）`, progress: pct, chapter: entry.id });
-            } else {
-              emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审稿未通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）→ 按意见重写：${hints.join('；').slice(0, 160)}`, progress: pct, chapter: entry.id });
-              emit({ stage: 'chapter-rewrite', level: 'info', message: `按审稿意见重写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」…`, progress: pct, chapter: entry.id });
-              const rewritePrompt = `${userPrompt}
+          const dimsLabel = `深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}`;
+          // R191: verdict 合理性钳制 —— 真实 E2E 实测 2/9 章「深度=adequate ·
+          // 直接回答=是 · 数据支撑=是」仍被 LLM 审稿人给了 rewrite（自相
+          // 矛盾），白白多一轮重写（+1 LLM 调用/章）。三维度全部达标时
+          // 以维度为准覆盖 verdict，只对真不达标的章节重写。
+          const dimsPass = (rv.directlyAnswers === true || rv.directlyAnswers === 'true')
+            && (rv.dataGrounded === true || rv.dataGrounded === 'true')
+            && depth !== 'shallow';
+          const needRewrite = verdict === 'rewrite' && hints.length > 0 && !dimsPass;
+          if (!needRewrite) {
+            emit({
+              stage: 'chapter-review',
+              level: 'success',
+              message: `✓ 审稿通过${round > 1 ? `（第 ${round} 轮复审）` : ''}（${dimsLabel}${verdict === 'rewrite' && dimsPass ? '；三维度达标，覆盖审稿人矛盾的 rewrite 判定' : ''}）`,
+              progress: pct,
+              chapter: entry.id,
+            });
+            break;
+          }
+          emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审稿未通过（${dimsLabel}）→ 按意见重写：${hints.join('；').slice(0, 160)}`, progress: pct, chapter: entry.id });
+          // R192: 达到轮次上限时不再重写（第 MAX_REVIEW_ROUNDS 轮复审仍
+          // 不达标 → 保留重写版或原稿，把配额留给后续章节），避免个别
+          // 「怎么改都不满意」的章节吃掉整条流水线的时间预算。
+          if (round >= MAX_REVIEW_ROUNDS) {
+            emit({ stage: 'chapter-review', level: 'info', message: `已达到审查轮次上限（${MAX_REVIEW_ROUNDS} 轮），保留当前版本继续（后续终审还会通读全文）`, progress: pct, chapter: entry.id });
+            break;
+          }
+          emit({ stage: 'chapter-rewrite', level: 'info', message: `按审稿意见重写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」（第 ${round} 轮）…`, progress: pct, chapter: entry.id });
+          const rewritePrompt = `${userPrompt}
 
 ---
 
@@ -1138,60 +1291,61 @@ ${content.slice(0, 4500)}${content.length > 4500 ? '\n（草稿已截断，按�
 ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
 
 请重写本章：逐条解决上述问题，直接回答科学问题、论证链完整（结论→证据→机制→含义）、关键论点至少两条独立证据交叉验证、引用具体 PDB ID/PMID/数字。第一行仍必须是\`## ${tmpl.titleZh}\`。`;
-              const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
-              llmTotalMs += r2.durationMs;
-              if (r2.provider) llmProvider = r2.provider;
-              if (r2.model) llmModel = r2.model;
-              if (r2.ok) {
-                const v2 = validateDshChapter(tmpl.titleZh, r2.content);
-                if (v2.ok) {
-                  content = normalizeDshChapter(r2.content, tmpl.titleZh);
-                  rewritten = true;
-                  attempts++;
-                } else {
-                  emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写版未通过格式校验（${v2.reason}），保留原版`, progress: pct, chapter: entry.id });
-                }
-              } else {
-                emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写调用失败，保留原版`, progress: pct, chapter: entry.id });
-              }
+          // R192: 重写调用同样抗瞬态（429/5xx）—— 多轮化后调用数上升，
+          // 限流窗口内直接放弃重写会浪费掉整轮审查成果，退避一次再试。
+          let rewriteDone = false;
+          for (let rwAttempt = 0; rwAttempt <= 1 && !rewriteDone; rwAttempt++) {
+            if (rwAttempt > 0) {
+              await backoffWait(25000, signal, `重写调用遇瞬态错误，25s 后退避重试`, (message) => emit({ stage: 'chapter-rewrite', level: 'warn', message, progress: pct, chapter: entry.id }));
             }
-          } else {
-            emit({ stage: 'chapter-review', level: 'success', message: `✓ 审稿通过（深度=${depth} · 直接回答=${rv.directlyAnswers ? '是' : '否'} · 数据支撑=${rv.dataGrounded ? '是' : '否'}）`, progress: pct, chapter: entry.id });
+            const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
+            llmTotalMs += r2.durationMs;
+            if (r2.provider) llmProvider = r2.provider;
+            if (r2.model) llmModel = r2.model;
+            if (r2.ok) {
+              const v2 = validateDshChapter(tmpl.titleZh, r2.content);
+              if (v2.ok) {
+                content = normalizeDshChapter(r2.content, tmpl.titleZh);
+                rewritten = true;
+                attempts++;
+                rewriteDone = true; // 进入下一轮复审
+              } else {
+                emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写版未通过格式校验（${v2.reason}），保留原版`, progress: pct, chapter: entry.id });
+                rewriteDone = true; // 校验失败不是瞬态 —— 重试无意义，保留原版收工
+              }
+            } else if (isTransientLlmError(r2.error || '')) {
+              continue; // 退避后重试一次
+            } else {
+              emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写调用失败，保留原版`, progress: pct, chapter: entry.id });
+              rewriteDone = true;
+            }
           }
-        } else {
-          emit({ stage: 'chapter-review', level: 'info', message: `审稿 JSON 解析失败，跳过本章审查（保留原稿）`, progress: pct, chapter: entry.id });
+          if (!rewriteDone) {
+            emit({ stage: 'chapter-rewrite', level: 'warn', message: `⚠ 重写退避重试后仍失败，保留原版`, progress: pct, chapter: entry.id });
+          }
+        } catch (err: any) {
+          // 审查环绝不能阻截章节交付 —— 任何异常都降级为保留原稿。
+          if (err?.name === 'AbortError') throw err;
+          emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审查环异常（保留原稿）：${err?.message?.slice(0, 100) ?? 'unknown'}`, progress: pct, chapter: entry.id });
+          break;
         }
-      } catch (err: any) {
-        // 审查环绝不能阻截章节交付 —— 任何异常都降级为保留原稿。
-        emit({ stage: 'chapter-review', level: 'warn', message: `⚠ 审查环异常（保留原稿）：${err?.message?.slice(0, 100) ?? 'unknown'}`, progress: pct, chapter: entry.id });
       }
     }
 
-    // ── R191: 图片 URL 突变修复 ─────────────────────────────────────
+    // ── R191/R192: 图片维护（URL 突变修复 + 章末确定性补挂）─────────
     // LLM 在「原样复制」指令下仍会抄错哈希 1 个字符（真实 E2E 实测：
-    // 867ea614c6a7 → 867ea61Rc6a7），突变 URL 大概率 404 且骗过下方
-    // 补挂的 includes 检查造成同图重复。放在补挂前：修复后 includes
-    // 命中 → 不再追加正确版 → 无重复；幻觉 URL（清单无近邻）整图剔除。
-    if (ok && figures.length > 0) {
-      const allowedUrls = figures.filter(f => f.status === 'verified').map(f => f.url);
-      const rep = repairFigureUrls(content, allowedUrls);
-      if (rep.fixed > 0 || rep.removed > 0) {
-        content = rep.content;
-        emit({ stage: 'figures', level: 'info', message: `配图 URL 自愈（${tmpl.titleZh}）：纠正 ${rep.fixed} 处字符突变、剔除 ${rep.removed} 张幻觉图片`, progress: pct, chapter: entry.id });
-      }
-    }
-
-    // R187: 章末确定性补挂 —— LLM 漏嵌的配图直接追加到章末，杜绝
-    // 「配图只在附录、不进正文」（用户现场：6 张配图仅 2 张进正文，其余
-    // 全堆在附录）。挂到该章的图（≤3 张/章）必须出现在正文；附录只收
-    // 未嵌入任何章节的溢出图（见 Phase F gallery 过滤）。
-    if (ok && figsToEmbed.length > 0) {
-      const missing = figsToEmbed.filter(f => !content.includes(f.url));
-      if (missing.length > 0) {
-        const appendix = missing
-          .map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`)
-          .join('\n\n');
-        content = `${content.trimEnd()}\n\n${appendix}\n`;
+    // 867ea614c6a7 → 867ea61Rc6a7），突变 URL 大概率 404 且骗过补挂的
+    // includes 检查造成同图重复；幻觉 URL（清单无近邻）整图剔除。修复后
+    // includes 命中 → 不再追加正确版 → 无重复。
+    // 章末补挂（R187）：挂到该章的图（≤3 张/章）必须出现在正文；附录只
+    // 收未嵌入任何章节的溢出图（见 Phase F gallery 过滤）。
+    // R192: 抽为 maintainChapterFigures 共用 —— 终审外科修正（见 Phase
+    // E+）重写某章后同样需要过这两道维护。
+    if (ok) {
+      const maint = maintainChapterFigures(content, figsToEmbed, figures);
+      content = maint.content;
+      if (maint.fixed > 0 || maint.removed > 0) {
+        emit({ stage: 'figures', level: 'info', message: `配图 URL 自愈（${tmpl.titleZh}）：纠正 ${maint.fixed} 处字符突变、剔除 ${maint.removed} 张幻觉图片`, progress: pct, chapter: entry.id });
       }
     }
 
@@ -1204,6 +1358,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       error: ok ? undefined : lastErr,
       reviewed,
       rewritten,
+      reviewRounds,
     });
     // R179 (Task 2-a): done 事件的 stage 统一为 `chapter_done`（spec + 经典
     // 管线同名约定），章节 id 经 `chapter`/`chapterId` 字段携带。
@@ -1211,7 +1366,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       stage: 'chapter_done',
       level: ok ? 'success' : 'warn',
       message: ok
-        ? `✓ 第 ${chapterIndex}/${chapterTotal} 章完成（${content.length} chars${rewritten ? ' · 审稿后重写' : reviewed ? ' · 审稿通过' : ''}）`
+        ? `✓ 第 ${chapterIndex}/${chapterTotal} 章完成（${content.length} chars${rewritten ? ` · 审稿后重写${reviewRounds > 1 ? `（${reviewRounds} 轮）` : ''}` : reviewed ? ` · 审稿通过${reviewRounds > 1 ? `（${reviewRounds} 轮）` : ''}` : ''}）`
         : `✗ 第 ${chapterIndex}/${chapterTotal} 章失败：${lastErr}`,
       progress: 72 + Math.round(((i + 1) / Math.max(1, chapterTotal)) * 24),
       chapter: entry.id,
@@ -1223,6 +1378,133 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       ...(ok ? {} : { chapterError: lastErr || 'LLM 调用失败' }),
       chapterDurationMs: Date.now() - chapterT0,
     });
+  }
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+
+  // ── Phase E+: 终审 pass（全文一致性，R192）───────────────────────────
+  // 逐章审稿只看单章三维度；章节是独立生成的，跨章问题（术语/缩写不一致、
+  // 章间结论矛盾、同一 PDB/文献两章给出不同数字、内容大段重复）只有通读
+  // 全文才能发现。终审 agent 一次通读 → 高严重度问题（矛盾/数字冲突）
+  // 触发「外科修正」（最小化重写该章，保标题保图片行，上限 2 章）；
+  // 低严重度（术语统一建议）仅记录到 provenance，不动正文。
+  // 基础评估模式同样适用（跨章一致性与是否有科学问题无关）；章节数
+  // <3 时不值得终审（跨章问题无从谈起）。
+  const finalReview = { ok: false, issues: 0, high: 0, rewrites: 0 };
+  if (chapters.filter(ch => ch.ok).length >= 3) {
+    try {
+      emit({ stage: 'final-review', level: 'info', message: `终审 agent 通读全部章节，检查跨章一致性（术语统一 / 结论矛盾 / 数字冲突）…`, progress: 94 });
+      const docForReview = chapters
+        .filter(ch => ch.ok)
+        .map(ch => `【${ch.title}】\n${ch.content.slice(0, 2600)}${ch.content.length > 2600 ? '\n（本章已截断）' : ''}`)
+        .join('\n\n')
+        .slice(0, 26000);
+      const frSystem = `你是结构生物学报告的终审编辑。报告各章已由逐章审稿人把关过单章质量，你只负责「章间一致性」—— 通读全文找跨章问题。只输出 JSON，不要其他文字。`;
+      const frUser = `${hasQuestion ? `科学问题：${question}\n\n` : ''}报告全文（每章可能被截断）：
+
+${docForReview}
+
+请检查并输出 JSON：
+{
+  "verdict": "pass"|"issues",
+  "issues": [{"chapterTitle": "出问题的章标题（必须与上文【】内标题完全一致）", "severity": "high"|"low", "note": "问题描述 + 具体修正指令"}]
+}
+
+检查范围（只查跨章问题，单章深度/论证已有审稿人负责）：
+- 术语/缩写不一致：同一概念两种叫法混用（如某章用缩写、另一章用全称且未对照）
+- 章间结论矛盾：A 章与 B 章对同一事实给出相反判断
+- 数字冲突：同一 PDB 结构/文献/评分在两章给出不同数字
+- 内容大段重复：两章讲同一件事且篇幅均不小
+
+规则：
+- 最多 5 条 issue；只报确实存在的问题，拿不准的不报
+- high = 必须修正（矛盾 / 数字冲突）；low = 建议性（术语统一）
+- 没有跨章问题时 verdict=pass、issues=[]`;
+      const frRun = await generateJson(frSystem, frUser, { maxChars: 1600, llm: llmCfg, signal });
+      llmTotalMs += frRun.durationMs;
+      if (frRun.provider) llmProvider = frRun.provider;
+      if (frRun.model) llmModel = frRun.model;
+      const fr = frRun.parsed;
+      if (fr && typeof fr === 'object' && Array.isArray(fr.issues)) {
+        finalReview.ok = true;
+        const issues = (fr.issues as any[])
+          .filter(it => it && typeof it === 'object' && typeof it.note === 'string' && it.note.trim())
+          .slice(0, 5)
+          .map(it => ({
+            chapterTitle: String(it.chapterTitle || '').trim(),
+            severity: String(it.severity || 'low') === 'high' ? 'high' : 'low',
+            note: String(it.note).slice(0, 400),
+          }));
+        finalReview.issues = issues.length;
+        finalReview.high = issues.filter(it => it.severity === 'high').length;
+        if (issues.length === 0) {
+          emit({ stage: 'final-review', level: 'success', message: `✓ 终审通过：未发现跨章一致性问题`, progress: 95 });
+        } else {
+          emit({
+            stage: 'final-review',
+            level: finalReview.high > 0 ? 'warn' : 'info',
+            message: `终审发现 ${issues.length} 个跨章问题（high ${finalReview.high} / low ${issues.length - finalReview.high}）：${issues.map(it => `「${it.chapterTitle || '未指明章节'}」${it.note.slice(0, 60)}`).join('；').slice(0, 300)}`,
+            progress: 95,
+          });
+          // 外科修正：只处理 high（矛盾/数字冲突），上限 2 章 —— 修正
+          // 是「最小化编辑」而非重写（保标题/保论证结构/保图片行原样），
+          // 失败保留原文，绝不倒退。low（术语建议）不动正文。
+          const surgTargets = issues.filter(it => it.severity === 'high');
+          for (const it of surgTargets.slice(0, 2)) {
+            if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+            const ch = chapters.find(x => x.ok && (x.title === it.chapterTitle || x.title.includes(it.chapterTitle) || it.chapterTitle.includes(x.title)));
+            if (!ch) {
+              emit({ stage: 'final-review', level: 'info', message: `终审意见未匹配到章节（「${it.chapterTitle}」），跳过该条修正`, progress: 95 });
+              continue;
+            }
+            emit({ stage: 'final-review', level: 'info', message: `按终审意见外科修正「${ch.title}」：${it.note.slice(0, 80)}`, progress: 95 });
+            const surgSystem = `你是结构生物学报告的资深编辑，做最小化外科修正 —— 只解决指定问题，绝不重写全文。`;
+            const surgPrompt = `报告终审发现章节「${ch.title}」存在跨章一致性问题，需要最小化修正。
+
+终审意见（必须解决）：${it.note}
+
+当前章节内容：
+${ch.content}
+
+修正要求：
+- 只修正终审意见指出的问题及其直接关联句，其余内容（论证结构、数据引用、图片行）原样保留
+- 第一行仍必须是 \`## ${ch.title}\`
+- 图片 Markdown 行（以 ! 开头的行）必须逐字原样保留，不得改动任何 URL
+- 只输出修正后的完整章节（不要解释你改了什么）`;
+            try {
+              const rs = await generateText(surgSystem, surgPrompt, { maxChars: Math.min(14000, Math.max(6000, ch.content.length + 2000)), llm: llmCfg, signal });
+              llmTotalMs += rs.durationMs;
+              if (rs.provider) llmProvider = rs.provider;
+              if (rs.model) llmModel = rs.model;
+              if (rs.ok) {
+                const vs = validateDshChapter(ch.title, rs.content);
+                if (vs.ok) {
+                  let newContent = normalizeDshChapter(rs.content, ch.title);
+                  const figsForCh = figures.filter(f => f.status === 'verified' && f.sectionId === ch.id).slice(0, 3);
+                  newContent = maintainChapterFigures(newContent, figsForCh, figures).content;
+                  ch.content = newContent;
+                  ch.rewritten = true;
+                  finalReview.rewrites++;
+                  emit({ stage: 'final-review', level: 'success', message: `✓ 「${ch.title}」外科修正完成（${newContent.length} chars）`, progress: 95 });
+                } else {
+                  emit({ stage: 'final-review', level: 'warn', message: `⚠ 「${ch.title}」修正版未通过格式校验（${vs.reason}），保留原文`, progress: 95 });
+                }
+              } else {
+                emit({ stage: 'final-review', level: 'warn', message: `⚠ 「${ch.title}」修正调用失败，保留原文`, progress: 95 });
+              }
+            } catch (err: any) {
+              if (err?.name === 'AbortError') throw err;
+              emit({ stage: 'final-review', level: 'warn', message: `⚠ 「${ch.title}」外科修正异常（保留原文）：${err?.message?.slice(0, 80) ?? 'unknown'}`, progress: 95 });
+            }
+          }
+        }
+      } else {
+        emit({ stage: 'final-review', level: 'info', message: `终审 JSON 解析失败，跳过终审（保留全文原稿）`, progress: 95 });
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') throw err;
+      // 终审绝不阻截报告交付 —— 任何异常降级为跳过。
+      emit({ stage: 'final-review', level: 'warn', message: `⚠ 终审异常（跳过终审，保留全文原稿）：${err?.message?.slice(0, 100) ?? 'unknown'}`, progress: 95 });
+    }
   }
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
@@ -1284,6 +1566,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
   // hasQuestion 分支，这里用 relevanceRunParsed 标量替代作用域外的引用。
   const reviewedCount = chapters.filter(ch => ch.reviewed).length;
   const rewrittenCount = chapters.filter(ch => ch.rewritten).length;
+  const reviewRoundsTotal = chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0);
   try {
     const provenanceLite = JSON.stringify({
       mode: 'dsh',
@@ -1296,7 +1579,8 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
         outline: { total: outline.length, ids: outline.map(o => o.id) },
         figures: { verified: verifiedFigures.length },
         chapters: { ok: chaptersOk, failed: chaptersFailed },
-        review: { reviewed: reviewedCount, rewritten: rewrittenCount },
+        review: { reviewed: reviewedCount, rewritten: rewrittenCount, rounds: chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0) },
+        finalReview: { ...finalReview },
       },
       llm: { provider: llmProvider, model: llmModel, durationMs: llmTotalMs },
       generatedAt: new Date().toISOString(),
@@ -1311,7 +1595,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
     stage: 'done',
     level: reportOk ? 'success' : 'error',
     message: reportOk
-      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount}）` : ' · 基础评估模式'}`
+      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮）` : ' · 基础评估模式'}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章）` : '通过'}` : ''}`
       : `✗ 全部章节生成失败`,
     progress: 100,
   });
