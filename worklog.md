@@ -5379,3 +5379,24 @@ Stage Summary:
 - 「本地只有 RCSB 图」根因 = web 配图搜索与 VLM 校验依赖 z-ai CLI/SDK（云沙箱内置），本地 ENOENT 静默降级；RCSB 图为公网 CDN 与 LLM 无关，故本地仍正常
 - 降级消息现在区分「未安装（环境能力差异，明示不影响正文）」与「挂起/超时（偶发故障）」两种情形
 - 待用户决策的选项池（未实现）：1) 本地 web 配图可用免密钥图源（如 Wikimedia Commons API）兜底，但无本地 VLM 时只能打「未校验」标记（MiniMax M3 无视觉能力，判官/中文 caption 均缺）2) 若本地配置了带视觉模型的 provider（如 MiniMax-VL），可扩展 VLM 判官走 provider 路径复用校验 3) 维持现状（本地纯 RCSB，云沙箱全量）
+
+---
+Task ID: R205
+Agent: main (Z.ai Code)
+Task: 本地部署 web 配图全链路落地（用户确认两项）：① VLM 判官走已配置 provider（MiniMax-M3 OpenAI 兼容视觉）② Wikimedia Commons 免密钥图源兜底
+
+Work Log:
+- 设计定案：判官双路径 = z-ai 内置优先（云沙箱免费；探测 ENOENT 即刻跳过零等待）→ 已配置 provider 兜底（本地主路径；provider/model 与正文报告同源（agent.ts 透传 run-service resolveRunLlmConfig 产物），'zai'/'cli:*'/'auto' 排除）。图源双轨 = z-ai image-search CLI → 不可用/零结果时 Commons 兜底（沙箱内 z-ai 零结果的 query 也获 Commons 补充覆盖）
+- figures.ts 新增：① zaiToolchainAvailable()（execFile 'z-ai --help' 会话级记忆 + PDB_FIGURES_NO_ZAI=1 逃生门）② callProviderVision()（OpenAI 兼容 /chat/completions + image_url 内容块；线格式与 callAgentProviderCompat 同源 authHeader/authPrefix/extraHeaders；MiniMax 专属 thinking:disabled；90s×2 重试；4xx 硬失败会话级短路 providerVisionUnavailable；stripReasoning + extractFirstJsonObject 解析）③ searchCommonsApi/searchCommonsFigures()（MediaWiki generator=search namespace 6；filetype:drawing 优先零结果退化无前缀；thumburl 栅格化 PNG ≤800px；mime 白名单 + 宽度≥200；LicenseShortName 进 source 署名）④ parseVlmVerdict 共用解析 ⑤ no-judge 守卫（无 z-ai 且无 provider → 跳过 web 配图，明示 RCSB 不受影响）⑥ provider 判官定性失败一次性原因提示
+- 关键环境发现：Wikimedia 全域（api/upload/thumb CDN）要求 UA 含联系方式（URL/email），否则 403 Too Many Reqs（bun 默认 UA/curl 风格 UA 均被拒；带 +https://github.com/... 的 UA 三连 200）——COMMONS_UA 带仓库地址，downloadImageAsDataUri 对 *.wikimedia.org 注入 UA（其余源不干预）
+- searchWebFigures 集成：llmCfg 第 4 参；开局判官阵容 announce（z-ai 优先→X 回退 / X 主路径 / 无判官守卫）；CLI 首查失败 ENOENT（info「本地部署常态→改用 Commons」）与挂起（warn）分流；cliBrokenThisRun 后续 query 直走 Commons（不再整体放弃）；Commons 结果进 imageSearchCache（commons: 前缀键）
+- 验证（bun 直跑真实网络 + mock 端点，五组）：T1 Commons 真实搜索 759ms 3 条（PD 协议 + 中文版通路图）；T2 判官调度 announce + minimax 无 key 定性「no API key」+ 一次性原因提示 + 逐图快速拒绝；T3 无判官守卫直接返回空；T4 mock api.minimaxi.com 成功腿 —— 请求形态全断言通过（model=MiniMax-M3、content blocks=[text,image_url]、image 为 base64 dataUri、thinking disabled、Bearer、/v1/chat/completions），噪声包裹的 JSON 解析成功，2 图 verified；T5 本地全链路模拟（PATH 剥离 z-ai：bun-only bin 目录）—— 判官探测 ENOENT→MiniMax 路径 + 搜索 ENOENT→Commons 真实搜索 + thumb 真实下载（UA 修复生效）+ mock 判官 → 2 张 thumb.wikimedia.org 图 verified，事件流与设计文案逐条一致
+- 质量门：eslint figures.ts + agent.ts 0 error 0 warning；run-dsh 路由实编译无错误；测试文件清理
+- 提交推送 GitHub
+
+Stage Summary:
+- 本地部署 web 配图从「仅 RCSB」升级为全链路可用：Commons 免密钥搜索（真实网络验证）+ 用户配置 provider 视觉判官（MiniMax-M3 OpenAI 兼容，请求形态按官方文档逐项断言）——用户本地用 MiniMax M3 跑评估即可获得 Commons 示意图 + 判官中文图注/严筛
+- 沙箱行为不变（z-ai 全链优先）但更健壮：z-ai 搜索零结果获 Commons 补充、z-ai VLM 瞬态失败回退 provider
+- 新增环境知识：Wikimedia UA 必须含联系方式否则 403（api + thumb CDN 同规则）——已带仓库地址固化
+- 用户本地启用方式：Providers 面板配置 MiniMax（apiKey + MiniMax-M3 模型）并设为默认 provider —— 判官与正文同源自动生效，无需额外配置
+- 未实现建议池：Commons query 可加 LLM 翻译环节（当前 figureQueries 已强制英文，无实际需求）；provider 判官消耗用户配额的用量统计（遥测未区分判官调用）

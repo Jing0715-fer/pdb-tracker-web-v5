@@ -21,6 +21,12 @@
 import type { SseEvent } from '@/lib/sse';
 import type { PdbEntryDetail } from '@/lib/rcsb';
 import { combineSignals } from '@/lib/blast'; // R197: Stop 信号与超时合并（与 blast/rcsb 同口径）
+// R205: 判官 provider 路径（OpenAI 兼容视觉调用，如 MiniMax-M3）—— 与 llm.ts
+// 同源的 leaf 级导入（agent/providers 无反向依赖，无循环）；stripReasoning
+// 剥推理模型（DeepSeek-R1 等）content 内联  minded 块（MiniMax 走 thinking
+// disabled 已天然干净，这里为其他 provider 兜底）。
+import { getProviderProfile, resolveApiKey, resolveBaseURL } from '@/lib/agent/providers';
+import { stripReasoning } from '@/lib/llm';
 
 export interface ReportFigure {
   kind: 'rcsb' | 'web';
@@ -395,6 +401,228 @@ interface ImageSearchResult {
  * 上限 200 条防内存无限增长（超出即清空重建，简单且足够）。 */
 const imageSearchCache = new Map<string, ImageSearchResult[]>();
 
+// ─── R205: 判官双路径 + Wikimedia Commons 免密钥图源 ─────────────────────
+
+/**
+ * R205: z-ai 工具链（CLI 与 SDK 同源）可用性 —— 会话级记忆。云沙箱两者齐备
+ * （判官走 z-ai 内置 VLM，免费）；本地部署 ENOENT 即刻返回 false（判官直落
+ * 已配置 provider 路径，不浪费超时等待）。PDB_FIGURES_NO_ZAI=1 可强制跳过
+ * （测试口/用户强制 provider 判官的逃生门）。
+ */
+let zaiToolchainMemo: boolean | undefined;
+async function zaiToolchainAvailable(): Promise<boolean> {
+  if (process.env.PDB_FIGURES_NO_ZAI === '1') return false;
+  if (zaiToolchainMemo !== undefined) return zaiToolchainMemo;
+  const { execFile } = await import('node:child_process');
+  zaiToolchainMemo = await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const done = (v: boolean) => { if (!settled) { settled = true; resolve(v); } };
+    try {
+      execFile('z-ai', ['--help'], { timeout: 10_000 }, (err) => done(!err))
+        .on('error', () => done(false));
+    } catch { done(false); }
+  });
+  return zaiToolchainMemo;
+}
+
+/** R205: VLM 判官输出解析（z-ai 与 provider 两路径共用）—— 只认 JSON 里的
+ * verdict/reason/caption；文本其余部分（前后缀噪声/think 块）无关。 */
+function parseVlmVerdict(text: string): { verdict: 'relevant' | 'irrelevant'; reason: string; caption?: string } | null {
+  const parsed = extractFirstJsonObject(String(text || ''));
+  if (parsed && (parsed.verdict === 'relevant' || parsed.verdict === 'irrelevant')) {
+    return {
+      verdict: parsed.verdict,
+      reason: String(parsed.reason || ''),
+      caption: typeof parsed.caption === 'string' ? parsed.caption : undefined,
+    };
+  }
+  return null;
+}
+
+/**
+ * R205: Wikimedia Commons 免密钥图源（MediaWiki API，generator=search +
+ * namespace 6 File:）。科学示意图在 Commons 以 SVG drawing 为主，
+ * `filetype:drawing` 前缀精准命中；零结果时退化为无前缀查询（判官兜底
+ * 过滤非示意图）。thumburl 为 CDN 栅格化 PNG（SVG 也转 PNG，默认 800px），
+ * 同时满足 VLM 输入（仅栅格）与 3MB 下载上限；LicenseShortName 进 source
+ * 供署名展示。查询语言：相关性分析的 figureQueries 本就强制英文，
+ * Commons 英文标注覆盖率最佳，无需翻译环节。
+ */
+const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
+const COMMONS_TIMEOUT_MS = 20_000;
+const COMMONS_THUMB_WIDTH = 800;
+const COMMONS_MIME_RE = /^image\/(?:svg\+xml|png|jpeg|gif|webp)$/;
+/** Wikimedia 礼仪要求带联系方式的 UA（无 URL/email 的 UA 进严限流桶，
+ * 实测 403 Too Many Reqs；thumb CDN 同规则）。用仓库地址作联系方式。 */
+const COMMONS_UA = 'PDB-Tracker/1.0 (+https://github.com/Jing0715-fer/pdb-tracker-web-v5)';
+
+interface CommonsPage {
+  title?: string;
+  index?: number;
+  imageinfo?: Array<{
+    mime?: string;
+    width?: number;
+    thumburl?: string;
+    extmetadata?: Record<string, { value?: string }>;
+  }>;
+}
+
+async function searchCommonsApi(searchQuery: string, signal?: AbortSignal): Promise<ImageSearchResult[]> {
+  const params = new URLSearchParams({
+    action: 'query',
+    format: 'json',
+    origin: '*',
+    generator: 'search',
+    gsrsearch: searchQuery,
+    gsrnamespace: '6',
+    gsrlimit: '6',
+    prop: 'imageinfo',
+    iiprop: 'url|mime|size|extmetadata',
+    iiurlwidth: String(COMMONS_THUMB_WIDTH),
+  });
+  const combo = combineSignals(signal, COMMONS_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${COMMONS_API}?${params.toString()}`, {
+      headers: { 'User-Agent': COMMONS_UA },
+      signal: combo.signal,
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json() as { query?: { pages?: Record<string, CommonsPage> } };
+    const pages = Object.values(data.query?.pages ?? {});
+    // relevance 顺序（MediaWiki 返回无序对象，index = 搜索排名）。
+    pages.sort((a, b) => (a.index ?? 99) - (b.index ?? 99));
+    const out: ImageSearchResult[] = [];
+    for (const p of pages) {
+      const info = p.imageinfo?.[0];
+      if (!info?.thumburl || !info.mime || !COMMONS_MIME_RE.test(info.mime)) continue;
+      if ((info.width ?? 0) < 200) continue; // 过小：图标/装饰件，非配图
+      const title = String(p.title || '')
+        .replace(/^File:/i, '')
+        .replace(/\.[a-z0-9]{2,5}$/i, '')
+        .replace(/_/g, ' ')
+        .trim();
+      if (!title) continue;
+      const license = info.extmetadata?.LicenseShortName?.value?.trim();
+      out.push({
+        // thumburl = 直接图片地址（下载/VLM/嵌入三用）；original_url 同源
+        //（本函数的下载链路取 original_url || url，不可填描述页 HTML）。
+        original_url: info.thumburl,
+        url: info.thumburl,
+        caption: title.slice(0, 120),
+        source: license ? `Wikimedia Commons · ${license.slice(0, 40)}` : 'Wikimedia Commons',
+      });
+    }
+    return out;
+  } catch {
+    return []; // 超时/网络/解析失败 → 宁缺毋滥，调用方走零结果分支
+  } finally {
+    combo.dispose();
+  }
+}
+
+/** R205: Commons 搜索（导出仅供测试）：drawing 优先，零结果退化无前缀。 */
+export async function searchCommonsFigures(query: string, signal?: AbortSignal): Promise<ImageSearchResult[]> {
+  const primary = await searchCommonsApi(`${query} filetype:drawing`, signal);
+  if (primary.length > 0) return primary;
+  return searchCommonsApi(query, signal);
+}
+
+/** R205: provider 视觉判官调用超时（OpenAI 兼容 /chat/completions +
+ *  image_url 内容块；图像已限 3MB，90s 对慢端点留了余量）。 */
+const PROVIDER_VISION_TIMEOUT_MS = 90_000;
+const PROVIDER_VISION_RETRIES = 1;
+/**
+ * R205: provider 视觉调用「硬失败」的会话级记忆（4xx：鉴权错/参数错/模型
+ * 无视觉能力）。首败即定性 —— 后续逐张直接跳过（每张两次 90s 重试纯属
+ * 浪费）；5xx/超时为瞬态，不记忆、允许重试。网络/超时型失败不设记忆，
+ * 下张图仍会尝试（沙箱内 provider 仅作 z-ai 失败的回退，瞬态恢复有效）。
+ */
+let providerVisionUnavailable: string | null = null;
+
+/** R205: provider 判官「已定性不可用」的原因（一次性提示用，避免逐张重复）。 */
+export function providerVisionFailureReason(): string | null {
+  return providerVisionUnavailable;
+}
+
+/**
+ * R205: 通过已配置 provider（OpenAI 兼容，如 MiniMax-M3）执行 VLM 判官。
+ * 线格式与 llm.ts 的 callAgentProviderCompat 同源（authHeader/authPrefix/
+ * extraHeaders 来自 provider profile），仅消息体换为多模态内容块：
+ * text（判官 prompt）+ image_url（base64 dataUri，MiniMax 图片上限 10MB、
+ * 请求体 64MB，本管线图源已限 3MB 远低于两者）。MiniMax-M3 额外显式关
+ * thinking（判官无需推理链；其余 provider 不发未知字段，靠 stripReasoning
+ * 剥可能内联的 think 块）。
+ */
+async function callProviderVision(
+  providerId: string,
+  model: string,
+  dataUri: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<{ verdict: 'relevant' | 'irrelevant'; reason: string; caption?: string } | null> {
+  if (providerVisionUnavailable) return null;
+  const profile = getProviderProfile(providerId);
+  if (!profile) { providerVisionUnavailable = `unknown provider "${providerId}"`; return null; }
+  const apiKey = resolveApiKey(providerId);
+  if (!apiKey) {
+    providerVisionUnavailable = `no API key for "${providerId}" (set it in shared LLM settings or ${profile.apiKeyEnv})`;
+    return null;
+  }
+  const baseURL = (resolveBaseURL(providerId) ?? profile.baseURL ?? '').replace(/\/+$/, '');
+  if (!baseURL) { providerVisionUnavailable = `no baseURL for "${providerId}"`; return null; }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    [profile.authHeader ?? 'Authorization']: `${profile.authPrefix ?? 'Bearer '}${apiKey}`,
+    ...(profile.extraHeaders ?? {}),
+  };
+  const body: Record<string, unknown> = {
+    model: model || profile.defaultModel,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: `${VLM_PROMPT}\n\n查询主题：${query}` },
+        { type: 'image_url', image_url: { url: dataUri } },
+      ],
+    }],
+    stream: false,
+    ...(providerId === 'minimax' ? { thinking: { type: 'disabled' } } : {}),
+  };
+
+  for (let attempt = 0; attempt <= PROVIDER_VISION_RETRIES; attempt++) {
+    if (signal?.aborted) return null;
+    if (providerVisionUnavailable) return null;
+    const combo = combineSignals(signal, PROVIDER_VISION_TIMEOUT_MS);
+    try {
+      const resp = await fetch(`${baseURL}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: combo.signal,
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => resp.statusText);
+        const brief = `${profile.displayName} API ${resp.status}: ${errText.slice(0, 200)}`;
+        // 4xx：鉴权/参数/模型无视觉 —— 定性为持续失败，会话级短路。
+        if (resp.status >= 400 && resp.status < 500) providerVisionUnavailable = brief;
+        continue; // 5xx/瞬态 → 重试一次
+      }
+      const json = await resp.json() as { choices?: Array<{ message?: { content?: string | null } }> };
+      const content = json.choices?.[0]?.message?.content || '';
+      const verdict = parseVlmVerdict(stripReasoning(content));
+      if (verdict) return verdict;
+      // JSON 无效 → 与 z-ai 路径同口径：重试一次
+    } catch {
+      if (signal?.aborted) return null;
+      if (providerVisionUnavailable) return null; // 已定性 → 不再重试
+      // 超时/网络错误 → 重试一次
+    } finally {
+      combo.dispose();
+    }
+  }
+  return null;
+}
+
 /** 以 execFile 方式调 z-ai image-search（无 shell 注入面）。R193: 超时可
  * 调（首查短超时）+ 返回 ok 区分「调用失败（CLI 挂/超时）」与「正常返回
  * 但零结果」（后者不代表 CLI 不可用，不应短路后续 query）。
@@ -447,11 +675,17 @@ async function runImageSearchCli(query: string, timeoutMs: number, signal?: Abor
 }
 
 /** 下载图片并校验（≤3MB、image/*，content-length 预检），返回 base64 dataUri；任何失败返回 null。
- * R197: signal 可选 —— 与每张 20s 下载超时合并（Stop 即刻生效）。 */
+ * R197: signal 可选 —— 与每张 20s 下载超时合并（Stop 即刻生效）。
+ * R205: Wikimedia 域（api/upload/thumb CDN）要求带联系方式的 UA，否则
+ * 403（实测）—— 对 wikimedia.org 域名注入 COMMONS_UA；其余源不干预。 */
 async function downloadImageAsDataUri(url: string, signal?: AbortSignal): Promise<string | null> {
   const combo = combineSignals(signal, IMAGE_DOWNLOAD_TIMEOUT_MS);
+  const isWikimedia = /\.wikimedia\.org$/i.test(url.replace(/^https?:\/\//, '').split('/')[0]);
   try {
-    const res = await fetch(url, { signal: combo.signal });
+    const res = await fetch(url, {
+      signal: combo.signal,
+      ...(isWikimedia ? { headers: { 'User-Agent': COMMONS_UA } } : {}),
+    });
     if (!res.ok) return null;
     const ctype = (res.headers.get('content-type') || '').toLowerCase();
     if (!ctype.startsWith('image/')) return null;
@@ -468,10 +702,11 @@ async function downloadImageAsDataUri(url: string, signal?: AbortSignal): Promis
   }
 }
 
-/** VLM 严格校验：relevant + reason 非空才通过；55s 超时 + 1 次重试。
- * R197: race 的超时定时器在快速返回后清理（旧版每次校验遗留一个 55s
- * 悬挂 timer，重试叠加）；另接受可选 signal（中止即退出重试循环）。 */
-async function verifyFigureWithVlm(
+/** z-ai 内置 VLM 判官（云沙箱主路径）：relevant + reason 非空才通过；
+ * 55s 超时 + 1 次重试。R197: race 的超时定时器在快速返回后清理（旧版每次
+ * 校验遗留一个 55s 悬挂 timer，重试叠加）；接受可选 signal（中止即退出
+ * 重试循环）。R205: 从 verifyFigureWithVlm 拆出（后者升级为判官双路径调度）。 */
+async function verifyWithZaiVlm(
   dataUri: string,
   query: string,
   signal?: AbortSignal,
@@ -512,14 +747,8 @@ async function verifyFigureWithVlm(
         ...(signalRace ? [signalRace] : []),
       ]);
       const text: string = resp?.choices?.[0]?.message?.content || '';
-      const parsed = extractFirstJsonObject(text);
-      if (parsed && (parsed.verdict === 'relevant' || parsed.verdict === 'irrelevant')) {
-        return {
-          verdict: parsed.verdict,
-          reason: String(parsed.reason || ''),
-          caption: typeof parsed.caption === 'string' ? parsed.caption : undefined,
-        };
-      }
+      const verdict = parseVlmVerdict(text);
+      if (verdict) return verdict;
       // JSON 无效 —— 视为本次尝试失败，进入重试。
     } catch {
       // 超时/网络错误 —— 重试一次。
@@ -534,19 +763,51 @@ async function verifyFigureWithVlm(
 }
 
 /**
- * R179 (Task 2-a) / R184: web 原理图/通路图搜索 + VLM 校验。
- * 每个有配图价值的章节各搜一条 query（按 query 文本去重 + 防刷量护栏 8 条）；
- * 每 query 最多 4 张送审、最多采用 2 张（近重复保护）；全报告总通过数
- * 不再设上限。VLM 校验逐张串行（峰值内存 = 单张图，与总量无关）。
- * CLI / SDK / VLM 任一环节失败 → emit warn + 返回空数组（绝不 throw）。
+ * R205: VLM 判官双路径调度 —— z-ai 内置优先（云沙箱免费；本地 CLI 缺失
+ * 探测 ENOENT 即刻跳过、不浪费超时等待），已配置 provider 的 OpenAI 兼容
+ * 视觉调用作兜底（本地主路径：MiniMax-M3 等视觉模型；沙箱内 z-ai 瞬态
+ * 失败时也走此兜底）。任一成功即返回；均不可用返回 null（调用方按「宁缺
+ * 毋滥」拒图）。provider 为 'zai'/'cli:*' 时无视觉路径，跳过。
+ */
+async function verifyFigureWithVlm(
+  dataUri: string,
+  query: string,
+  signal?: AbortSignal,
+  /** R205: 流水线 LLM 配置（run-service resolveRunLlmConfig 的产物）——
+   *  provider/model 与正文报告同源（用户配置什么就判什么）。 */
+  llmCfg?: { provider?: string; model?: string },
+): Promise<{ verdict: 'relevant' | 'irrelevant'; reason: string; caption?: string } | null> {
+  if (await zaiToolchainAvailable()) {
+    const v = await verifyWithZaiVlm(dataUri, query, signal);
+    if (v) return v;
+  }
+  const providerId = (llmCfg?.provider || '').trim();
+  if (providerId && providerId !== 'zai' && providerId !== 'auto' && !providerId.startsWith('cli:')) {
+    return callProviderVision(providerId, (llmCfg?.model || '').trim(), dataUri, query, signal);
+  }
+  return null;
+}
+
+/**
+ * R179 (Task 2-a) / R184 / R205: web 原理图/通路图搜索 + VLM 判官双路径。
+ * 图源双轨：z-ai image-search CLI（云沙箱主路径）→ 不可用/零结果时
+ * Wikimedia Commons 免密钥兜底（本地主路径）；每 query 的候选图逐张
+ * 下载后交判官（z-ai 内置 VLM 优先 → 已配置 provider 的 OpenAI 兼容视觉
+ * 调用，见 verifyFigureWithVlm）。每个有配图价值的章节各搜一条 query
+ * （按 query 文本去重 + 防刷量护栏 8 条）；每 query 最多 4 张送审、最多
+ * 采用 2 张（近重复保护）；全报告总通过数不设上限。VLM 校验逐张串行
+ * （峰值内存 = 单张图，与总量无关）。任一环节失败 → emit warn + 继续
+ * （绝不 throw）。
  * R197: signal 可选 —— 配图是可选产物，中止不抛错而是返回已收集的图；
  * 跨 query 同 URL 去重（相邻语义 query 常返回重叠 top 结果，旧版会把
  * 同一张图嵌入两个章节并双计 verifiedFigures）。
+ * R205: llmCfg —— 判官 provider 路径的配置来源（与正文报告同源）。
  */
 export async function searchWebFigures(
   queries: Array<{ sectionId: string; query: string }>,
   emit: (e: SseEvent) => void,
   signal?: AbortSignal,
+  llmCfg?: { provider?: string; model?: string },
 ): Promise<ReportFigure[]> {
   const out: ReportFigure[] = [];
   // R197: run 级已采用 URL 集合 —— 跨 query 去重（含省一次 VLM 配额）。
@@ -564,59 +825,108 @@ export async function searchWebFigures(
     .slice(0, MAX_WEB_QUERIES);
   if (capped.length === 0) return out;
 
+  // R205: 判官路径决策（会话级 z-ai 探测 + provider 可用性）—— 先说清楚
+  // 本次运行的判官阵容，再干活。provider 排除 'zai'（SDK 内置已由 z-ai
+  // 分支覆盖）与 'cli:*'（CLI 代理无视觉面）。
+  const zaiOk = await zaiToolchainAvailable();
+  const judgeProviderId = (() => {
+    const p = (llmCfg?.provider || '').trim();
+    return p && p !== 'zai' && p !== 'auto' && !p.startsWith('cli:') ? p : '';
+  })();
+  if (!zaiOk && !judgeProviderId) {
+    emit({ stage: 'figure-web', level: 'warn', message: '⚠ web 配图需要 VLM 判官（z-ai 内置或已配置 provider 的视觉模型）：本机无 z-ai CLI 且未配置可用 provider —— 跳过 web 配图搜索（RCSB 结构图与报告正文不受影响）' });
+    return out;
+  }
+  if (judgeProviderId) {
+    const profile = getProviderProfile(judgeProviderId);
+    const judgeName = profile?.displayName ?? judgeProviderId;
+    const judgeModel = (llmCfg?.model || '').trim() || profile?.defaultModel || '';
+    emit({
+      stage: 'figure-web',
+      level: 'info',
+      message: zaiOk
+        ? `VLM 判官：z-ai 内置（优先，云沙箱免费）→ ${judgeName}${judgeModel ? '/' + judgeModel : ''}（回退）`
+        : `VLM 判官：${judgeName}${judgeModel ? '/' + judgeModel : ''}（已配置 provider，OpenAI 兼容视觉调用；z-ai CLI 本机不可用）`,
+    });
+  } else {
+    emit({ stage: 'figure-web', level: 'info', message: 'VLM 判官：z-ai 内置（云沙箱）' });
+  }
+
   // R193: 首查短路标记（函数级 —— 本次评估内 CLI 首查即挂则后续 query
-  // 全部跳过；下次评估重新尝试，CLI 可能已恢复）+ 首查标志（短超时）。
+  // 不再空等超时；R205 起改为直走 Commons，而非整体放弃）+ 首查标志。
   let cliBrokenThisRun = false;
   let cliCalled = false;
+  // R205: provider 判官定性失败的一次性提示标志（逐张重复弹同一原因噪声大）。
+  let providerDeadAnnounced = false;
 
   for (const { sectionId, query } of capped) {
     if (signal?.aborted) { // R197: 配图可选 —— 中止即返回已收集图
       emit({ stage: 'figure-web', level: 'info', message: `已中止，返回已收集的 ${out.length} 张 web 配图` });
       return out;
     }
-    if (cliBrokenThisRun) {
-      emit({ stage: 'figure-web', level: 'info', message: `image-search 本次运行不可用，跳过 query：「${query}」` });
-      continue;
-    }
-    let results: ImageSearchResult[];
+    let results: ImageSearchResult[] = [];
+    let viaCommons = false;
     const cacheKey = String(query).trim().toLowerCase();
-    const cached = imageSearchCache.get(cacheKey);
-    if (cached) {
-      // R193: 会话级缓存命中 —— 免重复搜索（含 CLI 冷启动 ~55s），仍逐张 VLM。
-      results = cached;
-      emit({ stage: 'figure-web', level: 'info', message: `命中会话缓存（${results.length} 条候选，免重复搜索）：「${query}」` });
-    } else {
-      emit({ stage: 'figure-web', level: 'info', message: `搜索 web 示意图：「${query}」…` });
-      const isFirstCliCall = !cliCalled;
-      const run = await runImageSearchCli(query, isFirstCliCall ? FIRST_QUERY_TIMEOUT_MS : IMAGE_SEARCH_TIMEOUT_MS, signal);
-      cliCalled = true;
-      if (!run.ok) {
-        if (isFirstCliCall) {
-          // 首查即失败：CLI 挂死/不可用 —— 本次评估内短路后续所有 query
-          //（后续 query 大概率同样挂死，逐条等满 150s 纯属浪费）。
-          cliBrokenThisRun = true;
-          // R204: ENOENT（本机未装 z-ai CLI，本地部署典型场景）与挂起/超时
-          // 分开提示 —— 前者是环境能力差异（web 配图搜索 + VLM 校验为
-          // Z.ai 云沙箱内置服务），后者是本环境内的偶发故障。两条消息都
-          // 说明「仅影响配图、不影响报告正文」，避免用户误判为缺陷。
-          emit(run.enoent
-            ? { stage: 'figure-web', level: 'warn', message: '⚠ 本机未安装 z-ai CLI —— web 示意图搜索与 VLM 配图校验为 Z.ai 云沙箱内置服务，本地部署环境不提供。本次评估将仅使用 RCSB 结构图（不影响报告正文与评分）。' }
-            : { stage: 'figure-web', level: 'warn', message: '⚠ image-search 首次调用即失败（CLI 挂起或不可用），本次评估跳过 web 配图搜索（宁缺毋滥）' });
-          continue;
+
+    // ── 图源 1：z-ai image-search CLI（本次运行未定性不可用时尝试）。
+    if (!cliBrokenThisRun) {
+      const cached = imageSearchCache.get(cacheKey);
+      if (cached) {
+        // R193: 会话级缓存命中 —— 免重复搜索（含 CLI 冷启动 ~55s），仍逐张 VLM。
+        results = cached;
+        emit({ stage: 'figure-web', level: 'info', message: `命中会话缓存（${results.length} 条候选，免重复搜索）：「${query}」` });
+      } else {
+        emit({ stage: 'figure-web', level: 'info', message: `搜索 web 示意图：「${query}」…` });
+        const isFirstCliCall = !cliCalled;
+        const run = await runImageSearchCli(query, isFirstCliCall ? FIRST_QUERY_TIMEOUT_MS : IMAGE_SEARCH_TIMEOUT_MS, signal);
+        cliCalled = true;
+        if (run.ok) {
+          results = run.results;
+          // R193: 写入会话缓存（含零结果 —— 零结果同样是有效答案，防重复搜索）。
+          if (imageSearchCache.size > 200) imageSearchCache.clear();
+          imageSearchCache.set(cacheKey, results);
+        } else {
+          if (isFirstCliCall) {
+            // 首查即失败：CLI 挂死/未安装 —— 本次评估内不再尝试（R205：
+            // 后续 query 直走 Commons，而非整体放弃）。ENOENT（本地部署
+            // 常态，环境能力差异）与挂起/超时（本环境偶发故障）分开提示。
+            cliBrokenThisRun = true;
+            emit(run.enoent
+              ? { stage: 'figure-web', level: 'info', message: 'z-ai CLI 本机未安装（本地部署常态）—— web 图源改用 Wikimedia Commons（免密钥）' }
+              : { stage: 'figure-web', level: 'warn', message: '⚠ image-search CLI 调用失败 —— web 图源改用 Wikimedia Commons 兜底' });
+          } else {
+            emit({ stage: 'figure-web', level: 'warn', message: '⚠ image-search 调用失败（该 query 改用 Wikimedia Commons）' });
+          }
         }
-        emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 调用失败（跳过该 query，继续）` });
-        continue;
       }
-      results = run.results;
-      // R193: 写入会话缓存（含零结果 —— 零结果同样是有效答案，防重复搜索）。
-      if (imageSearchCache.size > 200) imageSearchCache.clear();
-      imageSearchCache.set(cacheKey, results);
+    } else {
+      viaCommons = true; // CLI 本次运行已定性不可用 → 直走 Commons
     }
+
+    // ── 图源 2（兜底）：z-ai 零结果/不可用时 → Wikimedia Commons（免密钥）。
+    // 沙箱内 z-ai 正常但某 query 零结果时也会走到这里（Commons 补充覆盖，
+    // ~1s 开销；两图源互不重叠时各出各的图，z-ai 有结果则不叠加）。
     if (results.length === 0) {
-      emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 无结果（跳过该 query，继续）` });
+      viaCommons = true;
+      const commonsKey = `commons:${cacheKey}`;
+      const commonsCached = imageSearchCache.get(commonsKey);
+      if (commonsCached) {
+        results = commonsCached;
+        emit({ stage: 'figure-web', level: 'info', message: `命中 Commons 会话缓存（${results.length} 条候选）：「${query}」` });
+      } else {
+        emit({ stage: 'figure-web', level: 'info', message: `Wikimedia Commons 搜索（免密钥图源）：「${query}」…` });
+        const cr = await searchCommonsFigures(query, signal);
+        if (imageSearchCache.size > 200) imageSearchCache.clear();
+        imageSearchCache.set(commonsKey, cr);
+        results = cr;
+      }
+    }
+
+    if (results.length === 0) {
+      emit({ stage: 'figure-web', level: 'warn', message: `⚠ web 图源无结果（跳过该 query，继续）` });
       continue;
     }
-    emit({ stage: 'figure-web', level: 'info', message: `image-search 返回 ${results.length} 条候选，逐张 VLM 校验（宁缺毋滥）…` });
+    emit({ stage: 'figure-web', level: 'info', message: `${viaCommons ? 'Wikimedia Commons' : 'image-search'} 返回 ${results.length} 条候选，逐张 VLM 校验（宁缺毋滥）…` });
 
     // R184: 近重复保护改为按 query 计（同一搜索的候选图常常高度相似，
     // 采用最佳 ≤VERIFIED_PER_QUERY_CAP 张即可）；总量不再设上限。
@@ -638,7 +948,7 @@ export async function searchWebFigures(
       };
       emit({ stage: 'figure-web', level: 'info', message: `VLM 校验中：${url.slice(0, 70)}…`, dshFigure: fig });
 
-      // 下载 → VLM 判官。
+      // 下载 → VLM 判官（R205: 双路径调度，见 verifyFigureWithVlm）。
       let verdict: { verdict: 'relevant' | 'irrelevant'; reason: string; caption?: string } | null = null;
       let downloadFailed = false;
       try {
@@ -646,7 +956,7 @@ export async function searchWebFigures(
         if (!dataUri) {
           downloadFailed = true;
         } else {
-          verdict = await verifyFigureWithVlm(dataUri, query, signal);
+          verdict = await verifyFigureWithVlm(dataUri, query, signal, llmCfg);
         }
       } catch {
         downloadFailed = true;
@@ -664,7 +974,14 @@ export async function searchWebFigures(
         fig.vlmReason = verdict.reason || 'VLM 判定不相关';
       } else {
         fig.status = 'rejected';
-        fig.vlmReason = 'VLM 校验失败';
+        // R205: 判官不可用且已定性（如 provider 4xx/无 key）→ 首次给出原因，
+        // 后续拒图理由带上定性标记（本地无判官场景用户能看懂为何全军覆没）。
+        const pvReason = providerVisionFailureReason();
+        if (pvReason && !providerDeadAnnounced) {
+          providerDeadAnnounced = true;
+          emit({ stage: 'figure-web', level: 'warn', message: `⚠ provider 视觉判官本次会话不可用：${pvReason.slice(0, 160)}（后续 web 候选图将直接拒绝）` });
+        }
+        fig.vlmReason = pvReason ? 'VLM 校验失败（判官不可用）' : 'VLM 校验失败';
       }
 
       emit({

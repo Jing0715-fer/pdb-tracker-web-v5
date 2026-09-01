@@ -1084,11 +1084,14 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
   }
   try {
     // web 原理图/通路图（VLM 校验；图事件 66-72% 区间，逐步递增）。
+    // R205: llmCfg 透传 —— 判官双路径（z-ai 内置 → 已配置 provider 的
+    // OpenAI 兼容视觉调用，如 MiniMax-M3）；图源双轨（z-ai image-search →
+    // Wikimedia Commons 免密钥兜底，本地部署主路径）。
     let webStep = 0;
     const webFigs = await searchWebFigures(figureQueries, (e) => {
       webStep++;
       emit({ ...e, progress: e.progress ?? Math.min(72, 66 + webStep) });
-    }, signal);
+    }, signal, { provider: llmCfg.provider, model: llmCfg.model });
     figures.push(...webFigs);
   } catch (err: any) {
     // R197: Stop 信号上抛（同上）。
