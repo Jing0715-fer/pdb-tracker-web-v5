@@ -5299,3 +5299,24 @@ Work Log:
 
 Stage Summary:
 - 「同一调用内存峰值 OOM」与「跨调用进程组回收」两类死因分别治理后服务器稳定；后续轮次重启 dev server 一律用 `(setsid bash -c 'exec bun run dev' > /dev/null 2>&1 < /dev/null &)` 模式
+
+---
+Task ID: R201（收尾轮：用户反馈三问题验证 + 真实 E2E）
+Agent: main (Z.ai Code)
+Task: 验证 R200/R201 提交的「Agent 模式序列输入 + 字体修复 + DSH→Agent 改名」三组改动（此前会话已实现并提交但未经浏览器验证），修复遗漏的 DSH 徽章，并以真实 LLM 调用完成 Agent 模式序列输入全链路 E2E
+
+Work Log:
+- 现状盘点：R200（19f1d50：后端序列支持 + i18n 改名 + ToggleChip 字体修复）与 R201（d21eb3c：前端切换标签对 Agent 模式放开）均已提交、工作树干净——用户「看不到切换标签」的反馈源于当时 dev server 已死（R198b OOM 问题）或浏览器缓存旧构建，非功能缺失
+- 补漏：pdb-tracker.tsx 大纲摘要卡的 "DSH" 徽章 → "AGENT"（与 provenance 面板 Agent 徽章一致；其余残留均为代码注释非用户可见文案）
+- 浏览器验证（agent-browser）：① Agent 模式下 UniProt ID / Sequence 切换标签可见，Sequence 分支含 AA/DNA 子切换、agent 专属 placeholder、PDB上限/MaxLit 字段与单序列警示 ② Force BLAST / Skip BLAST computed style 均为 ui-sans-serif 12px/400（原 font-mono text-sm 14px），Auto 为 ui-sans-serif 10px 无 italic（原 text-[9px] italic）——字体回归根治 ③ 0 page error / 0 console error，移动端 390px 无横向滚动
+- 真实 E2E 第一场（浏览器发起）：HBA 序列 142aa + 科学问题 → run-dsh 启动成功（X-Run-Id: dsh-SEQA-1jj68cc-142-mti4un89-0）、BLASTp 提交 NCBI、配图 VLM 校验正常推进；但 agent-browser 会话 + dev server 并发内存压力触发 OOM killer（next-server 1.74GB RSS），运行中断于第 7/13 章、遥测未落库（done 时才写）
+- 运维应对：关闭浏览器释放内存，改 curl 直发 POST /api/evaluations/run-dsh（与浏览器同端点同载荷）+ scripts/dsh-poll.mjs 轮询监控
+- 真实 E2E 第二场（curl 发起，dsh-SEQA-1jj68cc-142-mti5ivpa-0，531s）：① init 帧确认「序列输入（AA·142aa·BLAST 识别）+ 问题」② BLAST 识别为 P69905 Hemoglobin subunit alpha（HBA1/HBA2）③ 大纲 14 章 ④ 429 限流窗口真实出现（第 6 章三连退避 + 简化 prompt 自愈；配额降级跳过 5 章审查）⑤ 终末补救轮救回 1 章 ⑥ done：14/14 章全交付 · 14251 chars · 配图 16 张（VLM 拒图理由正确：如锁钥模型图≠血红蛋白协同机制）· 审稿 2 章重写 1 · 深挖占比 71%
+- 落库与 UI 回验：SkillRunRecord「Agent·序列：Hemoglobin subunit alpha · 80 PDB · overall=7/10 · 14/14 章 · 审稿 2 章 · LLM ✓」入历史首行（新前缀 Agent·序列 与旧 DSH： 区分）；Evaluation 表 P69905 行（coverage 100%、X-ray 10/优、Overall 7/良）；Run Center 日志展开含启动/BLAST/终局全事件；详情 Report 标签渲染大纲卡 14 章 + AGENT 徽章 + 配图画廊（PDB 8VYL 血红蛋白复合物）；溯源面板 Agent 徽章 + 科学问题 + 数据收集 80 PDB/BLAST 50/文献 20 + 相关性 5 发现 + 14/14 交付 + 配额压力 5 次全量呈现
+- 质量门：改动文件 eslint 0 error 0 warning（exit 0）；dev.log 无新增错误（429 为预期限流）；lint 全项目跑法受环境内存约束（见下）
+
+Stage Summary:
+- 用户反馈三问题闭环：切换标签「缺失」实为服务器死亡/缓存假象，浏览器实测可见且可用；字体回归双根因（font-mono text-sm / text-[9px] italic）此前已修，computed style 硬断言通过；改名补漏 DSH→AGENT 徽章后无用户可见 DSH 残留
+- Agent 模式序列输入全链路首次真实 E2E 成功：序列 → BLASTp 识别 P69905 → 问题驱动大纲 14 章 → 限流窗口实战（退避/简化 prompt/配额降级/终末补救全链触发）→ 14/14 全章交付 + 16 张 VLM 验证配图 + 遥测落库 + 报告/溯源 UI 渲染
+- 环境新发现两项：① agent-browser 会话与 dev server 并发时内存峰值可触发 OOM killer（第一场 E2E 中断根因；长运行 E2E 建议 curl 发起 + 浏览器仅做结果回验）② eslint . 全项目在默认 ~2GB 堆下 heap OOM（SIGABRT），需 NODE_OPTIONS=--max-old-space-size=3072 或按文件 lint——此前「停 server 后 lint」教训需追加此参数
+- 新建议池：1) Run Center 打开时若 status 端点存在 running 运行，显示「后台运行中」状态条并提供「重连观看」入口（R195 建议 3，本轮两度实证：面板关闭/页面重载后 UI 无感知，运行却在后台正常推进）2) dev script 已降堆 1600MB 基础上，可再评估 DSH 长运行峰值（第二场成功时 server RSS 稳定）3) eslint 全项目内存参数可写入 package.json script 固化

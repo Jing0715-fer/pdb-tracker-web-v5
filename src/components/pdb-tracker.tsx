@@ -600,7 +600,8 @@ function EvalDshOutlineCard({ outline }: { outline: { sections: DshReportOutline
         <Badge variant="outline" className="text-[9px] font-medium px-1.5 h-4 rounded shrink-0 border-claude-accent/40 bg-claude-accent/10 text-claude-accent">
           {outline.sections.length}
         </Badge>
-        <span className="text-[9px] text-claude-text-muted dark:text-[#9b9590] uppercase font-mono">DSH</span>
+        {/* R200: DSH→Agent 改名 —— 徽章文案同步（与 provenance 面板 Agent 徽章一致） */}
+        <span className="text-[9px] text-claude-text-muted dark:text-[#9b9590] uppercase font-mono">AGENT</span>
       </div>
       <ol className="space-y-1 list-none" aria-label={t.evalDshOutline}>
         {outline.sections.map((s, i) => (
