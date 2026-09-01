@@ -5400,3 +5400,23 @@ Stage Summary:
 - 新增环境知识：Wikimedia UA 必须含联系方式否则 403（api + thumb CDN 同规则）——已带仓库地址固化
 - 用户本地启用方式：Providers 面板配置 MiniMax（apiKey + MiniMax-M3 模型）并设为默认 provider —— 判官与正文同源自动生效，无需额外配置
 - 未实现建议池：Commons query 可加 LLM 翻译环节（当前 figureQueries 已强制英文，无实际需求）；provider 判官消耗用户配额的用量统计（遥测未区分判官调用）
+
+---
+Task ID: R206
+Agent: main (Z.ai Code)
+Task: 用户要求「用 Wikimedia Commons 进行一次真实评估测试看效果」→ 发现并修复 Commons 零召回根因（query 形态与 MediaWiki 检索模型不匹配），新增强制 Commons 测试门，真实 E2E 前后对照
+
+Work Log:
+- 测试门：figures.ts 新增 PDB_FIGURES_FORCE_COMMONS=1（searchWebFigures 预置 cliBrokenThisRun → 所有 query 直走 Commons 分支，VLM 判官路径不变）——沙箱内 z-ai CLI 存在，需显式切换才能展示纯 Commons 效果；重启 dev server 注入环境变量（setsid 双层脱离 + for 循环监督重启，跨工具命令实测存活）
+- 真实 E2E run#1（dsh-P69905-mtiicipl-0，3m34s）：14/14 章 · 13439 chars · 6 张 RCSB · **web 0 张** —— 四条 figureQuery 全部零结果，「前」状态坐实问题
+- 根因（直测 API 实证）：MediaWiki CirrusSearch 为严格 AND 词项匹配（无语义/近义），Google 风格长描述式 query（如「hemoglobin oxygen binding mechanism and conformational changes」）命中 PDF/年报**正文**（6 条全是 application/pdf，mime 白名单正确拒绝 → 全零）；且主题词常在句尾（「… for hemoglobin structures」）
+- 修复：commonsKeywords() 关键词归一化（去停用词、保留连字符术语 x-ray/cryo-EM）+ 降格搜索梯（命中即停）：① 前4词+filetype:drawing（SVG）② 前4词+filetype:bitmap（PNG/JPG——实测召回主力，Commons 科学配图大量为 bitmap 如「Hemoglobin R and T state Comparison.jpg」）③④ 前3/前2词+bitmap ⑤ 尾2词+bitmap（主题词在句尾场景）
+- 验证（真实网络，bun 直跑）：run#1 四条零结果 query 修复后 2/6/6/1 条召回（Hemoglobin T-R state animation、HbF 结构图、Heme deoxy vs oxygenated 等，正中主题；1.2-2.8s/query）；下载链 7/7 成功（PNG/JPEG/GIF 33-895KB dataUri，UA 规则+License 署名 CC BY-SA/CC0 全对）
+- zai 配额长窗口（run#1 后 429 持续 2.5h+，今日已 5 场重型评估）：部署 detached 自动发射器 scripts/commons-run2-launcher.sh（10 分钟一轮 × 60，POST 响应头 x-run-id 出现 = 配额恢复即发射，runId 落盘 /tmp/commons-run2-runid.txt；R195 语义发射后 curl 断开运行继续）
+- 质量门：eslint figures.ts 0 error 0 warning
+
+Stage Summary:
+- Commons 召回根因修复：0 → 有（四 query 实测 2/6/6/1），关键词梯 + filetype:bitmap 是召回关键；PDF 噪声由 mime 白名单拦截、垃圾图由 VLM 判官终筛
+- PDB_FIGURES_FORCE_COMMONS=1 为永久测试门（判官不变，对比/演示本地部署图源用）
+- run#2（Commons 修复后完整 E2E）由自动发射器值守 zai 配额恢复后执行，结果落 Run Center 历史与 DB
+- 新增环境知识：zai 429 窗口可长达小时级（当日累计重型运行后）；MediaWiki 检索模型 = 严格 AND 词项，无语义

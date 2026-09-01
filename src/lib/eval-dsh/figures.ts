@@ -14,6 +14,8 @@
 //
 //   collectRcsbFigures()  RCSB CDN 结构图（assembly-1.jpeg，HEAD 预检）
 //   searchWebFigures()    z-ai CLI image-search + VLM 判官（verdict/reason/caption）
+//                        R205: CLI 不可用→Commons 兜底；判官 z-ai→provider 双路径
+//                        R206: PDB_FIGURES_FORCE_COMMONS=1 强制 Commons 图源（判官不变）
 //
 // 每个 figure 都通过 emit({ ...ev, dshFigure }) 广播给前端；校验失败 /
 // CLI 不可用 / 超时统统降级为零图继续，绝不 throw。
@@ -520,11 +522,58 @@ async function searchCommonsApi(searchQuery: string, signal?: AbortSignal): Prom
   }
 }
 
-/** R205: Commons 搜索（导出仅供测试）：drawing 优先，零结果退化无前缀。 */
+/** R206: Commons query 关键词归一化 —— MediaWiki 全文检索（CirrusSearch）为
+ * 严格 AND 词项匹配，无语义/近义能力；z-ai/Google 风格的长描述式 query
+ * （如「hemoglobin oxygen binding mechanism and conformational changes」）
+ * 会命中 PDF/年报正文（mime 白名单过滤后全军覆没，实测 run dsh-P69905-
+ * mtiicipl-0 四 query 全零）。抽取内容词（去停用词、保留连字符术语如
+ * x-ray/cryo-EM）供逐级降格搜索。 */
+const COMMONS_STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'and', 'or', 'in', 'on', 'for', 'to', 'by', 'with',
+  'vs', 'versus', 'from', 'between', 'during', 'its', 'their', 'this', 'that',
+  'is', 'are', 'as', 'at', 'into', 'under', 'over', 'both', 'his', 'her',
+]);
+function commonsKeywords(query: string): string[] {
+  return String(query || '')
+    .toLowerCase()
+    .split(/[^a-z0-9-]+/)
+    .filter(w => w.length >= 2 && !COMMONS_STOPWORDS.has(w));
+}
+
+/**
+ * R205 → R206: Commons 搜索（导出仅供测试）。
+ * R205: drawing 优先，零结果退化无前缀。
+ * R206: 原策略对长描述式 query 无召回（见 commonsKeywords 注释）—— 改为
+ * 关键词归一化 + 逐级降格搜索梯，命中即停：
+ *  ① 前 4 内容词 + filetype:drawing（SVG 示意图，最精准）
+ *  ② 前 4 内容词 + filetype:bitmap（PNG/JPG：渲染图/机制对比图/扫描图 —
+ *     实测 Commons 科学配图大量为 bitmap，如「Hemoglobin R and T state
+ *     Comparison.jpg」，此级是召回主力）
+ *  ③④ 前 3 / 前 2 内容词 + filetype:bitmap（AND 约束逐级放宽）
+ *  ⑤ 尾 2 内容词 + filetype:bitmap（主题词常在句尾，如「comparison of
+ *     X-ray vs Cryo-EM resolution for hemoglobin structures」）
+ * 非图结果（PDF/视频）由 mime 白名单挡掉；垃圾图由 VLM 判官终筛。
+ * 每级一次 API 调用（~0.7s），最坏 5 级 ~3.5s。
+ */
 export async function searchCommonsFigures(query: string, signal?: AbortSignal): Promise<ImageSearchResult[]> {
-  const primary = await searchCommonsApi(`${query} filetype:drawing`, signal);
-  if (primary.length > 0) return primary;
-  return searchCommonsApi(query, signal);
+  const kw = commonsKeywords(query);
+  const tries: string[] = [];
+  if (kw.length > 0) {
+    tries.push(`${kw.slice(0, 4).join(' ')} filetype:drawing`);
+    tries.push(`${kw.slice(0, 4).join(' ')} filetype:bitmap`);
+    tries.push(`${kw.slice(0, 3).join(' ')} filetype:bitmap`);
+    tries.push(`${kw.slice(0, 2).join(' ')} filetype:bitmap`);
+    if (kw.length > 2) tries.push(`${kw.slice(-2).join(' ')} filetype:bitmap`);
+  }
+  const seen = new Set<string>();
+  for (const t of tries) {
+    if (seen.has(t)) continue; // kw.length≤2 时首尾词对重合
+    seen.add(t);
+    const results = await searchCommonsApi(t, signal);
+    if (signal?.aborted) return results;
+    if (results.length > 0) return results;
+  }
+  return [];
 }
 
 /** R205: provider 视觉判官调用超时（OpenAI 兼容 /chat/completions +
@@ -858,6 +907,15 @@ export async function searchWebFigures(
   let cliCalled = false;
   // R205: provider 判官定性失败的一次性提示标志（逐张重复弹同一原因噪声大）。
   let providerDeadAnnounced = false;
+
+  // R206: PDB_FIGURES_FORCE_COMMONS=1 —— 强制 Wikimedia Commons 图源（跳过
+  // z-ai CLI 搜索；VLM 判官路径不变，沙箱内仍 z-ai 内置优先）。用途：本地
+  // 部署图源效果对比/演示。复用现成短路机制：预置 cliBrokenThisRun → 所有
+  // query 直走 Commons 分支（与 CLI 首查 ENOENT 后的行为完全一致）。
+  if (process.env.PDB_FIGURES_FORCE_COMMONS === '1') {
+    cliBrokenThisRun = true;
+    emit({ stage: 'figure-web', level: 'info', message: 'PDB_FIGURES_FORCE_COMMONS=1 —— 本次运行强制 Wikimedia Commons 图源（跳过 z-ai image-search，VLM 判官不变）' });
+  }
 
   for (const { sectionId, query } of capped) {
     if (signal?.aborted) { // R197: 配图可选 —— 中止即返回已收集图
