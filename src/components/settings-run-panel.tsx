@@ -2905,9 +2905,9 @@ export function SettingsRunPanel({
                   <p className="text-xs text-muted-foreground mb-3 leading-relaxed">{t.evalModeDshHint}</p>
                 )}
 
-                {/* Input mode toggle: UniProt ID vs Sequence — hidden in DSH mode
-                    (DSH only supports UniProt input for now). */}
-                {evalPipeline !== 'dsh' && (
+                {/* Input mode toggle: UniProt ID vs Sequence — R201: 两种流水线
+                    （经典 / Agent）均可见。Agent 模式序列输入先经 BLAST 识别靶点
+                    再进入同一智能体评估轨道（R200 后端已支持，此处仅放开渲染）。 */}
                 <div className="flex items-center gap-1.5 mb-3">
                   <div className="flex items-center gap-0.5 rounded-md bg-claude-bg/60 dark:bg-[#1a1917]/60 border border-claude-border/40 dark:border-[#3d3832]/40 p-0.5">
                     <button type="button" onClick={() => setEvalInputMode('uniprot')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalInputMode === 'uniprot' ? 'bg-claude-accent/15 text-claude-accent' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}>{locale === 'zh' ? 'UniProt ID' : 'UniProt ID'}</button>
@@ -2919,11 +2919,16 @@ export function SettingsRunPanel({
                       <button type="button" onClick={() => setEvalSeqType('dna')} className={`px-2 py-1 rounded text-xs font-medium transition-colors ${evalSeqType === 'dna' ? 'bg-sky-500/10 text-sky-600 dark:text-sky-300' : 'text-claude-text-muted dark:text-[#9b9590] hover:text-claude-text dark:hover:text-[#e8e4dd]'}`}>DNA</button>
                     </div>
                   )}
+                  {evalInputMode === 'sequence' && evalPipeline === 'dsh' && (
+                    <span className="text-3xs text-claude-cryoem dark:text-claude-cryoem/80" title={t.evalDshSeqSingle}>
+                      {t.evalDshSeqSingle}
+                    </span>
+                  )}
                 </div>
-                )}
 
-                {evalInputMode === 'sequence' && evalPipeline !== 'dsh' ? (
-                  /* Sequence input mode */
+                {evalInputMode === 'sequence' ? (
+                  /* Sequence input mode — R201: 经典与 Agent 模式共用（Agent 模式
+                     仅单条序列：先 BLAST 识别靶点，再进入同一智能体评估轨道） */
                   <div className="space-y-2 mb-3">
                     <div>
                       <Label className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -2934,13 +2939,21 @@ export function SettingsRunPanel({
                       <textarea
                         value={evalSequence}
                         onChange={e => setEvalSequence(e.target.value)}
-                        placeholder={evalSeqType === 'dna'
-                          ? (locale === 'zh'
-                              ? '支持多条序列输入，以空行分隔。每条序列独立进行 BLAST 与评估。\n\n示例：\nATGGCGAGC...\n\nATGTTACGT...'
-                              : 'Supports multiple sequence inputs, separated by blank lines. Each sequence is independently BLASTed and evaluated.\n\nExample:\nATGGCGAGC...\n\nATGTTACGT...')
-                          : (locale === 'zh'
-                              ? '支持多条序列输入，以空行分隔。每条序列独立进行 BLAST 与评估。\n\n示例：\nMAGSCKLP...\n\nMKLTVFGV...'
-                              : 'Supports multiple sequence inputs, separated by blank lines. Each sequence is independently BLASTed and evaluated.\n\nExample:\nMAGSCKLP...\n\nMKLTVFGV...')}
+                        placeholder={evalPipeline === 'dsh'
+                          ? (evalSeqType === 'dna'
+                              ? (locale === 'zh'
+                                  ? 'Agent 模式：输入单条序列，先经 BLAST 识别靶点再进入智能体评估轨道。\n\n示例：\nATGGCGAGC...'
+                                  : 'Agent mode: enter a single sequence — BLAST identifies the target first, then the agent pipeline takes over.\n\nExample:\nATGGCGAGC...')
+                              : (locale === 'zh'
+                                  ? 'Agent 模式：输入单条序列，先经 BLAST 识别靶点再进入智能体评估轨道。\n\n示例：\nMAGSCKLP...'
+                                  : 'Agent mode: enter a single sequence — BLAST identifies the target first, then the agent pipeline takes over.\n\nExample:\nMAGSCKLP...'))
+                          : (evalSeqType === 'dna'
+                              ? (locale === 'zh'
+                                  ? '支持多条序列输入，以空行分隔。每条序列独立进行 BLAST 与评估。\n\n示例：\nATGGCGAGC...\n\nATGTTACGT...'
+                                  : 'Supports multiple sequence inputs, separated by blank lines. Each sequence is independently BLASTed and evaluated.\n\nExample:\nATGGCGAGC...\n\nATGTTACGT...')
+                              : (locale === 'zh'
+                                  ? '支持多条序列输入，以空行分隔。每条序列独立进行 BLAST 与评估。\n\n示例：\nMAGSCKLP...\n\nMKLTVFGV...'
+                                  : 'Supports multiple sequence inputs, separated by blank lines. Each sequence is independently BLASTed and evaluated.\n\nExample:\nMAGSCKLP...\n\nMKLTVFGV...'))}
                         className="mt-1 w-full h-24 px-2 py-1.5 rounded-md border border-border/60 bg-background text-xs font-mono resize-y thin-scroll"
                         spellCheck={false}
                       />
@@ -2951,12 +2964,22 @@ export function SettingsRunPanel({
                               const totalLen = evalSequence.replace(/\s/g, '').length;
                               const seqWord = locale === 'zh' ? '条序列' : 'sequences';
                               const totalWord = locale === 'zh' ? '总数' : 'total';
+                              if (evalPipeline === 'dsh') {
+                                // R201: Agent 模式单序列限制 —— 多条时给出琥珀色警示（运行前仍有 runEvaluation 校验兜底）
+                                return cnt > 1
+                                  ? `${cnt} ${seqWord} · ${totalLen} ${evalSeqType === 'dna' ? 'nt' : 'aa'} ${totalWord} · ${t.evalDshSeqSingle}`
+                                  : `1 ${seqWord} · ${totalLen} ${evalSeqType === 'dna' ? 'nt' : 'aa'} ${totalWord}`;
+                              }
                               const multiWord = locale === 'zh' ? '多序列批量模式（含跨序列关联分析）' : 'multi-sequence batch mode (with cross-sequence analysis)';
                               return `${cnt} ${seqWord} · ${totalLen} ${evalSeqType === 'dna' ? 'nt' : 'aa'} ${totalWord}${cnt > 1 ? ' · ' + multiWord : ''}`;
                             })()
                           : (locale === 'zh'
-                              ? `输入${evalSeqType === 'dna' ? 'DNA' : '氨基酸'}序列进行 BLASTp 同源搜索（多条序列以空行分隔）`
-                              : `Enter ${evalSeqType === 'dna' ? 'DNA' : 'amino acid'} sequence for BLASTp homology search (separate multiple sequences with blank lines)`)}
+                              ? (evalPipeline === 'dsh'
+                                  ? `输入${evalSeqType === 'dna' ? 'DNA' : '氨基酸'}序列，Agent 模式将先 BLAST 识别靶点（单条序列）`
+                                  : `输入${evalSeqType === 'dna' ? 'DNA' : '氨基酸'}序列进行 BLASTp 同源搜索（多条序列以空行分隔）`)
+                              : (evalPipeline === 'dsh'
+                                  ? `Enter a ${evalSeqType === 'dna' ? 'DNA' : 'amino acid'} sequence — agent mode identifies the target via BLAST first (single sequence)`
+                                  : `Enter ${evalSeqType === 'dna' ? 'DNA' : 'amino acid'} sequence for BLASTp homology search (separate multiple sequences with blank lines)`))}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -2965,6 +2988,23 @@ export function SettingsRunPanel({
                           <Input type="number" min={1} max={500} value={evalTargets[0]?.maxBlastHits || 50} onChange={e => updateEvalTarget(0, 'maxBlastHits', parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
                         </Field>
                       </div>
+                      {/* R201: Agent 模式序列输入也发送 maxPdb / maxLitCount（与
+                          UniProt 输入分支同参数面），故在序列行内提供同款字段；
+                          经典序列路径沿用旧参数面（仅 BLAST）。 */}
+                      {evalPipeline === 'dsh' && (
+                        <div className="w-16 shrink-0">
+                          <Field label={locale === 'zh' ? 'PDB上限' : 'maxPdb'}>
+                            <Input type="number" min={1} max={500} value={evalTargets[0]?.maxPdb || 80} onChange={e => updateEvalTarget(0, 'maxPdb', parseInt(e.target.value || '80'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                          </Field>
+                        </div>
+                      )}
+                      {evalPipeline === 'dsh' && (
+                        <div className="w-20 shrink-0" title={locale === 'zh' ? '附加到 LLM 报告上下文的最大 PubMed 文献数（按期刊 IF 降序排序）' : 'Max PubMed literature count attached to LLM report context (sorted by journal IF descending)'}>
+                          <Field label={locale === 'zh' ? '上限' : 'Max Lit'}>
+                            <Input type="number" min={0} max={200} value={evalMaxLitCount} onChange={e => setEvalMaxLitCount(Math.max(0, Math.min(200, parseInt(e.target.value || '20') || 0)))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                          </Field>
+                        </div>
+                      )}
                       <div className="ml-auto shrink-0">
                         <RunButton disabled={isRunning('eval')} running={isRunning('eval')} onClick={runEvaluation} onCancel={stopEvalRun} />
                       </div>
@@ -3034,52 +3074,62 @@ export function SettingsRunPanel({
                       )}
                     </div>
                   ))}
-                  {/* R179 (Task 2-b): DSH 科学问题输入（必填，≤1000 字符）。
-                      Styling matches the sequence textarea idiom; char counter
-                      warns (amber) near the limit; failed validation leaves an
-                      inline red hint (plus a sonner toast from runEvaluation). */}
-                  {evalPipeline === 'dsh' && (
-                    <div>
-                      <Label htmlFor="dsh-question-input" className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                        <Sparkles className="h-3 w-3 text-claude-cryoem" />
-                        {t.evalDshQuestion}
-                        <span className="text-muted-foreground/70 font-normal normal-case">（{locale === 'zh' ? '可选 · 留空则执行基础评估' : 'optional · empty = basic evaluation'}）</span>
-                      </Label>
-                      <textarea
-                        id="dsh-question-input"
-                        value={evalDshQuestion}
-                        onChange={e => { setEvalDshQuestion(e.target.value.slice(0, 1000)); if (dshQuestionError && e.target.value.trim()) setDshQuestionError(false); }}
-                        placeholder={t.evalDshQuestionPlaceholder}
-                        rows={3}
-                        maxLength={1000}
-                        aria-required="false"
-                        aria-invalid={dshQuestionError}
-                        aria-describedby={dshQuestionError ? 'dsh-question-error' : undefined}
-                        className={`mt-1 w-full px-2 py-1.5 rounded-md border bg-background text-xs resize-y thin-scroll ${dshQuestionError ? 'border-red-500/60' : 'border-border/60'}`}
-                      />
-                      <div className="flex items-center justify-between gap-2 mt-0.5">
-                        {dshQuestionError ? (
-                          <p id="dsh-question-error" className="text-3xs text-red-500" role="alert">{t.evalDshQuestionRequired}</p>
-                        ) : (
-                          /* R179 (Task 2-b): compact phase-flow helper (avoids duplicating
-                             the long evalModeDshHint shown under the pipeline pill). */
-                          <span className="text-3xs text-muted-foreground/80 truncate">{t.evalDshRelevance} → {t.evalDshOutline} → {t.evalDshChapterProgress}</span>
-                        )}
-                        <span className={`text-3xs font-mono tabular-nums shrink-0 ${evalDshQuestion.length > 900 ? 'text-amber-500 dark:text-amber-400' : 'text-muted-foreground/70'}`}>
-                          {evalDshQuestion.length}/1000
-                        </span>
-                      </div>
-                    </div>
-                  )}
                 </div>
                 ) /* end UniProt ID mode */}
+
+                {/* R179 (Task 2-b) / R201: Agent 模式科学问题输入（可选，≤1000
+                    字符）。从 UniProt 分支移出至两种输入模式共用 —— 序列输入时
+                    问题同样驱动相关性分析与大纲规划。Styling matches the
+                    sequence textarea idiom; char counter warns (amber) near the
+                    limit; failed validation leaves an inline red hint. */}
+                {evalPipeline === 'dsh' && (
+                  <div className="mb-3">
+                    <Label htmlFor="dsh-question-input" className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                      <Sparkles className="h-3 w-3 text-claude-cryoem" />
+                      {t.evalDshQuestion}
+                      <span className="text-muted-foreground/70 font-normal normal-case">（{locale === 'zh' ? '可选 · 留空则执行基础评估' : 'optional · empty = basic evaluation'}）</span>
+                    </Label>
+                    <textarea
+                      id="dsh-question-input"
+                      value={evalDshQuestion}
+                      onChange={e => { setEvalDshQuestion(e.target.value.slice(0, 1000)); if (dshQuestionError && e.target.value.trim()) setDshQuestionError(false); }}
+                      placeholder={t.evalDshQuestionPlaceholder}
+                      rows={3}
+                      maxLength={1000}
+                      aria-required="false"
+                      aria-invalid={dshQuestionError}
+                      aria-describedby={dshQuestionError ? 'dsh-question-error' : undefined}
+                      className={`mt-1 w-full px-2 py-1.5 rounded-md border bg-background text-xs resize-y thin-scroll ${dshQuestionError ? 'border-red-500/60' : 'border-border/60'}`}
+                    />
+                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                      {dshQuestionError ? (
+                        <p id="dsh-question-error" className="text-3xs text-red-500" role="alert">{t.evalDshQuestionRequired}</p>
+                      ) : (
+                        /* R179 (Task 2-b): compact phase-flow helper (avoids duplicating
+                           the long evalModeDshHint shown under the pipeline pill). */
+                        <span className="text-3xs text-muted-foreground/80 truncate">{t.evalDshRelevance} → {t.evalDshOutline} → {t.evalDshChapterProgress}</span>
+                      )}
+                      <span className={`text-3xs font-mono tabular-nums shrink-0 ${evalDshQuestion.length > 900 ? 'text-amber-500 dark:text-amber-400' : 'text-muted-foreground/70'}`}>
+                        {evalDshQuestion.length}/1000
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 <StreamFeed
                   events={evalStream.state.log}
                   running={evalStream.state.running}
                   done={evalStream.state.done}
                   ok={evalStream.state.ok}
-                  emptyHint={locale === 'zh' ? '输入 UniProt ID 并点击 “执行” 启动评估流水线' : 'Enter a UniProt ID and click Run to start the evaluation pipeline'}
+                  emptyHint={evalInputMode === 'sequence'
+                    ? (locale === 'zh'
+                        ? (evalPipeline === 'dsh'
+                            ? '输入序列并点击 "执行" 启动 Agent 模式评估（BLAST 识别靶点 → 智能体评估轨道）'
+                            : '输入序列并点击 "执行" 启动 BLASTp 评估流水线')
+                        : (evalPipeline === 'dsh'
+                            ? 'Enter a sequence and click Run to start agent-mode evaluation (BLAST identifies the target, then the agent pipeline)'
+                            : 'Enter a sequence and click Run to start the BLASTp evaluation pipeline'))
+                    : (locale === 'zh' ? '输入 UniProt ID 并点击 “执行” 启动评估流水线' : 'Enter a UniProt ID and click Run to start the evaluation pipeline')}
                 />
 
                 {/* R179 (Task 2-b): DSH 模式进度卡 — 相关性分析 → 报告大纲 →
