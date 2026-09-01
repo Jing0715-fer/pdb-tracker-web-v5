@@ -160,7 +160,7 @@ export function ApbsSurfaceChart() {
               onChange={(e) => setChain(e.target.value.toUpperCase())}
               placeholder="A"
               maxLength={2}
-              className="h-8 text-xs font-mono"
+              className="h-8 text-xs"
             />
           </div>
           <div>
@@ -172,7 +172,7 @@ export function ApbsSurfaceChart() {
               step={10}
               min={0}
               max={500}
-              className="h-8 text-xs font-mono"
+              className="h-8 text-xs"
             />
           </div>
         </div>

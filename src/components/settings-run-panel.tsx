@@ -2833,7 +2833,7 @@ export function SettingsRunPanel({
                 value={dbPath}
                 onChange={e => setDbPath(e.target.value)}
                 placeholder="file:./db/custom.db"
-                className="h-8 px-2 text-xs md:text-xs font-mono flex-1 min-w-0 bg-claude-surface dark:bg-[#1a1917] border-claude-border dark:border-[#3d3832]"
+                className="h-8 px-2 text-xs md:text-xs flex-1 min-w-0 bg-claude-surface dark:bg-[#1a1917] border-claude-border dark:border-[#3d3832]"
               />
               <Button
                 variant="outline"
@@ -3050,7 +3050,7 @@ export function SettingsRunPanel({
                     <div className="flex items-center gap-1.5">
                       <div className="w-20 shrink-0">
                         <Field label="BLAST">
-                          <Input type="number" min={1} max={500} value={evalTargets[0]?.maxBlastHits || 50} onChange={e => updateEvalTarget(0, 'maxBlastHits', parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                          <Input type="number" min={1} max={500} value={evalTargets[0]?.maxBlastHits || 50} onChange={e => updateEvalTarget(0, 'maxBlastHits', parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs" />
                         </Field>
                       </div>
                       {/* R201: Agent 模式序列输入也发送 maxPdb / maxLitCount（与
@@ -3059,14 +3059,14 @@ export function SettingsRunPanel({
                       {evalPipeline === 'dsh' && (
                         <div className="w-16 shrink-0">
                           <Field label={locale === 'zh' ? 'PDB上限' : 'maxPdb'}>
-                            <Input type="number" min={1} max={500} value={evalTargets[0]?.maxPdb || 80} onChange={e => updateEvalTarget(0, 'maxPdb', parseInt(e.target.value || '80'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                            <Input type="number" min={1} max={500} value={evalTargets[0]?.maxPdb || 80} onChange={e => updateEvalTarget(0, 'maxPdb', parseInt(e.target.value || '80'))} className="h-8 px-2 text-xs md:text-xs" />
                           </Field>
                         </div>
                       )}
                       {evalPipeline === 'dsh' && (
                         <div className="w-20 shrink-0" title={locale === 'zh' ? '附加到 LLM 报告上下文的最大 PubMed 文献数（按期刊 IF 降序排序）' : 'Max PubMed literature count attached to LLM report context (sorted by journal IF descending)'}>
                           <Field label={locale === 'zh' ? '上限' : 'Max Lit'}>
-                            <Input type="number" min={0} max={200} value={evalMaxLitCount} onChange={e => setEvalMaxLitCount(Math.max(0, Math.min(200, parseInt(e.target.value || '20') || 0)))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                            <Input type="number" min={0} max={200} value={evalMaxLitCount} onChange={e => setEvalMaxLitCount(Math.max(0, Math.min(200, parseInt(e.target.value || '20') || 0)))} className="h-8 px-2 text-xs md:text-xs" />
                           </Field>
                         </div>
                       )}
@@ -3104,23 +3104,23 @@ export function SettingsRunPanel({
                       )}
                       <div className="w-28 shrink-0">
                         <Field label={evalTargets.length > 1 ? (locale === 'zh' ? `UniProt ID ${i + 1}` : `UniProt ID ${i + 1}`) : 'UniProt ID'}>
-                          <Input value={t.uniprot} onChange={e => updateEvalTarget(i, 'uniprot', e.target.value)} placeholder="P00533" className="h-8 px-2 text-xs md:text-xs font-mono" />
+                          <Input value={t.uniprot} onChange={e => updateEvalTarget(i, 'uniprot', e.target.value)} placeholder="P00533" className="h-8 px-2 text-xs md:text-xs" />
                         </Field>
                       </div>
                       <div className="w-16 shrink-0">
                         <Field label={locale === 'zh' ? 'PDB上限' : 'maxPdb'}>
-                          <Input type="number" min={1} max={500} value={t.maxPdb} onChange={e => updateEvalTarget(i, 'maxPdb', parseInt(e.target.value || '80'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                          <Input type="number" min={1} max={500} value={t.maxPdb} onChange={e => updateEvalTarget(i, 'maxPdb', parseInt(e.target.value || '80'))} className="h-8 px-2 text-xs md:text-xs" />
                         </Field>
                       </div>
                       <div className="w-16 shrink-0">
                         <Field label="BLAST">
-                          <Input type="number" min={1} max={500} value={t.maxBlastHits} onChange={e => updateEvalTarget(i, 'maxBlastHits', parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                          <Input type="number" min={1} max={500} value={t.maxBlastHits} onChange={e => updateEvalTarget(i, 'maxBlastHits', parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs" />
                         </Field>
                       </div>
                       {i === 0 && (
                         <div className="w-20 shrink-0" title={locale === 'zh' ? '附加到 LLM 报告上下文的最大 PubMed 文献数（按期刊 IF 降序排序）' : 'Max PubMed literature count attached to LLM report context (sorted by journal IF descending)'}>
                           <Field label={locale === 'zh' ? '上限' : 'Max Lit'}>
-                            <Input type="number" min={0} max={200} value={evalMaxLitCount} onChange={e => setEvalMaxLitCount(Math.max(0, Math.min(200, parseInt(e.target.value || '20') || 0)))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                            <Input type="number" min={0} max={200} value={evalMaxLitCount} onChange={e => setEvalMaxLitCount(Math.max(0, Math.min(200, parseInt(e.target.value || '20') || 0)))} className="h-8 px-2 text-xs md:text-xs" />
                           </Field>
                         </div>
                       )}
@@ -3340,22 +3340,22 @@ export function SettingsRunPanel({
               >
                 <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 mb-3">
                   <Field label={locale === 'zh' ? '日期' : 'Date'}>
-                    <Input type="date" value={litDate} onChange={e => setLitDate(e.target.value)} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                    <Input type="date" value={litDate} onChange={e => setLitDate(e.target.value)} className="h-8 px-2 text-xs md:text-xs" />
                   </Field>
                   <Field label={locale === 'zh' ? '±天数' : '±Days'}>
-                    <Input type="number" min={0} max={7} value={litWindowDays} onChange={e => setLitWindowDays(parseInt(e.target.value || '3'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                    <Input type="number" min={0} max={7} value={litWindowDays} onChange={e => setLitWindowDays(parseInt(e.target.value || '3'))} className="h-8 px-2 text-xs md:text-xs" />
                   </Field>
                   <Field label={locale === 'zh' ? 'Path A 上限' : 'Path A Max'}>
-                    <Input type="number" min={10} max={1000} value={litMaxPathA} onChange={e => setLitMaxPathA(parseInt(e.target.value || '300'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                    <Input type="number" min={10} max={1000} value={litMaxPathA} onChange={e => setLitMaxPathA(parseInt(e.target.value || '300'))} className="h-8 px-2 text-xs md:text-xs" />
                   </Field>
                   <Field label={locale === 'zh' ? 'Path B 上限' : 'Path B Max'}>
-                    <Input type="number" min={5} max={200} value={litMaxPathB} onChange={e => setLitMaxPathB(parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                    <Input type="number" min={5} max={200} value={litMaxPathB} onChange={e => setLitMaxPathB(parseInt(e.target.value || '50'))} className="h-8 px-2 text-xs md:text-xs" />
                   </Field>
                   <Field label={locale === 'zh' ? 'Path C 上限' : 'Path C Max'}>
-                    <Input type="number" min={10} max={500} value={litMaxPathC} onChange={e => setLitMaxPathC(parseInt(e.target.value || '200'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                    <Input type="number" min={10} max={500} value={litMaxPathC} onChange={e => setLitMaxPathC(parseInt(e.target.value || '200'))} className="h-8 px-2 text-xs md:text-xs" />
                   </Field>
                   <Field label={locale === 'zh' ? '上限' : 'Max Papers'}>
-                    <Input type="number" min={1} max={100} value={litMaxPapers} onChange={e => setLitMaxPapers(parseInt(e.target.value || '20'))} className="h-8 px-2 text-xs md:text-xs font-mono" />
+                    <Input type="number" min={1} max={100} value={litMaxPapers} onChange={e => setLitMaxPapers(parseInt(e.target.value || '20'))} className="h-8 px-2 text-xs md:text-xs" />
                   </Field>
                 </div>
 
@@ -3496,7 +3496,7 @@ export function SettingsRunPanel({
                         type="week"
                         value={weeklyCustomWeek || (weeklyWindow?.weekId || '')}
                         onChange={e => setWeeklyCustomWeek(e.target.value)}
-                        className="h-8 px-2 text-xs font-mono flex-1 min-w-0"
+                        className="h-8 px-2 text-xs flex-1 min-w-0"
                         title="Custom ISO week selection (leave empty for current week)"
                       />
                       {weeklyCustomWeek && (

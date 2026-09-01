@@ -209,7 +209,7 @@ export function WaterBridgesChart() {
               <select
                 value={chain1}
                 onChange={(e) => setChain1(e.target.value)}
-                className="h-7 w-full text-xs font-mono rounded-md border border-input bg-background px-1"
+                className="h-7 w-full text-xs rounded-md border border-input bg-background px-1"
               >
                 {availableChains.map((c) => (
                   <option key={c} value={c}>{c}</option>
@@ -219,7 +219,7 @@ export function WaterBridgesChart() {
               <Input
                 value={chain1}
                 onChange={(e) => setChain1(e.target.value.toUpperCase())}
-                className="h-7 text-xs font-mono"
+                className="h-7 text-xs"
                 maxLength={2}
               />
             )}
@@ -230,7 +230,7 @@ export function WaterBridgesChart() {
               <select
                 value={chain2}
                 onChange={(e) => setChain2(e.target.value)}
-                className="h-7 w-full text-xs font-mono rounded-md border border-input bg-background px-1"
+                className="h-7 w-full text-xs rounded-md border border-input bg-background px-1"
               >
                 {availableChains.map((c) => (
                   <option key={c} value={c}>{c}</option>
@@ -240,7 +240,7 @@ export function WaterBridgesChart() {
               <Input
                 value={chain2}
                 onChange={(e) => setChain2(e.target.value.toUpperCase())}
-                className="h-7 text-xs font-mono"
+                className="h-7 text-xs"
                 maxLength={2}
                 placeholder={chainCount <= 1 ? "same as 1" : "B"}
               />
@@ -255,7 +255,7 @@ export function WaterBridgesChart() {
               step={0.1}
               min={2.5}
               max={5}
-              className="h-7 text-xs font-mono"
+              className="h-7 text-xs"
             />
           </div>
         </div>

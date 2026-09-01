@@ -5342,3 +5342,23 @@ Stage Summary:
 - 真实 E2E 双靶 18.9 分钟教科书式验证：两靶各自的 429 限流窗口 + 终末补救轮全部实战触发并救回（12/12 + 15/15 全章交付）；跨靶对比表数字与真实数据一致（防幻觉 prompt 生效）
 - 多靶点与单靶/序列三条输入路径现已正交：单 UniProt（旧扁平字段兼容）、多 UniProt（targets[]）、序列（BLAST 识别）——语义互斥且守卫各司其职
 - 新建议池：1) dsh-poll.mjs 终局判据改 status 字段（多靶点场景误触已实证）2) 多靶点 ChapterStream 章节流按靶点分组显示（当前 LAST-wins 覆盖为已知降级，合并报告为权威）3) 跨靶点对比可扩展为多轮（对比→用户追问→深挖），当前单轮单次调用 4) MAX_DSH_TARGETS=5 上限可按注册表安全网实测时长再调
+
+---
+Task ID: R203
+Agent: main (Z.ai Code)
+Task: 用户反馈「填写 UniProt ID 和参数的字体变难看了」——定位根因并修复，推送 GitHub
+
+Work Log:
+- 根因定位（非近期输入框代码变更，而是字体栈行为的滞后显形）：R194（295f884）为修复 var() 无回退导致整条 font-family 声明失效的问题，给 --font-mono 加了 var(--font-geist-mono, ui-monospace) 回退。修复本身正确（日志/时间戳等语义等宽场景恢复等宽），但副作用是**所有 font-mono 元素从「静默回退到正文 sans 栈」变为「真正渲染系统等宽字体」**——而所有表单填写框（UniProt ID/各参数/日期/周/路径/链过滤器）当时都挂着 font-mono class，其「好看的字体」其实一直是 R194 之前的 sans 回退假象。R200 已修 ToggleChip（同理），本轮用户继续发现输入框
+- 修复原则：**填写类控件回归正文 sans 栈（继承 body，恢复用户认可的观感）；语义等宽场景（序列 textarea、运行日志、时间戳、ID 徽章展示）保留 mono**。输入框 class 仅去掉 font-mono，保留 text-xs md:text-xs（md:text-xs 是防御 base Input 的 md:text-sm 抢占，非冗余）
+- settings-run-panel.tsx 15 处：UniProt ID 输入（placeholder P00533）+ 每靶点 PDB上限/BLAST/上限 + 序列模式参数行（BLAST/PDB上限/上限）+ 文献 tab 6 参数（日期/窗口/PathA/B/C/MaxPapers）+ 周报 ISO 周输入 + dbPath 路径输入
+- charts 3 文件 12 处：interaction-network / water-bridges-chart 的链 ID Input+select、apbs-surface-chart 的链/离子强度 Input
+- 浏览器硬断言（agent-browser）：UniProt 输入框与全部 number 参数框 computed font = ui-sans-serif, "PingFang SC", ... @ 12px/400 ✓；序列模式参数框同 ✓；dbPath 同 ✓；序列 textarea 保持 ui-monospace 12px（语义正确）✓；ToggleChip sans 12px 无回归 ✓；Auto sans 10px 无回归 ✓；0 page error / 0 console error
+- VLM 目检截图：placeholder（P00533/80/50/20）均为无衬线、表单整体字体统一协调、无重叠渲染异常
+- 质量门：改动 4 文件 eslint 0 error 0 warning（NODE_OPTIONS 3072MB）；dev.log 无新错误
+- 提交并推送 GitHub（commit R203）
+
+Stage Summary:
+- 输入框字体回归根治：根因是 R194 字体栈修复使 font-mono 真正生效，填写类控件此前「好看的 sans」实为 var() 失效的意外回退；本轮将 4 文件 27 处填写框统一回归 sans（含文献/周报/dbPath/图表过滤器等用户未点名但同类受累的面），序列 textarea 与日志类 mono 语义保留
+- 与 R200 ToggleChip 修复构成完整闭环：全应用「表单 sans / 数据日志 mono」的字体分工口径从此显式化，不再依赖 CSS 意外行为
+- 后续若引入真实 Geist webfont（layout.tsx 预留 --font-geist-* 变量），填写框会自动跟随 --font-sans 栈，无需再改
