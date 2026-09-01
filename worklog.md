@@ -5362,3 +5362,20 @@ Stage Summary:
 - 输入框字体回归根治：根因是 R194 字体栈修复使 font-mono 真正生效，填写类控件此前「好看的 sans」实为 var() 失效的意外回退；本轮将 4 文件 27 处填写框统一回归 sans（含文献/周报/dbPath/图表过滤器等用户未点名但同类受累的面），序列 textarea 与日志类 mono 语义保留
 - 与 R200 ToggleChip 修复构成完整闭环：全应用「表单 sans / 数据日志 mono」的字体分工口径从此显式化，不再依赖 CSS 意外行为
 - 后续若引入真实 Geist webfont（layout.tsx 预留 --font-geist-* 变量），填写框会自动跟随 --font-sans 栈，无需再改
+
+---
+Task ID: R204
+Agent: main (Z.ai Code)
+Task: 用户疑问「为何云沙箱测试的评估有网络搜索配图，本地 MiniMax M3 跑只有 RCSB 图」——根因解答 + 降级消息自解释化
+
+Work Log:
+- 根因（非缺陷，属环境能力差异）：Agent 配图的 web 示意图链路 = `z-ai image-search` CLI（execFile 子进程）搜索候选 + `z-ai-web-dev-sdk` VLM 严格判官（verdict/reason/caption）。两者均为 Z.ai 云沙箱内置服务；本地部署无 z-ai CLI → execFile ENOENT → 首查即失败 → cliBrokenThisRun 短路全部 web query（宁缺毋滥设计）→ 只剩 RCSB 结构图（RCSB CDN 为公网服务，本地可用）。MiniMax M3 只承担文本 LLM（大纲/章节/报告），与配图搜索无关；配图 query 本身来自相关性分析（LLM 输出，本地正常生成），只是搜索执行环节缺服务
+- 实证：PATH 剥离子进程下 `execFile('z-ai', ...) → spawn z-ai ENOENT, err.code='ENOENT'`（callback 与 child error 事件均携带，settle 幂等两路皆覆盖）
+- 修复（消息自解释化，非行为变更）：runImageSearchCli 返回值新增 enoent 标志（callback err 与 child.on('error') 两路均提取 code）；searchWebFigures 首查失败分支按 enoent 分流 —— ENOENT 提示「本机未安装 z-ai CLI —— web 示意图搜索与 VLM 配图校验为 Z.ai 云沙箱内置服务，本地部署环境不提供。本次评估将仅使用 RCSB 结构图（不影响报告正文与评分）」，其余保持原「CLI 挂起或不可用」消息。本地用户在 Run Center 日志可直接看到原因，不再误判为 bug
+- 验证：eslint figures.ts 0 error 0 warning；run-dsh 路由实编译触发（status 端点 200 正常 JSON 响应）dev.log 无编译错误；沙箱内 z-ai 存在走原路径不受影响
+- 提交推送 GitHub
+
+Stage Summary:
+- 「本地只有 RCSB 图」根因 = web 配图搜索与 VLM 校验依赖 z-ai CLI/SDK（云沙箱内置），本地 ENOENT 静默降级；RCSB 图为公网 CDN 与 LLM 无关，故本地仍正常
+- 降级消息现在区分「未安装（环境能力差异，明示不影响正文）」与「挂起/超时（偶发故障）」两种情形
+- 待用户决策的选项池（未实现）：1) 本地 web 配图可用免密钥图源（如 Wikimedia Commons API）兜底，但无本地 VLM 时只能打「未校验」标记（MiniMax M3 无视觉能力，判官/中文 caption 均缺）2) 若本地配置了带视觉模型的 provider（如 MiniMax-VL），可扩展 VLM 判官走 provider 路径复用校验 3) 维持现状（本地纯 RCSB，云沙箱全量）

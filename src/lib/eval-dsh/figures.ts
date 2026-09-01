@@ -398,14 +398,16 @@ const imageSearchCache = new Map<string, ImageSearchResult[]>();
 /** 以 execFile 方式调 z-ai image-search（无 shell 注入面）。R193: 超时可
  * 调（首查短超时）+ 返回 ok 区分「调用失败（CLI 挂/超时）」与「正常返回
  * 但零结果」（后者不代表 CLI 不可用，不应短路后续 query）。
- * R197: signal 可选 —— Stop 时 kill 子进程立即返回（不等满超时）。 */
-async function runImageSearchCli(query: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; results: ImageSearchResult[] }> {
+ * R197: signal 可选 —— Stop 时 kill 子进程立即返回（不等满超时）。
+ * R204: 失败时携带 enoent（ENOENT = 本机未安装 z-ai CLI，典型于本地部署
+ * 环境；区别于 CLI 存在但挂起/超时），供上层给出针对性提示。 */
+async function runImageSearchCli(query: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; results: ImageSearchResult[]; enoent?: boolean }> {
   const { execFile } = await import('node:child_process');
   const args = ['-q', query, '--count', '5', '--gl', 'us'];
-  return new Promise<{ ok: boolean; results: ImageSearchResult[] }>((resolve) => {
+  return new Promise<{ ok: boolean; results: ImageSearchResult[]; enoent?: boolean }>((resolve) => {
     let settled = false;
     let onAbort: (() => void) | undefined;
-    const settle = (v: { ok: boolean; results: ImageSearchResult[] }) => {
+    const settle = (v: { ok: boolean; results: ImageSearchResult[]; enoent?: boolean }) => {
       if (settled) return;
       settled = true;
       if (onAbort && signal) signal.removeEventListener('abort', onAbort);
@@ -417,7 +419,7 @@ async function runImageSearchCli(query: string, timeoutMs: number, signal?: Abor
       { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout) => {
         if (err) {
-          settle({ ok: false, results: [] });
+          settle({ ok: false, results: [], enoent: (err as NodeJS.ErrnoException).code === 'ENOENT' });
           return;
         }
         const parsed = extractFirstJsonObject(String(stdout || ''));
@@ -429,8 +431,9 @@ async function runImageSearchCli(query: string, timeoutMs: number, signal?: Abor
         settle({ ok: true, results: parsed.results as ImageSearchResult[] });
       },
     );
-    // execFile 的 timeout 会发 SIGTERM；再兜底 kill 防僵尸。
-    child.on('error', () => settle({ ok: false, results: [] }));
+    // execFile 的 timeout 会发 SIGTERM；再兜底 kill 防僵尸。spawn ENOENT
+    // 也会先走这里（与 callback 同源错误，settle 幂等）。
+    child.on('error', (e) => settle({ ok: false, results: [], enoent: (e as NodeJS.ErrnoException)?.code === 'ENOENT' }));
     // R197: Stop —— kill 子进程（SIGTERM，与 execFile 超时同口径）。
     onAbort = () => {
       try { child.kill('SIGTERM'); } catch { /* 已退出 */ }
@@ -592,7 +595,13 @@ export async function searchWebFigures(
           // 首查即失败：CLI 挂死/不可用 —— 本次评估内短路后续所有 query
           //（后续 query 大概率同样挂死，逐条等满 150s 纯属浪费）。
           cliBrokenThisRun = true;
-          emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 首次调用即失败（CLI 挂起或不可用），本次评估跳过 web 配图搜索（宁缺毋滥）` });
+          // R204: ENOENT（本机未装 z-ai CLI，本地部署典型场景）与挂起/超时
+          // 分开提示 —— 前者是环境能力差异（web 配图搜索 + VLM 校验为
+          // Z.ai 云沙箱内置服务），后者是本环境内的偶发故障。两条消息都
+          // 说明「仅影响配图、不影响报告正文」，避免用户误判为缺陷。
+          emit(run.enoent
+            ? { stage: 'figure-web', level: 'warn', message: '⚠ 本机未安装 z-ai CLI —— web 示意图搜索与 VLM 配图校验为 Z.ai 云沙箱内置服务，本地部署环境不提供。本次评估将仅使用 RCSB 结构图（不影响报告正文与评分）。' }
+            : { stage: 'figure-web', level: 'warn', message: '⚠ image-search 首次调用即失败（CLI 挂起或不可用），本次评估跳过 web 配图搜索（宁缺毋滥）' });
           continue;
         }
         emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 调用失败（跳过该 query，继续）` });
