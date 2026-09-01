@@ -5249,3 +5249,38 @@ Stage Summary:
 - 延后 4 项（下轮建议池）：① 经典管线 req.signal 全链接线（底层 blast/LLM 已就绪，只差路由层；改动面大单独做）；② 单序列模式 SkillRunRecord 遥测补齐；③ markdown-renderer ``` 围栏支持；④ lazy-markdown img onError（主路径已修，次要路径留观）
 - R196 遗留 worklog 缺口已在本条目补记；「python 字节级编辑 CRLF 文件」成为本仓库大文件（run/route.ts 2512 行）安全修改的可靠路径
 - 真实 E2E（配额恢复后补做）：DSH 全流程跑一轮验证 collect/figures signal 接线 + sticky 累积在超长运行下的表现 + provenance DSH 视图真实数据渲染
+
+---
+Task ID: R198
+Agent: main (Z.ai Code)
+Task: 修复 R197 延后的 4 项问题 → 真实 E2E（配额恢复）→ 根据测试结果进一步提升（终末补救轮等）
+
+Work Log:
+- 延后项①经典管线全链 signal 接线（run/route.ts 2526 行 CRLF 文件，Python 字节级 24 处编辑）：
+  sseStream 后建 AbortController 链接 req.signal；7 处 generateText + 4 处 runBlast/runBlastDb 全部传 _sig；11 处会吞 AbortError 的 catch（BLAST pdbaa/nr、单序列 LLM、多序列 per-seq、跨序列、UniProt BLAST、章节重试、batch BLAST/章节/单靶点/跨靶点）加 isAbortErr 上抛守卫；generateText 的「返回 ok=false 而非 throw」形态用 `!r.ok && _sig.aborted` 检查点补齐（章节循环顶防退避空转）；主 catch 新增中止分支（emit aborted 事件 + 补写 status='aborted' SkillRunRecord + done({aborted:true})，不写半截 Evaluation 行）
+- 延后项②单序列模式 SkillRunRecord 遥测：evaluateOneSequence 单序列分支（此前直接 done 返回、Run Center 查无此轮）补与多序列路径同构的 INSERT（log 带 NDJSON 全量事件）
+- 延后项③markdown-renderer ``` 围栏支持：块循环顶部（表格/标题检测之前，防围栏内 | 行误判）识别 ``` 开围栏（可带语言标注）→ 收集至闭围栏（CommonMark 语义：闭栏纯反引号且长度 ≥ 开栏）→ <pre> 原样输出（仅 escapeHtml）+ 语言标签 + 未闭合截断提示；段落收集正则加 ^`{3} 断段（无空行分隔的围栏不再吸入段落）；单测 10 例（基本/语言/表格保护/标题保护/未闭合/四反引号嵌套/XSS 转义/贴身围栏/尾随空格/回归）10/10 通过
+- 延后项④lazy-markdown img onError：SafeMarkdownImg 客户端组件（useState broken → 加载失败静默隐藏，与 DshFigureThumb 主路径同语义）；react-markdown hast 宽类型（string|Blob）传参前 typeof 收窄
+- E2E 驱动的新发现与修复（第一轮 DSH 真实运行暴露）：
+  a) 失败章占位符无 H2 标题 → 报告中两个章节间悬浮一段无题斜体注记，读者不知哪章失败 → 占位符加 `## ${titleZh}` 前缀（validateDshChapter 占位符检测与 H2 检测独立，无误判风险）
+  b) DSH 缺「终末补救轮」（经典管线 Round 36 起就有、DSH 没有）→ E2E 实证：第 10 章 20/30/30s 三连退避 + rescue 全 429，而其后章节（2-3 分钟）全部成功（限流窗口翻页）→ 新增 Phase E+ 前的终末补救轮：失败章在一圈生成后各重试 1 次（简化 prompt + 配图补挂 + lengthStats 计入 + rescuedFinal 标记）；瞬态失败即中止余下补救（窗口未过继续打是白烧配额）；done 消息/provenance.review.rescuedFinal/trajectory 行增加统计；DshChapterResult 与前端 DshProvView（类型 + 汇总行 + 逐章「终末救回」徽章）同步
+- 真实 E2E 三场全部通过（zai 配额部分恢复：RPM 限流形态，burst 后 429，窗口 ~2-3 分钟翻页）：
+  第一场 DSH（T790M 耐药问题，13 章大纲，490s）：VLM 配图校验恢复正常（14 图：RCSB 5 + web 9）；429 在第 10 章出现 → 配额降级三档真实触发（7 hits：level-1/2/3 全痕迹入 provenance.quota）；第 10 章失败（当时无终末补救轮）；trajectory/lengthStats/deepShare 72% 真实数据落库
+  第二场经典中止（forceBlast P00533，curl 25s 砍断于 BLAST 轮询第 4 次）：中止 114ms 生效（末次轮询 01:54:32.252 → abort 01:54:32.366）；aborted 遥测落库（21 事件 NDJSON log 2.6KB）；P00533 的 DSH 报告未被半截覆盖（13118 chars 完好）
+  第三场 DSH（同靶新问题，13 章大纲，490s）：第 11 章 429 三连败 + rescue 败 → 终末补救轮触发救回（533 chars）→ 13/13 全章交付「终末补救救回 1 章」入 done 消息；provenance chapters {ok:13, failed:0} + review.rescuedFinal:1；失败占位符被替换无残留
+  附加：单序列模式遥测 E2E（HBA 序列 28.8s）→ eval_seq_SEQ_* 记录入历史（此前不可见）
+- 浏览器端到端（agent-browser）：主页 0 page error 0 console error；Run Center 历史完整显示四条新记录（两场 DSH + 单序列 + 已中止）并可展开（NDJSON 日志含终末补救事件）；P00533 详情溯源面板首次以真实端到端数据渲染（数据收集 40 PDB/章节 13-13/深挖 70%/配额压力 6/轨迹表 5 章含 ligand_binding 2 轮重写/篇幅分布 13 章/终末补救救回 1）；报告视图 48 图 0 破图（SafeMarkdownImg onError 生效面）；移动端 390px 无横向滚动、页脚正常
+- 验证：eslint 7 个改动文件 0 error 0 warning；tsc 改动文件 0 错误（全项目二次确认；一次 OOM 杀 server 按 worklog 教训改「停 server→tsc→重启」顺序完成）；markdown-fence 单测 10/10（schemaCompat.test 的 node:sqlite 在 bun 下不可解析为预存环境问题，与改动无关）；dev.log 无新增错误（EADDRINUSE 为会话开始前的旧记录）
+- 工具沉淀：scripts/dsh-poll.mjs（R195 游标持久化轮询模式固化，跨 Bash 窗口续接，含 done 帧全量打印）入 scripts/ 目录供后续轮次复用
+- 临时产物清理（.r198-* 脚本/截图/游标）
+
+Stage Summary:
+- R197 延后 4 项全部落地且 E2E 实测：经典管线「断开即中止」114ms 生效（与 DSH 两段式「断开续看」构成两种正确语义的分野——前者运行依附请求、后者有注册表）；单序列/中止两种新遥测形态在 Run Center 历史可见；围栏渲染与破图隐藏分别由单测与 0 破图断言覆盖
+- 终末补救轮是本轮最高价值新增：E2E 教科书式验证（限流窗口内三连败 + 窗口翻页后一次救回 → 13/13 全章交付）；zai 配额呈 RPM 限流形态（burst 后 429、窗口 ~2-3 分钟）而非日耗尽——R193 的退避时长（20/30/40s）短于窗口是内联重试全灭的根因，终末轮用「时间换窗口」补齐
+- 新建议池（按价值排序，待用户定优先级）：
+  1. 退避时长自适应窗口：R198 实证限流窗口 ~2-3 分钟 > 内联退避上限 45s。可把 DSH 章节退避改为指数 + 窗口感知（第 2 次瞬态失败直接等 120s 而非 30/40s 两连小退避），省 2 次注定失败的调用
+  2. probeLlmQuota 只试主 provider：zai 429 时 17-provider 全链探测 5.9s 白等（R195 建议 2 仍未做）；顺带把「探测结果 + TTL 60s」缓存
+  3. Run Center「后台运行中」状态条（R195 建议 3 仍未做）：status list 端点已有数据，页面刷新后 UI 感知不到后台运行
+  4. 终末补救轮的延伸：本次只救回 1/1 章即成功；若多章失败且窗口死锁（终末轮首试即 429），可考虑 60s 后再给最后一轮（上限 2 轮终末补救）；或把终末轮成功后的章补送审稿环（当前跳过审稿直交付）
+  5. 围栏渲染的 ``` 围栏已在 markdown-renderer 生效；lazy-markdown（ReactMarkdown 路径）原生支持围栏无需改——两渲染器口径现已对齐
+  6. dev server OOM 规避固化：tsc 全项目检查必须「停 server → 检查 → 重启」（本轮一次实证）；可给 package.json 加 `typecheck:stop-server` 复合脚本防复发

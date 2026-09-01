@@ -143,6 +143,37 @@ export function renderMarkdownToHtml(md: string): MarkdownRenderResult {
     const line = lines[i];
     const trimmed = line.trim();
 
+    // ─── Fenced code blocks（R198 / R197 延后项③） ─────────────────────
+    // LLM 报告（DSH 章节 / 批量对比 / 经典分章）偶尔以 ``` 包裹命令行、JSON
+    // 或序列片段。旧渲染器把围栏行当普通段落：正文出现裸 ``` 字符，且围栏
+    // 内部的 `| a | b |` / `## x` / `- y` 会被表格/标题/列表分支误判。
+    // 现按块级处理：开围栏（``` 可带语言标注）到闭围栏（或文档结尾）之间
+    // 原样进 <pre>（仅 HTML 转义，不跑行内 markdown）；闭围栏须与开围栏
+    // 同为纯反引号行且长度 ≥ 开围栏（CommonMark 语义）；未闭合时按文档
+    // 截断处理并给出可见提示（与 sanitizeMarkdownReport 截断语义一致）。
+    const fenceOpen = trimmed.match(/^(`{3,})([^\n]*)$/);
+    if (fenceOpen) {
+      const fenceLen = fenceOpen[1].length;
+      const info = fenceOpen[2].trim();
+      const codeLines: string[] = [];
+      i++;
+      let closed = false;
+      while (i < lines.length) {
+        const t = lines[i].trim();
+        if (/^`{3,}$/.test(t) && t.length >= fenceLen) { closed = true; i++; break; }
+        codeLines.push(lines[i]);
+        i++;
+      }
+      const codeHtml = escapeHtml(codeLines.join('\n'));
+      const labelHtml = info
+        ? `<div style="font-size:11px;color:#6b5d4f;margin:0 0 4px 0;padding-left:2px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;">${escapeHtml(info)}</div>`
+        : '';
+      out.push(
+        `<div style="margin:10px 0;">${labelHtml}<pre style="background:#f8f5f1;border:1px solid #e8e4dd;border-radius:6px;padding:10px 12px;margin:0;overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.5px;line-height:1.5;color:#3d3832;white-space:pre;">${codeHtml}${closed ? '' : '\n（围栏未闭合 — 报告可能被截断）'}</pre></div>`
+      );
+      continue;
+    }
+
     // ─── Markdown table detection ─────────────────────────────────────
     // Four formats supported:
     //  1. Pipe-separated with separator: | a | b | / |---| / | c | d |
@@ -394,7 +425,7 @@ export function renderMarkdownToHtml(md: string): MarkdownRenderResult {
     while (
       i < lines.length &&
       lines[i].trim() !== '' &&
-      !/^(\s*)[#\-|*]|\d+\.\s/.test(lines[i])
+      !/^(\s*)[#\-|*]|\d+\.\s|^`{3}/.test(lines[i])
     ) {
       paraLines.push(lines[i]);
       i++;

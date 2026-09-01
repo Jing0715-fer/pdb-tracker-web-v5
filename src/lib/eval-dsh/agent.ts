@@ -67,6 +67,9 @@ export interface DshChapterResult {
   /** R195: 审稿环达到轮次上限仍未通过（保留当前版继续）—— 复审锚效果
    * 度量用（provenance.review.trajectory 会汇总）。 */
   reviewCapped?: boolean;
+  /** R198: 终末补救轮救回（内联重试+救援全灭后，一圈章节跑完、限流
+   * 窗口重置时再试一次成功）。provenance 与 done 消息统计用。 */
+  rescuedFinal?: boolean;
 }
 
 export interface DshRunResult {
@@ -1555,7 +1558,11 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       id: entry.id,
       title: tmpl.titleZh,
       ok,
-      content: ok ? content : `_(本章生成失败：${shortLlmErr(lastErr || 'LLM 调用失败')})_`,
+      // R198: 失败占位符带 H2 标题 —— 旧行为只留一段斜体注记，报告里
+      // 两个章节之间悬浮一段无题文字，读者无从得知是哪章失败；带标题
+      // 后结构与成功章一致（validateDshChapter 的占位符拒绝检测与 H2
+      // 检测独立，不会因加了标题而误判为真文）。
+      content: ok ? content : `## ${tmpl.titleZh}\n\n_(本章生成失败：${shortLlmErr(lastErr || 'LLM 调用失败')})_`,
       attempts,
       error: ok ? undefined : lastErr,
       reviewed,
@@ -1588,6 +1595,86 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
     });
   }
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+
+  // ── R198: 终末补救轮（失败章「等窗口」重试，E2E 驱动新增）────────────
+  // 内联重试（2 轮退避）+ 简化 prompt 救援在限流窗口长于 ~100s 时全灭
+  // （本功能来自 R198 E2E 实测：第 10 章 20/30/30s 三连退避 + rescue 均
+  // 429，而其后的章节（约 2-3 分钟）全部成功 —— 窗口在其间已翻页）。
+  // 终末轮在一圈章节全部生成完之后再给失败章一次机会：此时距首次失败
+  // 已隔数分钟，限流窗口大概率已重置（经典管线自 Round 36 起就有同款
+  // pass，DSH 此前缺失）。规则：每章仅 1 次尝试（无退避 —— 内联阶段已
+  // 退避过）；任一尝试仍瞬态失败即中止余下补救（窗口未过，继续打是白
+  // 烧配额）；成功则替换占位符、补挂配图、翻 ok 标记（Phase F 的
+  // chaptersOk / done 消息统计自动更新）。
+  const failedRescueList = chapters
+    .map((ch, idx) => ({ ch, idx }))
+    .filter(x => !x.ch.ok && !x.ch.deterministic);
+  if (failedRescueList.length > 0) {
+    emit({ stage: 'chapter-rescue', level: 'info', message: `终末补救轮：${failedRescueList.length} 个失败章在一圈生成后重试（限流窗口已重置）`, progress: 94 });
+    for (let ri = 0; ri < failedRescueList.length; ri++) {
+      const { ch, idx } = failedRescueList[ri];
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      const entry = outline[idx];
+      const tmpl = getSection(entry.id)!;
+      const chapterIndex = idx + 1;
+      emit({ stage: `chapter-${entry.id}`, level: 'info', message: `[终末补救] 第 ${chapterIndex}/${chapterTotal} 章 ${tmpl.titleZh} — 重试`, progress: 94, chapter: entry.id, chapterIndex, chapterTotal, chapterId: entry.id, chapterTitle: tmpl.titleZh });
+      const finalRescuePrompt = `请为蛋白靶点评估报告撰写章节「${tmpl.titleZh}」。
+
+靶点：${c.uniprotInfo.proteinName}（${c.uniprotInfo.uniprotId}，${c.uniprotInfo.organism}）
+${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.contentSpec}
+可用数据要点：直接 PDB ${c.directPdbCount} 条、BLAST ${c.blastHitCount} 条、文献 ${c.literature.length} 篇、Overall 评分 ${c.scores.overall.score}/10。
+
+第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 250-500 字。只输出本章内容。`;
+      try {
+        const r = await generateText(chapterSystem, finalRescuePrompt, { maxChars: 6000, llm: llmCfg, signal });
+        llmTotalMs += r.durationMs;
+        if (r.provider) llmProvider = r.provider;
+        if (r.model) llmModel = r.model;
+        if (!r.ok) {
+          const errStr = r.error || '';
+          noteTransient(errStr); // R193: 配额压力计数
+          if (isTransientLlmError(errStr)) {
+            emit({ stage: 'chapter-rescue', level: 'warn', message: `终末补救中止（限流窗口仍未重置：${shortLlmErr(errStr)}）· 余 ${failedRescueList.length - ri - 1} 章保留占位符`, progress: 94 });
+            break;
+          }
+          continue; // 非瞬态失败（格式/校验类）—— 换下一章试
+        }
+        const v = validateDshChapter(tmpl.titleZh, r.content);
+        if (!v.ok) continue;
+        let rescued = normalizeDshChapter(r.content, tmpl.titleZh);
+        // 补挂该章配图（与主循环同款维护逻辑）
+        const figsForRescue = figures.filter(f => f.status === 'verified' && f.sectionId === entry.id).slice(0, 3);
+        const maint = maintainChapterFigures(rescued, figsForRescue, figures);
+        rescued = maint.content;
+        ch.ok = true;
+        ch.content = rescued;
+        ch.attempts = (ch.attempts || 0) + 1;
+        ch.rescuedFinal = true;
+        ch.error = undefined;
+        // R195 建议 4: 补救成功的章也计入篇幅比（观察口径与主循环一致）
+        const maxW = (hasQuestion && !rules.baselineIds.includes(entry.id))
+          ? (tmpl.deepWords?.max ?? Math.round(tmpl.maxWords * 1.8))
+          : tmpl.maxWords;
+        if (maxW > 0) lengthStats.push({ id: entry.id, chars: rescued.length, ratio: Math.round((rescued.length / maxW) * 100) / 100 });
+        emit({
+          stage: 'chapter_done',
+          level: 'success',
+          message: `✓ [终末补救] 第 ${chapterIndex}/${chapterTotal} 章 ${tmpl.titleZh} 完成（${rescued.length} chars）`,
+          progress: 94,
+          chapter: entry.id,
+          chapterIndex,
+          chapterTotal,
+          chapterId: entry.id,
+          chapterTitle: tmpl.titleZh,
+          chapterContent: rescued,
+        });
+      } catch (err: any) {
+        // R196: Stop 信号不得被补救 catch 吞掉
+        if (err?.name === 'AbortError') throw err;
+        // 补救失败 —— 保留占位符，不中止整体
+      }
+    }
+  }
 
   // ── Phase E+: 终审 pass（全文一致性，R192/R193）─────────────────────
   // 逐章审稿只看单章三维度；章节是独立生成的，跨章问题（术语/缩写不一致、
@@ -1846,11 +1933,13 @@ ${ch.content}
   const reviewedCount = chapters.filter(ch => ch.reviewed).length;
   const rewrittenCount = chapters.filter(ch => ch.rewritten).length;
   const reviewRoundsTotal = chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0);
+  // R198: 终末补救统计（done 消息 / provenance 共用）
+  const finalRescuedCount = chapters.filter(ch => ch.rescuedFinal).length;
   // R195 建议 3: 审稿轮次轨迹（复审锚效果度量 —— capped 占比高 = 锚没
   // 把「2 轮 rewrite 保留」比例压下来，是下轮迭代信号）。
   const reviewTrajectory = chapters
     .filter(ch => (ch.reviewRounds || 0) > 0)
-    .map(ch => ({ id: ch.id, rounds: ch.reviewRounds || 0, rewritten: !!ch.rewritten, capped: !!ch.reviewCapped }));
+    .map(ch => ({ id: ch.id, rounds: ch.reviewRounds || 0, rewritten: !!ch.rewritten, capped: !!ch.reviewCapped, rescuedFinal: !!ch.rescuedFinal }));
   // R195 建议 4: 篇幅膨胀率（ratio > 1.6 的章数；references 确定性章不在
   // lengthStats 内）。
   const inflatedChapters = lengthStats.filter(s => s.ratio > 1.6).length;
@@ -1871,7 +1960,7 @@ ${ch.content}
         outline: { total: outline.length, ids: outline.map(o => o.id) },
         figures: { verified: verifiedFigures.length },
         chapters: { ok: chaptersOk, failed: chaptersFailed, deepChars: ds.deepChars, bodyChars: ds.bodyChars, deepShare: ds.deepShare, lengthStats: { inflated: inflatedChapters, entries: lengthStats } },
-        review: { reviewed: reviewedCount, rewritten: rewrittenCount, rounds: chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0), skippedReview: skippedReviewChapters, skippedReReview: skippedReReviewChapters, trajectory: reviewTrajectory },
+        review: { reviewed: reviewedCount, rewritten: rewrittenCount, rounds: chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0), skippedReview: skippedReviewChapters, skippedReReview: skippedReReviewChapters, trajectory: reviewTrajectory, rescuedFinal: finalRescuedCount },
         finalReview: { ...finalReview },
         // R193 建议 2: 配额压力与降级痕迹入 provenance（事后可追溯哪次运行
         // 被降级、降了哪几档）。
@@ -1898,7 +1987,7 @@ ${ch.content}
     stage: 'done',
     level: reportOk ? 'success' : 'error',
     message: reportOk
-      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）${inflatedChapters > 0 ? ` · 篇幅超限 ${inflatedChapters} 章（观察项）` : ''}` : ' · 基础评估模式'}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 项（${finalReview.termReplacements} 处）` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
+      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）${inflatedChapters > 0 ? ` · 篇幅超限 ${inflatedChapters} 章（观察项）` : ''}` : ' · 基础评估模式'}${finalRescuedCount > 0 ? ` · 终末补救救回 ${finalRescuedCount} 章` : ''}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 项（${finalReview.termReplacements} 处）` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
       : `✗ 全部章节生成失败`,
     progress: 100,
   });

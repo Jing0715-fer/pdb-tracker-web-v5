@@ -333,6 +333,22 @@ export async function POST(req: Request) {
   const model = body.llm?.model || 'hermes';
 
   const { stream, progress, done } = sseStream();
+
+  // R198（R197 延后项①）: 经典管线全链 signal 接线 —— 客户端断开（用户 Stop /
+  // 刷新页面 / 网络中断）时 req.signal 触发；此前该信号被完全忽略，运行继续
+  // 烧 NCBI 队列时间与 LLM 配额（孤儿运行）。底层 runBlast/runBlastDb/
+  // generateText 的 signal 形参 R195-R197 已就绪，此处补上路由层。
+  // 与 DSH 两段式（断开只 detach、运行后台继续）不同：经典管线无注册表、
+  // 运行依附请求，「断开即中止」才是正确语义；中止时补写 aborted 遥测，
+  // Run Center 历史仍可追溯（本文件所有 catch 的 isAbortErr 守卫均上抛至此）。
+  const _runAbort = new AbortController();
+  const _abortRun = () => { try { _runAbort.abort(); } catch { /* double abort ok */ } };
+  if (req.signal.aborted) _abortRun();
+  else req.signal.addEventListener('abort', _abortRun, { once: true });
+  const _sig = _runAbort.signal;
+  const _abortErr = (): Error => { const e = new Error('aborted (client disconnected)'); e.name = 'AbortError'; return e; };
+  const isAbortErr = (e: unknown): boolean => !!e && typeof e === 'object' && ((e as any).name === 'AbortError' || _sig.aborted);
+
   (async () => {
     const t0 = Date.now();
     // ── Batch progress remapping ────────────────────────────────────────────
@@ -422,7 +438,7 @@ export async function POST(req: Request) {
           // ready (FAILED/UNKNOWN are the only hard stops). The previous
           // 180s race aborted legitimate long-running queries when NCBI
           // queue congestion pushed pdbaa to 3+ minutes.
-          blastHits = await runBlast(sequence, maxBlastHits, (msg) => { emit({ stage: 'blast', level: 'info', message: `${prefix}${msg}`, progress: 20 }); });
+          blastHits = await runBlast(sequence, maxBlastHits, (msg) => { emit({ stage: 'blast', level: 'info', message: `${prefix}${msg}`, progress: 20 }); }, _sig);
           const topIdentity = blastHits.length > 0 ? blastHits[0].identity : 0;
           if (blastHits.length === 0) {
             emit({ stage: 'blast', level: 'warn', message: `${prefix}pdbaa 数据库无命中，回退搜索 nr 数据库…`, progress: 25 });
@@ -436,7 +452,7 @@ export async function POST(req: Request) {
             try {
               // No timeout on nr either — nr is huge (~80 GB) and routinely
               // takes 2-3 min; we let it run to completion.
-              const nrHits = await runBlastDb(sequence, maxBlastHits, 'nr', (msg) => { emit({ stage: 'blast-nr', level: 'info', message: `${prefix}${msg}`, progress: 30 }); });
+              const nrHits = await runBlastDb(sequence, maxBlastHits, 'nr', (msg) => { emit({ stage: 'blast-nr', level: 'info', message: `${prefix}${msg}`, progress: 30 }); }, _sig);
               if (nrHits.length > 0) {
                 usedNrFallback = true;
                 blastHits = nrHits;
@@ -445,10 +461,12 @@ export async function POST(req: Request) {
                 emit({ stage: 'blast-nr', level: 'warn', message: `${prefix}nr 数据库也无命中`, progress: 40 });
               }
             } catch (nrErr: any) {
+              if (isAbortErr(nrErr)) throw nrErr; // R198: 中止上抛，不回退续跑
               emit({ stage: 'blast-nr', level: 'error', message: `${prefix}nr 搜索失败：${nrErr?.message}`, progress: 40 });
             }
           }
         } catch (err: any) {
+          if (isAbortErr(err)) throw err; // R198: 中止上抛
           emit({ stage: 'blast', level: 'error', message: `${prefix}BLAST pdbaa 失败：${err?.message}`, progress: 40 });
         }
 
@@ -615,7 +633,8 @@ ${blastTable}${litBlock}
             // for targets with rich BLAST hits (~10-15 hits per target). 6000
             // lets the model produce 4-6 well-developed paragraphs per chapter
             // — the LLM was previously padding its output with "..." to fit.
-            const r = await generateText(bSysPrompt, userPrompt, { maxChars: 6000, llm: body.llm });
+            const r = await generateText(bSysPrompt, userPrompt, { maxChars: 6000, llm: body.llm, signal: _sig });
+            if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止运行
             // Sanitize the LLM output: closes unclosed **, completes truncated
             // table headers, cuts back to last full sentence if the LLM was
             // cut off mid-word. Applied at ingestion so the DB stores clean
@@ -626,6 +645,7 @@ ${blastTable}${litBlock}
             if (r.ok) emit({ stage: 'llm-report', level: 'success', message: `${prefix}LLM 报告已生成 · ${report.contentChars} chars · ${(r.durationMs / 1000).toFixed(1)}s · ${r.provider}/${r.model}`, progress: 90 });
             else emit({ stage: 'llm-report', level: 'error', message: `${prefix}LLM 报告失败：${r.error}`, progress: 90 });
           } catch (err: any) {
+            if (isAbortErr(err)) throw err; // R198: 中止上抛
             emit({ stage: 'llm-report', level: 'error', message: `${prefix}LLM 生成失败：${err?.message}`, progress: 90 });
           }
         }
@@ -695,6 +715,7 @@ ${blastTable}${litBlock}
             seqResults.push(r);
             emit({ stage: `seq-${i + 1}-done`, level: 'success', message: `[序列 ${i + 1}/${rawSeqs.length}] ${r.seqId} 完成 · ${r.blastHits.length} BLAST 同源 · overall=${r.scores.overall.score}/10${r.report?.ok ? ` · LLM ✓ (${r.report.contentChars} chars)` : ''}`, progress: 100 });
           } catch (err: any) {
+            if (isAbortErr(err)) throw err; // R198: 中止上抛（终止整个批量，而非记单条失败）
             emit({ stage: `seq-${i + 1}-done`, level: 'error', message: `[序列 ${i + 1}/${rawSeqs.length}] 失败：${err?.message}`, progress: 100 });
             seqResults.push({ seqId: `SEQ_ERR_${i + 1}`, ok: false, error: err?.message || String(err), pdbDetails: [], blastHits: [], scores: { overall: { score: 0 } }, coverage: 0, report: undefined, uniprotInfo: { proteinName: `Sequence ${i + 1} (failed)` } });
           }
@@ -788,7 +809,8 @@ ${overlapSummary}${crossLitBlock}
 （总结序列间关系，提出后续研究建议）`;
               // Cross-target report: 8000 chars — covers summary + per-pair
               // comparison + table for 2-4 targets without truncation.
-              const r = await generateText(crossSysPrompt, crossUserPrompt, { maxChars: 8000, llm: body.llm });
+              const r = await generateText(crossSysPrompt, crossUserPrompt, { maxChars: 8000, llm: body.llm, signal: _sig });
+              if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止
               // Sanitize the cross-report: closes unclosed **, completes
               // truncated tables, cuts back to last full sentence if the
               // LLM was cut off mid-word. The 4 batch reports in our DB all
@@ -799,6 +821,7 @@ ${overlapSummary}${crossLitBlock}
               if (r.ok) emit({ stage: 'cross-llm', level: 'success', message: `✓ 跨序列相关性报告已生成 · ${crossReport.contentChars} chars · ${(r.durationMs / 1000).toFixed(1)}s · ${r.provider}/${r.model}${crossLit.count > 0 ? ` · 附 ${crossLit.count} 篇文献` : ''}`, progress: 100 });
               else emit({ stage: 'cross-llm', level: 'error', message: `✗ 跨序列相关性 LLM 失败：${r.error}`, progress: 100 });
             } catch (err: any) {
+              if (isAbortErr(err)) throw err; // R198: 中止上抛
               emit({ stage: 'cross-llm', level: 'error', message: `✗ 跨序列相关性分析失败：${err?.message}`, progress: 100 });
             }
           }
@@ -870,6 +893,19 @@ ${overlapSummary}${crossLitBlock}
       if (body.inputMode === 'sequence' && body.sequence) {
         const seqType: 'aa' | 'dna' = body.sequenceType === 'dna' ? 'dna' : 'aa';
         const r = await evaluateOneSequence(String(body.sequence), seqType, 1, 1);
+        // R198（R197 延后项②）: 单序列模式 SkillRunRecord 遥测补齐 —— 多序列/
+        // UniProt / batch 三条路径各有一份遥测写入，唯独单序列（body.sequence
+        // 字符串）此前直接 done 返回，Run Center 历史查无此轮运行。此处补一条
+        // 与多序列路径同构的记录（log 带 NDJSON 全量事件，可展开回看）。
+        try {
+          const _ssrrId = `eval_seq_${r.seqId}_${Date.now()}`;
+          const _ssrrStatus = r.report?.ok || !generateReport ? 'success' : 'error';
+          const _ssrrSummary = `单序列评估 ${r.seqId} · ${r.pdbDetails.length} PDB · ${r.blastHits.length} BLAST 同源 · overall=${r.scores.overall.score}/10${r.report?.ok ? ' · LLM ✓' : generateReport ? ' · LLM ✗' : ''}`;
+          const _ssrrDetails = JSON.stringify({ seqId: r.seqId, inputMode: 'sequence', pdbCount: r.pdbDetails.length, blastHitCount: r.blastHits.length, overall: r.scores.overall.score, reportOk: r.report?.ok, reportChars: r.report?.contentChars });
+          const _ssrrResultJson = JSON.stringify({ seqId: r.seqId, scores: r.scores, reportOk: r.report?.ok, reportChars: r.report?.contentChars, pdbSample: r.pdbDetails.slice(0, 5).map(e => e.pdbId) });
+          const _ssrrLog = _log.join('\n');
+          await db.$executeRaw`INSERT INTO SkillRunRecord (id, module, status, summary, details, provider, model, llmOk, llmFallback, llmError, durationMs, resultJson, log, createdAt) VALUES (${_ssrrId}, 'eval', ${_ssrrStatus}, ${_ssrrSummary}, ${_ssrrDetails}, ${body.llm?.provider || 'auto'}, ${r.report?.model || ''}, ${generateReport ? (r.report?.ok ? 1 : 0) : null}, 0, null, ${Date.now() - t0}, ${_ssrrResultJson}, ${_ssrrLog}, CURRENT_TIMESTAMP)`;
+        } catch { /* telemetry only — never fail the evaluation */ }
         const result = { uniprot: r.seqId, uniprotInfo: r.uniprotInfo, directPdbCount: 0, pdbPersisted: r.pdbDetails.length, blastHitCount: r.blastHits.length, coverage: r.coverage, scores: r.scores, report: r.report, dbSaved: true, durationMs: Date.now() - t0 };
         emit({ stage: 'done', level: r.report?.ok || !generateReport ? 'success' : 'warn', message: `完成 · ${r.blastHits.length} BLAST 同源 · overall=${r.scores.overall.score}/10 · ${((Date.now() - t0) / 1000).toFixed(1)}s${r.report?.ok ? ` · LLM ✓ (${r.report.contentChars} chars)` : ''}`, progress: 100 });
         await sleep(150);
@@ -1027,7 +1063,7 @@ ${overlapSummary}${crossLitBlock}
           const sequence = await fetchUniprotSequence(uniprot);
           emit({ stage: 'blast', level: 'info', message: `序列长度 ${sequence.length} aa，提交 BLASTp（持续轮询直至返回，上限 ${maxBlastHits} 条）…`, progress: 48 });
           // No fixed timeout — runBlast polls NCBI until the result is ready.
-          blastHits = await runBlast(sequence, maxBlastHits, (msg) => { emit({ stage: 'blast', level: 'info', message: msg, progress: 49 }); });
+          blastHits = await runBlast(sequence, maxBlastHits, (msg) => { emit({ stage: 'blast', level: 'info', message: msg, progress: 49 }); }, _sig);
           blastHitCount = blastHits.length;
           if (blastHitCount > 0) {
             const topHit = blastHits[0];
@@ -1036,6 +1072,7 @@ ${overlapSummary}${crossLitBlock}
             emit({ stage: 'blast', level: 'warn', message: `BLAST 完成，无同源命中`, progress: 52 });
           }
         } catch (err: any) {
+          if (isAbortErr(err)) throw err; // R198: 中止上抛（不落 skippedBblast 继续跑）
           emit({ stage: 'blast', level: 'error', message: `✗ BLAST 失败：${err?.message}（继续后续评分）`, progress: 52 });
           skippedBblast = true;
         }
@@ -1549,8 +1586,10 @@ ${overlapSummary}${crossLitBlock}
           let chapterError: string | undefined;
           let chapterDurationMs = 0;
           for (let attempt = 0; attempt <= MAX_CHAPTER_RETRIES; attempt++) {
+            if (_sig.aborted) throw _abortErr(); // R198: 断开 → 立即中止（防退避后空转重试）
             const t0 = Date.now();
-            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession });
+            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession, signal: _sig });
+            if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止
             chapterDurationMs += r.durationMs;
             if (!r.ok) {
               chapterError = r.error;
@@ -1640,7 +1679,8 @@ ${overlapSummary}${crossLitBlock}
             emit({ stage: chapterStage, level: 'info', message: `${batchPrefix}[补救] [${chapterIdx}/${totalChapters}] ${labelOf(ck)} — 重新生成`, progress: 90, chapter: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters });
             const userPrompt = buildChapterPrompt({ ...reportData, chapterKey: ck, chapterIndex: chapterIdx, chapterTotal: totalChapters });
             const sysPrompt = buildChapterSystemPrompt();
-            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession });
+            const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: llmWithSession, signal: _sig });
+            if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止
             if (r.ok && validateChapterContent(ck, r.content).ok) {
               // Rescue succeeded — replace the failed content.
               // Round 56: Normalize the rescued chapter too.
@@ -1971,7 +2011,7 @@ ${overlapSummary}${crossLitBlock}
               try {
                 const bSeq = await fetchUniprotSequence(bUid);
                 emit({ stage: `batch-${bi}-blast`, level: 'info', message: `[Target ${bi + 1}] 序列 ${bSeq.length}aa，提交 BLASTp（上限 ${maxBlastHits}）…`, progress: 38 });
-                bBlastHits = await runBlast(bSeq, maxBlastHits, (msg) => { emit({ stage: `batch-${bi}-blast`, level: 'info', message: `[Target ${bi + 1}] ${msg}`, progress: 40 }); });
+                bBlastHits = await runBlast(bSeq, maxBlastHits, (msg) => { emit({ stage: `batch-${bi}-blast`, level: 'info', message: `[Target ${bi + 1}] ${msg}`, progress: 40 }); }, _sig);
                 bBlastHitCount = bBlastHits.length;
                 if (bBlastHitCount > 0) {
                   emit({ stage: `batch-${bi}-blast`, level: 'success', message: `[Target ${bi + 1}] ✓ BLAST 命中 ${bBlastHitCount}/${maxBlastHits} 条同源（最高 identity=${bBlastHits[0].identity}% · ${bBlastHits[0].pdbId}）`, progress: 44 });
@@ -1999,6 +2039,7 @@ ${overlapSummary}${crossLitBlock}
                   emit({ stage: `batch-${bi}-blast`, level: 'warn', message: `[Target ${bi + 1}] BLAST 完成，无同源命中`, progress: 44 });
                 }
               } catch (blastErr: any) {
+                if (isAbortErr(blastErr)) throw blastErr; // R198: 中止上抛
                 emit({ stage: `batch-${bi}-blast`, level: 'error', message: `[Target ${bi + 1}] ✗ BLAST 失败：${blastErr?.message}（继续后续评分）`, progress: 44 });
                 bSkippedBblast = true;
               }
@@ -2222,7 +2263,9 @@ ${overlapSummary}${crossLitBlock}
                   let chapterContent = '';
                   let chapterError: string | undefined;
                   for (let attempt = 0; attempt <= MAX_CHAPTER_RETRIES; attempt++) {
-                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession });
+                    if (_sig.aborted) throw _abortErr(); // R198: 断开 → 立即中止（防退避后空转重试）
+                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession, signal: _sig });
+                    if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止
                     if (!r.ok) {
                       chapterError = r.error;
                       if (attempt < MAX_CHAPTER_RETRIES) { await sleep(1500 * (attempt + 1)); continue; }
@@ -2255,7 +2298,8 @@ ${overlapSummary}${crossLitBlock}
                     const chapterIdx = chapters.indexOf(ck) + 1;
                     const userPrompt = buildChapterPrompt({ ...bReportData, chapterKey: ck, chapterIndex: chapterIdx, chapterTotal: chapters.length });
                     const sysPrompt = buildChapterSystemPrompt();
-                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession });
+                    const r = await generateText(sysPrompt, userPrompt, { maxChars: 4000, llm: bLlmWithSession, signal: _sig });
+                    if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止
                     if (r.ok && validateChapterContent(ck, r.content).ok) {
                       // Round 56: Normalize the rescued batch chapter too.
                       const normalizedContent = normalizeEvalChapterContent(r.content, ck);
@@ -2286,6 +2330,7 @@ ${overlapSummary}${crossLitBlock}
                   emit({ stage: `batch-${bi}-llm`, level: 'warn', message: `⚠ [Target ${bi + 1}] ${bUid} LLM 分章部分失败 · ${perChapterOkCount}✓ ${perChapterFailCount}✗ · ${finalReport.length} chars · ${provider}/${model}`, progress: 90 });
                 }
               } catch (err: any) {
+                if (isAbortErr(err)) throw err; // R198: 中止上抛
                 emit({ stage: `batch-${bi}-llm`, level: 'error', message: `✗ [Target ${bi + 1}] ${bUid} LLM 生成失败：${err?.message}`, progress: 90 });
               }
             }
@@ -2324,6 +2369,7 @@ ${overlapSummary}${crossLitBlock}
             batchResults.push({ uniprot: bUid, uniprotInfo: bInfo, pdbDetails: bPdbDetails, scores: bScores, cached: bCacheHit, report: bReport, blastHits: bBlastHits });
             emit({ stage: `batch-${bi}`, level: 'success', message: `✓ [Target ${bi + 1}] ${bUid}: ${bPdbDetails.length} PDB${bBlastHitCount > 0 ? ` · ${bBlastHitCount} BLAST 同源` : bSkippedBblast ? ' · BLAST 跳过' : ''} · overall=${bScores.overall.score}/10${bCacheHit ? ' · 缓存' : ''}${bReport?.ok ? ` · LLM ✓ (${bReport.contentChars} chars)` : ''}`, progress: 100 });
           } catch (err: any) {
+            if (isAbortErr(err)) throw err; // R198: 中止上抛（终止整个 batch）
             emit({ stage: `batch-${bi}`, level: 'error', message: `✗ [Target ${bi + 1}] ${bUid} 失败：${err?.message}`, progress: 100 });
           }
         }
@@ -2432,11 +2478,13 @@ ${overlapSummary}${crossLitBlock}
 （总结靶点间关系，提出后续研究建议）`;
              // Batch cross-report: 8000 chars — covers summary + per-pair
             // comparison + table for 2-4 batch targets without truncation.
-            const r = await generateText(crossSysPrompt, crossUserPrompt, { maxChars: 8000, llm: body.llm });
+            const r = await generateText(crossSysPrompt, crossUserPrompt, { maxChars: 8000, llm: body.llm, signal: _sig });
+            if (!r.ok && _sig.aborted) throw _abortErr(); // R198: 断开致全链失败 → 中止
             crossReport = { ok: r.ok, content: r.content, provider: r.provider, model: r.model, durationMs: r.durationMs, contentChars: r.content?.length || 0, commonPdbIds, pdbOverlap, literatureCount: crossLit.count };
             if (r.ok) emit({ stage: 'cross-llm', level: 'success', message: `✓ 相关性分析报告已生成 · ${crossReport.contentChars} chars · ${(r.durationMs / 1000).toFixed(1)}s · ${r.provider}/${r.model}${crossLit.count > 0 ? ` · 附 ${crossLit.count} 篇文献` : ''}`, progress: 99 });
             else emit({ stage: 'cross-llm', level: 'error', message: `✗ 相关性分析 LLM 失败：${r.error}`, progress: 99 });
           } catch (err: any) {
+            if (isAbortErr(err)) throw err; // R198: 中止上抛
             emit({ stage: 'cross-llm', level: 'error', message: `✗ 相关性分析失败：${err?.message}`, progress: 99 });
           }
         }
@@ -2501,6 +2549,20 @@ ${overlapSummary}${crossLitBlock}
       await sleep(150);
       done(result);
     } catch (err: any) {
+      // R198: 客户端断开 / 用户 Stop —— 平静收尾（区别于真实失败；不再写
+      // 半截 Evaluation 行，只补一条 aborted 遥测供 Run Center 历史追溯）。
+      if (isAbortErr(err)) {
+        emit({ stage: 'aborted', level: 'warn', message: `已中止（客户端断开 / 用户 Stop）· ${((Date.now() - t0) / 1000).toFixed(1)}s · ${_log.length} 事件`, progress: 100 });
+        try {
+          const _asrrId = `eval_abort_${Date.now()}`;
+          const _asrrSummary = `已中止（客户端断开）· ${uniprot} · ${_log.length} 事件`;
+          const _asrrDetails = JSON.stringify({ uniprot, aborted: true, events: _log.length });
+          await db.$executeRaw`INSERT INTO SkillRunRecord (id, module, status, summary, details, provider, model, llmOk, llmFallback, llmError, durationMs, resultJson, log, createdAt) VALUES (${_asrrId}, 'eval', 'aborted', ${_asrrSummary}, ${_asrrDetails}, ${provider}, ${model}, null, 0, null, ${Date.now() - t0}, null, ${_log.join('\n')}, CURRENT_TIMESTAMP)`;
+        } catch { /* telemetry only */ }
+        await sleep(50);
+        done({ ok: false, aborted: true, error: 'aborted (client disconnected)', uniprot });
+        return;
+      }
       // Last-resort error emit so SSE stream terminates cleanly.
       emit({ stage: 'error', level: 'error', message: `✗ 未捕获异常：${err?.message || String(err)}`, progress: 100 });
       await sleep(50);

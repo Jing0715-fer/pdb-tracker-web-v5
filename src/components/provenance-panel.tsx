@@ -42,7 +42,7 @@ interface DshLiteProvenance {
     outline?: { total?: number; ids?: string[] };
     figures?: { verified?: number };
     chapters?: { ok?: number; failed?: number; deepChars?: number; bodyChars?: number; deepShare?: number; lengthStats?: { inflated?: number; entries?: Array<{ id?: string; chars?: number; maxWords?: number; ratio?: number }> } };
-    review?: { reviewed?: number; rewritten?: number; rounds?: number; skippedReview?: number; skippedReReview?: number; trajectory?: Array<{ id?: string; rounds?: number; rewritten?: boolean; capped?: boolean }> };
+    review?: { reviewed?: number; rewritten?: number; rounds?: number; skippedReview?: number; skippedReReview?: number; rescuedFinal?: number; trajectory?: Array<{ id?: string; rounds?: number; rewritten?: boolean; capped?: boolean; rescuedFinal?: boolean }> };
     finalReview?: { ok?: boolean; issues?: number; high?: number; rewrites?: number; termFixes?: number; termReplacements?: number };
     quota?: { transientHits?: number; degradedReview?: boolean; skippedReview?: boolean; skippedFinalReview?: boolean };
   };
@@ -305,6 +305,7 @@ function DshProvView({ prov }: { prov: DshLiteProvenance }) {
           <span className="ml-auto text-[10px] text-claude-text-muted">
             审 {review.reviewed ?? 0} 章 · 重写 {review.rewritten ?? 0} · 共 {review.rounds ?? 0} 轮
             {(review.skippedReview ?? 0) + (review.skippedReReview ?? 0) > 0 ? ` · 降级跳过 ${(review.skippedReview ?? 0) + (review.skippedReReview ?? 0)}` : ''}
+            {(review.rescuedFinal ?? 0) > 0 ? ` · 终末补救救回 ${review.rescuedFinal}` : ''}
           </span>
         </div>
         {trajectory.length > 0 ? (
@@ -315,6 +316,7 @@ function DshProvView({ prov }: { prov: DshLiteProvenance }) {
                 <span className="text-claude-text-muted">{t.rounds ?? 0} 轮</span>
                 {t.rewritten && <span className="px-1 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[9px]">重写</span>}
                 {t.capped && <span className="px-1 rounded bg-claude-border-light dark:bg-[#3d3832] text-[9px] text-claude-text-muted">轮次上限</span>}
+                {t.rescuedFinal && <span className="px-1 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px]">终末救回</span>}
               </div>
             ))}
           </div>
