@@ -64,14 +64,18 @@ export const en = {
   evalSkipBlast: 'Skip BLAST',
   evalForceBlast: 'Force BLAST',
   evalReport: 'View Report',
-  // ─── DSH mode (question-driven agent, R179 / Task 2-b) ───────────────────
+  // ─── Agent mode (question-driven agent, R179 / Task 2-b; renamed from DSH in R200) ──
   evalModeClassic: 'Classic',
-  evalModeDsh: 'DSH Mode',
+  evalModeDsh: 'Agent Mode',
   evalModeDshHint: 'The agent first analyzes data-source relevance to your question, then plans an outline from a section library, writes chapter-by-chapter with figures',
   evalDshQuestion: 'Scientific question',
   evalDshQuestionPlaceholder: 'Optional: focus the report on this question (e.g. Which proteins form complexes with this target and what are their functions?); leave empty for a basic evaluation (function/PDB/quality/druggability)',
   evalDshQuestionRequired: 'Scientific question must be at least 8 characters (leave empty for basic evaluation)',
-  evalDshSingleOnly: 'DSH mode supports a single target for now',
+  evalDshSingleOnly: 'Agent mode supports a single target for now',
+  // R200: Agent-mode sequence input (BLAST identify → agent evaluation)
+  evalDshSeqSingle: 'Agent mode supports a single sequence for now (use classic mode for multiple)',
+  evalDshSeqLabel: 'Sequence input (Agent mode)',
+  evalDshSeqHint: 'The agent first identifies the target protein via BLASTp, then runs relevance → outline → chapter-by-chapter + figures',
   evalDshRelevance: 'Data relevance analysis',
   evalDshOutline: 'Report outline',
   evalDshFigures: 'Report figures',

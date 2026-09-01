@@ -25,7 +25,7 @@ import { sanitizeReport } from '@/lib/markdown-renderer';
 import { Prisma } from '@prisma/client';
 import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
-import { collectEvaluationData, type CollectOpts, type CollectResult, type LiteratureRow } from './collect';
+import { collectEvaluationData, collectEvaluationDataForSequence, type CollectOpts, type CollectResult, type LiteratureRow, type SequenceInput } from './collect';
 import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint, type OutlineDataInfo } from './section-library';
 import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, type ReportFigure } from './figures';
 
@@ -76,6 +76,8 @@ export interface DshRunResult {
   mode: 'dsh';
   uniprot: string;
   uniprotInfo: CollectResult['uniprotInfo'];
+  /** R200: 序列输入时非空 —— BLAST 识别摘要（done 载荷/遥测用）。 */
+  sequenceInfo?: CollectResult['sequenceInfo'];
   question: string;
   relevance: DshRelevance | null;
   outline: DshOutlineEntry[];
@@ -338,11 +340,15 @@ function normalizeDshChapter(content: string, expectedTitle: string): string {
 
 /** 共享数据上下文头部（mirror report-template.ts buildChapterPrompt 的表头风格）。 */
 function buildContextHeader(c: CollectResult): string {
+  // R200: 序列输入行 —— 告知各章 prompt 本次靶点由 BLAST 识别而来。
+  const seqRows = c.sequenceInfo
+    ? `| 输入序列 | ${c.sequenceInfo.inputType === 'dna' ? 'DNA' : 'AA'} ${c.sequenceInfo.inputLength}${c.sequenceInfo.inputType === 'dna' ? 'nt' : 'aa'} → ${c.sequenceInfo.aaLength}aa · BLAST identity ${c.sequenceInfo.identity ?? '?'}% · ${c.sequenceInfo.resolvedUniprot ? `识别为 ${c.sequenceInfo.resolvedUniprot}` : '未识别出 UniProt'} |\n`
+    : '';
   return `# 数据上下文（真实数据，不得编造）
 
 | 字段 | 值 |
 |------|------|
-| UniProt ID | ${c.uniprotInfo.uniprotId} |
+${seqRows}| UniProt ID | ${c.uniprotInfo.uniprotId} |
 | Entry | ${c.uniprotInfo.entryName} |
 | 蛋白名 | ${c.uniprotInfo.proteinName} |
 | 基因 | ${c.uniprotInfo.geneNames} |
@@ -799,17 +805,20 @@ async function backoffWait(
 // ─── 主流程 ─────────────────────────────────────────────────────────────────
 
 export async function runDshEvaluation(params: {
+  /** UniProt accession（序列输入模式下可为空串）。 */
   uniprot: string;
+  /** R200: 序列输入 —— BLAST 识别靶点后进入同一评估轨道。 */
+  sequenceInput?: SequenceInput;
   question: string;
   opts?: CollectOpts;
   llm?: LlmConfig;
   emit: (e: SseEvent) => void;
   signal?: AbortSignal;
 }): Promise<DshRunResult> {
-  const { uniprot, question, emit, signal } = params;
+  const { uniprot: uniprotParam, sequenceInput, question, emit, signal } = params;
   const opts = params.opts ?? {};
   const t0 = Date.now();
-  const sessionId = `dsh-${uniprot}-${Date.now()}`;
+  const sessionId = `dsh-${uniprotParam || 'seq'}-${Date.now()}`;
   const llmCfg: LlmConfig = { ...(params.llm || {}), sessionId };
   // R189: 科学问题可为空 —— 空问题 = 基础评估口径（无 relevance 阶段、
   // 无 question_focus 章、无深挖章节、无审查环），与 classic 模式对齐。
@@ -828,10 +837,22 @@ export async function runDshEvaluation(params: {
   };
 
   // ── Phase A: 数据收集（→ 56%）─────────────────────────────────────────
-  emit({ stage: 'collect', level: 'info', message: `DSH 模式启动 · 数据收集（UniProt → RCSB → BLAST → PubMed）`, progress: 3 });
-  const collected = await collectEvaluationData(uniprot, opts, emit);
+  // R200: 序列输入 —— 先 BLAST 识别靶点（identity/UniProt 解析），再进入
+  // 与 UniProt 输入完全同轨的相关性 → 大纲 → 逐章 → 配图流程。
+  if (sequenceInput) {
+    emit({ stage: 'collect', level: 'info', message: `Agent 模式启动 · 序列输入（${sequenceInput.seqType === 'dna' ? 'DNA' : 'AA'}）· BLAST 识别靶点 → 数据收集 → 智能体评估`, progress: 3 });
+  } else {
+    emit({ stage: 'collect', level: 'info', message: `Agent 模式启动 · 数据收集（UniProt → RCSB → BLAST → PubMed）`, progress: 3 });
+  }
+  const collected = sequenceInput
+    ? await collectEvaluationDataForSequence(sequenceInput, opts, emit)
+    : await collectEvaluationData(uniprotParam, opts, emit);
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
   const c = collected;
+  // R200: 有效键 —— 序列输入时为识别出的 UniProt acc（或 SEQ_xxx 占位，
+  // collect 阶段已用它入库）；UniProt 输入时与入参一致。后续报告标题 /
+  // Phase F 回写 / 返回值统一使用该键。
+  const uniprot = c.uniprotInfo.uniprotId;
 
   // ── Phase B: 相关性分析（58-62%）──────────────────────────────────────
   // R189: ① 空问题跳过（基础评估模式）；② 有问题时数据样本扩大（PDB
@@ -846,6 +867,11 @@ export async function runDshEvaluation(params: {
   emit({ stage: 'relevance', level: 'info', message: `Agent 分析全部数据源与科学问题的相关性…`, progress: 58 });
   const compact = [
     `科学问题：${question}`,
+    ...(c.sequenceInfo ? [
+      ``,
+      `## 输入序列（BLAST 识别）`,
+      `${c.sequenceInfo.inputType === 'dna' ? 'DNA' : 'AA'} ${c.sequenceInfo.inputLength}${c.sequenceInfo.inputType === 'dna' ? 'nt' : 'aa'} → ${c.sequenceInfo.aaLength}aa · BLAST identity ${c.sequenceInfo.identity ?? '?'}% · ${c.sequenceInfo.resolvedUniprot ? `识别为 ${c.sequenceInfo.resolvedUniprot}` : '未识别出 UniProt'}${c.sequenceInfo.usedNrFallback ? '（nr 库）' : ''}`,
+    ] : []),
     ``,
     `## UniProt 元数据`,
     `${c.uniprotInfo.proteinName}（${c.uniprotInfo.uniprotId} / ${c.uniprotInfo.entryName}）· 基因 ${c.uniprotInfo.geneNames} · ${c.uniprotInfo.organism} · ${c.uniprotInfo.sequenceLength} aa`,
@@ -1080,7 +1106,7 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
   // ── Phase E: 逐章撰写（72-96%）────────────────────────────────────────
-  const chapterSystem = `你是结构生物学领域的资深研究员，为一份蛋白靶点评估报告撰写某一章节（DSH 模式，逐章生成）。
+  const chapterSystem = `你是结构生物学领域的资深研究员，为一份蛋白靶点评估报告撰写某一章节（Agent 模式，逐章生成）。
 
 全局格式约束（必须逐条遵守）：
 1. 章节标题：第一行必须是该章的 H2 标题，精确使用指定的中文标题（一字不差），如 \`## 执行摘要\`
@@ -1892,9 +1918,13 @@ ${ch.content}
     ? `\n\n## 附：其余报告配图（未嵌入正文）\n\n${galleryFigs.map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`).join('\n\n')}`
     : '';
   // R189: 空问题时标题不含「科学问题」引用块，标注基础评估口径。
+  // R200: 序列输入时追加识别徽标（类型/长度/identity/识别结果）。
+  const seqBadge = c.sequenceInfo
+    ? `（序列输入 · ${c.sequenceInfo.inputType === 'dna' ? 'DNA' : 'AA'} · ${c.sequenceInfo.aaLength}aa${c.sequenceInfo.identity != null ? ` · BLAST identity ${c.sequenceInfo.identity}%` : ''}${c.sequenceInfo.resolvedUniprot ? ` · 识别为 ${c.sequenceInfo.resolvedUniprot}` : ' · 未识别出 UniProt'}）`
+    : '';
   const header = hasQuestion
-    ? `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — DSH 模式\n\n> 科学问题：${question}\n\n`
-    : `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — DSH 模式（基础评估）\n\n`;
+    ? `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — Agent 模式${seqBadge}\n\n> 科学问题：${question}\n\n`
+    : `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — Agent 模式${seqBadge}（基础评估）\n\n`;
   const rawReport = header + chapters.map(ch => ch.content).join('\n\n') + gallery;
   const finalReport = sanitizeReport(rawReport);
   const reportOk = chaptersOk > 0;
@@ -1987,7 +2017,7 @@ ${ch.content}
     stage: 'done',
     level: reportOk ? 'success' : 'error',
     message: reportOk
-      ? `✓ DSH 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）${inflatedChapters > 0 ? ` · 篇幅超限 ${inflatedChapters} 章（观察项）` : ''}` : ' · 基础评估模式'}${finalRescuedCount > 0 ? ` · 终末补救救回 ${finalRescuedCount} 章` : ''}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 项（${finalReview.termReplacements} 处）` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
+      ? `✓ Agent 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）${inflatedChapters > 0 ? ` · 篇幅超限 ${inflatedChapters} 章（观察项）` : ''}` : ' · 基础评估模式'}${finalRescuedCount > 0 ? ` · 终末补救救回 ${finalRescuedCount} 章` : ''}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 项（${finalReview.termReplacements} 处）` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
       : `✗ 全部章节生成失败`,
     progress: 100,
   });
@@ -1996,6 +2026,7 @@ ${ch.content}
     mode: 'dsh',
     uniprot,
     uniprotInfo: c.uniprotInfo,
+    ...(c.sequenceInfo ? { sequenceInfo: c.sequenceInfo } : {}),
     question,
     relevance,
     outline,

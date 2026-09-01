@@ -32,7 +32,14 @@ function clampInt(raw: unknown, def: number, min: number, max: number): number {
 }
 
 export interface DshLaunchParams {
+  /** R200: 输入模式 —— 'uniprot'（默认）或 'sequence'（BLAST 识别）。 */
+  inputMode: 'uniprot' | 'sequence';
+  /** UniProt accession（序列输入时为空串）。 */
   uniprot: string;
+  /** R200: 序列输入 —— 原始序列（DNA 时待转录）。 */
+  sequence: string;
+  /** R200: 序列类型。 */
+  sequenceType: 'aa' | 'dna';
   question: string;
   hasQuestion: boolean;
   maxPdb: number;
@@ -47,16 +54,56 @@ export type DshValidateResult =
   | { ok: true; params: DshLaunchParams; force: boolean }
   | { ok: false; status: number; error: string };
 
-/** 入参校验（400 早退逻辑，与旧 SSE route 完全一致，双端点共用）。 */
+/** 入参校验（400 早退逻辑，双端点共用）。
+ *  R200: 支持 UniProt / 序列两种输入模式（二选一）。 */
 export function validateDshRunBody(body: unknown): DshValidateResult {
   const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-  const uniprot = String(b.uniprot || '').trim().toUpperCase();
-  if (!uniprot || !UNIPROT_RE.test(uniprot)) {
-    return {
-      ok: false,
-      status: 400,
-      error: `Invalid or missing 'uniprot': expected a UniProt accession matching /^[A-Z0-9_]{3,10}$/i (got "${uniprot.slice(0, 20)}").`,
-    };
+  // R200: 序列输入模式 —— BLAST 识别靶点后进入同一评估轨道。
+  const inputMode: 'uniprot' | 'sequence' = b.inputMode === 'sequence' ? 'sequence' : 'uniprot';
+  let uniprot = '';
+  let sequence = '';
+  let sequenceType: 'aa' | 'dna' = 'aa';
+  if (inputMode === 'sequence') {
+    sequence = String(b.sequence || '').trim().toUpperCase().replace(/\s/g, '');
+    sequenceType = b.sequenceType === 'dna' ? 'dna' : 'aa';
+    if (sequence.length < 10) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Invalid 'sequence': at least 10 residues after cleaning (got ${sequence.length}).`,
+      };
+    }
+    if (sequence.length > 10_000) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Invalid 'sequence': too long (${sequence.length} residues, max 10000).`,
+      };
+    }
+    if (sequenceType === 'dna' && !/^[ATGCN]+$/.test(sequence)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Invalid 'sequence': DNA sequence may only contain A/T/G/C/N (got unexpected characters).`,
+      };
+    }
+    if (sequenceType === 'aa' && !/^[ACDEFGHIKLMNPQRSTVWYBXZU]+$/.test(sequence)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Invalid 'sequence': amino-acid sequence contains invalid characters (allowed: 20 standard residues + B/X/Z/U).`,
+      };
+    }
+    // 允许附带 uniprot 字段但忽略（以序列识别为准）。
+  } else {
+    uniprot = String(b.uniprot || '').trim().toUpperCase();
+    if (!uniprot || !UNIPROT_RE.test(uniprot)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Invalid or missing 'uniprot': expected a UniProt accession matching /^[A-Z0-9_]{3,10}$/i (got "${uniprot.slice(0, 20)}"), or set inputMode='sequence' with a 'sequence' field.`,
+      };
+    }
   }
   // R189: 科学问题可选 —— 空 = 基础评估口径；非空 ≥8 字符。
   const question = String(b.question || '').trim();
@@ -81,7 +128,7 @@ export function validateDshRunBody(body: unknown): DshValidateResult {
   return {
     ok: true,
     force,
-    params: { uniprot, question, hasQuestion, maxPdb, maxBlastHits, maxLitCount, forceBlast, skipBlast, llm },
+    params: { inputMode, uniprot, sequence, sequenceType, question, hasQuestion, maxPdb, maxBlastHits, maxLitCount, forceBlast, skipBlast, llm },
   };
 }
 
@@ -142,6 +189,23 @@ export async function probeLlmQuota(
 }
 
 /**
+ * R200: 重复运行守卫的去重键 —— UniProt 输入用 acc；序列输入用
+ * 序列指纹（FNV-1a 稳定哈希 + 类型 + 长度），避免空 uniprot 把不同
+ * 序列的并发运行互相误判为重复，也避免同序列双击双烧配额。
+ */
+function dshDedupKey(params: DshLaunchParams): string {
+  if (params.inputMode === 'sequence') {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < params.sequence.length; i++) {
+      h ^= params.sequence.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return `SEQ${params.sequenceType === 'dna' ? 'D' : 'A'}-${h.toString(36)}-${params.sequence.length}`;
+  }
+  return params.uniprot;
+}
+
+/**
  * 启动一个后台 DSH 运行（SSE / start 两端点共用）。
  *
  * 任务体 = 旧 SSE route 的 async IIFE 原样迁移：init 帧 →
@@ -157,9 +221,11 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
     forceBlast: params.forceBlast,
     skipBlast: params.skipBlast,
   };
+  // R200: 注册表/去重键 —— 序列输入用指纹，UniProt 输入用 acc。
+  const key = dshDedupKey(params);
 
   return createDshRun(
-    { uniprot, question, maxPdb: params.maxPdb, provider: llm.provider || '', model: llm.model || '', source: llm.source },
+    { uniprot: key, question, maxPdb: params.maxPdb, provider: llm.provider || '', model: llm.model || '', source: llm.source },
     async (ctx) => {
       const t0 = Date.now();
       const emit = ctx.emit;
@@ -169,9 +235,12 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
           llm.source === 'run-override' ? '（Run Center 本地 CLI Agent）'
           : llm.source === 'explicit' ? '（显式指定）'
           : '（与 Agent 聊天共享）';
+        const seqInputLabel = params.inputMode === 'sequence'
+          ? `序列输入（${params.sequenceType === 'dna' ? 'DNA' : 'AA'} · ${params.sequence.length}${params.sequenceType === 'dna' ? 'nt' : 'aa'} · BLAST 识别）`
+          : `uniprot=${uniprot}`;
         emit({ stage: 'init', level: 'info', message: hasQuestion
-          ? `启动 DSH 模式评估 · uniprot=${uniprot} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`
-          : `启动 DSH 模式评估（基础评估口径，未提供科学问题）· uniprot=${uniprot} · LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`, progress: 2 });
+          ? `启动 Agent 模式评估 · ${seqInputLabel} · 问题「${question.slice(0, 40)}${question.length > 40 ? '…' : ''}」· LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`
+          : `启动 Agent 模式评估（基础评估口径，未提供科学问题）· ${seqInputLabel} · LLM=${llm.provider}/${llm.model || '(默认)'}${llmSourceLabel}`, progress: 2 });
         if (llm.source !== 'run-override' && !llm.shared.available) {
           emit({ stage: 'init', level: 'warn', message: `共享 LLM「${llm.shared.displayName}」未配置 API Key，实际调用将回退到可用 provider（zai SDK 兜底）。可在 Run Center 的 LLM 设置或 Agent 聊天供应商面板中配置。`, progress: 2 });
         }
@@ -181,6 +250,7 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
 
         const result = await runDshEvaluation({
           uniprot,
+          ...(params.inputMode === 'sequence' ? { sequenceInput: { sequence: params.sequence, seqType: params.sequenceType } } : {}),
           question,
           opts: { ...opts, signal: ctx.signal },
           llm: { provider: llm.provider, model: llm.model, ...(llm.system ? { system: llm.system } : {}) },
@@ -191,8 +261,10 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
         // done 载荷（前端 useRunStream 的同款契约）。
         ctx.succeed({
           mode: 'dsh',
-          uniprot,
+          inputMode: params.inputMode,
+          uniprot: result.uniprotInfo.uniprotId,
           uniprotInfo: result.uniprotInfo,
+          ...(result.sequenceInfo ? { sequenceInfo: result.sequenceInfo } : {}),
           question,
           relevance: result.relevance,
           outline: result.outline,
@@ -209,11 +281,13 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
         // ── SkillRunRecord 遥测（best-effort：绝不因遥测失败报 error）─────
         try {
           const durationMs = Date.now() - t0;
-          const summary = `DSH${hasQuestion ? '' : '（基础评估）'}：${result.uniprotInfo.proteinName} · ${result.directPdbCount} PDB · overall=${result.scores.overall.score}/10 · ${result.report.chaptersOk}/${result.report.chapters.length} 章${hasQuestion ? ` · 审稿 ${result.report.chapters.filter(ch => ch.reviewed).length} 章` : ''}${result.report.ok ? ' · LLM ✓' : ' · LLM ✗'}`;
+          const summary = `Agent${hasQuestion ? '' : '（基础评估）'}${params.inputMode === 'sequence' ? '·序列' : ''}：${result.uniprotInfo.proteinName} · ${result.directPdbCount} PDB · overall=${result.scores.overall.score}/10 · ${result.report.chaptersOk}/${result.report.chapters.length} 章${hasQuestion ? ` · 审稿 ${result.report.chapters.filter(ch => ch.reviewed).length} 章` : ''}${result.report.ok ? ' · LLM ✓' : ' · LLM ✗'}`;
           const details = JSON.stringify({
             mode: 'dsh',
+            inputMode: params.inputMode,
             question,
-            uniprot,
+            uniprot: result.uniprotInfo.uniprotId,
+            ...(result.sequenceInfo ? { sequence: { identity: result.sequenceInfo.identity, resolvedUniprot: result.sequenceInfo.resolvedUniprot, usedNrFallback: result.sequenceInfo.usedNrFallback, aaLength: result.sequenceInfo.aaLength } } : {}),
             directPdbCount: result.directPdbCount,
             blastHitCount: result.blastHitCount,
             coverage: result.coverage,
@@ -225,7 +299,8 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
           });
           const resultJson = JSON.stringify({
             mode: 'dsh',
-            uniprot,
+            inputMode: params.inputMode,
+            uniprot: result.uniprotInfo.uniprotId,
             scores: result.scores,
             reportOk: result.report.ok,
             reportChars: result.report.contentChars,
@@ -233,7 +308,7 @@ export function launchDshRun(params: DshLaunchParams): DshRunRecord {
           });
           // log 行来自注册表 NDJSON 累积（与旧 withLog 行为一致）。
           const logText = ctx.logLines().join('\n');
-          await db.$executeRaw`INSERT INTO SkillRunRecord (id, module, status, summary, details, provider, model, llmOk, llmFallback, llmError, durationMs, resultJson, log, createdAt) VALUES (${'dsh_' + uniprot + '_' + Date.now()}, ${'eval'}, ${result.report.ok ? 'success' : 'error'}, ${summary}, ${details}, ${result.report.provider || llm.provider}, ${result.report.model || llm.model || null}, ${result.report.ok ? 1 : 0}, 0, ${result.report.ok ? null : (result.report.error ?? null)}, ${durationMs}, ${resultJson}, ${logText}, CURRENT_TIMESTAMP)`;
+          await db.$executeRaw`INSERT INTO SkillRunRecord (id, module, status, summary, details, provider, model, llmOk, llmFallback, llmError, durationMs, resultJson, log, createdAt) VALUES (${'dsh_' + key + '_' + Date.now()}, ${'eval'}, ${result.report.ok ? 'success' : 'error'}, ${summary}, ${details}, ${result.report.provider || llm.provider}, ${result.report.model || llm.model || null}, ${result.report.ok ? 1 : 0}, 0, ${result.report.ok ? null : (result.report.error ?? null)}, ${durationMs}, ${resultJson}, ${logText}, CURRENT_TIMESTAMP)`;
         } catch (srrErr: any) {
           // 遥测失败只 warn —— 评估结果已经通过 done 帧交付。
           try {
@@ -271,24 +346,25 @@ export async function ensureSchemaCompatBeforeRun(): Promise<void> {
  * R196: 启动前守卫（SSE / start 两端点共用）：
  *   ① 客户端已断开（探测/迁移等待期间 Stop/网络断开）→ 不启动，返回
  *     499（孤儿运行只会无观察者白烧 10+ 分钟配额）；
- *   ② 同一 UniProt 已有运行中的评估 → 409 拒绝（双击/刷新后重复 Run
- *     会烧双份配额且旧运行对 UI 不可见）。
+ *   ② 同一靶点（UniProt acc 或序列指纹）已有运行中的评估 → 409 拒绝
+ *     （双击/刷新后重复 Run 会烧双份配额且旧运行对 UI 不可见）。
  */
 export function preLaunchGuard(
-  params: { uniprot: string },
+  params: DshLaunchParams,
   reqSignal: AbortSignal,
 ): { ok: true } | { ok: false; status: number; error: string; runId?: string; duplicate?: boolean } {
   if (reqSignal.aborted) {
     return { ok: false, status: 499, error: '客户端已断开，评估未启动。' };
   }
-  const running = findRunningDshRunByUniprot(params.uniprot);
+  const key = dshDedupKey(params);
+  const running = findRunningDshRunByUniprot(key);
   if (running) {
     return {
       ok: false,
       status: 409,
       duplicate: true,
       runId: running.runId,
-      error: `${params.uniprot} 已有一场 DSH 评估正在后台运行（runId: ${running.runId}）。请等待其完成，或先停止后再启动。`,
+      error: `${key} 已有一场 Agent 模式评估正在后台运行（runId: ${running.runId}）。请等待其完成，或先停止后再启动。`,
     };
   }
   return { ok: true };

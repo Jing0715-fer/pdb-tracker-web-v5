@@ -64,14 +64,18 @@ export const zh = {
   evalSkipBlast: 'skipBlast',
   evalForceBlast: 'forceBlast',
   evalReport: '查看评估报告',
-  // ─── DSH 模式（问题驱动智能体，R179 / Task 2-b）─────────────────────────
+  // ─── Agent 模式（问题驱动智能体，R179 / Task 2-b；R200 由「DSH 模式」改名）───
   evalModeClassic: '经典模式',
-  evalModeDsh: 'DSH 模式',
+  evalModeDsh: 'Agent 模式',
   evalModeDshHint: '智能体先分析各数据源与科学问题的相关性，再从章节库规划大纲，逐章撰写并配图',
   evalDshQuestion: '科学问题',
   evalDshQuestionPlaceholder: '可选：填写后聚焦深挖该问题（如：该靶点与哪些蛋白形成复合物，分别行使什么功能？）；留空则执行基础评估（功能/PDB/质量/成药性等标准章节）',
   evalDshQuestionRequired: '科学问题至少需要 8 个字符（留空则执行基础评估）',
-  evalDshSingleOnly: 'DSH 模式暂支持单靶点',
+  evalDshSingleOnly: 'Agent 模式暂支持单靶点',
+  // R200: Agent 模式序列输入（BLAST 识别 → 智能体评估）
+  evalDshSeqSingle: 'Agent 模式暂支持单条序列（多条请用经典模式）',
+  evalDshSeqLabel: '序列输入（Agent 模式）',
+  evalDshSeqHint: 'Agent 将先 BLASTp 识别序列对应的靶点蛋白，再执行相关性分析 → 大纲 → 逐章撰写 + 配图',
   evalDshRelevance: '数据相关性分析',
   evalDshOutline: '报告大纲',
   evalDshFigures: '报告配图',

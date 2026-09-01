@@ -1941,23 +1941,16 @@ export function SettingsRunPanel({
   // (not off evalPipeline) so toggling the UI mode doesn't hide a finished
   // DSH run's results until the next run resets the stream.
   const [evalRunPipeline, setEvalRunPipeline] = useState<'classic' | 'dsh' | null>(null);
-  // Remembers the input mode the user was in before DSH forced 'uniprot', so
-  // switching back to classic restores it (DSH mode only supports UniProt input).
-  const prevEvalInputModeRef = useRef<'uniprot' | 'sequence'>('uniprot');
-  /** Pipeline toggle handler — forces/ restores the input mode around DSH. */
+  // Remembers the input mode the user was in before DSH forced 'uniprot'
+  // (R200: retired —— Agent 模式已支持序列输入，不再强制切回。历史注释保留供
+  // 追溯，prevEvalInputModeRef 已删除。)
+  /** Pipeline toggle handler — R200: Agent 模式与经典模式共用当前输入模式
+   *  （UniProt / 序列均可）；切换不再重置输入，方便两种流水线对比。 */
   const switchEvalPipeline = useCallback((p: 'classic' | 'dsh') => {
     if (p === evalPipeline) return;
-    if (p === 'dsh') {
-      // Entering DSH: remember the current input mode, force UniProt UI.
-      prevEvalInputModeRef.current = evalInputMode;
-      setEvalInputMode('uniprot');
-    } else {
-      // Leaving DSH: restore the input mode the user had before.
-      setEvalInputMode(prevEvalInputModeRef.current);
-    }
     setDshQuestionError(false);
     setEvalPipeline(p);
-  }, [evalPipeline, evalInputMode]);
+  }, [evalPipeline]);
   // Database path config
   const [dbPath, setDbPath] = useState('file:./db/custom.db');
   /** Full DB status object from `/api/db-config` GET — surfaces active
@@ -2327,16 +2320,13 @@ export function SettingsRunPanel({
     // 两场评估：服务端 409 守卫 + 前端 genRef 代际令牌双保险，此处是最
     // 早拦截点）。旧流若有残留，start() 的 abort + 代际失效机制会静默接管。
     if (isRunning('eval')) return;
-    // R179 (Task 2-b): DSH 模式 — 问题驱动智能体流水线（单靶点 + 必填科学问题）。
+    // R179 (Task 2-b): DSH 模式 — 问题驱动智能体流水线（单靶点 + 可选科学问题）。
     // Posts to /api/evaluations/run-dsh with the same SSE frame contract as
     // classic; progress events additionally carry dshRelevance/dshOutline/
     // dshFigure extras that the derived-state memos above consume.
+    // R200: 支持 UniProt / 序列两种输入 —— 序列先经 BLAST 识别靶点，再进入
+    // 同一智能体评估轨道（单条序列，多条引导用经典模式）。
     if (evalPipeline === 'dsh') {
-      const uniprot = (evalTargets[0]?.uniprot || '').trim().toUpperCase();
-      if (!uniprot) {
-        toast.error(locale === 'zh' ? '请输入至少一个 UniProt ID' : 'Please enter a UniProt ID');
-        return;
-      }
       // R189: 科学问题改为可选 —— 空问题 = 基础评估口径（与 classic 一致，
       // 后端跳过 relevance/深挖章节/审稿环）。仅保留非空时的最短长度提示。
       const question = evalDshQuestion.trim();
@@ -2345,18 +2335,70 @@ export function SettingsRunPanel({
         toast.error(locale === 'zh' ? '科学问题至少需要 8 个字符（留空则执行基础评估）' : 'Scientific question must be at least 8 characters (leave empty for basic evaluation)');
         return;
       }
+      // R200: 序列输入分支 —— 校验全部完成后再 markRunning（避免「标记
+      // running 后又 return」把按钮永久卡在运行态）。
+      let seqPayload: { sequence: string; sequenceType: 'aa' | 'dna' } | null = null;
+      let seqLabel = '';
+      if (evalInputMode === 'sequence') {
+        const rawSeqs = evalSequence
+          .split(/\n\s*\n+/)
+          .map(s => s.trim())
+          .filter(s => s.length > 0);
+        if (rawSeqs.length === 0) {
+          toast.error(locale === 'zh' ? '请输入至少一条有效序列' : 'Please enter at least one valid sequence');
+          return;
+        }
+        if (rawSeqs.length > 1) {
+          toast.error(t.evalDshSeqSingle);
+          return;
+        }
+        const seq = rawSeqs[0].replace(/\s/g, '');
+        if (seq.length < 10) {
+          toast.error(locale === 'zh' ? '序列至少需要 10 个残基' : 'Sequence needs at least 10 residues');
+          return;
+        }
+        seqPayload = { sequence: seq, sequenceType: evalSeqType };
+        seqLabel = evalSeqType === 'dna' ? `DNA ${seq.length}nt` : `AA ${seq.length}aa`;
+      } else {
+        const uniprot = (evalTargets[0]?.uniprot || '').trim().toUpperCase();
+        if (!uniprot) {
+          toast.error(locale === 'zh' ? '请输入至少一个 UniProt ID' : 'Please enter a UniProt ID');
+          return;
+        }
+      }
       setDshQuestionError(false);
       markRunning('eval');
       evalStream.reset();
       setEvalRunPipeline('dsh');
+      if (seqPayload) {
+        log({
+          ts: new Date().toISOString(),
+          module: 'eval',
+          status: 'running',
+          summary: locale === 'zh'
+            ? `Agent 模式评估（序列输入 · ${seqLabel}）— BLAST 识别 → 相关性分析 → 大纲 → 逐章撰写 + 配图 — SSE streaming…`
+            : `Agent-mode eval (sequence · ${seqLabel}) — BLAST identify → relevance → outline → chapters + figures — SSE streaming…`,
+        });
+        evalStream.start('/api/evaluations/run-dsh', {
+          inputMode: 'sequence',
+          sequence: seqPayload.sequence,
+          sequenceType: seqPayload.sequenceType,
+          question,
+          maxPdb: evalTargets[0]?.maxPdb || 80,
+          maxBlastHits: evalTargets[0]?.maxBlastHits || 50,
+          maxLitCount: evalMaxLitCount,
+        });
+        return;
+      }
+      const uniprot = (evalTargets[0]?.uniprot || '').trim().toUpperCase();
       const t0 = evalTargets[0] || { maxPdb: 80, maxBlastHits: 50, forceBlast: false, skipBlast: false };
       log({
         ts: new Date().toISOString(),
         module: 'eval',
         status: 'running',
         summary: locale === 'zh'
-          ? `DSH 模式评估 ${uniprot} — 相关性分析 → 大纲 → 逐章撰写 + 配图 — SSE streaming…`
-          : `DSH-mode eval ${uniprot} — relevance → outline → chapter-by-chapter + figures — SSE streaming…`,
+          ? `Agent 模式评估 ${uniprot} — 相关性分析 → 大纲 → 逐章撰写 + 配图 — SSE streaming…`
+          : `Agent-mode eval ${uniprot} — relevance → outline → chapter-by-chapter + figures — SSE streaming…`,
       });
       evalStream.start('/api/evaluations/run-dsh', {
         uniprot,
@@ -2976,7 +3018,7 @@ export function SettingsRunPanel({
                       <ToggleChip checked={t.forceBlast} onCheckedChange={(v) => { updateEvalTarget(i, 'forceBlast', v); if (v) updateEvalTarget(i, 'skipBlast', false); }} label={locale === 'zh' ? '强制 BLAST' : 'Force BLAST'} />
                       <ToggleChip checked={t.skipBlast} onCheckedChange={(v) => { updateEvalTarget(i, 'skipBlast', v); if (v) updateEvalTarget(i, 'forceBlast', false); }} label={locale === 'zh' ? '跳过 BLAST' : 'Skip BLAST'} />
                       {!t.forceBlast && !t.skipBlast && (
-                        <span className="text-[9px] text-claude-text-muted italic shrink-0" title={locale === 'zh' ? 'PDB<5 或覆盖率<50% 时自动执行 BLAST' : 'Auto: runs BLAST when PDB<5 or coverage<50%'}>
+                        <span className="text-3xs text-claude-text-muted shrink-0" title={locale === 'zh' ? 'PDB<5 或覆盖率<50% 时自动执行 BLAST' : 'Auto: runs BLAST when PDB<5 or coverage<50%'}>
                           {locale === 'zh' ? '自动' : 'Auto'}
                         </span>
                       )}
@@ -3068,7 +3110,7 @@ export function SettingsRunPanel({
                   <LLMPreview
                     content={effectivePrimaryReport.content}
                     title={`${(evalRunPipeline === 'dsh' || dshOutline)
-                      ? (locale === 'zh' ? 'DSH 模式 · LLM 评估报告' : 'DSH Mode · LLM Report')
+                      ? (locale === 'zh' ? 'Agent 模式 · LLM 评估报告' : 'Agent Mode · LLM Report')
                       : (locale === 'zh' ? 'LLM 可行性报告' : 'LLM Feasibility Report')} · ${evalStream.state.result?.uniprotInfo?.proteinName || evalStream.state.result?.uniprot || (evalStream.state.running ? (locale === 'zh' ? '生成中…' : 'Generating…') : (locale === 'zh' ? '主靶点' : 'Primary target'))}`}
                     provider={effectivePrimaryReport.provider}
                     model={effectivePrimaryReport.model}
@@ -3814,7 +3856,8 @@ function ToggleChip({
   return (
     <label className={`flex items-center gap-1.5 text-xs text-muted-foreground pb-1.5 ${disabled ? 'opacity-40 pointer-events-none' : 'cursor-pointer'}`}>
       <Switch checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} className="scale-90" />
-      <span className="font-mono text-sm">{label}</span>
+      {/* R200: 移除 font-mono text-sm —— 与表单其余标签统一 sans text-xs（用户反馈字体突变） */}
+      <span>{label}</span>
     </label>
   );
 }

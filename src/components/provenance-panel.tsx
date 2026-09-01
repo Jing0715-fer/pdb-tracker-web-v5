@@ -244,7 +244,7 @@ function DshProvView({ prov }: { prov: DshLiteProvenance }) {
         <h4 className="text-[11px] font-semibold text-claude-text uppercase tracking-wider">
           Provenance & Reproducibility
         </h4>
-        <span className="px-1.5 py-0.5 rounded bg-claude-accent/10 text-claude-accent text-[9px] font-mono font-semibold">DSH</span>
+        <span className="px-1.5 py-0.5 rounded bg-claude-accent/10 text-claude-accent text-[9px] font-mono font-semibold">Agent</span>
         <span className="text-[10px] text-claude-text-muted">
           {prov.questionDriven ? '问题驱动深度评估' : '基础评估模式'}
           {typeof llm.provider === 'string' && llm.provider ? ` · ${llm.provider}${llm.model ? ` / ${llm.model}` : ''}` : ''}
