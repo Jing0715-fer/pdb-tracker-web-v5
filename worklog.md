@@ -5284,3 +5284,18 @@ Stage Summary:
   4. 终末补救轮的延伸：本次只救回 1/1 章即成功；若多章失败且窗口死锁（终末轮首试即 429），可考虑 60s 后再给最后一轮（上限 2 轮终末补救）；或把终末轮成功后的章补送审稿环（当前跳过审稿直交付）
   5. 围栏渲染的 ``` 围栏已在 markdown-renderer 生效；lazy-markdown（ReactMarkdown 路径）原生支持围栏无需改——两渲染器口径现已对齐
   6. dev server OOM 规避固化：tsc 全项目检查必须「停 server → 检查 → 重启」（本轮一次实证）；可给 package.json 加 `typecheck:stop-server` 复合脚本防复发
+
+---
+Task ID: R198b（运维补记）
+Agent: main (Z.ai Code)
+Task: dev server 反复消亡问题的根因定位与持久化修复
+
+Work Log:
+- 现象：R198 收尾阶段 dev server 反复在跨工具调用边界死亡（同一次调用内 200 正常、下一调用 000），单次 dmesg 证实一次 OOM（next-server anon-rss 2.58GB，cgroup 上限 4GB 无更紧约束），但后续死亡无新 OOM 记录 → 两种死因叠加
+- 死因一（内存）：dev script 的 NODE_OPTIONS=--max-old-space-size=2560 使 V8 旧生代可涨至 2.5GB，冷编译主页峰值触顶 → OOM killer。修复：package.json dev script 降为 1600（编译耗时 19-25s 不变，稳态 RSS 23-31%，2GB 余量）
+- 死因二（进程组回收）：Bash 工具会话结束时对其进程组做清理，nohup/setsid 单层都不足以逃逸；`（setsid bash -c 'exec bun run dev' > /dev/null 2>&1 < /dev/null &）`（外层括号子 shell 立即退出 → setsid 进程完全孤儿化 + exec 替换消除中间 shell）实测跨调用三连 200 持久存活
+- 顺带确认：watchdog.sh 面向旧架构（3001 api-server）不适用；会话开始的 EADDRINUSE 证明环境有预览面板自带的启动器（用户打开预览时自愈）
+- 提交：package.json（heap 2560→1600）随本条目入库
+
+Stage Summary:
+- 「同一调用内存峰值 OOM」与「跨调用进程组回收」两类死因分别治理后服务器稳定；后续轮次重启 dev server 一律用 `(setsid bash -c 'exec bun run dev' > /dev/null 2>&1 < /dev/null &)` 模式
