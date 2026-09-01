@@ -31,6 +31,9 @@ export interface DshRunMeta {
   model: string;
   /** LLM 配置来源标签（shared / run-override / explicit）。 */
   source: string;
+  /** R202: 多靶点运行的全部目标 ID（含单靶点场景——守卫用逐 ID 冲突检测）。
+   *  旧记录无此字段时回退 [meta.uniprot]。 */
+  targetIds?: string[];
 }
 
 /** 注册表内事件 —— 在 SseEvent 基础上补单调 seq 与 ts。 */
@@ -191,6 +194,23 @@ export function getDshRun(runId: string): DshRunRecord | undefined {
 export function findRunningDshRunByUniprot(uniprot: string): DshRunRecord | undefined {
   for (const r of runs.values()) {
     if (r.status === 'running' && r.meta.uniprot === uniprot) return r;
+  }
+  return undefined;
+}
+
+/** R202: 逐靶点冲突检测 —— 新运行的任一目标 ID 与任何运行中记录的目标集合
+ *  有交集即冲突（含多对多：[A,B] vs [B,C] 在 B 上冲突；旧记录无 targetIds
+ *  时回退其 meta.uniprot 单键）。序列运行（SEQ* 指纹键）不在此检测 —— 调用
+ *  方对序列先做精确键比对。 */
+export function findRunningDshRunByAnyTarget(targetIds: string[]): DshRunRecord | undefined {
+  if (targetIds.length === 0) return undefined;
+  const wanted = new Set(targetIds);
+  for (const r of runs.values()) {
+    if (r.status !== 'running') continue;
+    const existing = r.meta.targetIds ?? [r.meta.uniprot];
+    for (const id of existing) {
+      if (wanted.has(id)) return r;
+    }
   }
   return undefined;
 }

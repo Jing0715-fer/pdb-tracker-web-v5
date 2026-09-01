@@ -71,7 +71,8 @@ export const en = {
   evalDshQuestion: 'Scientific question',
   evalDshQuestionPlaceholder: 'Optional: focus the report on this question (e.g. Which proteins form complexes with this target and what are their functions?); leave empty for a basic evaluation (function/PDB/quality/druggability)',
   evalDshQuestionRequired: 'Scientific question must be at least 8 characters (leave empty for basic evaluation)',
-  evalDshSingleOnly: 'Agent mode supports a single target for now',
+  // R202: Agent multi-target (replaces R200 single-target limit)
+  evalDshMultiHint: 'Agent multi-target: full agent pipeline per target + final cross-target comparison (max 5)',
   // R200: Agent-mode sequence input (BLAST identify → agent evaluation)
   evalDshSeqSingle: 'Agent mode supports a single sequence for now (use classic mode for multiple)',
   evalDshSeqLabel: 'Sequence input (Agent mode)',

@@ -71,7 +71,8 @@ export const zh = {
   evalDshQuestion: '科学问题',
   evalDshQuestionPlaceholder: '可选：填写后聚焦深挖该问题（如：该靶点与哪些蛋白形成复合物，分别行使什么功能？）；留空则执行基础评估（功能/PDB/质量/成药性等标准章节）',
   evalDshQuestionRequired: '科学问题至少需要 8 个字符（留空则执行基础评估）',
-  evalDshSingleOnly: 'Agent 模式暂支持单靶点',
+  // R202: Agent 多靶点（替换 R200 的单靶点限制文案）
+  evalDshMultiHint: 'Agent 多靶点：逐靶点完整智能体评估 + 终末跨靶点对比（上限 5 靶）',
   // R200: Agent 模式序列输入（BLAST 识别 → 智能体评估）
   evalDshSeqSingle: 'Agent 模式暂支持单条序列（多条请用经典模式）',
   evalDshSeqLabel: '序列输入（Agent 模式）',

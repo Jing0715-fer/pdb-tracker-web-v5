@@ -398,6 +398,10 @@ function dshStageLabel(stage: string, locale: string): string {
     case 'chapter-review': return zh ? '章节审稿' : 'Chapter review';
     case 'chapter-rewrite': return zh ? '章节重写' : 'Chapter rewrite';
     case 'final-review': return zh ? '终审' : 'Final review';
+    // R202: 多靶点运行新增阶段
+    case 'target': return zh ? '靶点' : 'Target';
+    case 'cross': return zh ? '跨靶对比' : 'Cross-target';
+    case 'rescue': return zh ? '终末补救' : 'Rescue';
     default: return stage;
   }
 }
@@ -2360,10 +2364,26 @@ export function SettingsRunPanel({
         seqPayload = { sequence: seq, sequenceType: evalSeqType };
         seqLabel = evalSeqType === 'dna' ? `DNA ${seq.length}nt` : `AA ${seq.length}aa`;
       } else {
-        const uniprot = (evalTargets[0]?.uniprot || '').trim().toUpperCase();
-        if (!uniprot) {
+        // R202: UniProt 输入 —— 多靶点支持（与经典模式同构的行集合）。
+        // 去重保序；上限 5 靶（与后端 MAX_DSH_TARGETS 一致，提前拦截）。
+        const seen = new Set<string>();
+        const validTargets = evalTargets
+          .map(tg => ({ ...tg, id: tg.uniprot.trim().toUpperCase() }))
+          .filter(tg => {
+            if (!tg.id || seen.has(tg.id)) return false;
+            seen.add(tg.id);
+            return true;
+          });
+        if (validTargets.length === 0) {
           toast.error(locale === 'zh' ? '请输入至少一个 UniProt ID' : 'Please enter a UniProt ID');
           return;
+        }
+        if (validTargets.length > 5) {
+          toast.error(locale === 'zh' ? 'Agent 模式最多支持 5 个靶点（每靶点执行完整智能体流水线）' : 'Agent mode supports at most 5 targets (full agent pipeline per target)');
+          return;
+        }
+        if (validTargets.length < evalTargets.filter(tg => tg.uniprot.trim()).length) {
+          toast.info(locale === 'zh' ? '重复的 UniProt ID 已自动去重' : 'Duplicate UniProt IDs were deduplicated');
         }
       }
       setDshQuestionError(false);
@@ -2390,8 +2410,44 @@ export function SettingsRunPanel({
         });
         return;
       }
-      const uniprot = (evalTargets[0]?.uniprot || '').trim().toUpperCase();
-      const t0 = evalTargets[0] || { maxPdb: 80, maxBlastHits: 50, forceBlast: false, skipBlast: false };
+      // R202: UniProt 输入 —— 单靶沿用旧扁平字段（向后兼容）；多靶发
+      // targets[]（与经典 batch 同构，逐靶点 forceBlast/skipBlast/
+      // maxPdb/maxBlastHits），后端逐靶点执行完整智能体流水线 +
+      // 终末跨靶点对比。
+      const seen = new Set<string>();
+      const validTargets = evalTargets
+        .map(tg => ({ ...tg, id: tg.uniprot.trim().toUpperCase() }))
+        .filter(tg => {
+          if (!tg.id || seen.has(tg.id)) return false;
+          seen.add(tg.id);
+          return true;
+        });
+      if (validTargets.length > 1) {
+        const idList = validTargets.map(tg => tg.id).join(', ');
+        log({
+          ts: new Date().toISOString(),
+          module: 'eval',
+          status: 'running',
+          summary: locale === 'zh'
+            ? `Agent 模式多靶点评估（${validTargets.length} 靶点：${idList}）— 逐靶点相关性→大纲→逐章+配图 + 跨靶点对比 — SSE streaming…`
+            : `Agent-mode multi-target eval (${validTargets.length} targets: ${idList}) — per-target relevance → outline → chapters + figures, then cross-target comparison — SSE streaming…`,
+        });
+        evalStream.start('/api/evaluations/run-dsh', {
+          inputMode: 'uniprot',
+          targets: validTargets.map(tg => ({
+            uniprot: tg.id,
+            maxPdb: tg.maxPdb,
+            maxBlastHits: tg.maxBlastHits,
+            forceBlast: tg.forceBlast,
+            skipBlast: tg.skipBlast,
+          })),
+          question,
+          maxLitCount: evalMaxLitCount,
+        });
+        return;
+      }
+      const uniprot = validTargets[0].id;
+      const t0 = validTargets[0];
       log({
         ts: new Date().toISOString(),
         module: 'eval',
@@ -2866,10 +2922,17 @@ export function SettingsRunPanel({
                 title={t.moduleEvalTitle}
                 endpoint={evalPipeline === 'dsh' ? 'POST /api/evaluations/run-dsh' : 'POST /api/evaluations/run'}
                 description={locale === 'zh' ? 'UniProt → 元数据 + 序列 → RCSB 直接 PDB → SIFTS 覆盖度 → NCBI BLASTp 同源 → 评分 → 原子任务包含 LLM 报告生成（写入 Evaluation.report + EvaluationReport 表 + 可选 LLM-Wiki）。支持多个 UniProt ID 批量评估，含跨靶点结构与关联分析。' : 'UniProt → metadata + sequence → RCSB direct PDB → SIFTS coverage → NCBI BLASTp homology → scoring → atomic tasks include LLM report generation (writes to Evaluation.report + EvaluationReport table + optional LLM-Wiki). Supports multiple UniProt IDs for batch evaluation with cross-target structure and correlation analysis.'}
-                headerBadge={evalPipeline !== 'dsh' && evalTargets.length > 1 ? (
-                  <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-xray/40 bg-claude-xray-bg text-claude-xray" title={locale === 'zh' ? '多靶点批量评估 + 关联分析' : 'Multi-target batch evaluation + correlation analysis'}>
-                    <Layers className="h-2 w-2" /> {locale === 'zh' ? '批量' : 'Batch'} · {evalTargets.length} {locale === 'zh' ? '靶点' : 'targets'}
-                  </Badge>
+                headerBadge={evalTargets.length > 1 ? (
+                  evalPipeline !== 'dsh' ? (
+                    <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-xray/40 bg-claude-xray-bg text-claude-xray" title={locale === 'zh' ? '多靶点批量评估 + 关联分析' : 'Multi-target batch evaluation + correlation analysis'}>
+                      <Layers className="h-2 w-2" /> {locale === 'zh' ? '批量' : 'Batch'} · {evalTargets.length} {locale === 'zh' ? '靶点' : 'targets'}
+                    </Badge>
+                  ) : (
+                    /* R202: Agent 多靶点徽章（逐靶点智能体评估 + 跨靶点对比） */
+                    <Badge variant="outline" className="text-xs font-medium px-2 h-5 gap-1 rounded-md shrink-0 border-claude-cryoem/40 bg-claude-cryoem/10 text-claude-cryoem" title={locale === 'zh' ? 'Agent 多靶点：逐靶点智能体评估（相关性→大纲→逐章+配图）+ 跨靶点对比' : 'Agent multi-target: per-target agent pipeline + cross-target comparison'}>
+                      <Sparkles className="h-2 w-2" /> {locale === 'zh' ? 'Agent 批量' : 'Agent Batch'} · {evalTargets.length} {locale === 'zh' ? '靶点' : 'targets'}
+                    </Badge>
+                  )
                 ) : null}
               >
                 {/* R179 (Task 2-b): Pipeline mode toggle — 经典模式 vs DSH 模式
@@ -2895,9 +2958,11 @@ export function SettingsRunPanel({
                       <Sparkles className="h-3 w-3" /> {t.evalModeDsh}
                     </button>
                   </div>
+                  {/* R202: Agent 多靶点提示 —— 与经典模式同构支持多 UniProt ID
+                      （逐靶点完整智能体流水线 + 终末跨靶点对比），上限 5 靶。 */}
                   {evalPipeline === 'dsh' && evalTargets.length > 1 && (
-                    <span className="text-3xs text-amber-600 dark:text-amber-400" title={t.evalDshSingleOnly}>
-                      {t.evalDshSingleOnly}
+                    <span className="text-3xs text-claude-cryoem dark:text-claude-cryoem/80" title={t.evalDshMultiHint}>
+                      {t.evalDshMultiHint}
                     </span>
                   )}
                 </div>
@@ -3011,18 +3076,25 @@ export function SettingsRunPanel({
                     </div>
                   </div>
                 ) : (
-                /* UniProt ID input mode (original). In DSH mode only the FIRST
-                    target row renders (single-target pipeline) and the add /
-                    remove buttons are hidden. */
+                /* UniProt ID input mode (original). R202: Agent 模式与经典模式
+                    同构支持多靶点行（增删按钮一致）；上限 5 靶（后端钳制，
+                    超限时 runEvaluation 前端提前拦截）。 */
                 <div className="space-y-2 mb-3">
-                  {(evalPipeline === 'dsh' ? evalTargets.slice(0, 1) : evalTargets).map((t, i) => (
+                  {evalTargets.map((t, i) => (
                     <div key={i} className="flex items-end gap-1.5 flex-wrap">
-                      {/* Left slot: + (add) on row 1, remove (×) on rows 2+ — both
-                          hidden in DSH mode (single target only, kept as spacer). */}
-                      {evalPipeline === 'dsh' ? (
-                        <span className="h-8 w-8 shrink-0" aria-hidden="true" />
-                      ) : i === 0 ? (
-                        <Button variant="outline" size="sm" className="h-8 w-8 p-0 shrink-0" onClick={addEvalTarget} title={locale === 'zh' ? '新增靶点' : 'Add target'}>
+                      {/* Left slot: + (add) on row 1, remove (×) on rows 2+ ——
+                          R202 起 Agent 模式同样可见（多靶点支持）。 */}
+                      {i === 0 ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 w-8 p-0 shrink-0"
+                          onClick={addEvalTarget}
+                          disabled={evalPipeline === 'dsh' && evalTargets.length >= 5}
+                          title={evalPipeline === 'dsh' && evalTargets.length >= 5
+                            ? (locale === 'zh' ? 'Agent 模式最多 5 个靶点' : 'Agent mode: max 5 targets')
+                            : (locale === 'zh' ? '新增靶点' : 'Add target')}
+                        >
                           <Plus className="h-3.5 w-3.5" />
                         </Button>
                       ) : (

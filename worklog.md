@@ -5320,3 +5320,25 @@ Stage Summary:
 - Agent 模式序列输入全链路首次真实 E2E 成功：序列 → BLASTp 识别 P69905 → 问题驱动大纲 14 章 → 限流窗口实战（退避/简化 prompt/配额降级/终末补救全链触发）→ 14/14 全章交付 + 16 张 VLM 验证配图 + 遥测落库 + 报告/溯源 UI 渲染
 - 环境新发现两项：① agent-browser 会话与 dev server 并发时内存峰值可触发 OOM killer（第一场 E2E 中断根因；长运行 E2E 建议 curl 发起 + 浏览器仅做结果回验）② eslint . 全项目在默认 ~2GB 堆下 heap OOM（SIGABRT），需 NODE_OPTIONS=--max-old-space-size=3072 或按文件 lint——此前「停 server 后 lint」教训需追加此参数
 - 新建议池：1) Run Center 打开时若 status 端点存在 running 运行，显示「后台运行中」状态条并提供「重连观看」入口（R195 建议 3，本轮两度实证：面板关闭/页面重载后 UI 无感知，运行却在后台正常推进）2) dev script 已降堆 1600MB 基础上，可再评估 DSH 长运行峰值（第二场成功时 server RSS 稳定）3) eslint 全项目内存参数可写入 package.json script 固化
+
+---
+Task ID: R202
+Agent: main (Z.ai Code)
+Task: Agent 模式支持多 UniProt ID 输入（用户需求）—— 逐靶点完整智能体流水线 + 终末跨靶点对比报告，前后端全链路 + 真实 E2E
+
+Work Log:
+- 设计定案：多靶点 = 逐靶点串行完整智能体评估（相关性→大纲→逐章+配图，报告各自 Phase F 落库）+ 终末跨靶点对比章节（best-effort 单次 LLM 调用，失败不阻塞交付）+ done 载荷交付合并报告文档（对比 + 逐靶点全文）；弃「单一 agent 跨靶点大纲」方案（会失去逐靶点报告的独立价值与既有管线复用）
+- 后端 run-registry：DshRunMeta 新增 targetIds（逐靶点冲突检测数据源，旧记录回退 meta.uniprot 单键）；新增 findRunningDshRunByAnyTarget（目标集合交集检测，覆盖 [A,B] vs [B,C] 多对多冲突）
+- 后端 run-service：① DshLaunchParams 升级 uniprots[]/targetOpts[]（逐靶点 forceBlast/skipBlast/maxPdb/maxBlastHits，与经典 batch 的 targets[] 同构）；validateDshRunBody 接受 targets[]/uniprots[]/旧单字段 uniprot 三形态（去重保序，MAX_DSH_TARGETS=5 上限——60 分钟注册表安全网 ÷ 10 分钟/靶 + 限流余量）② dshDedupKey 多靶点 MULTI-{排序 join '-'}（URL 安全）③ preLaunchGuard 升级逐靶点交集检测 ④ launchDshRun 多靶点循环路径：每靶点 emit 包装（[i/n ID] 消息前缀 + 进度重标定 [i/n,(i+1)/n] 全局段，extras 原样透传）+ 靶点级 try/catch（非中止错误记录后继续，全灭才 fail）+ 靶点间 signal 检查 + generateCrossTargetReport（真实数据对比表 prompt）+ buildMultiReportDoc（合并文档）+ 多靶点合并 SkillRunRecord 遥测 ⑤ 跨靶点对比全文随事件入 NDJSON 日志（历史回看可见，done 载荷仅 live 订阅者可见的补齐）
+- 前端 settings-run-panel：① 移除 evalTargets.slice(0,1) 单靶限制与增删按钮隐藏——Agent 模式渲染全部靶点行（+ 按钮在 Agent 模式 ≥5 靶时禁用带提示）② headerBadge 分流：经典「批量」/ Agent「Agent 批量 · N 靶点」（cryoem 色系 + Sparkles）③ 多靶点提示 evalDshMultiHint 替换 evalDshSingleOnly（i18n zh/en 同步）④ runEvaluation Agent+UniProt 分支：去重校验 + 超限拦截 + 多靶发 targets[] / 单靶沿用旧扁平字段（向后兼容）⑤ dshStageLabel 补 target/cross/rescue 双语标签
+- 守卫/校验 E2E（curl 实测）：交叠集 [P69905,P07766] → 409 带冲突靶点+runId+duplicate:true；不相交集 [P07766] → 守卫通过（误启后立即 stop，中止 12s 生效 status=aborted）；6 合法靶 → 400 Too many targets (max 5)；空 uniprots[] → 400；旧单字段 uniprot → 校验通过（409 冲突证明）
+- 真实 E2E（浏览器 UI 发起 P00533+P69905 双靶 + 跨靶科学问题，runId dsh-MULTI-P00533-P69905-mti7pbgp-0，1134s）：① [1/2 P00533] 前缀 + 进度重标定全程生效 ② 靶点 1：80 PDB 收集（BLAST 自动跳过）→ 相关性 4 发现 → 12 章大纲 → 429 限流实战（第 9 章占位 → 终末补救救回）→ 12/12 章 13271 chars 14 配图 ③ 靶点 2：15 章大纲（问题驱动规划含 expression/experimental 深挖章）→ 第 8 章占位 → 终末补救救回 → 15/15 章 15372 chars 14 配图 ④ 跨靶点对比 701 chars 生成（对比表数字全部真实：EGFR 6/10 vs HBA 7/10、80 PDB、配图 14）⑤ done 载荷：multi:true + targets[] 双靶全统计 + failedTargets:[] + 合并报告 29636 chars/27 章 ⑥ 逐靶点报告各自落库（P00533 12 章大纲 + P69905 15 章大纲，mode=dsh，各 14 配图，问题驱动 focus 双靶对比视角贯穿）⑦ SkillRunRecord「Agent·多靶点（2）：EGFR / Hemoglobin subunit alpha · overall=6/7/10 · 27/27 章 · 跨靶对比 ✓ · LLM ✓」入历史首行（log 101.3KB）⑧ 浏览器历史展开 231 条 [i/2 ID] 前缀日志事件全量回放
+- 浏览器 UI 验证：Agent 模式 + 按钮新增第二行（Remove this target 出现）+ 填 P69905 + Agent Batch · 2 targets 徽章 + 多靶点提示 + Run 点击发 targets[] 载荷（network 捕获）——0 page error / 0 console error；热重载后页面健康；lint 改动 6 文件 0/0（NODE_OPTIONS 3072MB 堆）；tsc 改动文件 0 错误（全项目预存错误与本轮无关）
+- 工具链发现：dsh-poll.mjs 的终局判定（ev.stage==='done'）在多靶点运行会误触（每靶点的 runDshEvaluation 也发 stage:'done' 事件）——轮询器提前退出，运行本体不受影响（前端以 SSE 事件名为终局判据，正确）；后续可改轮询器判据为「status 字段终态」
+- 收尾运维：server 重启一次遭遇旧进程残留 + 端口无监听状态（kill -9 清理后正常）；R198b 双层脱离模式照常使用
+
+Stage Summary:
+- Agent 模式多 UniProt ID 输入全链路落地：UI（多行增删 + 徽章 + 提示）→ 请求（targets[] 同构经典 batch）→ 校验（去重/上限/三形态兼容）→ 守卫（逐靶点交集 409）→ 逐靶点完整智能体流水线（emit 前缀 + 进度重标定 + 靶点级容错）→ 跨靶点对比（真实数据驱动）→ 合并 done 载荷 + 逐靶点落库 + 合并遥测 → 历史回放（231 前缀事件）
+- 真实 E2E 双靶 18.9 分钟教科书式验证：两靶各自的 429 限流窗口 + 终末补救轮全部实战触发并救回（12/12 + 15/15 全章交付）；跨靶对比表数字与真实数据一致（防幻觉 prompt 生效）
+- 多靶点与单靶/序列三条输入路径现已正交：单 UniProt（旧扁平字段兼容）、多 UniProt（targets[]）、序列（BLAST 识别）——语义互斥且守卫各司其职
+- 新建议池：1) dsh-poll.mjs 终局判据改 status 字段（多靶点场景误触已实证）2) 多靶点 ChapterStream 章节流按靶点分组显示（当前 LAST-wins 覆盖为已知降级，合并报告为权威）3) 跨靶点对比可扩展为多轮（对比→用户追问→深挖），当前单轮单次调用 4) MAX_DSH_TARGETS=5 上限可按注册表安全网实测时长再调

@@ -20,10 +20,13 @@
 //     20s 一帧 ping（客户端解析器忽略未知事件名）防中间层按空闲连接
 //     斩断（每次斩断消耗前端重连预算之一）。
 //
-// 与经典 /api/evaluations/run 的区别（沿用 R179 注释）：
+// 与经典 /api/evaluations/run 的区别（沿用 R179 注释；R202 起批量已支持）：
 //   - 请求可带 `question`（科学问题，8-1000 字；空 = 基础评估口径）；
-//   - 不支持批量 targets / 序列模式 / 结构分析 recipe（宁精勿滥）；
-//   - done 载荷带 relevance / outline / figures / chapters 结构。
+//   - R202: 支持 targets[] / uniprots[] 多靶点（逐靶点完整智能体流水线 +
+//     终末跨靶点对比，上限 5 靶）；R200: 支持序列输入（BLAST 识别）；
+//   - 不支持结构分析 recipe（宁精勿滥）；
+//   - done 载荷带 relevance / outline / figures / chapters 结构（多靶点
+//     另带 multi/targets/failedTargets 字段）。
 
 import { NextResponse } from 'next/server';
 import { sseStream } from '@/lib/sse';
