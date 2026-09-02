@@ -27,7 +27,8 @@ import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, collectEvaluationDataForSequence, type CollectOpts, type CollectResult, type LiteratureRow, type SequenceInput } from './collect';
 import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint, type OutlineDataInfo } from './section-library';
-import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, type ReportFigure } from './figures';
+import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, applyFigureLegends, type ReportFigure } from './figures';
+import { proxyFigureUrl } from '@/lib/figure-view'; // R207: URL 对比归一（正文内为代理形，fig.url 为原始外链）
 
 // ─── 类型 ───────────────────────────────────────────────────────────────────
 
@@ -294,13 +295,16 @@ function maintainChapterFigures(
   let removed = 0;
   const verified = allFigures.filter(f => f.status === 'verified');
   if (verified.length > 0) {
-    const rep = repairFigureUrls(out, verified.map(f => f.url));
+    // R207: 期望 URL 用代理形与正文同口径（图行模板已带代理 URL；
+    // LLM 的突变发生在代理形内部，Levenshtein 修复照常生效）。
+    const rep = repairFigureUrls(out, verified.map(f => proxyFigureUrl(f.url)));
     out = rep.content;
     fixed = rep.fixed;
     removed = rep.removed;
   }
   if (figsToEmbed.length > 0) {
-    const missing = figsToEmbed.filter(f => !out.includes(f.url));
+    // R207: 同上 —— includes 判定用代理形（与嵌入模板一致）。
+    const missing = figsToEmbed.filter(f => !out.includes(proxyFigureUrl(f.url)));
     if (missing.length > 0) {
       const appendix = missing
         .map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`)
@@ -368,11 +372,13 @@ function buildPdbBlock(c: CollectResult): string {
   if (!c.pdbRows || c.pdbRows.length === 0) {
     return `## PDB 结构表（无数据 — RCSB 未返回直接结构）`;
   }
-  return `## PDB 结构表（共 ${c.pdbRows.length} 条，按分辨率/IF 排序，显示前 40）
+  return `## PDB 结构表（共 ${c.pdbRows.length} 条，按分辨率/IF 排序，显示前 40；「配体」列为 RCSB 官方元数据）
 
 | # | PDB | 方法 | 分辨率(Å) | 来源 | 期刊 (IF) | 配体 | 作者 | 标题 |
 |---|------|------|-----------|------|------|------|------|------|
-${buildDetailedPdbTable(c.pdbRows, 40)}`;
+${buildDetailedPdbTable(c.pdbRows, 40)}
+
+**配体/结合态判定规则（必须遵守）**：上表「配体」列是每个结构结合态的唯一权威依据 —— 配体列为「无」且标题无复合物描述时才可称 apo 态；有配体（如 CMO (Carbon Monoxide)、HEM、抑制剂代号）时必须按对应结合态描述（如 8WJ0 = CMO+HEM → CO 结合态）。严禁凭常识、期刊风格或分辨率高低推断/编造 apo 或配体结合状态，严禁引用表中不存在的 PDB ID。`;
 }
 
 function buildBlastBlock(c: CollectResult): string {
@@ -905,7 +911,7 @@ export async function runDshEvaluation(params: {
 
 要求：
 - findings 逐源给出（uniprot/rcsb/blast/literature/scores 各 1-2 条）
-- keyPicks 4-12 条：从上方 PDB 表中挑选对回答问题最重要的结构（代表性复合物/最高分辨率/关键配体态/关键方法学），why 必须点明它与问题的具体关系；pdbId 只能来自表中真实存在的 ID，不得编造
+- keyPicks 4-12 条：从上方 PDB 表中挑选对回答问题最重要的结构（代表性复合物/最高分辨率/关键配体态/关键方法学），why 必须点明它与问题的具体关系；pdbId 只能来自表中真实存在的 ID，不得编造；描述结合态时依据「配体」列（列为「无」才可称 apo）
 - keyLiterature 0-8 条：与问题最直接相关的 PMID，必须来自上方文献清单
 - figureQueries 0-6 条：每个确有配图价值的章节最多 1 条（原理图/通路图/机制图对该章确有帮助时才给，宁缺毋滥）；query 用英文（图片召回更好）；sectionId 必须是：${SECTION_LIBRARY.filter(s => !s.fixed && s.id !== 'question_focus').map(s => s.id).join(' / ')}`;
 
@@ -1199,7 +1205,7 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     const figsForSection = figures.filter(f => f.status === 'verified' && f.sectionId === entry.id);
     const figsToEmbed = figsForSection.slice(0, 3);
     const figuresNote = figsToEmbed.length > 0
-      ? `\n\n## 本章配图（以下 ${figsToEmbed.length} 张必须全部嵌入正文，分别放在本章最合适的小节；漏嵌的图会被自动补挂到章末）\n${figsToEmbed.map(f => `- ${f.url} ｜ ${f.caption}`).join('\n')}\n\n嵌入格式（单独一行，必须原样复制，不要改动方括号内的文本）：\n${figsToEmbed.map(f => figureImageMarkdown(f)).join('\n')}`
+      ? `\n\n## 本章配图（以下 ${figsToEmbed.length} 张必须全部嵌入正文，分别放在本章最合适的小节；漏嵌的图会被自动补挂到章末）\n${figsToEmbed.map(f => `- ${f.caption}（将放在：${(figureImageMarkdown(f).match(/\]\(([^)]+)\)/) || [])[1] || f.url}）`).join('\n')}\n\n嵌入格式（单独一行，必须原样复制，不要改动方括号内的文本）：\n${figsToEmbed.map(f => figureImageMarkdown(f)).join('\n')}`
       : '';
 
     // R184: 基础评估章节与问题深挖章节的科学问题定位不同 ——
@@ -1909,16 +1915,28 @@ ${ch.content}
   const chaptersOk = chapters.filter(ch => ch.ok).length;
   const chaptersFailed = chapters.length - chaptersOk;
 
+  // R207: figure legend 注入 —— 全报告统一「图 N」编号（章内图行下方插
+  // 斜体图例行）；发生在嵌入判定之前（注入只增行不改 URL，不影响判定）。
+  const legendRes = applyFigureLegends(chapters, verifiedFigures);
+  const chaptersLegended = legendRes.chapters;
+
   // R187: 附录只收「未嵌入任何章节正文」的溢出配图（每章 ≤3 张之外的），
   // 且图片语法统一走消毒后的 figureImageMarkdown —— 旧版把全部图无条件
   // 堆进附录，造成「附录有、正文无」的错位感；alt 含化学名方括号时还会
   // 整图渲染失败（markdown 图片语法不允许裸 ]）。
+  // R207: 嵌入判定双形归一（正文 URL 为代理形，fig.url 为原始外链）。
   const embeddedUrls = new Set(
-    chapters.flatMap(ch => (ch.content.match(/https:\/\/[^\s)]+/g) || []) as string[]),
+    chaptersLegended.flatMap(ch => ((ch.content.match(/https:\/\/[^\s)]+/g) || []) as string[]))
+      .flatMap(u => {
+        try { return [u, decodeURIComponent(u)]; } catch { return [u]; }
+      }),
   );
-  const galleryFigs = verifiedFigures.filter(f => !embeddedUrls.has(f.url));
+  const isEmbedded = (f: ReportFigure) => embeddedUrls.has(f.url) || chaptersLegended.some(ch => ch.content.includes(proxyFigureUrl(f.url)));
+  const galleryFigs = verifiedFigures.filter(f => !isEmbedded(f));
+  // R207: 附录溢出图续编 legendNo（从正文的 legendCount 接续，编号全报告连续）。
+  galleryFigs.forEach(f => { f.legendNo = ++legendRes.legendCount; });
   const gallery = galleryFigs.length > 0
-    ? `\n\n## 附：其余报告配图（未嵌入正文）\n\n${galleryFigs.map(f => `${figureImageMarkdown(f)}\n\n- ${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）`).join('\n\n')}`
+    ? `\n\n## 附：其余报告配图（未嵌入正文）\n\n${galleryFigs.map(f => `${figureImageMarkdown(f)}\n\n*图 ${f.legendNo}：${f.caption}（来源：${f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search')}）*`).join('\n\n')}`
     : '';
   // R189: 空问题时标题不含「科学问题」引用块，标注基础评估口径。
   // R200: 序列输入时追加识别徽标（类型/长度/identity/识别结果）。
@@ -1928,7 +1946,7 @@ ${ch.content}
   const header = hasQuestion
     ? `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — Agent 模式${seqBadge}\n\n> 科学问题：${question}\n\n`
     : `# ${c.uniprotInfo.proteinName}（${uniprot}）靶点评估报告 — Agent 模式${seqBadge}（基础评估）\n\n`;
-  const rawReport = header + chapters.map(ch => ch.content).join('\n\n') + gallery;
+  const rawReport = header + chaptersLegended.map(ch => ch.content).join('\n\n') + gallery;
   const finalReport = sanitizeReport(rawReport);
   const reportOk = chaptersOk > 0;
 

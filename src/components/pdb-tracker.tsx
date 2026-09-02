@@ -56,6 +56,7 @@ import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts';
 import { useRecentlyViewed } from '@/hooks/use-recently-viewed';
 import { toast } from 'sonner';
 import { useAppSettings } from '@/hooks/use-app-settings';
+import { proxyFigureUrl } from '@/lib/figure-view'; // R207: 报告画廊 img 统一走服务端代理（用户网络直连 wikimedia/rcsb CDN 不可达）
 import { generateBibTeX, generateRIS, generateAPA, generateVancouver, generateMLA, downloadFile } from '@/lib/citation-utils';
 // fallback-data import removed — errors now surface as error messages, not demo data.
 import { useTour } from '@/hooks/use-tour';
@@ -549,6 +550,8 @@ interface DshReportFigure {
   source?: string;
   sectionId?: string;
   status: string;
+  /** R207: 全报告统一图号（正文图例「图 N：…」；新报告自带，旧数据无）。 */
+  legendNo?: number;
 }
 
 interface EvalReportDshMeta {
@@ -646,26 +649,38 @@ function EvalDshFiguresGallery({ figures }: { figures: DshReportFigure[] }) {
         </Badge>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {verified.map((f, i) => (
+        {verified.map((f, i) => {
+          // R207: 渲染出口统一代理（wikimedia/rcsb CDN 直连在部分用户网络
+          // 不可达 → 报告图全空白）；点开大图同走代理。ReportFigure.url
+          // 原始外链仅作数据语义，渲染层一律改写。
+          const imgSrc = proxyFigureUrl(f.url);
+          return (
           <a
             key={`${f.url}-${i}`}
-            href={f.url}
+            href={imgSrc}
             target="_blank"
             rel="noopener noreferrer"
             className="group rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden hover:border-claude-accent/40 transition-colors"
             title={f.caption}
           >
-            {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
+            {/* SECURITY: https 原始图 URL 或 /api/figure-proxy 同源代理形
+                （镜像 markdown-renderer isSafeImgSrc 口径，代理侧二次白名单）。 */}
             {/* R197: 图片失效时隐藏（不永久显示破图占位，标题/caption 仍可读） */}
-            <img src={f.url} alt={f.caption} loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="h-28 w-full object-cover bg-muted/30" />
+            {(imgSrc.startsWith('/') || /^https:\/\//i.test(imgSrc)) ? (
+              <img src={imgSrc} alt={f.caption} loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="h-28 w-full object-cover bg-muted/30" />
+            ) : null}
             <div className="p-1.5 space-y-0.5">
+              {typeof f.legendNo === 'number' && (
+                <span className="inline-flex px-1 h-3.5 items-center rounded-[3px] text-[9px] font-mono border border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-accent/10 text-claude-accent dark:text-[#c9ae8a] mb-0.5" title="全报告统一图号（见正文图例）">图 {f.legendNo}</span>
+              )}
               <p className="text-[10px] text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
               <p className="text-[9px] font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
                 {t.evalDshFigureVerified} · {f.kind}{f.pdbId ? ` · ${f.pdbId}` : ''}
               </p>
             </div>
           </a>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

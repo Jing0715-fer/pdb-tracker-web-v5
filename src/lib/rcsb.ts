@@ -60,7 +60,81 @@ export async function fetchPdbEntryDetails(
       try { onProgress(Math.min(ids.length, i + chunkSize), ids.length); } catch { /* ignore */ }
     }
   }
+  // R207: ligands 批量回填 —— entry-level API 的 rcsb_nonpolymer_instance
+  // 恒为空数组（配体数据只在 entity/instance 级端点），旧实现拉了但永远
+  // null → 章节生成的「配体」列全为「无」→ LLM 幻觉结合态（实测 run
+  // dsh-P69905-mtjf46vh-0：8WJ0 实为 CO 结合态却被写成 apo 态参考）。
+  // GraphQL 端点 25 条/批一次取回全部配体（实测 8WJ0=CMO+HEM、7DY4=HEM）。
+  // 失败静默降级：ligands 保持 null，LLM 侧按「无配体数据」口径处理。
+  if (results.length > 0 && !signal?.aborted) {
+    const ligandsMap = await fetchPdbLigandsBatch(results.map(r => r.pdbId), signal);
+    for (const r of results) {
+      const l = ligandsMap.get(r.pdbId);
+      if (l) r.ligands = l;
+    }
+  }
   return results;
+}
+
+// ─── R207: 配体（ligand）GraphQL 批量拉取 ──────────────────────────────────
+
+const RCSB_GRAPHQL_URL = 'https://data.rcsb.org/graphql';
+
+/** R207: 结晶学溶剂/缓冲添加剂/常见离子黑名单 —— 这些「配体」无药理学
+ * 信息量，进表只会稀释真实配体（药物/辅因子/血红素等）的信号。
+ * 金属辅因子（FE 随 HEM、ZN 指蛋白）随结构语义保留，不入黑名单。 */
+const LIGAND_JUNK = new Set([
+  'HOH', 'SO4', 'GOL', 'EDO', 'ACT', 'ACY', 'CL', 'NA', 'K', 'CA', 'TRS', 'MES',
+  'EPE', 'CIT', 'PO4', 'PEG', 'DTT', 'IMD', 'NO3', 'NHE', 'FLC', 'IOD', 'BR',
+  'FMT', 'ETH', 'EOH', 'MPD', '2PE', '1PE', 'P4G', 'PG4', 'PE4', 'TLA', 'MPO',
+  'UNL', 'UNX',
+]);
+
+function titleCaseChem(name: string): string {
+  return name.toLowerCase().replace(/(^|\s|-)([a-z])/g, (_m, p1, p2) => p1 + p2.toUpperCase()).slice(0, 40);
+}
+
+/**
+ * R207: 批量拉取多个 PDB 结构的非聚合物配体（comp_id + 化学名）。
+ * GraphQL 25 条/批（80 条结构 → 4 批 ≈ 4s）；返回 pdbId →
+ * "CMO (Carbon Monoxide); HEM (Protoporphyrin IX Containing Fe)" 映射
+ * （黑名单过滤 + 去重 + 至多 5 个）。无配体/失败的结构不出现在映射中。
+ */
+export async function fetchPdbLigandsBatch(pdbIds: string[], signal?: AbortSignal): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(
+    pdbIds.map(i => String(i || '').trim().toUpperCase()).filter(i => /^[0-9A-Z]{4}$/.test(i)),
+  )];
+  const CHUNK = 25;
+  const query = 'query($ids:[String!]!){ entries(entry_ids:$ids){ rcsb_id nonpolymer_entities { nonpolymer_comp { rcsb_id chem_comp { name } } } } }';
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    if (signal?.aborted) return out;
+    const chunk = ids.slice(i, i + CHUNK);
+    try {
+      const resp = await fetch(RCSB_GRAPHQL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables: { ids: chunk } }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) continue;
+      const data = await resp.json() as { data?: { entries?: Array<{ rcsb_id?: string; nonpolymer_entities?: Array<{ nonpolymer_comp?: { rcsb_id?: string; chem_comp?: { name?: string } } }> }> } };
+      for (const e of data.data?.entries || []) {
+        const id = String(e.rcsb_id || '').toUpperCase();
+        if (!id) continue;
+        const comps = new Set<string>();
+        for (const np of e.nonpolymer_entities || []) {
+          const comp = np.nonpolymer_comp;
+          const cid = String(comp?.rcsb_id || '').toUpperCase();
+          if (!cid || LIGAND_JUNK.has(cid)) continue;
+          const name = String(comp?.chem_comp?.name || '').trim();
+          comps.add(name ? `${cid} (${titleCaseChem(name)})` : cid);
+        }
+        if (comps.size > 0) out.set(id, [...comps].slice(0, 5).join('; '));
+      }
+    } catch { /* 该批网络/超时失败 → ligands 缺失（null 口径），不阻塞主流程 */ }
+  }
+  return out;
 }
 export async function fetchPdbIdsForUniprot(uniprotId: string, max = 80, signal?: AbortSignal): Promise<string[]> {
   const body = { query: { type: 'group', logical_operator: 'and', nodes: [{ type: 'terminal', service: 'text', parameters: { attribute: 'rcsb_polymer_entity_container_identifiers.reference_sequence_identifiers.database_accession', operator: 'exact_match', value: uniprotId } }] }, return_type: 'entry', request_options: { paginate: { start: 0, rows: max }, sort: [{ sort_by: 'rcsb_accession_info.initial_release_date', direction: 'desc' }] } };

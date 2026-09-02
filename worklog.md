@@ -5440,3 +5440,20 @@ Stage Summary:
 - 两项实测驱动的优化落地（GIF mime 排除、硬失败 URL run 级去重），判官配额消耗进一步降低
 - 环境知识：沙箱重启会回滚本地 git 至早期提交且清空 /tmp（远端 push 是唯一可靠持久层；DB 也会回滚但本次靠备份保住——后续重启需先查 git log 再干活）
 - 用户本地（MiniMax-M3 provider + Commons）与本次沙箱验证链路等价，效果可直接复现
+
+---
+Task ID: R207
+Agent: main (Z.ai Code)
+Task: 用户反馈三问题闭环：①Wikimedia Commons 图片不显示 ②报告配图缺 figure legend ③8WJ0 科学性错误（apo 态误述 + 图文不符）
+
+Work Log:
+- ①根因：报告图 URL 为 upload/thumb.wikimedia.org CDN 直链，沙箱侧可达（实测 200/586KB）但用户浏览器侧网络不可达（大陆出口对 wikimedia CDN 间歇阻断）→ 整图空白。修复=三层渲染出口统一走服务端代理：新 src/lib/figure-view.ts（纯函数 proxyFigureUrl，域名后缀白名单：upload/thumb/commons.wikimedia.org + cdn.rcsb.org）+ 新 /api/figure-proxy 路由（白名单 400 域外 / Wikimedia UA 礼仪 / 20s 超时 / 并发 4 / 内存缓存 24 项 48MB / immutable 24h 浏览器缓存 / image/* content-type 校验 / 4MB 上限）；figureImageMarkdown 生成侧改写（prompt 模板/LLM 嵌入/补挂/附录全带代理 URL）；两处画廊（settings-run-panel DshFigureThumb + pdb-tracker EvalDshFiguresGallery）img+href 改写；markdown 白名单三处（markdown-renderer isSafeImgSrc + lazy-markdown SafeMarkdownImg）追加 /api/figure-proxy?url= 同源形；maintainChapterFigures repair 与 Phase F 嵌入判定的 URL 对比双形归一（代理形 vs 原始外链）
+- ②figure legend：figures.ts 新增 applyFigureLegends（组装期 Phase F 全报告统一「图 N」编号——章节生成期无法预知全局序号；图行下方插斜体图例「*图 N：caption（来源：source）*」；同图跨章只编号一次；ReportFigure 新增 legendNo 字段）；附录溢出图续编（编号全报告连续）；两处画廊加「图 N」徽章（与正文图例同源）
+- ③科学性错误根因（用户质问成立）：rcsb.ts 旧代码从 entry-level API 的 rcsb_nonpolymer_instance 提取配体——实测该字段恒为空数组（配体数据只在 entity/instance 级端点）→ ligands 恒 null → agent.ts 结构表「配体」列全「无」→ LLM 幻觉结合态（8WJ0 实为 carbonmonoxy form/CO 结合态，被写成 apo 态参考）。修复=fetchPdbLigandsBatch（RCSB GraphQL data.rcsb.org/graphql，25 条/批，nonpolymer_entities→nonpolymer_comp→chem_comp 拿 comp_id+化学名；溶剂/缓冲添加剂黑名单 35 项过滤；失败静默降级）+ fetchPdbEntryDetails 尾部批量回填（80 结构 ≈ 4 批 2s）；agent.ts 双重防幻觉（PDB 表下配体/结合态判定规则 + keyPicks 指令配体列依据）
+- 验证：T1 ligand 真实 GraphQL（8WJ0=HEM+CMO ✓ 用户指证的 CO 结合态铁证 / 7DY4=HEM / 9TQD=OXY+HEM+NAG / 506ms）；T2 markdown 全走代理 ✓；T3 legend 注入+编号 1,2 ✓；T4 外域原样 ✓；代理路由 curl 三组（wikimedia 200 png 586KB / rcsb 200 jpeg / evil 400）；浏览器端到端（P69905→Report tab：画廊 22/22 走代理、可视区 12 张加载=懒加载正常、0 console error）；eslint 8 文件 0/0
+- 环境知识：RCSB GraphQL 在 data.rcsb.org/graphql（api.rcsb.org 不存在）；Schema introspection 定位字段（entries→nonpolymer_entities→nonpolymer_comp{rcsb_id, chem_comp{id,name}}）；旧报告（DB 已存 markdown 原始外链）不迁移——新报告自动全代理形
+
+Stage Summary:
+- 用户浏览器看图的三层修复：代理路由 + 生成侧改写 + 渲染侧白名单放宽（旧报告画廊也即时受益；旧报告正文图保持直连，新报告正文带代理形）
+- figure legend 学术格式全链落地（统一编号 + 图例行 + 画廊徽章）
+- 配体数据链修复：ligands 从恒 null → GraphQL 真实回填 + prompt 防幻觉条款 —— 8WJ0 类结合态误述的结构性根因已消除

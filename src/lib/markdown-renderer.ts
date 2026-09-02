@@ -96,17 +96,24 @@ function renderInline(text: string): string {
   return s;
 }
 
+/** R207: 图片 src 安全校验 —— https 绝对外链或本服务代理相对路径
+ * （/api/figure-proxy?url=…，目标 URL 在代理路由侧做域名白名单二次校验）。
+ * 代理形用于解决用户网络直连 wikimedia/rcsb CDN 不可达（报告图全空白）。 */
+function isSafeImgSrc(u: string): boolean {
+  return /^https:\/\//i.test(u) || /^\/api\/figure-proxy\?url=/.test(u);
+}
+
 /**
  * R179 (Task 2-b): build a figure <img> tag from (already-escaped) alt + url.
  *
- * SECURITY allowlist: only `https://` URLs are emitted; http:/data:/javascript:
- * etc. are dropped and the alt text is kept as a muted italic instead (so the
- * reader at least sees the intended caption). Both inputs MUST already be
+ * SECURITY allowlist: https:// 绝对外链或 /api/figure-proxy 同源代理相对
+ * 路径（R207，见 isSafeImgSrc）；http:/data:/javascript: 等一律丢弃，保留
+ * alt 文本作灰色斜体（读者至少能看到图注）。Both inputs MUST already be
  * HTML-escaped (via escapeHtml) — attribute injection is impossible because
  * `"` / `<` / `>` / `&` are all entity-encoded by then.
  */
 function renderImageHtml(escapedAlt: string, escapedUrl: string): string {
-  if (/^https:\/\//i.test(escapedUrl)) {
+  if (isSafeImgSrc(escapedUrl)) {
     return `<img src="${escapedUrl}" alt="${escapedAlt}" loading="lazy" class="dsh-report-figure" style="${FIGURE_IMG_STYLE}" />`;
   }
   return escapedAlt

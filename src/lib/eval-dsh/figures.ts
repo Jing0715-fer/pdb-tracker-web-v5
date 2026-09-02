@@ -23,6 +23,7 @@
 import type { SseEvent } from '@/lib/sse';
 import type { PdbEntryDetail } from '@/lib/rcsb';
 import { combineSignals } from '@/lib/blast'; // R197: Stop 信号与超时合并（与 blast/rcsb 同口径）
+import { proxyFigureUrl } from '@/lib/figure-view'; // R207: 嵌入 markdown 的图 URL 统一走服务端代理（用户网络直连 wikimedia CDN 不稳）
 // R205: 判官 provider 路径（OpenAI 兼容视觉调用，如 MiniMax-M3）—— 与 llm.ts
 // 同源的 leaf 级导入（agent/providers 无反向依赖，无循环）；stripReasoning
 // 剥推理模型（DeepSeek-R1 等）content 内联  minded 块（MiniMax 走 thinking
@@ -39,6 +40,9 @@ export interface ReportFigure {
   sectionId: string;
   status: 'searching' | 'verified' | 'rejected' | 'failed';
   vlmReason?: string;
+  /** R207: 全报告统一图号（figure legend「图 N：…」；仅 verified 图在组装
+   * 期由 applyFigureLegends 分配；供正文图例与前端画廊「图 N」徽章共用）。 */
+  legendNo?: number;
 }
 
 /** z-ai image-search CLI 的单次调用超时（宁缺毋滥：超时即放弃该 query）。 */
@@ -148,7 +152,49 @@ export function figureImageMarkdown(fig: Pick<ReportFigure, 'caption' | 'url'>):
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
-  return `![${alt}](${fig.url})`;
+  // R207: 渲染出口统一改写 —— wikimedia/rcsb CDN → /api/figure-proxy。
+  // LLM 按模板原样复制的图行、补挂图、附录图全部自动变代理 URL；
+  // ReportFigure.url 本体保持原始外链（下载/VLM/去重/溯源语义不变）。
+  return `![${alt}](${proxyFigureUrl(fig.url)})`;
+}
+
+/** R207: figure legend（学术图例）—— 全报告统一「图 N」编号 + 图行下方
+ * 斜体图例行。用户反馈报告配图缺 legend：旧版只有裸 ![alt](url)（caption
+ * 藏在 alt 文本里，渲染不占行），补挂图才有「- caption（来源）」列表行。
+ * 注入发生在组装期（Phase F，所有章节定型后）—— 章节生成期无法预知全局
+ * 序号。同图跨章重复出现只编号一次；返回值同时把 legendNo 写回 figure
+ * （前端画廊「图 N」徽章与正文一致）。
+ * 配套：附录溢出图的续编在 agent.ts 组装处（gallery 依赖嵌入判定结果）。 */
+export function applyFigureLegends<T extends { content: string }>(
+  chapters: T[],
+  figures: ReportFigure[],
+): { chapters: T[]; legendCount: number } {
+  const verified = figures.filter(f => f.status === 'verified');
+  if (verified.length === 0 || chapters.length === 0) return { chapters, legendCount: 0 };
+  let n = 0;
+  const seen = new Set<string>(); // 已编号的原始 url
+  const chaptersOut = chapters.map(ch => {
+    if (!ch.content) return ch;
+    let content = ch.content;
+    for (const f of verified) {
+      if (seen.has(f.url)) continue;
+      const proxy = proxyFigureUrl(f.url);
+      const esc = proxy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // 图行：整行仅 ![alt](proxyUrl)（允许首尾空白）—— 模板要求 LLM
+      // 原样复制单独一行；补挂图同格式。行内混排不匹配（宁漏勿错）。
+      const re = new RegExp(`^(\\s*!\\[[^\\]\\n]*\\]\\(${esc}\\)\\s*)$`, 'm');
+      const m = content.match(re);
+      if (m) {
+        n += 1;
+        seen.add(f.url);
+        f.legendNo = n;
+        const src = f.source || (f.kind === 'rcsb' ? 'RCSB PDB' : 'web image search');
+        content = content.replace(m[0], `${m[0]}\n*图 ${n}：${f.caption}（${src}）*`);
+      }
+    }
+    return { ...ch, content };
+  });
+  return { chapters: chaptersOut, legendCount: n };
 }
 
 // ─── R191: 图片 URL 突变修复 ────────────────────────────────────────────────

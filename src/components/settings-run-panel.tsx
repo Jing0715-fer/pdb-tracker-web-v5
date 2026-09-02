@@ -34,6 +34,7 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { useRunStream, type StreamEvent } from '@/lib/use-run-stream';
 import { useI18n } from '@/lib/i18n';
+import { proxyFigureUrl } from '@/lib/figure-view'; // R207: 画廊图 img 统一走服务端代理（用户网络直连 wikimedia/rcsb CDN 不可达）
 import {
   Dialog,
   DialogContent,
@@ -151,6 +152,8 @@ interface DshFigurePayload {
   sectionId: string;
   status: 'searching' | 'verified' | 'rejected' | 'failed';
   vlmReason?: string;
+  /** R207: 全报告统一图号（正文图例「图 N：…」；组装期分配，画廊徽章同源）。 */
+  legendNo?: number;
 }
 
 /** Extract + narrow a `dshRelevance` extra from a stream event (null-safe). */
@@ -1588,14 +1591,17 @@ function DshFigureThumb({
   const rejected = f.status === 'rejected' || f.status === 'failed';
   // R197: 图片加载失败降级 —— 404/失效 URL 不再永久显示浏览器破图占位。
   const [imgFailed, setImgFailed] = useState(false);
+  // R207: 渲染出口统一代理（wikimedia/rcsb CDN 直连在部分用户网络不可达
+  // —— 报告图全部空白；代理后 <img src> 为本服务相对路径，走同源网关）。
+  const imgSrc = proxyFigureUrl(f.url);
   return (
     <div
       className={`rounded-md border border-claude-border/40 dark:border-[#3d3832]/40 bg-claude-surface/60 dark:bg-[#242220]/60 overflow-hidden ${rejected ? 'opacity-50' : ''}`}
       title={rejected && f.vlmReason ? `${t.evalDshVlmReason}: ${f.vlmReason}` : f.caption}
     >
-      {/* SECURITY: https-only figure URLs (mirrors markdown-renderer allowlist). */}
-      {/^https:\/\//i.test(f.url) && !imgFailed ? (
-        <img src={f.url} alt={f.caption} loading="lazy" onError={() => setImgFailed(true)} className={`${imageHeight} w-full object-cover bg-muted/30`} />
+      {/* SECURITY: https 原始图 URL 或代理相对路径（镜像 markdown-renderer 允许列表）。 */}
+      {(imgSrc.startsWith('/') || /^https:\/\//i.test(imgSrc)) && !imgFailed ? (
+        <img src={imgSrc} alt={f.caption} loading="lazy" onError={() => setImgFailed(true)} className={`${imageHeight} w-full object-cover bg-muted/30`} />
       ) : (
         <div className={`${imageHeight} w-full flex items-center justify-center bg-muted/30`} aria-hidden="true">
           <ImageIcon className="h-4 w-4 text-muted-foreground/40" />
@@ -1603,6 +1609,9 @@ function DshFigureThumb({
       )}
       <div className="p-1.5 space-y-0.5">
         <DshFigureStatusBadge status={f.status} label={labels} />
+        {typeof f.legendNo === 'number' && (
+          <span className="inline-flex ml-1 px-1 h-3.5 rounded-[3px] text-4xs font-mono border border-claude-border/60 dark:border-[#3d3832]/60 bg-claude-accent/10 text-claude-accent dark:text-[#c9ae8a]" title="全报告统一图号（见正文图例）">图 {f.legendNo}</span>
+        )}
         <p className="text-3xs text-claude-text-secondary dark:text-[#9b9590] leading-snug line-clamp-2 break-words">{f.caption}</p>
         <p className="text-4xs font-mono text-claude-text-muted/60 dark:text-[#9b9590]/60 uppercase truncate">
           {f.kind}{f.source ? ` · ${f.source}` : ''}{f.pdbId ? ` · ${f.pdbId}` : ''}
