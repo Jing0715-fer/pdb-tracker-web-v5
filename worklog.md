@@ -5457,3 +5457,23 @@ Stage Summary:
 - 用户浏览器看图的三层修复：代理路由 + 生成侧改写 + 渲染侧白名单放宽（旧报告画廊也即时受益；旧报告正文图保持直连，新报告正文带代理形）
 - figure legend 学术格式全链落地（统一编号 + 图例行 + 画廊徽章）
 - 配体数据链修复：ligands 从恒 null → GraphQL 真实回填 + prompt 防幻觉条款 —— 8WJ0 类结合态误述的结构性根因已消除
+
+---
+Task ID: R208
+Agent: main (Z.ai Code)
+Task: 用户要求「动态调整 report 长度：数据源少 → 报告短；数据源多 → 报告长且详细；避免大量已获取数据未被提及，总结尽量全面」
+
+Work Log:
+- 机制设计：数据规模五档评级（computeDataScale，纯函数）—— 输入 = 四类数据源计数（PDB/BLAST/文献/相关性重点结构），分项打分（PDB ≥60→3/≥25→2/≥8→1、BLAST ≥40→2/≥15→1、文献 ≥15→2/≥6→1、picks ≥8→1，总分 0-8）映射 sparse/lean/standard/rich/abundant 五档；产物 = wordFactor（0.65→1.3）+ 深挖章区间（1-2→3-8）+ maxChars 分档（3200/5200→8400/12600）+ 代表结构/文献引用覆盖下限（2→8）+ 大纲指令 directive。分档阈值锚定真实 E2E：P69905 全量=abundant，小众靶点=sparse；standard 档与 R189 基准完全一致（向后兼容）
+- 消费点六处统一口径：① repairOutline/outlineRules 接 scale（总章节数 sparse≈12/standard=16/abundant=18，深挖 clamp 随档）② chapterWordBounds（模板 min/max × wordFactor，铁底 ≥150/≥200；主循环/终末补救/审稿篇幅观察/lengthStats 分母同口径）③ buildCoverageBlock（pdb_analysis 章承担全额点名下限，>20 条注入分组表格建议「其余结构至少分组统计概述，不得只字不提」；其余 rcsb 章半额；literature 章 PMID 引用下限；homology BLAST 点名随命中数伸缩；summary 章恒注入「总结须尽量全面：覆盖每一类实际收集到的数据源的总览数字」）④ 生成 maxChars 分档（主循环/重写/补救）⑤ 大纲规划 prompt 注入评级与 directive（rich/abundant 时 outlineMaxChars 4000→4800）⑥ done 消息与 provenance（phases.outline.dataScale 全参数记录）
+- 基础评估模式（无问题）同样参与评级（字数乘数/覆盖策略照常生效，章节结构不变）；Phase C 新增 SSE 评级公告事件（progress 62）
+- E2E run A（sparse 档真实运行 dsh-P69905-mtjn058o-0，同蛋白收上限 maxPdb=3/skipBlast/maxLit=2 模拟数据稀疏）：评级事件「数据稀疏（0/8 · PDB 3 · BLAST 0 · 文献 2 · 重点结构 3）→ 字数 ×0.65 · 深挖 1-2」→ 大纲 11 章（深挖恰 2 章被 clamp）→ 11/11 章完成 · 6246 chars（此前 abundant 形态同蛋白 14043 chars）· 摘要含 2 个 PDB ID+分辨率+PMID+Overall 总览数字 · PDB 结构章 3 条结构 100% 点名（28OD/9TQD/9SZW 含方法/分辨率/结合态）· provenance.dataScale 落库 · 报告 UI 浏览器渲染 11 章+9 图+图例徽章 0 console error（截图 docs/images/qa-r208-sparse-report.png）
+- E2E run B（abundant 档对照）：配额 429 窗口拦截 → 部署 detached 自动发射器（scripts/r208-runb-launcher.sh，10 分钟轮询 × 60，配额恢复即发射，runId 落盘 /tmp/r208-runb-runid.txt）——预期「数据海量 8/8 · 深挖 3-8 · 字数 ×1.3 · 报告显著加长」
+- 附带处置：dev server 移除 R206 遗留 PDB_FIGURES_FORCE_COMMONS=1 测试门恢复默认图源行为（双 setsid 脱离重启，跨工具命令存活实测）
+- 质量门：eslint agent.ts+section-library.ts 0 error 0 warning；bun 直跑功能验证 60 断言（T1 五档映射含边界/T2 参数单调性/T3 outlineRules 消费与向后兼容/T4-T6 字数边界真函数/T7 repairOutline clamp sparse 2/standard 6/abundant 8 真实库 id 实证）；run-dsh 路由实编译 200
+
+Stage Summary:
+- 动态篇幅机制全链落地：评级（Phase C 公告）→ 大纲（章节数随档伸缩）→ 逐章生成（字数区间/maxChars ×乘数 + 数据覆盖要求块）→ 审稿/补救（同口径）→ done 消息/provenance（dataScale 全记录）—— sparse 档真实 E2E 已验证全部六处消费点
+- 「避免数据未被提及」三重约束：覆盖下限（随档 2→8）+ >20 条分组表格建议 + 摘要全面性硬要求（run A 实测 3/3 结构点名、摘要带全部数据源总览数字）
+- sparse 6246 vs 前版同蛋白 14043 chars —— 数据少时报告收敛约 55%，字数不注水
+- run B（abundant 对照）由自动发射器值守配额恢复后执行，结果将落 Run Center 历史与 DB 供后续比对

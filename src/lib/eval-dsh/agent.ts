@@ -26,7 +26,7 @@ import { Prisma } from '@prisma/client';
 import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, collectEvaluationDataForSequence, type CollectOpts, type CollectResult, type LiteratureRow, type SequenceInput } from './collect';
-import { SECTION_LIBRARY, getSection, outlineRules, type SectionTemplate, type DataHint, type OutlineDataInfo } from './section-library';
+import { SECTION_LIBRARY, getSection, outlineRules, computeDataScale, type SectionTemplate, type DataHint, type OutlineDataInfo, type DataScalePolicy } from './section-library';
 import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, applyFigureLegends, type ReportFigure } from './figures';
 import { proxyFigureUrl } from '@/lib/figure-view'; // R207: URL 对比归一（正文内为代理形，fig.url 为原始外链）
 
@@ -453,7 +453,10 @@ export function guessQuestionSections(question: string): string[] {
  *     口径）；extras 仍只来自 LLM raw（无问题时调用方传空 sections）
  *   - clamp 到 totalMax（溢出时从问题深挖章节尾部截断）
  */
-export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>, opts?: { noQuestion?: boolean }): DshOutlineEntry[] {
+export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>, opts?: { noQuestion?: boolean; scale?: DataScalePolicy }): DshOutlineEntry[] {
+  // R208: opts.scale 透传 outlineRules —— clamp 上限随数据规模分档
+  //（abundant 可到 18 章，sparse 收紧到约 10）；深挖章超限时从尾部
+  // 截断的语义不变。缺省 scale = 标准档（R189 基准，向后兼容）。
   const rules = outlineRules(data, opts);
   const baseline = rules.baselineIds;
   const entries: DshOutlineEntry[] = [];
@@ -512,6 +515,83 @@ export function repairOutline(raw: any, data?: Partial<OutlineDataInfo>, opts?: 
 
 function clippedFocus(list: DshOutlineEntry[]): DshOutlineEntry[] {
   return list.map(e => ({ ...e, focus: e.focus.slice(0, 300) }));
+}
+
+// ─── R208: 动态篇幅 —— 章节字数边界与数据覆盖要求 ──────────────────────
+
+/**
+ * R208: 章节字数边界 —— 模板 min/max（或 deepWords）× 数据规模乘数
+ * wordFactor（sparse 0.65 → abundant 1.3），四舍五入到 10。主循环、
+ * 终末补救、篇幅比度量（lengthStats ratio 的分母）三处共用同一口径，
+ * 保证 ratio 不因乘数引入口径漂移。下限铁底 ≥150（validateDshChapter
+ * 的最短章节门槛，稀疏档×最短模板 250×0.65=160 仍在门槛之上）。
+ */
+export function chapterWordBounds(
+  tmpl: SectionTemplate,
+  deep: boolean,
+  scale: DataScalePolicy,
+): { minW: number; maxW: number } {
+  const f = scale.wordFactor;
+  const rawMin = deep ? (tmpl.deepWords?.min ?? Math.round(tmpl.minWords * 1.6)) : tmpl.minWords;
+  const rawMax = deep ? (tmpl.deepWords?.max ?? Math.round(tmpl.maxWords * 1.8)) : tmpl.maxWords;
+  return {
+    minW: Math.max(150, Math.round((rawMin * f) / 10) * 10),
+    maxW: Math.max(200, Math.round((rawMax * f) / 10) * 10),
+  };
+}
+
+/**
+ * R208: 数据覆盖要求块 —— 动态篇幅的「全面性」侧。用户诉求：数据源很多
+ * 时报告要更详细，且「避免很多数据并没有提到」；数据源少时只要最小覆盖，
+ * 不逼注水。规则：
+ *   - pdb_analysis（盘点章）承担代表性结构点名的全额下限；数据量大时
+ *     鼓励分组表格提升覆盖面（其余结构至少分组统计概述，不得只字不提）；
+ *   - 其余 rcsb-hint 章取半额下限（≥2）；
+ *   - literature（文献综合章）承担 PMID 引用全额下限；其余文献章半额；
+ *   - homology 承担 BLAST 同源点名下限（随命中数伸缩）；
+ *   - summary（执行摘要）注入「总结尽量全面」要求 —— 覆盖每一类实际
+ *     收集到的数据源的总览数字（用户原话：总结应该尽量全面）。
+ * references 章确定性生成且全量列文献，天然全覆盖，无需注入。
+ */
+export function buildCoverageBlock(
+  entryId: string,
+  tmpl: SectionTemplate,
+  c: CollectResult,
+  scale: DataScalePolicy,
+): string {
+  const lines: string[] = [];
+  const pdbCount = c.pdbRows?.length ?? 0;
+  const litCount = c.literature?.length ?? 0;
+  const blastCount = c.skippedBlast ? 0 : (c.blastRows?.length ?? 0);
+  if (pdbCount > 0 && tmpl.dataHints.includes('rcsb')) {
+    if (entryId === 'pdb_analysis') {
+      lines.push(
+        `- PDB 结构表共 ${pdbCount} 条：本章点名（PDB ID 级）的结构数 ≥ ${Math.min(scale.representativePdbMin, pdbCount)}${
+          pdbCount > 20
+            ? '；数据量较大时可用分组表格（按方法学/分辨率分档）点名更多结构，其余结构至少以分组统计概述，不得只字不提'
+            : ''
+        }`,
+      );
+    } else {
+      const floor = Math.max(2, Math.round(scale.representativePdbMin / 2));
+      lines.push(`- PDB 结构表共 ${pdbCount} 条：本章点名（PDB ID 级）的结构数 ≥ ${Math.min(floor, pdbCount)}`);
+    }
+  }
+  if (litCount > 0 && tmpl.dataHints.includes('literature')) {
+    const floor = entryId === 'literature' ? scale.literatureCiteMin : Math.max(1, Math.round(scale.literatureCiteMin / 2));
+    lines.push(`- 文献共 ${litCount} 篇：本章引用的不同 PMID 数 ≥ ${Math.min(floor, litCount)}`);
+  }
+  if (blastCount > 0 && tmpl.dataHints.includes('blast')) {
+    const floor = entryId === 'homology' ? Math.max(3, Math.min(8, Math.round(blastCount / 8))) : 2;
+    lines.push(`- BLAST 同源共 ${blastCount} 条：本章点名（PDB ID / UniProt Ref 级）的同源条目数 ≥ ${Math.min(floor, blastCount)}`);
+  }
+  if (entryId === 'summary') {
+    lines.push(
+      '- 总结须尽量全面：覆盖每一类实际收集到的数据源的总览数字（有 PDB 则给数量与最佳分辨率；有 BLAST 则给同源规模；有文献则给篇数与最高 IF；各方法学评分恒给），不得只挑一两类数据源概述',
+    );
+  }
+  if (lines.length === 0) return '';
+  return `\n\n## 数据覆盖要求（数据规模评级：${scale.tierZh}）\n${lines.join('\n')}`;
 }
 
 // ─── R183: SkillEvaluationReport 三级写入 ──────────────────────────────────
@@ -976,15 +1056,37 @@ export async function runDshEvaluation(params: {
   const rel: DshRelevance | null = relevance;
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
+  // ── R208: 数据规模评级（动态篇幅机制输入）───────────────────────────
+  // 用户诉求：数据源少 → 报告精简；数据源多 → 加长加深 + 覆盖更多数据
+  //（避免很多数据没被提到）；总结尽量全面。评级输入 = 四类数据源计数
+  //（重点结构数来自相关性分析，问题模式才有）；产物在 Phase C（章节
+  // 区间）与 Phase E（字数乘数 / maxChars / 覆盖下限）两处消费。基础
+  // 评估模式（无问题）同样参与评级 —— 字数与覆盖策略与问题模式同轨。
+  const scale = computeDataScale({
+    pdbCount: c.pdbRows?.length ?? 0,
+    blastCount: c.skippedBlast ? 0 : (c.blastRows?.length ?? 0),
+    literatureCount: c.literature?.length ?? 0,
+    keyPicks: hasQuestion ? (rel?.keyPicks?.length ?? 0) : 0,
+  });
+  const blastCountForScale = c.skippedBlast ? 0 : (c.blastRows?.length ?? 0);
+  emit({
+    stage: 'outline',
+    level: 'info',
+    message: `数据规模评级：${scale.tierZh}（${scale.score}/8 · PDB ${c.pdbRows?.length ?? 0} · BLAST ${blastCountForScale} · 文献 ${c.literature?.length ?? 0}${hasQuestion ? ` · 重点结构 ${rel?.keyPicks?.length ?? 0}` : ''}）→ 动态篇幅：每章字数 ×${scale.wordFactor}${hasQuestion ? ` · 深挖章 ${scale.questionExtraMin}-${scale.questionExtraMax}` : ''} · 代表性结构点名 ≥${scale.representativePdbMin} · 文献引用 ≥${scale.literatureCiteMin}`,
+    progress: 62,
+  });
+
   // ── Phase C: 大纲规划（62-64%）────────────────────────────────────────
   // R184: 基础评估章节（数据驱动）必含 + 问题深挖章节叠加 —— 聚焦的科学
   // 问题不再挤掉基本评估内容，只是「额外重点讨论」。
+  // R208: outlineRules 接入 scale —— 深挖章区间 / 总章节数随数据规模分档
+  //（sparse 收紧、abundant 放宽；标准档与 R189 基准一致）。
   const dataInfo: OutlineDataInfo = {
     hasPdb: (c.pdbRows?.length ?? 0) > 0,
     hasBlast: !c.skippedBlast && (c.blastRows?.length ?? 0) > 0,
     hasLiterature: (c.literature?.length ?? 0) > 0,
   };
-  const rules = outlineRules(dataInfo, { noQuestion: !hasQuestion });
+  const rules = outlineRules(dataInfo, { noQuestion: !hasQuestion, scale });
   const baselineListing = rules.baselineIds
     .map(id => getSection(id))
     .filter((s): s is SectionTemplate => !!s)
@@ -995,7 +1097,7 @@ export async function runDshEvaluation(params: {
     // R189: 基础评估模式 —— 大纲确定性生成（不调 LLM）：summary + 基础章节
     // + references + conclusion，与 classic 口径对齐。
     emit({ stage: 'outline', level: 'info', message: `规划报告大纲（基础评估模式，共 ${rules.totalMin} 章）…`, progress: 62 });
-    outline = repairOutline({ sections: [] }, dataInfo, { noQuestion: true });
+    outline = repairOutline({ sections: [] }, dataInfo, { noQuestion: true, scale });
     emit({
       stage: 'outline',
       level: 'success',
@@ -1018,6 +1120,7 @@ ${libraryListing}
 - 基础评估章节（下方「必含基础章节」清单的全部）必须包含——无论科学问题多聚焦，功能背景/PDB 资源/结构质量/成药性等标准评估内容都不可省略，只在自然相关处顺带联系问题
 - 在基础章节之外，从章节库其余 optional id 中按与科学问题的相关性额外选 ${rules.questionExtraMin}-${rules.questionExtraMax} 个「问题深挖」章节，重点展开问题本身
 - 排列顺序：基础评估章节在前，问题深挖章节在后
+- 数据规模评级：${scale.tierZh}（${scale.score}/8）—— ${scale.directive}
 - 同一章节不得重复；只能使用上面的章节 id，不得发明新 id
 - 只输出 JSON：{"sections": [{"id": "章节id", "focus": "本章要回答什么/用哪些数据，1-2 句"}]}`;
   const outlineUser = `科学问题：${question}
@@ -1030,6 +1133,8 @@ ${libraryListing}
 
 数据清单：UniProt 元数据 ✓、PDB 结构 ${c.pdbRows.length} 条、BLAST 同源 ${c.blastRows.length} 条（${c.skippedBlast ? '已跳过' : '已运行'}）、文献 ${c.literature.length} 篇、评分 Overall ${c.scores.overall.score}/10。
 
+本次数据规模评级：${scale.tierZh}（${scale.score}/8）—— ${scale.directive}。请按该篇幅策略决定深挖章的数量与各章 focus 的展开深度。
+
 本次必含的基础评估章节（数据驱动，不可省略；本地校验会自动补齐遗漏）：
 ${baselineListing}
 ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节放一张原理图/通路图确有帮助，规划时可优先考虑）：${figureQueries.map(q => `${q.sectionId}（${q.query}）`).join('、')}` : ''}
@@ -1038,12 +1143,14 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
 
   // R184: maxChars 2400→3600 —— 大纲最多 14 章，JSON 变长。
   // R189: 3600→4000 —— 深挖章节上限 6 后 JSON 变长。
-  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: 4000, llm: llmCfg, signal });
+  // R208: 4000→4800（rich/abundant）—— 章节数上限 17-18 后 JSON 变长。
+  const outlineMaxChars = scale.tier === 'rich' || scale.tier === 'abundant' ? 4800 : 4000;
+  const outlineRun = await generateJson(outlineSystem, outlineUser, { maxChars: outlineMaxChars, llm: llmCfg, signal });
   llmTotalMs += outlineRun.durationMs;
   if (outlineRun.provider) llmProvider = outlineRun.provider;
   if (outlineRun.model) llmModel = outlineRun.model;
 
-  outline = repairOutline(outlineRun.parsed, dataInfo);
+  outline = repairOutline(outlineRun.parsed, dataInfo, { scale });
   if (outlineRun.parsed) {
     emit({
       stage: 'outline',
@@ -1061,7 +1168,7 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     if (outTransient) noteTransient(outlineRun.error || '');
     outline = repairOutline({
       sections: guessQuestionSections(question).map(id => ({ id })),
-    }, dataInfo);
+    }, dataInfo, { scale });
     emit({
       stage: 'outline',
       level: 'warn',
@@ -1254,8 +1361,12 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
       ? `\n\n## 深度要求（问题深挖章节，必须全部满足）\n- 论证链完整：每个结论按「结论 → 证据 → 机制解释 → 含义」展开，不得只罗列条目\n- 多证据交叉：关键论点至少两条独立证据（不同结构 / 结构+文献 / 不同方法学），并说明证据间是否一致\n- 量化对比：用分辨率、identity%、IF、年份等具体数字支撑判断\n- 主动指出证据冲突或数据空白，给出你的裁决与理由，而非回避`
       : '';
     // R189: 深挖字数（模板 deepWords，缺失则 1.6x/1.8x 兜底）。
-    const minW = deep ? (tmpl.deepWords?.min ?? Math.round(tmpl.minWords * 1.6)) : tmpl.minWords;
-    const maxW = deep ? (tmpl.deepWords?.max ?? Math.round(tmpl.maxWords * 1.8)) : tmpl.maxWords;
+    // R208: × 数据规模乘数（chapterWordBounds）—— sparse 0.65 收紧 /
+    // abundant 1.3 放宽；主循环 / 终末补救 / lengthStats 分母三处同口径。
+    const { minW, maxW } = chapterWordBounds(tmpl, deep, scale);
+    // R208: 数据覆盖要求 —— 数据规模越高，点名结构/引用文献的覆盖下限
+    // 越高（避免大量数据未被提及）；summary 章注入「总结尽量全面」。
+    const coverageBlock = buildCoverageBlock(entry.id, tmpl, c, scale);
 
     const userPrompt = `# 当前任务：撰写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」
 
@@ -1263,7 +1374,7 @@ ${buildFilteredContext(c, tmpl.dataHints)}
 
 ---
 
-${questionBlock}${keyPicksBlock}${keyLitBlock}${depthBlock}
+${questionBlock}${keyPicksBlock}${keyLitBlock}${depthBlock}${coverageBlock}
 
 ## 本章焦点（大纲规划器指定）
 ${entry.focus}
@@ -1297,7 +1408,7 @@ ${figuresNote}
       const prompt = attempt === 0
         ? userPrompt
         : `${userPrompt}\n\n【重试】上次输出未通过校验（${lastErr || '格式不符'}）。请严格输出：第一行为 \`## ${tmpl.titleZh}\`，正文 ≥150 字符，不得包含失败占位符。`;
-      const r = await generateText(chapterSystem, prompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
+      const r = await generateText(chapterSystem, prompt, { maxChars: deep ? scale.maxCharsDeep : scale.maxCharsBase, llm: llmCfg, signal });
       llmTotalMs += r.durationMs;
       if (r.provider) llmProvider = r.provider;
       if (r.model) llmModel = r.model;
@@ -1328,8 +1439,8 @@ ${figuresNote}
 ${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.contentSpec}
 可用数据要点：直接 PDB ${c.directPdbCount} 条、BLAST ${c.blastHitCount} 条、文献 ${c.literature.length} 篇、Overall 评分 ${c.scores.overall.score}/10。
 
-第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 250-500 字。只输出本章内容。`;
-        const r = await generateText(chapterSystem, rescuePrompt, { maxChars: 6000, llm: llmCfg, signal });
+第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 ${minW}-${maxW} 字。只输出本章内容。`;
+        const r = await generateText(chapterSystem, rescuePrompt, { maxChars: scale.maxCharsBase, llm: llmCfg, signal });
         llmTotalMs += r.durationMs;
         if (r.provider) llmProvider = r.provider;
         if (r.model) llmModel = r.model;
@@ -1420,9 +1531,11 @@ ${lastRoundHints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
           // 是否可无损压缩由审稿人判断（存在明显冗余才给压缩建议，有效
           // 论证不因篇幅判 rewrite），不设硬性字数墙。R193 实测：深挖章
           // 膨胀 ~80%（2783 chars vs 1600 字上限），挤占报告整体篇幅平衡。
-          const deepMaxWords = tmpl.deepWords?.max ?? 0;
+          // R208: 上限改用乘数后的 maxW（chapterWordBounds 口径）——
+          // abundant 档允许更长正文、sparse 档更早触发压缩观察。
+          const deepMaxWords = deep ? maxW : 0;
           const lengthNote = deep && deepMaxWords > 0 && content.length > deepMaxWords * 1.6
-            ? `【篇幅观察】本章 ${content.length} chars，超出模板字数上限（${deepMaxWords} 字）约 ${Math.round((content.length / deepMaxWords - 1) * 100)}%。若存在明显冗余（重复论证/无效罗列/可合并表格），在 rewriteHints 中给出压缩建议；若均为有效论证则忽略本观察，不因篇幅单独判 rewrite。\n\n`
+            ? `【篇幅观察】本章 ${content.length} chars，超出本章字数上限（${deepMaxWords} 字）约 ${Math.round((content.length / deepMaxWords - 1) * 100)}%。若存在明显冗余（重复论证/无效罗列/可合并表格），在 rewriteHints 中给出压缩建议；若均为有效论证则忽略本观察，不因篇幅单独判 rewrite。\n\n`
             : '';
           const reviewUser = `科学问题：${question}
 
@@ -1517,7 +1630,7 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
             if (rwAttempt > 0) {
               await backoffWait(25000, signal, `重写调用遇瞬态错误，25s 后退避重试`, (message) => emit({ stage: 'chapter-rewrite', level: 'warn', message, progress: pct, chapter: entry.id }));
             }
-            const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? 9000 : 6000, llm: llmCfg, signal });
+            const r2 = await generateText(chapterSystem, rewritePrompt, { maxChars: deep ? scale.maxCharsDeep : scale.maxCharsBase, llm: llmCfg, signal });
             llmTotalMs += r2.durationMs;
             if (r2.provider) llmProvider = r2.provider;
             if (r2.model) llmModel = r2.model;
@@ -1653,15 +1766,17 @@ ${hints.map((h, idx) => `${idx + 1}. ${h}`).join('\n')}
       const tmpl = getSection(entry.id)!;
       const chapterIndex = idx + 1;
       emit({ stage: `chapter-${entry.id}`, level: 'info', message: `[终末补救] 第 ${chapterIndex}/${chapterTotal} 章 ${tmpl.titleZh} — 重试`, progress: 94, chapter: entry.id, chapterIndex, chapterTotal, chapterId: entry.id, chapterTitle: tmpl.titleZh });
+      // R208: 终末补救字数与主循环同口径（× 数据规模乘数）。
+      const frBounds = chapterWordBounds(tmpl, hasQuestion && !rules.baselineIds.includes(entry.id), scale);
       const finalRescuePrompt = `请为蛋白靶点评估报告撰写章节「${tmpl.titleZh}」。
 
 靶点：${c.uniprotInfo.proteinName}（${c.uniprotInfo.uniprotId}，${c.uniprotInfo.organism}）
 ${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.contentSpec}
 可用数据要点：直接 PDB ${c.directPdbCount} 条、BLAST ${c.blastHitCount} 条、文献 ${c.literature.length} 篇、Overall 评分 ${c.scores.overall.score}/10。
 
-第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 250-500 字。只输出本章内容。`;
+第一行必须是：\`## ${tmpl.titleZh}\`。正文中文 ${frBounds.minW}-${frBounds.maxW} 字。只输出本章内容。`;
       try {
-        const r = await generateText(chapterSystem, finalRescuePrompt, { maxChars: 6000, llm: llmCfg, signal });
+        const r = await generateText(chapterSystem, finalRescuePrompt, { maxChars: scale.maxCharsBase, llm: llmCfg, signal });
         llmTotalMs += r.durationMs;
         if (r.provider) llmProvider = r.provider;
         if (r.model) llmModel = r.model;
@@ -1686,11 +1801,10 @@ ${hasQuestion ? `科学问题：${question}\n` : ''}本章要求：${tmpl.conten
         ch.attempts = (ch.attempts || 0) + 1;
         ch.rescuedFinal = true;
         ch.error = undefined;
-        // R195 建议 4: 补救成功的章也计入篇幅比（观察口径与主循环一致）
-        const maxW = (hasQuestion && !rules.baselineIds.includes(entry.id))
-          ? (tmpl.deepWords?.max ?? Math.round(tmpl.maxWords * 1.8))
-          : tmpl.maxWords;
-        if (maxW > 0) lengthStats.push({ id: entry.id, chars: rescued.length, ratio: Math.round((rescued.length / maxW) * 100) / 100 });
+        // R195 建议 4: 补救成功的章也计入篇幅比（观察口径与主循环一致；
+        // R208: 分母 = 乘数后的 maxW，与 chapterWordBounds 同口径）。
+        const frMaxW = frBounds.maxW;
+        if (frMaxW > 0) lengthStats.push({ id: entry.id, chars: rescued.length, ratio: Math.round((rescued.length / frMaxW) * 100) / 100 });
         emit({
           stage: 'chapter_done',
           level: 'success',
@@ -2008,7 +2122,7 @@ ${ch.content}
       phases: {
         collect: { directPdbCount: c.directPdbCount, blastHitCount: c.blastHitCount, literatureCount: c.literature.length },
         relevance: { ok: relevanceRunParsed, findings: relevance?.findings?.length ?? 0, keyPicks: relevance?.keyPicks?.length ?? 0 },
-        outline: { total: outline.length, ids: outline.map(o => o.id) },
+        outline: { total: outline.length, ids: outline.map(o => o.id), dataScale: { tier: scale.tier, tierZh: scale.tierZh, score: scale.score, wordFactor: scale.wordFactor, questionExtra: [scale.questionExtraMin, scale.questionExtraMax], coverage: { representativePdbMin: scale.representativePdbMin, literatureCiteMin: scale.literatureCiteMin } } },
         figures: { verified: verifiedFigures.length },
         chapters: { ok: chaptersOk, failed: chaptersFailed, deepChars: ds.deepChars, bodyChars: ds.bodyChars, deepShare: ds.deepShare, lengthStats: { inflated: inflatedChapters, entries: lengthStats } },
         review: { reviewed: reviewedCount, rewritten: rewrittenCount, rounds: chapters.reduce((s, ch) => s + (ch.reviewRounds || 0), 0), skippedReview: skippedReviewChapters, skippedReReview: skippedReReviewChapters, trajectory: reviewTrajectory, rescuedFinal: finalRescuedCount },
@@ -2038,7 +2152,7 @@ ${ch.content}
     stage: 'done',
     level: reportOk ? 'success' : 'error',
     message: reportOk
-      ? `✓ Agent 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）${inflatedChapters > 0 ? ` · 篇幅超限 ${inflatedChapters} 章（观察项）` : ''}` : ' · 基础评估模式'}${finalRescuedCount > 0 ? ` · 终末补救救回 ${finalRescuedCount} 章` : ''}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 项（${finalReview.termReplacements} 处）` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
+      ? `✓ Agent 报告完成：${chaptersOk}/${chapters.length} 章 · ${finalReport.length} chars · 动态篇幅 ${scale.tierZh}（${scale.score}/8 · 字数 ×${scale.wordFactor}）· 配图 ${verifiedFigures.length} 张${hasQuestion ? ` · 审稿 ${reviewedCount} 章（重写 ${rewrittenCount} · 共 ${reviewRoundsTotal} 轮${skippedReviewChapters + skippedReReviewChapters > 0 ? ` · 配额降级跳过 ${skippedReviewChapters + skippedReReviewChapters} 章` : ''}）· 深挖占比 ${deepShare}%（排除参考文献口径）${inflatedChapters > 0 ? ` · 篇幅超限 ${inflatedChapters} 章（观察项）` : ''}` : ' · 基础评估模式'}${finalRescuedCount > 0 ? ` · 终末补救救回 ${finalRescuedCount} 章` : ''}${finalReview.ok ? ` · 终审 ${finalReview.issues ? `${finalReview.issues} 项问题（外科修正 ${finalReview.rewrites} 章${finalReview.termFixes > 0 ? ` · 术语统一 ${finalReview.termFixes} 项（${finalReview.termReplacements} 处）` : ''}）` : '通过'}` : ''}${transientHits > 0 ? ` · 限流退避 ${transientHits} 次${transientHits >= 2 ? '（已自动降级审查深度）' : ''}` : ''}`
       : `✗ 全部章节生成失败`,
     progress: 100,
   });

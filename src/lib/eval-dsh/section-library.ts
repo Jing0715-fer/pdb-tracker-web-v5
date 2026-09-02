@@ -356,6 +356,114 @@ export function getSection(id: string): SectionTemplate | undefined {
   return SECTION_LIBRARY.find((s) => s.id === id);
 }
 
+// ─── R208: 数据规模评级（动态篇幅机制）──────────────────────────────────────
+
+/**
+ * R208: 数据规模五档 —— 报告篇幅随数据源规模伸缩。
+ * 用户诉求：数据源少 → 报告精简（不注水）；数据源多 → 报告加长加深、
+ * 覆盖更多数据条目（避免大量数据未被提及）；总结尽量全面。
+ *
+ * 评级输入 = 四类数据源计数（PDB / BLAST / 文献 / 相关性分析点名的重点
+ * 结构数）；产物 = 大纲章节区间（outlineRules 消费）+ 每章字数乘数 +
+ * 章节生成 maxChars 分档 + 覆盖下限（agent.ts Phase E 消费）。
+ */
+export type DataScaleTier = 'sparse' | 'lean' | 'standard' | 'rich' | 'abundant';
+
+/** computeDataScale 的输入 —— 由调用方从 CollectResult 导出。 */
+export interface DataScaleInput {
+  /** 直接命中的 PDB 结构数（pdbRows.length）。 */
+  pdbCount: number;
+  /** BLAST 同源命中数（skippedBlast 时传 0）。 */
+  blastCount: number;
+  /** PubMed 文献数。 */
+  literatureCount: number;
+  /** 相关性分析点名的重点结构数（无问题模式传 0）。 */
+  keyPicks?: number;
+}
+
+/** 评级产物（纯数据，无副作用 —— 可直接单测）。 */
+export interface DataScalePolicy {
+  tier: DataScaleTier;
+  /** 中文档名（SSE 事件 / provenance 展示）。 */
+  tierZh: string;
+  /** 评级分 0-8（可解释性：各数据源分项之和，事件与 provenance 呈现）。 */
+  score: number;
+  /** 每章正文字数乘数（min/max 同乘；sparse 0.65 → abundant 1.3）。 */
+  wordFactor: number;
+  /** 问题深挖章数量区间（仅问题模式生效；标准档 = R189 的 1-6 不变）。 */
+  questionExtraMin: number;
+  questionExtraMax: number;
+  /** 基础章生成 maxChars（R208 前固定 6000）。 */
+  maxCharsBase: number;
+  /** 深挖章生成 maxChars（R208 前固定 9000）。 */
+  maxCharsDeep: number;
+  /** pdb_analysis 章「代表性结构」点名下限（R207 前 contentSpec 固定 3-5）。 */
+  representativePdbMin: number;
+  /** literature 章「引用不同 PMID」下限。 */
+  literatureCiteMin: number;
+  /** 大纲规划 prompt 注入的篇幅策略指令（不含评级名 —— 调用方拼装）。 */
+  directive: string;
+}
+
+/**
+ * R208: 数据规模评级（纯函数）。
+ * 分项打分：PDB（≥60→3 / ≥25→2 / ≥8→1）、BLAST（≥40→2 / ≥15→1）、
+ * 文献（≥15→2 / ≥6→1）、重点结构（≥8→1），总分 0-8 映射五档。
+ * 分档阈值锚定真实 E2E 数据形态：P69905（80 PDB + 50 BLAST + 20 文献）
+ * = abundant；小众靶点（<8 PDB + 无 BLAST + <6 文献）= sparse。
+ */
+export function computeDataScale(input: DataScaleInput): DataScalePolicy {
+  const pdb = input.pdbCount >= 60 ? 3 : input.pdbCount >= 25 ? 2 : input.pdbCount >= 8 ? 1 : 0;
+  const blast = input.blastCount >= 40 ? 2 : input.blastCount >= 15 ? 1 : 0;
+  const lit = input.literatureCount >= 15 ? 2 : input.literatureCount >= 6 ? 1 : 0;
+  const picks = (input.keyPicks ?? 0) >= 8 ? 1 : 0;
+  const score = pdb + blast + lit + picks;
+  const tier: DataScaleTier =
+    score <= 1 ? 'sparse' : score === 2 ? 'lean' : score <= 4 ? 'standard' : score <= 6 ? 'rich' : 'abundant';
+  switch (tier) {
+    case 'sparse':
+      return {
+        tier, tierZh: '数据稀疏', score, wordFactor: 0.65,
+        questionExtraMin: 1, questionExtraMax: 2,
+        maxCharsBase: 3200, maxCharsDeep: 5200,
+        representativePdbMin: 2, literatureCiteMin: 2,
+        directive: '数据源稀少 —— 报告保持精炼：问题深挖章宁少勿多（取区间下限），各章按「本章字数要求」的下限一侧撰写，不注水、不重复罗列本就稀少的数据；宁可短而实，不可长而空',
+      };
+    case 'lean':
+      return {
+        tier, tierZh: '数据有限', score, wordFactor: 0.8,
+        questionExtraMin: 1, questionExtraMax: 3,
+        maxCharsBase: 4500, maxCharsDeep: 7200,
+        representativePdbMin: 3, literatureCiteMin: 3,
+        directive: '数据源有限 —— 篇幅适度收紧：问题深挖章取区间中低位，各章按字数要求的中下限撰写，把有限数据讲透即可，无需展开冗余讨论',
+      };
+    case 'rich':
+      return {
+        tier, tierZh: '数据丰富', score, wordFactor: 1.15,
+        questionExtraMin: 2, questionExtraMax: 7,
+        maxCharsBase: 7200, maxCharsDeep: 10800,
+        representativePdbMin: 6, literatureCiteMin: 6,
+        directive: '数据源丰富 —— 报告应更详细：问题深挖章取区间中高位，各章充分展开；点名结构与引用文献的覆盖面要跟上数据规模（结构点名 ≥6、文献引用 ≥6 量级），避免大量数据未被提及',
+      };
+    case 'abundant':
+      return {
+        tier, tierZh: '数据海量', score, wordFactor: 1.3,
+        questionExtraMin: 3, questionExtraMax: 8,
+        maxCharsBase: 8400, maxCharsDeep: 12600,
+        representativePdbMin: 8, literatureCiteMin: 8,
+        directive: '数据源海量 —— 报告应全面详尽：问题深挖章取区间上限，各章充分展开；数据覆盖要求相应提高（代表性结构点名 ≥8、文献引用 ≥8 量级），大量结构/文献未被提及是不可接受的',
+      };
+    default: // standard（R208 前的行为基准）
+      return {
+        tier, tierZh: '数据中等', score, wordFactor: 1.0,
+        questionExtraMin: 1, questionExtraMax: 6,
+        maxCharsBase: 6000, maxCharsDeep: 9000,
+        representativePdbMin: 4, literatureCiteMin: 4,
+        directive: '数据规模中等 —— 按标准篇幅撰写',
+      };
+  }
+}
+
 /**
  * 数据可用性信号 —— 决定哪些「基础评估章节」有数据支持（R184）。
  * 由调用方从 CollectResult 导出；repairOutline / 大纲规划 prompt 共用。
@@ -397,6 +505,9 @@ export function baselineSectionIds(data?: Partial<OutlineDataInfo>): string[] {
  * R189: ① 科学问题可为空 —— noQuestion 模式下无 question_focus、无深挖
  * 章节，大纲确定性生成（基础评估口径，与 classic 对齐）；② 有问题时深挖
  * 章节上限 4→6（加大聚焦问题的回答篇幅），总上限 14→16。
+ * R208: opts.scale（数据规模评级）—— 深挖章区间与总章节数随数据源规模
+ * 五档伸缩（sparse 1-2/约10 → abundant 3-8/最多18）；缺省 = 标准档
+ * （R189 基准不变，向后兼容）。
  */
 export interface OutlineRules {
   totalMin: number;
@@ -415,9 +526,19 @@ export interface OutlineRules {
   formatStability: string[];
 }
 
-export function outlineRules(data?: Partial<OutlineDataInfo>, opts?: { noQuestion?: boolean }): OutlineRules {
+export function outlineRules(
+  data?: Partial<OutlineDataInfo>,
+  opts?: { noQuestion?: boolean; scale?: DataScalePolicy },
+): OutlineRules {
   const baselineIds = baselineSectionIds(data);
   const noQuestion = !!opts?.noQuestion;
+  // R208: 数据规模评级 —— 问题模式下深挖章区间 / 总章节数随数据源规模
+  // 伸缩（sparse 收紧 → abundant 放宽）；scale 缺省时保持 R189 基准
+  //（1-6 / 16，向后兼容）。基础评估模式大纲确定性生成，scale 不改章节
+  // 结构 —— 但 Phase E 的每章字数乘数与 maxChars 分档照常生效。
+  const scale = opts?.scale;
+  const extraMin = scale?.questionExtraMin ?? 1;
+  const extraMax = scale?.questionExtraMax ?? 6;
   // 无问题模式：大纲确定性 = 1 summary + 基础章节 + 2 tail（无深挖空间）。
   const fixedCount = noQuestion ? 3 : 4;
   const baseTotal = fixedCount + baselineIds.length;
@@ -442,25 +563,31 @@ export function outlineRules(data?: Partial<OutlineDataInfo>, opts?: { noQuestio
       ],
     };
   }
+  // R208: 总章节数动态化 —— 4 强制位 + 基础章节（数据驱动，至多 6）+
+  // 深挖章区间（scale 分档）。标准档 = 4 + max(6,4) + 6 = 16（与 R189
+  // 一致）；abundant = 4 + 6 + 8 = 18（章节库 19 个 id 内可行）；
+  // sparse ≈ 10-12（深挖章上限 2）。
+  const dynTotalMax = 4 + Math.max(baselineIds.length, 4) + extraMax;
   return {
-    totalMin: 5,
-    // R189: 4 个强制位 + 基础章节（最多 6）+ 问题深挖章节（最多 6）= 16。
-    totalMax: 16,
+    totalMin: 4 + extraMin,
+    totalMax: dynTotalMax,
     mandatoryFirst: 'summary',
     // DSH 模式特有：问题聚焦章强制第 2 位。
     mandatorySecond: 'question_focus',
     mandatoryTail: ['references', 'conclusion'],
     baselineIds,
-    // R189: 4→6 —— 用户要求加大聚焦问题回答占报告的篇幅。
-    questionExtraMin: 1,
-    questionExtraMax: 6,
+    // R189: 4→6 —— 用户要求加大聚焦问题回答占报告的篇幅（标准档基准）。
+    questionExtraMin: extraMin,
+    questionExtraMax: extraMax,
     optionalIds: SECTION_LIBRARY
       .filter((s) => !s.fixed && s.id !== 'question_focus')
       .map((s) => s.id),
     formatStability: [
-      '总章节数 5-16：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion',
+      `总章节数 ${4 + extraMin}-${dynTotalMax}：首章 summary，第 2 章 question_focus，倒数第 2 章 references，末章 conclusion`,
       '基础评估章节必须全部包含（有数据支持的那些）——科学问题再聚焦，功能背景/PDB 资源/结构质量/成药性等标准评估内容也不可省略，只是顺带联系问题',
-      '在基础章节之外，按与科学问题的相关性从章节库其余 optional id 中额外选取 1-6 个「问题深挖」章节，重点展开问题本身，排在基础章节之后；问题深挖章节的总字数应占报告正文的 50% 以上',
+      `在基础章节之外，按与科学问题的相关性从章节库其余 optional id 中额外选取 ${extraMin}-${extraMax} 个「问题深挖」章节，重点展开问题本身，排在基础章节之后；问题深挖章节的总字数应占报告正文的 50% 以上`,
+      // R208: 篇幅策略指令 —— 大纲规划器据此决定深挖章取舍的松紧。
+      ...(scale ? [`数据规模评级 ${scale.tierZh}（${scale.score}/8）：${scale.directive}`] : []),
       '同一章节不得重复出现；章节顺序一经确定不再改变',
       '每章 H2 标题必须精确使用章节库的中文章节名（一字不差）',
       '不得发明章节库之外的章节 id 或标题',
