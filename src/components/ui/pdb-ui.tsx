@@ -2,13 +2,14 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Clock, ChevronLeft, ChevronRight, Download, FileText, FileCode, Copy, Check, Printer } from 'lucide-react';
+import { X, Clock, ChevronLeft, ChevronRight, Download, FileText, FileCode, Copy, Check, Printer, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { TagInfo, TagCategory } from '@/lib/pdb-types';
 import { PAGE_SIZE_OPTIONS, loadStoredPageSize } from '@/lib/pdb-utils';
-import { sanitizeReport, stripMarkdownFrontmatterAndTitle, renderMarkdownToFullPage } from '@/lib/markdown-renderer';
+import { renderMarkdownToFullPage, sanitizeReport, stripMarkdownFrontmatterAndTitle } from '@/lib/markdown-renderer';
 import { ReportMarkdown } from '@/components/report-markdown';
+import { inlineReportImages, decodeProxyUrlsInMarkdown, hasInlineableImages } from '@/lib/report-export-images';
 
 // ─── Tag Category Styles ──────────────────────────────────────────────────
 
@@ -59,6 +60,8 @@ export function TagPill({ tag, onClick, size = 'sm' }: { tag: TagInfo; onClick?:
 export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boolean; onClose: () => void; title: string; content: string }) {
   const [copied, setCopied] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  // R210: 导出时内联图片的进度态（null = 空闲；嵌入期间按钮禁用防重复点击）。
+  const [embedding, setEmbedding] = useState<{ done: number; total: number } | null>(null);
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     if (isOpen) window.addEventListener('keydown', handleEscape);
@@ -108,28 +111,50 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
   }, [safeTitle]);
 
   const exportMarkdown = useCallback(() => {
-    const md = `# ${title}\n\n${processedContent}\n`;
+    // R210: 反代理化 —— markdown 文件里的代理相对地址在应用外无意义，
+    // 还原为原始 https 图源地址（可溯源/可二次编辑）。
+    const md = `# ${title}\n\n${decodeProxyUrlsInMarkdown(processedContent)}\n`;
     downloadBlob(md, 'text/markdown;charset=utf-8', 'md');
     setExportMenuOpen(false);
   }, [title, processedContent, downloadBlob]);
 
-  const exportHtml = useCallback(() => {
-    const { html } = renderMarkdownToFullPage(processedContent, {
+  // R210: 导出前把报告图片内联为 data URI —— 此前导出的独立 HTML 中
+  // 图片是相对代理地址（/api/figure-proxy?...），file:// 下全部失效。
+  // 内联后文件自包含、离线可看；失败图保持原 URL（显示 alt，不阻断）。
+  const embedImagesForExport = useCallback(async (): Promise<string> => {
+    if (!hasInlineableImages(processedContent)) return processedContent;
+    try {
+      const res = await inlineReportImages(processedContent, (done, total) => setEmbedding({ done, total }));
+      if (res.inlined > 0) {
+        console.info(`[report-export] 内联 ${res.inlined} 张图片为 data URI（${res.failed} 张失败保留原地址）`);
+      }
+      return res.markdown;
+    } catch {
+      return processedContent; // 内联异常不阻断导出
+    } finally {
+      setEmbedding(null);
+    }
+  }, [processedContent]);
+
+  const exportHtml = useCallback(async () => {
+    const md = await embedImagesForExport();
+    const { html } = renderMarkdownToFullPage(md, {
       title,
       bodyClassName: 'report-export',
       maxWidth: 820,
     });
     downloadBlob(html, 'text/html;charset=utf-8', 'html');
     setExportMenuOpen(false);
-  }, [title, processedContent, downloadBlob]);
+  }, [title, embedImagesForExport, downloadBlob]);
 
   // Round 57: Print / PDF export — opens a new window with the print-optimized
   // HTML and triggers the browser's print dialog. The user can then "Save as PDF"
   // from the print dialog. This avoids needing a heavy PDF library (jsPDF/pdfmake)
   // and leverages the browser's native PDF rendering which handles CJK fonts
   // perfectly.
-  const exportPdf = useCallback(() => {
-    const { html } = renderMarkdownToFullPage(processedContent, {
+  const exportPdf = useCallback(async () => {
+    const md = await embedImagesForExport();
+    const { html } = renderMarkdownToFullPage(md, {
       title,
       bodyClassName: 'report-export',
       maxWidth: 820,
@@ -152,7 +177,7 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
       }, 300);
     };
     setExportMenuOpen(false);
-  }, [title, processedContent, downloadBlob]);
+  }, [title, embedImagesForExport, downloadBlob]);
 
   const copyToClipboard = useCallback(async () => {
     try {
@@ -205,9 +230,16 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
                     className="h-7 px-2 text-xs gap-1 text-claude-text-muted hover:text-claude-text"
                     onClick={() => setExportMenuOpen(o => !o)}
                     title="导出报告"
+                    disabled={embedding != null}
                   >
-                    <Download className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">导出</span>
+                    {embedding != null ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {embedding != null ? `嵌入图片 ${embedding.done}/${embedding.total}` : '导出'}
+                    </span>
                   </Button>
                   <AnimatePresence>
                     {exportMenuOpen && (
@@ -220,29 +252,32 @@ export function ReportModal({ isOpen, onClose, title, content }: { isOpen: boole
                       >
                         <button
                           type="button"
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors"
+                          disabled={embedding != null}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           onClick={exportMarkdown}
                         >
                           <FileText className="h-3.5 w-3.5 text-claude-accent" />
                           <div className="flex flex-col">
                             <span className="font-medium">Markdown (.md)</span>
-                            <span className="text-[10px] text-claude-text-muted">纯文本，可编辑</span>
+                            <span className="text-[10px] text-claude-text-muted">纯文本，图片为原始链接</span>
                           </div>
                         </button>
                         <button
                           type="button"
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50"
+                          disabled={embedding != null}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50 disabled:opacity-50 disabled:cursor-not-allowed"
                           onClick={exportHtml}
                         >
                           <FileCode className="h-3.5 w-3.5 text-claude-accent" />
                           <div className="flex flex-col">
                             <span className="font-medium">HTML (.html)</span>
-                            <span className="text-[10px] text-claude-text-muted">独立网页，可打印</span>
+                            <span className="text-[10px] text-claude-text-muted">图片内联，离线可看</span>
                           </div>
                         </button>
                         <button
                           type="button"
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50"
+                          disabled={embedding != null}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-claude-text-secondary dark:text-[#c4beb7] hover:bg-claude-border-light dark:hover:bg-[#3d3832]/60 transition-colors border-t border-claude-border/50 dark:border-[#3d3832]/50 disabled:opacity-50 disabled:cursor-not-allowed"
                           onClick={exportPdf}
                         >
                           <Printer className="h-3.5 w-3.5 text-claude-accent" />

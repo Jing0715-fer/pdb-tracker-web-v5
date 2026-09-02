@@ -5519,3 +5519,24 @@ Stage Summary:
 - 代理链路结构性升级：任意公网 https 图源可显示（SSRF 出口防护替代域名白名单）+ 并发排队替代 429 立拒 —— 旧报告 z-cdn 图与新 MiniMax 任意域图都即时受益
 - 环境知识：① en.wikipedia.org 会 403 无 UA/undici 默认 UA 的 Node fetch（直连 curl 200）；② 浏览器 img 收到 429 不重试即永久缺图——代理类路由的并发控制必须排队不能立拒
 - 未实现建议池：判官与 web_search 的用量统计（遥测未区分）；Anthropic Messages API 形态（/anthropic/v1/messages + web_search_20250305）作为非标 Responses 端点的备选路径
+
+---
+Task ID: R210
+Agent: main (Z.ai Code)
+Task: 用户反馈三问题闭环：①流式逐章生成疑似参考前文导致重复内容 ②最新评估 Druggability Score 全 0（0/100 F Challenging · Structure/Function/Topology/Feasibility 全 0）③导出 HTML 报告图片不显示
+
+Work Log:
+- ①根因确认：逐章 prompt 互不可见（各章只拿数据上下文+大纲焦点，无前文章节信息）→ 摘要/结论/各章对同一 PDB/分辨率/机制事实独立重复展开（用户感知「重复内容」）。修复=前文去重上下文注入：agent.ts 新增 buildPriorChaptersDigest（每已完成章 = 章序号+标题+开篇小结 ~180 chars+§小节题 ≤4；references 章序号照计不列条目；总量截断 2400 chars）+ buildPriorContextBlock（摘要 + 三条去重硬约束：不得整段重复前文已展开论证/关联结论一句话带过并标注「详见第 N 章」/篇幅留给本章职责增量内容）；注入 userPrompt 数据上下文之后、首章跳过；重写 prompt 基于 userPrompt 自动继承；终审原有「内容大段重复」检查口径不变（生成侧为主、终审为兜底）
+- ②根因确认：真实评估（DSH collect 与 classic route）落库 Evaluation.scores 均为方法学键（X-ray/Cryo-EM/NMR/Overall，0-10 制），而 EvaluationScoreCard 期望顶层 {structure, function, topology, feasibility, overall}（0-100 制）→ 键不匹配四维恒 0/F（seed-demo 演示数据恰好是五键形态掩盖了该断裂）。修复=三层：新 src/lib/druggability.ts（computeDruggabilityScores 纯函数：structure=覆盖率40+结构量30+最佳分辨率30 / topology=覆盖率40+配体结合态占比30+方法学多样性30 / function=文献40+配体35+同源25 / feasibility=方法学综合50+分辨率30+覆盖率20 / overall=30/30/20/20 加权，全 0-100 钳制；parseDruggabilityFromScores 双形态解析）；collect.ts 两路（UniProt/序列）收集期末计算 + SSE 事件（可成药性 N/100 四维拆解）+ persistCollectRows scoresJson 增嵌套 druggability 子对象（无顶层 score 键 → EvalSummary/EvalScoreRadar/导出器 parseScores 全部安全跳过，卡片新分支专读；legacy 五键形态向后兼容）；存量回填 scripts/r210-backfill-druggability.ts（P69905 90/100 A+ · P00533 41/100，legacy 行跳过）—— pdb-tracker 批量聚合守卫 + provenance.phases.collect.druggability 记录
+- ③根因确认：两条导出路径图片全断 —— ReportModal（View Full Report→导出 HTML）与 EvalReportGenerator（Generate Report→Export HTML）导出的独立 HTML 中图片为相对代理地址 /api/figure-proxy?url=…（file:// 下失效；Generate Report 对话框还恒导出数据视图而非 LLM 报告）。修复=新 src/lib/report-export-images.ts（extractMarkdownImageUrls/fetchableImageUrl 归一化（代理形原样 · https 走代理 · data:/http: 不入流）/arrayBufferToDataUri 分块 btoa/inlineReportImages 并发 4 · 单图 20s · ≤5MB · 总 30 张 · 失败图保持原 URL 不阻断/decodeProxyUrlsInMarkdown 反代理化）；ReportModal exportHtml/exportPdf 先内联再渲染（导出按钮进度态「嵌入图片 N/M」+ 嵌入期间禁用防重复点击；exportMarkdown 反代理化为原始 https 图源）；EvalReportGenerator Export HTML 改导出当前视图（llm 视图 markdown 先内联 → renderMarkdownToFullPage → 下载）
+- 副产品修复（E2E 实测暴露的 R207 回归）：repairFigureUrls 旧正则只匹配裸 https:// 形图片 URL，而 R207 起报告图行全为代理形 → 突变修复/幻觉剔除自 R207 起整体静默失效（真实实证：LLM 把 structures%2F9szw 抄丢 2F 成 structures%9szw → 未纠正未剔除 + includes 判定失配触发章末补挂 → 正文坏图+附录重复并存）。修复=正则两形均匹配（(?:https?://|/api/figure-proxy\?url=)）+ bucketKeyOfUrl 分桶键兼容两形；真实管线验证：幻觉 URL 被剔除、3/3 图 URL 全部有效、0 broken
+- 验证（bun 直跑 45 断言 + 真实网络 + 双 E2E）：T1 computeDruggabilityScores（P69905 真实形态 90/100 全维度 / 零数据 / 越界钳制 / 分辨率五分档）；T2 parseDruggabilityFromScores（v2 嵌套 / legacy 五键 / 纯方法学键 null / 坏 JSON / 小数钳整数）；T3 前文摘要（核心句提取 / references 不列条目但序号照计 / ok=false 不列 / 小节题收录 / 图片行不作开篇 / 空块 / 超长截断标记）；T4 导出图片（URL 提取 / 归一化矩阵 / 反代理化 / data URI 转换）；T4b 真实代理取图内联（dev server figure-proxy → data URI >1KB）；T5 repairFigureUrls（真实突变形态纠正 / 幻觉剔除 / 正确保留 / 修复后 includes 命中不重复补挂 / 裸 https 向后兼容）
+- E2E run#1（dsh-P69905-mtjy7hje-0，sparse：3 PDB/skipBlast/2 文献）：8/8 章 · 3947 chars · SSE「可成药性 49/100（结构 44 · 功能 48 · 拓扑 66 · 可行性 39）」事件 → Evaluation.scores 含 druggability 键 → provenance.collect.druggability 落库；暴露 R207 回归（2 个突变 URL 未自愈 + 附录重复）→ 修复后 run#2（dsh_P69905_1788345218264，58s 热缓存）：8/8 章 · 3249 chars · 幻觉图剔除 1 张 · 3/3 图 URL 有效 · 终审 3 问题外科修正 3 章 + 术语统一 8 处
+- 浏览器验证（agent-browser）：评分卡 0/100 F → 90/100 A+（回填后富数据形态）→ 49/100 C（sparse 新运行形态，结构数据 3 条@15% 覆盖率如实反映证据稀疏）；报告模态 3/3 图 0 broken；导出点击触发 5 个程序化 fetch 全 200（inlineReportImages 浏览器内实跑：3 内联 2 失败保持原址）——导出文件自包含；0 console error；截图 docs/images/qa-r210-report-modal.png + qa-r210-final-eval.png
+- 质量门：eslint 9 文件 0 error 0 warning；dev server 全程健康（run-dsh 路由实编译 200）
+
+Stage Summary:
+- 三用户反馈全部闭环：逐章生成有前文摘要+去重硬约束（首章除外，重写自动继承）；Druggability Score 从恒 0/F → 数据驱动四维真实评分（新运行自动写入 + 存量已回填）；导出 HTML 图片 data URI 内联（离线自包含，md 导出反代理化，进度态可视化）
+- 附带修复 R207 代理形 URL 自愈回归（突变修复/幻觉剔除自 R207 起静默失效，本次 E2E 实证暴露并修复，两形兼容）
+- 评分语义：数据规模如实映射（同靶点 80 PDB/20 文献 → 90 A+ vs 3 PDB/2 文献 → 49 C），公式全注释可解释，provenance 全记录
+- 未实现建议池：LLM 参与的成药性定性评估（当前为纯数据启发式）；导出图片的失败重试（当前失败保持原址显示 alt）

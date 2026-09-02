@@ -22,6 +22,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import type { Evaluation } from '@/lib/pdb-types';
+import { parseDruggabilityFromScores } from '@/lib/druggability';
 
 /**
  * EvaluationScoreCard
@@ -32,8 +33,10 @@ import type { Evaluation } from '@/lib/pdb-types';
  *   - Individual score bars with colors
  *   - Quick stats (coverage, PDB count, BLAST status)
  *
- * The scores are stored as JSON in evaluation.scores:
- *   { structure, function, topology, feasibility, overall }
+ * R210: scores 解析升级 —— 优先读 v2 嵌套 `druggability` 子对象（DSH
+ * collect 落库新格式，四维 0-100 数据驱动计算），回退 legacy 顶层五键
+ * （seed-demo 形态）。方法学键（X-ray/Cryo-EM/NMR/Overall）不在此卡
+ * 展示（EvalSummary 已有）。此前 DSH 行四维恒 0/F 即键不匹配所致。
  */
 
 interface ScoreDimensions {
@@ -45,12 +48,7 @@ interface ScoreDimensions {
 }
 
 function parseScores(scores: string | null | undefined): ScoreDimensions {
-  if (!scores) return {};
-  try {
-    return JSON.parse(scores);
-  } catch {
-    return {};
-  }
+  return parseDruggabilityFromScores(scores) ?? {};
 }
 
 function getGrade(overall: number): { label: string; color: string; bg: string } {

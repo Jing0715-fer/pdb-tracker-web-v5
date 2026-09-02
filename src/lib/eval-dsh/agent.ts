@@ -594,6 +594,68 @@ export function buildCoverageBlock(
   return `\n\n## 数据覆盖要求（数据规模评级：${scale.tierZh}）\n${lines.join('\n')}`;
 }
 
+// ─── R210: 前文章节去重上下文 ──────────────────────────────────────────────
+
+/**
+ * R210: 已完成章节的紧凑摘要（每章 = 章序号 + 标题 + 开篇小结 + 小节题）。
+ *
+ * 背景：逐章独立生成（各章 prompt 互不可见）→ 同一 PDB/分辨率/机制事实
+ * 在多章重复展开（用户反馈「感觉有一些重复内容」）。注入前文摘要 +
+ * 去重硬约束后，模型能显式避让前文已覆盖内容并做「详见第 N 章」式引用。
+ *
+ * 摘要形态刻意紧凑（每章 ~220 chars，总上限 maxChars）：全量注入前文
+ * 正文会撑爆 prompt 且稀释本章指令。references 章是确定性文献列表
+ * （无去重价值）—— 章序号照计（报告 H2 顺序），条目不列。
+ */
+export function buildPriorChaptersDigest(
+  chapters: Array<{ id: string; title: string; ok: boolean; content: string }>,
+  maxChars = 2400,
+): string {
+  const entries: string[] = [];
+  let n = 0;
+  for (const ch of chapters) {
+    n++; // 报告章序号：含 references（编号与最终 H2 顺序一致）
+    if (!ch.ok || ch.id === 'references' || !ch.content) continue;
+    const bodyLines = ch.content.split('\n');
+    const body = bodyLines.slice(1).join('\n'); // 去掉 H2 标题行
+    // 开篇小结：首个非空、非图片/表格/标题的段落（章节格式约束要求开篇 1-2 句小结）。
+    const paras = body
+      .split(/\n\s*\n/)
+      .map(p => p.trim())
+      .filter(p => p && !p.startsWith('![') && !p.startsWith('|') && !p.startsWith('#') && !p.startsWith('>'));
+    const lead = (paras[0] || '')
+      .replace(/[*_`>]/g, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 180);
+    const subs = Array.from(ch.content.matchAll(/^###\s+(.+)$/gm))
+      .map(m => (m[1] || '').trim().slice(0, 32))
+      .slice(0, 4);
+    const subNote = subs.length > 0 ? `（小节：${subs.join(' / ')}）` : '';
+    entries.push(`- 第 ${n} 章「${ch.title}」${lead ? `核心：${lead}` : ''}${subNote}`);
+  }
+  let digest = entries.join('\n');
+  if (digest.length > maxChars) {
+    let cut = digest.lastIndexOf('\n- ', maxChars);
+    if (cut < maxChars * 0.5) cut = maxChars;
+    digest = digest.slice(0, cut) + '\n（其余前文章节从略 —— 去重要求同样适用）';
+  }
+  return digest;
+}
+
+/**
+ * R210: 逐章 prompt 的前文去重块（无前文/摘要为空 → 空串）。
+ * 注入位置：userPrompt 的数据上下文之后、科学问题块之前；
+ * 重写 prompt 基于 userPrompt 构建，自动继承。
+ */
+export function buildPriorContextBlock(
+  chapters: Array<{ id: string; title: string; ok: boolean; content: string }>,
+): string {
+  if (chapters.length === 0) return '';
+  const digest = buildPriorChaptersDigest(chapters);
+  if (!digest) return '';
+  return `\n\n## 前文章节概览（跨章去重上下文 —— 先读再写）\n${digest}\n\n去重要求（必须遵守）：\n- 前文章节已展开过的论证、数据表格与机制描述，本章不得整段重复；确需关联前文结论时，一句话带过并标注「详见第 N 章」\n- 同一 PDB 结构/文献已被前文重点解析过时，本章只从与本章职责直接相关的新角度引用（如新的分辨率对比、新的结合态、新的机制证据），不得复述前文已给出的数字与结论\n- 把篇幅留给本章自身职责范围内的增量内容（字数要求按增量内容衡量）`;
+}
+
 // ─── R183: SkillEvaluationReport 三级写入 ──────────────────────────────────
 
 /**
@@ -1367,6 +1429,9 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     // R208: 数据覆盖要求 —— 数据规模越高，点名结构/引用文献的覆盖下限
     // 越高（避免大量数据未被提及）；summary 章注入「总结尽量全面」。
     const coverageBlock = buildCoverageBlock(entry.id, tmpl, c, scale);
+    // R210: 前文章节概览 + 去重硬约束 —— 逐章独立生成时模型看不到前文，
+    // 同一事实/数字在多章重复展开（用户反馈）。首章无前文 → 空串。
+    const priorBlock = i > 0 ? buildPriorContextBlock(chapters) : '';
 
     const userPrompt = `# 当前任务：撰写第 ${chapterIndex}/${chapterTotal} 章「${tmpl.titleZh}」
 
@@ -1374,7 +1439,7 @@ ${buildFilteredContext(c, tmpl.dataHints)}
 
 ---
 
-${questionBlock}${keyPicksBlock}${keyLitBlock}${depthBlock}${coverageBlock}
+${priorBlock}${questionBlock}${keyPicksBlock}${keyLitBlock}${depthBlock}${coverageBlock}
 
 ## 本章焦点（大纲规划器指定）
 ${entry.focus}
@@ -2120,7 +2185,7 @@ ${ch.content}
       question,
       sessionId,
       phases: {
-        collect: { directPdbCount: c.directPdbCount, blastHitCount: c.blastHitCount, literatureCount: c.literature.length },
+        collect: { directPdbCount: c.directPdbCount, blastHitCount: c.blastHitCount, literatureCount: c.literature.length, druggability: c.druggability },
         relevance: { ok: relevanceRunParsed, findings: relevance?.findings?.length ?? 0, keyPicks: relevance?.keyPicks?.length ?? 0 },
         outline: { total: outline.length, ids: outline.map(o => o.id), dataScale: { tier: scale.tier, tierZh: scale.tierZh, score: scale.score, wordFactor: scale.wordFactor, questionExtra: [scale.questionExtraMin, scale.questionExtraMax], coverage: { representativePdbMin: scale.representativePdbMin, literatureCiteMin: scale.literatureCiteMin } } },
         figures: { verified: verifiedFigures.length },

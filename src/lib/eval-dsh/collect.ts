@@ -24,6 +24,7 @@ import { efetch } from '@/lib/pubmed';
 import { JOURNAL_IF_MAP } from '@/lib/journal-if-map';
 import { db } from '@/lib/db';
 import { Prisma } from '@prisma/client';
+import { computeDruggabilityScores, type DruggabilityBreakdown, type DruggabilityInput } from '@/lib/druggability';
 
 /** R179 (Task 2-a): SQLite $queryRaw 的 IN 占位符（空数组 → NULL，永不相等）。
  * 与经典 route 的 safeInPlaceholders 同一惯用法。 */
@@ -81,6 +82,8 @@ export interface CollectResult {
   coverage: number;
   skippedBlast: boolean;
   scores: CollectScores;
+  /** R210: 数据驱动可成药性四维评分（0-100，EvaluationScoreCard 直接消费）。 */
+  druggability: DruggabilityBreakdown;
   literature: LiteratureRow[];
   dbSaved: boolean;
   /** R200: 序列输入模式的识别信息（UniProt 输入时为 undefined）。 */
@@ -142,6 +145,42 @@ function scoreEmitMessage(scores: CollectScores): string {
 }
 
 /**
+ * R210: 从收集数据推导可成药性评分入参（两路共用；纯数据推导，零 LLM）。
+ * ligandRich = 含结合配体的结构数（结合态/口袋证据）；methodDiversity =
+ * 有结构的方法学种数；bestResolution = 最小分辨率（无结构为 null）。
+ */
+export function druggabilityInputFromCollect(args: {
+  pdbRows: PdbEntryDetail[];
+  blastRows: BlastHit[];
+  literature: LiteratureRow[];
+  coverage: number;
+  scores: CollectScores;
+}): DruggabilityInput {
+  const { pdbRows, blastRows, literature, coverage, scores } = args;
+  const resolutions = pdbRows.map(e => e.resolution).filter((r): r is number => r != null && r > 0);
+  const ligandRichCount = pdbRows.filter(e => (e.ligands || '').trim().length > 0).length;
+  const methodDiversity = 1
+    + (pdbRows.some(e => (e.method || '').includes('X-RAY')) ? 1 : 0)
+    + (pdbRows.some(e => (e.method || '').includes('ELECTRON')) ? 1 : 0)
+    + (pdbRows.some(e => (e.method || '').includes('NMR')) ? 1 : 0);
+  return {
+    coverage,
+    pdbCount: pdbRows.length,
+    blastCount: blastRows.length,
+    literatureCount: literature.length,
+    bestResolution: resolutions.length > 0 ? Math.min(...resolutions) : null,
+    ligandRichCount,
+    methodDiversity: Math.max(1, Math.min(3, methodDiversity)),
+    overallMethodScore: scores.overall.score,
+  };
+}
+
+/** R210: 可成药性评分 emit 行（含四维拆解，两路共用）。 */
+function druggabilityEmitMessage(d: DruggabilityBreakdown): string {
+  return `可成药性 ${d.overall}/100（结构 ${d.structure} · 功能 ${d.function} · 拓扑 ${d.topology} · 可行性 ${d.feasibility}）`;
+}
+
+/**
  * R200: DB 持久化（自 collectEvaluationData 提取，UniProt/序列两路共用）。
  * mirror 经典 route：raw-SQL upsert，schema-drift 免疫；report/provenance
  * 留 null —— Phase F 由 agent.ts 写回。key = 真 UniProt acc 或 SEQ_xxx。
@@ -153,12 +192,14 @@ async function persistCollectRows(args: {
   blastRows: BlastHit[];
   coverage: number;
   scores: CollectScores;
+  /** R210: 可成药性四维评分（写入 Evaluation.scores 嵌套键）。 */
+  druggability: DruggabilityBreakdown;
   maxPdb: number;
   skippedBlast: boolean;
   directPdbCount: number;
   emit: (e: SseEvent) => void;
 }): Promise<boolean> {
-  const { key, uniprotInfo, pdbRows, blastRows, coverage, scores, maxPdb, skippedBlast, directPdbCount, emit } = args;
+  const { key, uniprotInfo, pdbRows, blastRows, coverage, scores, druggability, maxPdb, skippedBlast, directPdbCount, emit } = args;
   try {
     emit({ stage: 'write-db', level: 'info', message: `写入数据库（Evaluation + ${pdbRows.length} PDB + ${blastRows.length} BLAST）`, progress: 57 });
     const scoresJson = JSON.stringify({
@@ -166,6 +207,16 @@ async function persistCollectRows(args: {
       'Cryo-EM': { score: scores.cryoem.score, rating: scores.cryoem.rating, max: 10 },
       'NMR': { score: scores.nmr.score, rating: scores.nmr.rating, max: 10 },
       'Overall': { score: scores.overall.score, rating: scores.overall.rating, max: 10 },
+      // R210: 可成药性四维（0-100）。嵌套子对象无顶层 'score' 键 ——
+      // EvalSummary / EvalScoreRadar / 报告导出器的 parseScores 均会
+      // 安全跳过未知对象键；EvaluationScoreCard 新分支专门读取。
+      druggability: {
+        structure: druggability.structure,
+        function: druggability.function,
+        topology: druggability.topology,
+        feasibility: druggability.feasibility,
+        overall: druggability.overall,
+      },
     });
     // 先写父表（FK 约束），report/provenance 均为 null（Phase F 更新）。
     await db.$executeRaw`INSERT INTO Evaluation (uniprotId, entryName, proteinName, geneNames, organism, sequenceLength, coverage, scores, report, provenance, maxPdbUsed, blastWasSkipped, pdbCountAtEval, createdAt, updatedAt) VALUES (${key}, ${uniprotInfo.entryName}, ${uniprotInfo.proteinName}, ${uniprotInfo.geneNames}, ${uniprotInfo.organism}, ${uniprotInfo.sequenceLength}, ${coverage}, ${scoresJson}, null, null, ${maxPdb}, ${skippedBlast}, ${directPdbCount}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(uniprotId) DO UPDATE SET entryName = excluded.entryName, proteinName = excluded.proteinName, geneNames = excluded.geneNames, organism = excluded.organism, sequenceLength = excluded.sequenceLength, coverage = excluded.coverage, scores = excluded.scores, maxPdbUsed = excluded.maxPdbUsed, blastWasSkipped = excluded.blastWasSkipped, pdbCountAtEval = excluded.pdbCountAtEval, updatedAt = CURRENT_TIMESTAMP`;
@@ -494,6 +545,9 @@ export async function collectEvaluationData(
   }
 
   // ── 7. DB 持久化（R200 提取为 persistCollectRows，两路共用）──────────
+  // R210: 可成药性四维评分（文献已到位后计算，随 scores 一并落库）。
+  const druggability = computeDruggabilityScores(druggabilityInputFromCollect({ pdbRows, blastRows, literature, coverage, scores }));
+  emit({ stage: 'score', level: 'success', message: druggabilityEmitMessage(druggability), progress: 57 });
   const dbSaved = await persistCollectRows({
     key: uniprot,
     uniprotInfo,
@@ -501,6 +555,7 @@ export async function collectEvaluationData(
     blastRows,
     coverage,
     scores,
+    druggability,
     maxPdb,
     skippedBlast: shouldSkipBlast,
     directPdbCount,
@@ -516,6 +571,7 @@ export async function collectEvaluationData(
     coverage,
     skippedBlast,
     scores,
+    druggability,
     literature,
     dbSaved,
   };
@@ -787,6 +843,9 @@ export async function collectEvaluationDataForSequence(
   }
 
   // ── 9. DB 持久化（key = 识别 acc 或 SEQ_xxx）────────────────────────
+  // R210: 可成药性四维评分（文献到位后计算，两路同口径）。
+  const druggability = computeDruggabilityScores(druggabilityInputFromCollect({ pdbRows, blastRows, literature, coverage, scores }));
+  emit({ stage: 'score', level: 'success', message: druggabilityEmitMessage(druggability), progress: 57 });
   const dbSaved = await persistCollectRows({
     key: uniprotAcc || seqKey,
     uniprotInfo,
@@ -794,6 +853,7 @@ export async function collectEvaluationDataForSequence(
     blastRows,
     coverage,
     scores,
+    druggability,
     maxPdb,
     skippedBlast: false,
     directPdbCount,
@@ -809,6 +869,7 @@ export async function collectEvaluationDataForSequence(
     coverage,
     skippedBlast: false,
     scores,
+    druggability,
     literature,
     dbSaved,
     sequenceInfo: {

@@ -220,6 +220,13 @@ function editDistanceAtMost(a: string, b: string, max: number): number {
   return prev[b.length];
 }
 
+/** R210: 图片 URL 的候选分桶键 —— 裸 https 形用 host；代理形全落同一桶
+ *（清单与正文同形时天然同桶，近邻搜索不受影响）。 */
+function bucketKeyOfUrl(u: string): string {
+  if (u.startsWith('/api/figure-proxy')) return '/api/figure-proxy';
+  return u.replace(/^https?:\/\//, '').split('/')[0];
+}
+
 export interface FigureUrlRepair {
   content: string;
   /** 被修复的 URL 数（字符突变 → 就近纠正回清单内的正确 URL）。 */
@@ -248,16 +255,21 @@ export function repairFigureUrls(content: string, allowedUrls: string[]): Figure
   const allowed = [...new Set(allowedUrls)];
   const byHost = new Map<string, string[]>();
   for (const u of allowed) {
-    const host = u.replace(/^https?:\/\//, '').split('/')[0];
+    const host = bucketKeyOfUrl(u);
     if (!byHost.has(host)) byHost.set(host, []);
     byHost.get(host)!.push(u);
   }
   let fixed = 0;
   let removed = 0;
   // 图片 token 独立成行（生成侧约定），删除时顺带吞掉行尾换行避免空洞。
-  const out = content.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)(\n?)/g, (full, _alt: string, url: string, nl: string) => {
+  // R210 回归修复：R207 起报告图行全部为代理形（/api/figure-proxy?url=
+  // <enc>），旧正则只匹配裸 https:// 形 —— 突变修复/幻觉剔除自 R207 起
+  // 整体静默失效（真实 E2E 实证：structures%2F9szw 被抄丢 2F 成
+  // structures%9szw，既未纠正也未剔除，还因 includes 判定失配触发同图
+  // 章末补挂 → 正文坏图 + 附录重复并存）。两形均匹配，与 allowed 同口径比对。
+  const out = content.replace(/!\[([^\]\n]*)\]\(((?:https?:\/\/|\/api\/figure-proxy\?url=)[^)\s]+)\)(\n?)/g, (full, _alt: string, url: string, nl: string) => {
     if (allowed.includes(url)) return full;
-    const host = url.replace(/^https?:\/\//, '').split('/')[0];
+    const host = bucketKeyOfUrl(url);
     const candidates = byHost.get(host) ?? [];
     let best: string | null = null;
     let bestDist = 3; // 阈值 2

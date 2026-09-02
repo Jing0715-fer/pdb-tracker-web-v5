@@ -5,12 +5,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import {
   X, FileText, Printer, Download, Eye, Edit3,
-  CheckSquare, Square, ChevronRight, Sparkles,
+  CheckSquare, Square, ChevronRight, Sparkles, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { Evaluation } from '@/lib/pdb-types';
 import { renderMarkdownToFullPage } from '@/lib/markdown-renderer';
+import { inlineReportImages, hasInlineableImages } from '@/lib/report-export-images';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,6 +106,8 @@ export function EvalReportGenerator({
 
   const [showPreview, setShowPreview] = useState(false);
   const [view, setView] = useState<'data' | 'llm'>('data');
+  // R210: 导出时内联图片进度（LLM 报告视图导出前把代理图转 data URI）。
+  const [embedding, setEmbedding] = useState<{ done: number; total: number } | null>(null);
 
   const toggleSection = useCallback((id: string) => {
     setSections(prev => prev.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s));
@@ -377,15 +380,38 @@ export function EvalReportGenerator({
 
   // ─── Export as HTML ─────────────────────────────────────────────────────
 
-  const handleExportHtml = useCallback(() => {
-    const blob = new Blob([reportHtml], { type: 'text/html' });
+  // R210: 导出当前视图 —— LLM 分析视图的导出图片全量内联为 data URI
+  //（旧版恒导出数据视图：既无报告正文也无配图；LLM 视图的代理相对地址
+  // 在独立文件中也会失效）。内联失败图保持原地址，不阻断导出。
+  const handleExportHtml = useCallback(async () => {
+    let html = reportHtml;
+    if (view === 'llm') {
+      let md = evaluation.report || '';
+      if (md && hasInlineableImages(md)) {
+        try {
+          const res = await inlineReportImages(md, (done, total) => setEmbedding({ done, total }));
+          md = res.markdown;
+          if (res.inlined > 0) {
+            console.info(`[report-export] 内联 ${res.inlined} 张图片为 data URI（${res.failed} 张失败保留原地址）`);
+          }
+        } catch {
+          // 内联异常不阻断导出
+        } finally {
+          setEmbedding(null);
+        }
+      }
+      html = md
+        ? renderMarkdownToFullPage(md, { title: `LLM Report · ${evaluation.uniprotId}` }).html
+        : llmReportHtml;
+    }
+    const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `eval-report-${evaluation.uniprotId}-${new Date().toISOString().slice(0, 10)}.html`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [reportHtml, evaluation.uniprotId]);
+  }, [reportHtml, llmReportHtml, view, evaluation.report, evaluation.uniprotId]);
 
   // ─── Print ──────────────────────────────────────────────────────────────
 
@@ -597,10 +623,11 @@ export function EvalReportGenerator({
                     variant="default"
                     size="sm"
                     onClick={handleExportHtml}
+                    disabled={embedding != null}
                     className="h-7 px-3 text-[11px] bg-claude-accent text-white hover:bg-claude-accent-hover"
                   >
-                    <Download className="h-3 w-3 mr-1" />
-                    Export HTML
+                    {embedding != null ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+                    {embedding != null ? `嵌入图片 ${embedding.done}/${embedding.total}` : 'Export HTML'}
                   </Button>
                 </div>
 

@@ -3951,6 +3951,9 @@ export default function PdbTracker() {
             const parsed = JSON.parse(e.scores);
             for (const [k, v] of Object.entries(parsed)) {
               const sv = v as { score: number; max: number; rating: string };
+              // R210: 嵌套 druggability（无 score 字段）与方法学键聚合口径
+              // 不兼容 —— 跳过（聚合视图只统计方法学评分条目）。
+              if (typeof v !== 'number' && (typeof v !== 'object' || v == null || !('score' in (v as Record<string, unknown>)))) continue;
               if (!scoreAgg[k]) scoreAgg[k] = { score: 0, max: sv.max || 10, rating: sv.rating || '', count: 0 };
               scoreAgg[k].score += sv.score || 0;
               scoreAgg[k].count = (scoreAgg[k].count || 0) + 1;
