@@ -5496,3 +5496,26 @@ Stage Summary:
 - R208 动态篇幅机制两档真实 E2E 对照闭环完成：数据少→精简（6246 chars/11 章/深挖 2/3 条结构全点名），数据多→详尽（18747 chars/15 章/深挖 6/16 ID+25 PMID 覆盖）
 - 自动发射器模式（R206 先例）再次有效：配额窗口 10 分钟粒度探测恢复即发射，无人值守完成对照验证
 - 用户场景直证：同一靶点数据量从 3 PDB/2 文献 → 80 PDB/20 文献，报告从 6K → 18.7K chars，摘要从「有限数据总览」→「全数据源总览 + 量化细节」
+
+---
+Task ID: R209
+Agent: main (Z.ai Code)
+Task: 用户反馈「Wikimedia Commons 图源效果不太好，本地用 MiniMax M3，参考其 Server Tools 文档接入 web_search」→ MiniMax 服务端 web_search 图源落地 + 代理链路全 https 放开
+
+Work Log:
+- 方案定案（依据用户提供的 MiniMax Server Tools 文档）：web_search 是 MiniMax 服务端托管工具（Responses API /v1/responses 专属，声明式 tools:[{type:"web_search"}]，模型在服务端自动执行搜索并在单次请求内继续生成）——无法直接搜图，采用「页面发现 → 服务端提取」两段式：① Responses API 让模型联网搜索并返回最可能包含高质量科学配图的网页（≤4 页，严格 JSON 数组契约）② 服务端并行抓取页面 → 正则提取 <img> 候选（过滤/打分）→ 进入既有下载 → VLM 判官链（质量闸门与 z-ai/Commons 候选完全一致）
+- figures.ts 新增：minimaxWebSearchConfig（探测：provider id/baseURL 含 minimax + 有 key；zai/auto/cli: 排除；PDB_FIGURES_NO_MINIMAX_WEB=1 逃生门）→ minimaxResponsesEndpoint（/v1 后缀双形适配）→ callProviderWebSearchRaw（官方请求形态：model+input+tools，Bearer；output_text 顶层优先 / message.content 聚合双解析路径；web_search_call 提取模型实际搜索词；120s 超时）→ extractFirstJsonArray（平衡数组提取，围栏噪声容忍）→ parseWebSearchPages → extractImagesFromPageHtml（纯函数：data-src/src 懒加载双取 + srcset 最高倍率（维基 src 常为 250px 缩略，只取 src 会喂判官小图）+ https-only + GIF/SVG 剔除（R206b 口径）+ 宽<200 剔除 + 垃圾模式 + wikimedia 无扩展名 thumb 例外 + alt/文件名关键词打分排序 + 同 host ≤3）→ fetchPageAndExtractImages（15s/2.5MB/text-html 三门槛）→ searchMinimaxWebFigures（编排 + 4xx 会话级定性 dead-memo（瞬态 2 次也定性，防 4 query 各白等 120s））
+- searchWebFigures 集成：图源三级链 z-ai image-search（沙箱优先）→ MiniMax web_search（本地主路径，用户配置 MiniMax provider 即激活）→ Wikimedia Commons（兜底）；图源链 upfront 公告（仅 MiniMax 激活时）+ 模型搜索词事件 + minimax: 前缀会话缓存 + dead-memo 一次性原因提示 + 「返回 N 条候选」消息三分流；FORCE_COMMONS 测试门同时跳过 MiniMax（纯 Commons 演示口径不变）；downloadImageAsDataUri UA 统一为浏览器兼容 + 仓库地址形（任意站点 CDN 反爬 + Wikimedia 礼仪双满足）
+- 代理链路全 https 放开（配套）：figure-view proxyFigureUrl 从「静态白名单域改写」扩大为「全部 https 图 URL 改写」（MiniMax 图源来自任意公网站点，逐域白名单不可行）；figure-proxy 路由白名单改为 SSRF 出口防护（https-only + 无显式端口 + 环回/私网/链路本地/IPv6 等价段/内网后缀全拒绝 + content-type image/* + 4MB + 20s）—— 实测对照发现并修复两个问题：① 无 UA 时 Node fetch 被 en.wikipedia.org 403（直连 curl 200）→ 全目标统一带联系方式 UA；② 并发上限 429 立拒会造成浏览器 img 永久缺图（<img> 不自动重试）→ 改为轮询信号量排队（30s 上限），8 并发不同真实 URL 全 200
+- 验证（bun 直跑 66 断言 + 真实网络）：T1-T4 纯函数（端点拼接/数组提取/页面解析/HTML 提取 16 项过滤打分断言含同 host 上限独立用例）；T5 mock MiniMax Responses 端点 —— 请求形态全断言（tools=[{type:"web_search"}]/model/input/Bearer/Content-Type）+ 顶层 output_text 与 message 聚合双解析路径 + 搜索词回调 + 候选来自页面提取；T6 真实 Wikipedia Hemoglobin 页面（681KB HTML）提取 ≥3 相关候选（500px 1GZX Haemoglobin/HemoglobinABDAlignment/Heme B，全部 upload.wikimedia.org https）；T7 探测排除矩阵；T9 代理改写；T10 真实 MiniMax 国际端点伪 key 探针 401（端点路径存在性证实——404 才是路径错误）；T5b 4xx dead-memo 短路（含后续调用零 HTTP 请求）
+- 代理路由 live 测试（dev server 热编译后 curl）：SSRF 五组 400（localhost/192.168/10.0/http/显式端口）+ 真实 URL 四组 200（en.wikipedia.org 非白名单公网图 13KB / thumb.wikimedia.org 真实 thumb / z-cdn.chatglm.cn 旧报告图 261KB / cdn.rcsb.org 回归）+ HTML 415 + 8 并发排队全 200
+- 浏览器端到端（现有 run B 报告页）：52 img · 44 走代理（含旧报告 z-cdn 图——R209 前该域不在白名单，附带收益）· 0 broken（修复前 2 张因 429 立拒而缺图）· 0 console error · 截图 docs/images/qa-r209-proxy-report.png
+- 质量门：eslint figures/figure-view/figure-proxy/pdb-tracker/settings-run-panel/agent 全 0/0；run-dsh 路由实编译 200；dev server 压测重启后 supervisor 自动恢复验证通过
+
+Stage Summary:
+- 本地部署 web 图源从「Commons 关键词梯（严格 AND 词项匹配，召回质量受限）」升级为「MiniMax web_search 语义化联网搜索 → 页面发现 → 服务端 <img> 提取」——用户本地配置 MiniMax provider（apiKey + MiniMax-M3）即自动生效，判官与正文同源
+- 用户本地预期效果：Commons 召回不到的主题（模型自主多轮搜索 + 权威页面优先 prompt）→ 维基百科/教育站/综述页的高质量配图 → VLM 判官严筛（中文图注）→ 代理显示
+- 沙箱行为不变（provider=zai → MiniMax 路径不激活，z-ai CLI → Commons 原链路）；沙箱无法真打 MiniMax API（无 key），请求形态与响应解析经 mock 全断言 + 真实端点 401 存在性探针
+- 代理链路结构性升级：任意公网 https 图源可显示（SSRF 出口防护替代域名白名单）+ 并发排队替代 429 立拒 —— 旧报告 z-cdn 图与新 MiniMax 任意域图都即时受益
+- 环境知识：① en.wikipedia.org 会 403 无 UA/undici 默认 UA 的 Node fetch（直连 curl 200）；② 浏览器 img 收到 429 不重试即永久缺图——代理类路由的并发控制必须排队不能立拒
+- 未实现建议池：判官与 web_search 的用量统计（遥测未区分）；Anthropic Messages API 形态（/anthropic/v1/messages + web_search_20250305）作为非标 Responses 端点的备选路径

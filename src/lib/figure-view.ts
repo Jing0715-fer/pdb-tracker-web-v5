@@ -8,9 +8,15 @@
  *
  * 改写只发生在「渲染出口」（markdown 嵌入、前端 img src）：ReportFigure.url
  * 恒存原始外链（下载/VLM/去重/溯源语义不变）。
+ *
+ * R209: 改写范围从「静态白名单域」扩大到「全部 https 图 URL」—— MiniMax
+ * web_search 图源的图片来自任意公网站点（教育站/期刊站/CDN），逐域维护白
+ * 名单不可行；代理路由侧以 SSRF 防护（私网/环回主机拒绝 + https-only +
+ * image/* content-type + 4MB 上限）兜安全。http URL 保持原样（代理不接受
+ * http，宁直连不劫持）。
  */
 
-/** 走代理的图源域名（后缀匹配；均为公网只读 CDN，无鉴权面）。 */
+/** 既有静态白名单域（代理路由据此决定是否注入 Wikimedia 礼仪 UA）。 */
 const PROXIED_HOSTS = [
   'upload.wikimedia.org',
   'thumb.wikimedia.org',
@@ -22,7 +28,8 @@ const PROXIED_HOSTS = [
  * 要求 UA 带联系方式，否则 403 严限流桶；代理请求由 Next 服务端发出）。 */
 export const FIGURE_PROXY_UA = 'PDB-Tracker/1.0 (+https://github.com/Jing0715-fer/pdb-tracker-web-v5)';
 
-/** 判断 URL 是否为应走代理的图源（https + 域名后缀匹配）。 */
+/** 判断 URL 是否为静态白名单图源（https + 域名后缀匹配）。
+ * R209 起只用于 UA 注入判定；是否走代理见 proxyFigureUrl（全部 https）。 */
 export function isProxiedFigureUrl(url: string): boolean {
   try {
     const u = new URL(url);
@@ -32,8 +39,14 @@ export function isProxiedFigureUrl(url: string): boolean {
   }
 }
 
-/** 渲染出口统一改写：代理域名 → /api/figure-proxy?url=<enc>；其余原样。 */
+/** 渲染出口统一改写：https 图 URL → /api/figure-proxy?url=<enc>；其余原样。
+ * （R207：仅白名单域；R209：全部 https —— 见文件头注释。） */
 export function proxyFigureUrl(url: string): string {
-  if (!url || !isProxiedFigureUrl(url)) return url;
+  if (!url) return url;
+  try {
+    if (new URL(url).protocol !== 'https:') return url;
+  } catch {
+    return url;
+  }
   return `/api/figure-proxy?url=${encodeURIComponent(url)}`;
 }

@@ -626,6 +626,390 @@ export async function searchCommonsFigures(query: string, signal?: AbortSignal):
   return [];
 }
 
+// ─── R209: MiniMax 服务端 web_search 图源（本地主路径）───────────────────────
+
+/**
+ * R209: 网页/图片抓取 UA（浏览器兼容前缀 + 联系方式）。纯标识 UA 常被站点
+ * CDN 反爬 403，纯浏览器 UA 违反抓取礼仪 —— 折中为 compatible 标识 + 仓库
+ * 地址（Wikimedia「UA 必须含联系方式」规则同样满足：R205 实测带 URL 即
+ * 200，前缀不限）。
+ */
+const FIGURE_PAGE_UA = 'Mozilla/5.0 (compatible; PDB-TrackerFigureBot/1.0; +https://github.com/Jing0715-fer/pdb-tracker-web-v5)';
+/** R209: MiniMax Responses API（web_search 服务端工具）单次调用超时 —— 官方
+ * 文档明示「搜索行为在服务端完成，单次请求耗时可能比不启用工具时更长」。 */
+const MINIMAX_WEBSEARCH_TIMEOUT_MS = 120_000;
+/** R209: 每 query 最多采纳 web_search 发现的页数（并行抓取，每页 15s）。 */
+const MINIMAX_MAX_PAGES = 4;
+/** R209: 单页 HTML 抓取上限（>2.5MB 的页面多为巨型站点，正则提取性价比低）。 */
+const PAGE_HTML_MAX_BYTES = 2_500_000;
+const PAGE_FETCH_TIMEOUT_MS = 15_000;
+
+/** 从文本提取第一个平衡的 JSON 数组（与 extractFirstJsonObject 同源算法；
+ * R209: MiniMax web_search 的输出契约是页面列表 JSON 数组）。 */
+export function extractFirstJsonArray(text: string): any[] | null {
+  if (!text) return null;
+  const start = text.indexOf('[');
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) {
+        const slice = text.slice(start, i + 1);
+        try {
+          const parsed = JSON.parse(slice);
+          return Array.isArray(parsed) ? parsed : null;
+        } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * R209: MiniMax web_search 图源配置解析 —— 仅当已配置 provider 为 MiniMax
+ *（provider id 或 baseURL 含 minimax）时激活。web_search 是 MiniMax 服务端
+ * 托管工具（Responses API 专属，声明式 tools: [{"type":"web_search"}]，模型
+ * 在服务端自动执行搜索并在单次请求内继续生成），其他 OpenAI 兼容 provider
+ * 无此能力，不尝试。'zai'/'auto'/'cli:*' 照旧排除。逃生门
+ * PDB_FIGURES_NO_MINIMAX_WEB=1（强制回退 Commons）。
+ */
+export function minimaxWebSearchConfig(
+  llmCfg?: { provider?: string; model?: string },
+): { providerId: string; displayName: string; baseURL: string; apiKey: string; model: string } | null {
+  if (process.env.PDB_FIGURES_NO_MINIMAX_WEB === '1') return null;
+  const p = (llmCfg?.provider || '').trim();
+  if (!p || p === 'zai' || p === 'auto' || p.startsWith('cli:')) return null;
+  const profile = getProviderProfile(p);
+  const baseURL = (resolveBaseURL(p) ?? profile?.baseURL ?? '').replace(/\/+$/, '');
+  if (!baseURL) return null;
+  if (!/minimax/i.test(p) && !/minimax/i.test(baseURL)) return null;
+  const apiKey = resolveApiKey(p);
+  if (!apiKey) return null;
+  return {
+    providerId: p,
+    displayName: profile?.displayName ?? p,
+    baseURL,
+    apiKey,
+    model: (llmCfg?.model || '').trim() || profile?.defaultModel || 'MiniMax-M3',
+  };
+}
+
+/** R209: Responses API 端点 —— baseURL 以 /v1 结尾时直接拼 /responses，
+ * 否则补 /v1/responses（MiniMax 官方路径 /v1/responses，见
+ * platform.minimaxi.com/docs Server Tools 章节）。导出仅供测试。 */
+export function minimaxResponsesEndpoint(baseURL: string): string {
+  const base = String(baseURL || '').replace(/\/+$/, ''); // 尾斜杠防御（调用方已剥）
+  return /\/v1$/i.test(base) ? `${base}/responses` : `${base}/v1/responses`;
+}
+
+export interface MinimaxWebSearchOutcome {
+  ok: boolean;
+  /** 最终回复文本（顶层 output_text 或 message 内容块聚合）。 */
+  text: string;
+  /** 模型实际发起的搜索词（output[].type === 'web_search_call' 的 action.query）。 */
+  searchedQueries: string[];
+  /** 4xx = 定性失败（会话级短路依据）；5xx/超时 = 瞬态。 */
+  status?: number;
+  error?: string;
+}
+
+/**
+ * R209: MiniMax Responses API + web_search 服务端工具调用（导出仅供测试）。
+ * 请求形态按官方文档：POST {endpoint} { model, input, tools:[{type:"web_search"}] }，
+ * Authorization Bearer。响应解析：顶层 output_text（官方聚合字段）缺失时
+ * 从 output[].message.content[].output_text 聚合；web_search_call 项提取
+ * 实际搜索词（事件/日志用）。
+ */
+export async function callProviderWebSearchRaw(
+  endpoint: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<MinimaxWebSearchOutcome> {
+  const combo = combineSignals(signal, MINIMAX_WEBSEARCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        tools: [{ type: 'web_search' }],
+      }),
+      signal: combo.signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => resp.statusText);
+      return { ok: false, text: '', searchedQueries: [], status: resp.status, error: errText.slice(0, 200) };
+    }
+    const json = await resp.json() as {
+      output_text?: string;
+      output?: Array<{
+        type?: string;
+        action?: { query?: string };
+        content?: Array<{ type?: string; text?: string }>;
+      }>;
+    };
+    const searchedQueries: string[] = [];
+    for (const item of json.output ?? []) {
+      if (item?.type === 'web_search_call') {
+        const q = String(item.action?.query || '').trim();
+        if (q) searchedQueries.push(q);
+      }
+    }
+    let text = typeof json.output_text === 'string' ? json.output_text : '';
+    if (!text) {
+      const parts: string[] = [];
+      for (const item of json.output ?? []) {
+        if (item?.type !== 'message') continue;
+        for (const c of item.content ?? []) {
+          if (c?.type === 'output_text' && c.text) parts.push(c.text);
+        }
+      }
+      text = parts.join('\n');
+    }
+    return { ok: true, text, searchedQueries };
+  } catch (e: any) {
+    return { ok: false, text: '', searchedQueries: [], error: String(e?.message || e || 'fetch failed').slice(0, 200) };
+  } finally {
+    combo.dispose();
+  }
+}
+
+/** R209: web_search 页面发现 prompt（严格 JSON 数组契约）。 */
+function webSearchPagePrompt(query: string): string {
+  return `你是一个科研配图检索助手。请使用 web_search 工具进行联网搜索，找出最可能包含与下列主题相关的高质量科学示意图（原理图 / 机制图 / 信号通路图 / 结构图）的网页。
+
+主题：${query}
+
+要求：
+- 优先权威来源：维基百科（Wikipedia）、大学 / 研究所教育页面、综述文章、权威科普网站
+- 优先页面内容与主题强相关、以解释性配图为主的页面
+- 最多 ${MINIMAX_MAX_PAGES} 个网页，只返回你通过搜索实际找到的 URL
+
+只输出 JSON 数组（不要任何其他文字）：
+[{"pageUrl":"https://…","reason":"一句话说明该页面为何可能包含相关配图"}]
+若无合适结果，输出 []`;
+}
+
+/** R209: 解析 web_search 回复为页面清单（容忍 markdown 围栏/前后缀噪声）。 */
+export function parseWebSearchPages(text: string): Array<{ pageUrl: string; reason: string }> {
+  const arr = extractFirstJsonArray(stripReasoning(String(text || '')));
+  if (!Array.isArray(arr)) return [];
+  const out: Array<{ pageUrl: string; reason: string }> = [];
+  const seen = new Set<string>();
+  for (const item of arr.slice(0, MINIMAX_MAX_PAGES)) {
+    if (!item || typeof item !== 'object') continue;
+    const url = String((item as Record<string, unknown>).pageUrl || (item as Record<string, unknown>).url || '').trim();
+    if (!/^https?:\/\//i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push({ pageUrl: url, reason: String((item as Record<string, unknown>).reason || '').slice(0, 100) });
+  }
+  return out;
+}
+
+// ─── R209: 页面 <img> 提取（纯函数 + 抓取封装）──────────────────────────────
+
+const IMG_TAG_RE = /<img\b[^>]*>/gi;
+const IMG_EXT_RE = /\.(png|jpe?g|webp)(?:[?#]|$)/i;
+/** 垃圾图 URL/alt 模式（logo/icon/头像/轮播/广告/埋点等 —— 与 Commons 链路
+ * 的 width≥200 门槛互补）。 */
+const IMG_JUNK_RE = /(logo|icon|avatar|sprite|badge|favicon|bullet|spacer|blank|placeholder|tracking|pixel|analytics|gravatar|carousel|arrow[-_ ]?(next|prev)|loading|ads?[._/-]|doubleclick|facebook|twitter|weibo|qrcode)/i;
+
+/** 从 <img ...> 标签取属性值（双引号/单引号/裸值三形）。 */
+function imgAttr(tag: string, name: string): string {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return (m?.[1] ?? m?.[2] ?? m?.[3] ?? '').trim();
+}
+
+/** srcset 最高倍率项（维基百科 img src 常为 250px 缩略，srcset 才有高分辨率
+ * 版本 —— 只取 src 会把判官喂成小图）。w 描述符按 /96 近似换算。 */
+function bestSrcsetEntry(tag: string): { url: string; scale: number } | null {
+  const ss = imgAttr(tag, 'srcset');
+  if (!ss) return null;
+  let best: { url: string; scale: number } | null = null;
+  for (const part of ss.split(',')) {
+    const seg = part.trim().split(/\s+/);
+    const url = seg[0];
+    if (!url) continue;
+    const d = seg[1] || '1x';
+    const scale = d.endsWith('x')
+      ? parseFloat(d)
+      : (() => { const w = parseFloat(d); return Number.isFinite(w) && w > 0 ? w / 96 : 1; })();
+    if (!Number.isFinite(scale) || scale <= 0) continue;
+    if (!best || scale > best.scale) best = { url, scale };
+  }
+  return best;
+}
+
+/**
+ * R209: 从页面 HTML 提取配图候选（纯函数，导出仅供测试）。
+ * 过滤口径沿用本管线既有决策：GIF/SVG 剔除（判官无法解析，R206b 实测）、
+ * 声明宽/高 < 200 视为图标、垃圾模式剔除；https-only（渲染代理只收 https）；
+ * 无扩展名 URL 仅 wikimedia thumb 路径保留（thumburl 无扩展名常态，下载侧
+ * content-type 兜底）。排序 = alt/title 与 query 关键词重合（×3）+ 文件名
+ * 重合（×2）+ wikimedia 域（+2，策展质量）+ 声明宽 ≥600（+1）；srcset 存在
+ * 时取最高倍率 URL。同 host 上限 3 张保多样性。
+ */
+export function extractImagesFromPageHtml(html: string, pageUrl: string, query: string): ImageSearchResult[] {
+  if (!html || !pageUrl) return [];
+  const kw = new Set(commonsKeywords(query));
+  const candidates: Array<{ r: ImageSearchResult; score: number }> = [];
+  const seen = new Set<string>();
+  const hostCount = new Map<string, number>();
+  let pageBase: URL;
+  try { pageBase = new URL(pageUrl); } catch { return []; }
+
+  for (const m of html.matchAll(IMG_TAG_RE)) {
+    const tag = m[0];
+    let src = imgAttr(tag, 'data-src') || imgAttr(tag, 'data-original') || imgAttr(tag, 'src') || '';
+    const srcsetBest = bestSrcsetEntry(tag);
+    let scale = 1;
+    if (srcsetBest) {
+      src = srcsetBest.url;
+      scale = srcsetBest.scale;
+    }
+    if (!src || /^(data|blob|javascript):/i.test(src)) continue;
+    let u: URL;
+    try { u = new URL(src, pageBase); } catch { continue; }
+    if (u.protocol !== 'https:') continue; // 渲染代理 https-only；http 直连不可靠
+    const url = u.toString();
+    const isWikimedia = /(^|\.)wikimedia\.org$/i.test(u.hostname);
+    if (!IMG_EXT_RE.test(u.pathname) && !(isWikimedia && /\/thumb\//.test(u.pathname))) continue;
+    if (IMG_JUNK_RE.test(u.pathname) || IMG_JUNK_RE.test(u.search)) continue;
+    if (seen.has(url)) continue;
+    // 声明尺寸（src 的显示尺寸；srcset 存在时按倍率折算近似真实尺寸）。
+    const w = parseInt(imgAttr(tag, 'width') || '0', 10) || 0;
+    const h = parseInt(imgAttr(tag, 'height') || '0', 10) || 0;
+    const effW = Math.round(w * scale);
+    if ((w > 0 && effW < 200) || (h > 0 && Math.round(h * scale) < 120)) continue;
+    const alt = (imgAttr(tag, 'alt') || imgAttr(tag, 'title') || '').slice(0, 160);
+    if (alt && IMG_JUNK_RE.test(alt)) continue;
+
+    // 打分：alt/title 重合 ×3 + 文件名重合 ×2 + wikimedia +2 + 宽度 +1。
+    let score = 0;
+    const altKw = new Set(commonsKeywords(alt));
+    let overlap = 0;
+    for (const k of altKw) if (kw.has(k)) overlap++;
+    score += overlap * 3;
+    const base = decodeURIComponent(u.pathname.split('/').pop() || '');
+    const fileKw = new Set(commonsKeywords(base.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[-_]/g, ' ')));
+    for (const k of fileKw) if (kw.has(k)) score += 2;
+    if (isWikimedia) score += 2;
+    if (effW >= 600) score += 1;
+    if (overlap === 0 && !isWikimedia) score -= 2; // 无线索非权威 → 沉底
+
+    const host = u.hostname;
+    if ((hostCount.get(host) ?? 0) >= 3) continue;
+    hostCount.set(host, (hostCount.get(host) ?? 0) + 1);
+    seen.add(url);
+    const caption = (alt || base.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[-_]/g, ' ').trim() || 'web image').slice(0, 120);
+    candidates.push({
+      r: {
+        original_url: url,
+        url,
+        caption,
+        source: host,
+      },
+      score,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, 6).map(c => c.r);
+}
+
+/** R209: 抓取单个发现页并提取配图候选（15s / 2.5MB / text/html 三门槛）。 */
+async function fetchPageAndExtractImages(pageUrl: string, query: string, signal?: AbortSignal): Promise<ImageSearchResult[]> {
+  const combo = combineSignals(signal, PAGE_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(pageUrl, {
+      headers: { 'User-Agent': FIGURE_PAGE_UA, Accept: 'text/html,application/xhtml+xml' },
+      signal: combo.signal,
+      redirect: 'follow',
+    });
+    if (!resp.ok) return [];
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    if (!ct.includes('html')) return [];
+    const declared = Number(resp.headers.get('content-length') || '0');
+    if (declared > PAGE_HTML_MAX_BYTES) return [];
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length === 0 || buf.length > PAGE_HTML_MAX_BYTES) return [];
+    return extractImagesFromPageHtml(buf.toString('utf-8'), pageUrl, query);
+  } catch {
+    return []; // 单页失败不拖垮整条 query（宁缺毋滥）
+  } finally {
+    combo.dispose();
+  }
+}
+
+/**
+ * R209: MiniMax web_search 定性失败（会话级短路 —— 4xx 定性；瞬态 2 次也
+ * 定性，避免 4 条 query 各白等 120s）。失败后本会话所有运行直落 Commons。
+ */
+let minimaxWebSearchDead: string | null = null;
+let minimaxWebSearchTransientFails = 0;
+export function minimaxWebSearchFailureReason(): string | null {
+  return minimaxWebSearchDead;
+}
+
+/**
+ * R209: MiniMax web_search 图源编排（导出仅供测试）——
+ *   ① Responses API + web_search 服务端工具 → 页面清单（≤4 页）
+ *   ② 并行抓取页面 → extractImagesFromPageHtml 提取 <img> 候选
+ *   ③ 合并去重（URL 级 + 同 host ≤3）→ 排序取前 6
+ * 候选进入调用方的既有下载 → VLM 判官链（z-ai 优先 → provider 视觉兜底），
+ * 与 Commons/z-ai 候选同一质量闸门。
+ */
+export async function searchMinimaxWebFigures(
+  query: string,
+  cfg: { providerId: string; displayName: string; baseURL: string; apiKey: string; model: string },
+  opts?: { signal?: AbortSignal; onSearched?: (queries: string[]) => void },
+): Promise<ImageSearchResult[]> {
+  if (minimaxWebSearchDead) return [];
+  const endpoint = minimaxResponsesEndpoint(cfg.baseURL);
+  const run = await callProviderWebSearchRaw(endpoint, cfg.apiKey, cfg.model, webSearchPagePrompt(query), opts?.signal);
+  if (!run.ok) {
+    if (run.status !== undefined && run.status >= 400 && run.status < 500) {
+      minimaxWebSearchDead = `${cfg.displayName} web_search ${run.status}: ${run.error || 'client error'}`;
+    } else if (++minimaxWebSearchTransientFails >= 2) {
+      minimaxWebSearchDead = `${cfg.displayName} web_search 瞬态失败 ×2（${run.error || 'timeout/network'}）`;
+    }
+    return [];
+  }
+  if (run.searchedQueries.length > 0 && opts?.onSearched) opts.onSearched(run.searchedQueries);
+  const pages = parseWebSearchPages(run.text);
+  if (pages.length === 0) return [];
+  const perPage = await Promise.all(pages.map(p => fetchPageAndExtractImages(p.pageUrl, query, opts?.signal)));
+  const merged: ImageSearchResult[] = [];
+  const seen = new Set<string>();
+  for (const list of perPage) {
+    for (const r of list) {
+      const url = r.original_url || r.url || '';
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      merged.push(r);
+    }
+  }
+  return merged.slice(0, RESULTS_PER_QUERY_CAP + 2);
+}
+
 /** R205: provider 视觉判官调用超时（OpenAI 兼容 /chat/completions +
  *  image_url 内容块；图像已限 3MB，90s 对慢端点留了余量）。 */
 const PROVIDER_VISION_TIMEOUT_MS = 90_000;
@@ -775,15 +1159,15 @@ async function runImageSearchCli(query: string, timeoutMs: number, signal?: Abor
 
 /** 下载图片并校验（≤3MB、image/*，content-length 预检），返回 base64 dataUri；任何失败返回 null。
  * R197: signal 可选 —— 与每张 20s 下载超时合并（Stop 即刻生效）。
- * R205: Wikimedia 域（api/upload/thumb CDN）要求带联系方式的 UA，否则
- * 403（实测）—— 对 wikimedia.org 域名注入 COMMONS_UA；其余源不干预。 */
+ * R209: UA 统一为 FIGURE_PAGE_UA（浏览器兼容 + 联系方式）—— web 图源
+ * 现来自任意公网站点，非浏览器 UA 常被 CDN 反爬 403；Wikimedia 域仍满足
+ * 「UA 必须含联系方式」规则（R205 实测带 URL 即 200，前缀不限）。 */
 async function downloadImageAsDataUri(url: string, signal?: AbortSignal): Promise<string | null> {
   const combo = combineSignals(signal, IMAGE_DOWNLOAD_TIMEOUT_MS);
-  const isWikimedia = /\.wikimedia\.org$/i.test(url.replace(/^https?:\/\//, '').split('/')[0]);
   try {
     const res = await fetch(url, {
       signal: combo.signal,
-      ...(isWikimedia ? { headers: { 'User-Agent': COMMONS_UA } } : {}),
+      headers: { 'User-Agent': FIGURE_PAGE_UA },
     });
     if (!res.ok) return null;
     const ctype = (res.headers.get('content-type') || '').toLowerCase();
@@ -937,6 +1321,12 @@ export async function searchWebFigures(
     const p = (llmCfg?.provider || '').trim();
     return p && p !== 'zai' && p !== 'auto' && !p.startsWith('cli:') ? p : '';
   })();
+  // R209: MiniMax web_search 图源配置（仅 MiniMax provider；见
+  // minimaxWebSearchConfig）。FORCE_COMMONS 测试门下跳过（纯 Commons 演示）。
+  const forceCommonsOnly = process.env.PDB_FIGURES_FORCE_COMMONS === '1';
+  const mmCfg = forceCommonsOnly ? null : minimaxWebSearchConfig(llmCfg);
+  // R209: web_search 定性失败的一次性提示标志（跨 query 只提一次）。
+  let mmDeadAnnounced = false;
   if (!zaiOk && !judgeProviderId) {
     emit({ stage: 'figure-web', level: 'warn', message: '⚠ web 配图需要 VLM 判官（z-ai 内置或已配置 provider 的视觉模型）：本机无 z-ai CLI 且未配置可用 provider —— 跳过 web 配图搜索（RCSB 结构图与报告正文不受影响）' });
     return out;
@@ -955,6 +1345,23 @@ export async function searchWebFigures(
   } else {
     emit({ stage: 'figure-web', level: 'info', message: 'VLM 判官：z-ai 内置（云沙箱）' });
   }
+  // R209: 图源链 upfront 公告（仅 MiniMax 路径激活时 —— 沙箱内 zai 图源
+  // 行为不变，不加噪声）。z-ai 优先（免费）→ MiniMax web_search（联网检索
+  // 网页 + 服务端提取配图）→ Wikimedia Commons（免密钥兜底）。
+  if (mmCfg) {
+    const mmDead = minimaxWebSearchFailureReason();
+    emit({
+      stage: 'figure-web',
+      level: 'info',
+      message: zaiOk
+        ? `web 图源链：z-ai image-search（优先）→ ${mmCfg.displayName} web_search（联网检索网页，模型 ${mmCfg.model}）→ Wikimedia Commons（兜底）`
+        : `web 图源链：${mmCfg.displayName} web_search（联网检索网页，模型 ${mmCfg.model}；z-ai CLI 本机不可用）→ Wikimedia Commons（兜底）`,
+    });
+    if (mmDead) {
+      mmDeadAnnounced = true;
+      emit({ stage: 'figure-web', level: 'warn', message: `⚠ ${mmCfg.displayName} web_search 本次会话不可用：${mmDead.slice(0, 160)}—— web 图源回退 Wikimedia Commons` });
+    }
+  }
 
   // R193: 首查短路标记（函数级 —— 本次评估内 CLI 首查即挂则后续 query
   // 不再空等超时；R205 起改为直走 Commons，而非整体放弃）+ 首查标志。
@@ -964,12 +1371,13 @@ export async function searchWebFigures(
   let providerDeadAnnounced = false;
 
   // R206: PDB_FIGURES_FORCE_COMMONS=1 —— 强制 Wikimedia Commons 图源（跳过
-  // z-ai CLI 搜索；VLM 判官路径不变，沙箱内仍 z-ai 内置优先）。用途：本地
-  // 部署图源效果对比/演示。复用现成短路机制：预置 cliBrokenThisRun → 所有
-  // query 直走 Commons 分支（与 CLI 首查 ENOENT 后的行为完全一致）。
-  if (process.env.PDB_FIGURES_FORCE_COMMONS === '1') {
+  // z-ai CLI 搜索与 R209 MiniMax web_search；VLM 判官路径不变，沙箱内仍
+  // z-ai 内置优先）。用途：本地部署图源效果对比/演示。复用现成短路机制：
+  // 预置 cliBrokenThisRun → 所有 query 直走 Commons 分支（与 CLI 首查 ENOENT
+  // 后的行为完全一致）。R209 起本标志同时使 mmCfg 置空（见图源链公告上方）。
+  if (forceCommonsOnly) {
     cliBrokenThisRun = true;
-    emit({ stage: 'figure-web', level: 'info', message: 'PDB_FIGURES_FORCE_COMMONS=1 —— 本次运行强制 Wikimedia Commons 图源（跳过 z-ai image-search，VLM 判官不变）' });
+    emit({ stage: 'figure-web', level: 'info', message: 'PDB_FIGURES_FORCE_COMMONS=1 —— 本次运行强制 Wikimedia Commons 图源（跳过 z-ai image-search 与 MiniMax web_search，VLM 判官不变）' });
   }
 
   for (const { sectionId, query } of capped) {
@@ -979,6 +1387,8 @@ export async function searchWebFigures(
     }
     let results: ImageSearchResult[] = [];
     let viaCommons = false;
+    // R209: MiniMax web_search 图源命中标记（「返回 N 条候选」消息三分流）。
+    let viaMinimax = false;
     const cacheKey = String(query).trim().toLowerCase();
 
     // ── 图源 1：z-ai image-search CLI（本次运行未定性不可用时尝试）。
@@ -1013,12 +1423,44 @@ export async function searchWebFigures(
         }
       }
     } else {
-      viaCommons = true; // CLI 本次运行已定性不可用 → 直走 Commons
+      // CLI 本次运行已定性不可用 → 直落 R209 MiniMax web_search / Commons（下方分支）
     }
 
-    // ── 图源 2（兜底）：z-ai 零结果/不可用时 → Wikimedia Commons（免密钥）。
-    // 沙箱内 z-ai 正常但某 query 零结果时也会走到这里（Commons 补充覆盖，
-    // ~1s 开销；两图源互不重叠时各出各的图，z-ai 有结果则不叠加）。
+    // ── 图源 2（R209: 本地主路径）：z-ai 零结果/不可用时 → MiniMax web_search
+    // 服务端联网检索 —— 用户诉求：Commons 召回质量不佳（严格 AND 词项匹配的
+    // 检索模型与科学主题描述不匹配），MiniMax web_search 为语义化联网搜索，
+    // 由模型自主多次搜索并返回最可能包含高质量配图的网页，服务端抓取页面后
+    // 提取 <img> 候选（提取/过滤/排序见 extractImagesFromPageHtml）。
+    // 仅已配置 MiniMax provider 时激活；零候选/不可用 → 落 Commons 兜底。
+    if (results.length === 0 && mmCfg && !minimaxWebSearchFailureReason()) {
+      const mmKey = `minimax:${cacheKey}`;
+      const mmCached = imageSearchCache.get(mmKey);
+      if (mmCached) {
+        results = mmCached;
+        if (results.length > 0) viaMinimax = true;
+        emit({ stage: 'figure-web', level: 'info', message: `命中 MiniMax web_search 会话缓存（${results.length} 条候选）：「${query}」` });
+      } else {
+        emit({ stage: 'figure-web', level: 'info', message: `${mmCfg.displayName} web_search 联网检索网页（服务端工具，模型自主搜索）：「${query}」…` });
+        const mmr = await searchMinimaxWebFigures(query, mmCfg, {
+          signal,
+          onSearched: (qs) => {
+            if (qs.length > 0) emit({ stage: 'figure-web', level: 'info', message: `模型搜索词：${qs.slice(0, 4).join(' / ')}` });
+          },
+        });
+        if (imageSearchCache.size > 200) imageSearchCache.clear();
+        imageSearchCache.set(mmKey, mmr); // 含零结果 —— 零结果同样是有效答案
+        results = mmr;
+        if (results.length > 0) viaMinimax = true;
+        if (results.length === 0 && minimaxWebSearchFailureReason() && !mmDeadAnnounced) {
+          mmDeadAnnounced = true;
+          emit({ stage: 'figure-web', level: 'warn', message: `⚠ ${mmCfg.displayName} web_search 不可用：${(minimaxWebSearchFailureReason() || '').slice(0, 160)}—— 该 query 改用 Wikimedia Commons` });
+        }
+      }
+    }
+
+    // ── 图源 3（兜底）：z-ai/MiniMax 零结果或不可用时 → Wikimedia Commons
+    // （免密钥）。沙箱内 z-ai 正常但某 query 零结果时也会走到这里（Commons
+    // 补充覆盖，~1s 开销；各图源互不重叠时各出各的图，上游有结果则不叠加）。
     if (results.length === 0) {
       viaCommons = true;
       const commonsKey = `commons:${cacheKey}`;
@@ -1039,7 +1481,7 @@ export async function searchWebFigures(
       emit({ stage: 'figure-web', level: 'warn', message: `⚠ web 图源无结果（跳过该 query，继续）` });
       continue;
     }
-    emit({ stage: 'figure-web', level: 'info', message: `${viaCommons ? 'Wikimedia Commons' : 'image-search'} 返回 ${results.length} 条候选，逐张 VLM 校验（宁缺毋滥）…` });
+    emit({ stage: 'figure-web', level: 'info', message: `${viaMinimax ? 'MiniMax web_search' : viaCommons ? 'Wikimedia Commons' : 'image-search'} 返回 ${results.length} 条候选，逐张 VLM 校验（宁缺毋滥）…` });
 
     // R184: 近重复保护改为按 query 计（同一搜索的候选图常常高度相似，
     // 采用最佳 ≤VERIFIED_PER_QUERY_CAP 张即可）；总量不再设上限。
