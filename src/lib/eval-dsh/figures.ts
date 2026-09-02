@@ -453,7 +453,11 @@ function parseVlmVerdict(text: string): { verdict: 'relevant' | 'irrelevant'; re
 const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
 const COMMONS_TIMEOUT_MS = 20_000;
 const COMMONS_THUMB_WIDTH = 800;
-const COMMONS_MIME_RE = /^image\/(?:svg\+xml|png|jpeg|gif|webp)$/;
+const COMMONS_MIME_RE = /^image\/(?:svg\+xml|png|jpeg|webp)$/;
+/* R206b: 剔除 image/gif —— 实测 run dsh-P69905-mtjf46vh-0 中两张 Commons GIF
+ * （Hemoglobin-animation.gif 895KB / t-r state GIF）下载后送审 VLM 全部
+ * 「VLM 校验失败」（判官无法解析 GIF），白耗下载与判官调用；且动画帧
+ * 嵌入静态报告本就无意义。PNG/JPEG/WEBP/SVG→thumb PNG 实测均可判。 */
 /** Wikimedia 礼仪要求带联系方式的 UA（无 URL/email 的 UA 进严限流桶，
  * 实测 403 Too Many Reqs；thumb CDN 同规则）。用仓库地址作联系方式。 */
 const COMMONS_UA = 'PDB-Tracker/1.0 (+https://github.com/Jing0715-fer/pdb-tracker-web-v5)';
@@ -861,6 +865,11 @@ export async function searchWebFigures(
   const out: ReportFigure[] = [];
   // R197: run 级已采用 URL 集合 —— 跨 query 去重（含省一次 VLM 配额）。
   const adoptedUrls = new Set<string>();
+  // R206b: run 级硬失败 URL 集合（下载失败或判官无法处理）—— 确定性失败
+  // 换 query 重试同一 URL 只会重复浪费下载与判官配额（实测 run#2 同一张
+  // GIF 在两条 query 下各失败一次）。判官「不相关」裁决不进此集合：
+  // 相关性判定与 query 语境相关，换 query 后同一图结论可能翻转。
+  const hardFailedUrls = new Set<string>();
   // R184: 移除「最多 2 条 query」配额 —— 仅按 query 文本去重 + 安全护栏。
   const seenQuery = new Set<string>();
   const capped = queries
@@ -996,6 +1005,8 @@ export async function searchWebFigures(
       if (!/^https?:\/\//i.test(url)) continue;
       // R197: 跨 query 同 URL 跳过（已在前一 query 被采用 —— 同图不重复嵌章）。
       if (adoptedUrls.has(url)) continue;
+      // R206b: 硬失败 URL 跳过（下载/判官确定性失败，重试纯浪费配额）。
+      if (hardFailedUrls.has(url)) continue;
       const fig: ReportFigure = {
         kind: 'web',
         url,
@@ -1041,6 +1052,8 @@ export async function searchWebFigures(
         }
         fig.vlmReason = pvReason ? 'VLM 校验失败（判官不可用）' : 'VLM 校验失败';
       }
+      // R206b: 硬失败（下载失败或判官未给出裁决）进 run 级集合，后续 query 不再重试。
+      if (downloadFailed || !verdict) hardFailedUrls.add(url);
 
       emit({
         stage: 'figure-web',

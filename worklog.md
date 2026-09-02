@@ -5420,3 +5420,23 @@ Stage Summary:
 - PDB_FIGURES_FORCE_COMMONS=1 为永久测试门（判官不变，对比/演示本地部署图源用）
 - run#2（Commons 修复后完整 E2E）由自动发射器值守 zai 配额恢复后执行，结果落 Run Center 历史与 DB
 - 新增环境知识：zai 429 窗口可长达小时级（当日累计重型运行后）；MediaWiki 检索模型 = 严格 AND 词项，无语义
+
+---
+Task ID: R206b
+Agent: main (Z.ai Code)
+Task: 配额重置后完成 Commons 强制图源真实 E2E（run#2），依据测试结果实施修复（GIF 排除 + 硬失败 URL 去重）
+
+Work Log:
+- 沙箱重启事故处置：重启后 /tmp 清空 + 本地 git 回滚至 R197（R198-R206 全部丢失于工作树，远端完好）——首次发射的 run 误跑旧代码（init「DSH 模式」佐证），立即 stop 省配额；DB 备份后 git reset --hard origin/main（e33f259）恢复代码并还原 DB（run 历史无损），重启注入 FORCE_COMMONS 重测
+- run#2 真实 E2E（dsh-P69905-mtjf46vh-0，R206 代码）：**Commons 链路全通** —— FORCE 消息 → 四 query 搜索（1/6/1/6 候选）→ z-ai 判官逐张严筛 → **5 张 web 图采用**（血红素结合口袋 3D/HbF 四聚体/Hb-触珠蛋白-CD163 机制/三维空间结构/血红素辅基活性中心，中文图注判官撰写，CC0/CC BY-SA 4.0/CC BY 4.0 署名，精准落章 ligand_binding/interactions/pathway）；总配图 11 = RCSB 6 + web 5；报告 14043 chars；12/15 章交付（3 章败于 zai 配额再限流，与图源无关）；浏览器验证 Report 标签画廊 + 章节内联渲染、0 console error、图片按可视区懒加载
+- 测试暴露问题①GIF 浪费：两张 Commons GIF（animation 895KB 等）下载送审 → VLM 无法解析 GIF →「VLM 校验失败」白耗下载+判官调用（且动画帧不适合静态报告）
+- 修复①：COMMONS_MIME_RE 剔除 image/gif（PNG/JPEG/WEBP/SVG→thumb PNG 实测可判）——实证 run#2 出 GIF 的 query 修复后 6→4 条全有效
+- 测试暴露问题②被拒 URL 重复送审：同一 GIF 在 query1 与 query4 各失败一次（adoptedUrls 只去重已采用图）
+- 修复②：searchWebFigures 新增 run 级 hardFailedUrls（下载失败或判官无裁决的确定性失败跨 query 跳过；「不相关」裁决不进集合 —— 相关性判定与 query 语境相关，换 query 可能翻转）
+- 质量门：eslint figures.ts 0/0；run-dsh 路由热编译 400 校验正常；bun 直跑真实网络功能验证两组
+
+Stage Summary:
+- Commons 免密钥图源真实 E2E 完整闭环：搜索梯召回 → 下载 → VLM 判官严筛（中文图注+License）→ 报告画廊/章节内联渲染 → Run Center 历史落库，全程浏览器验证
+- 两项实测驱动的优化落地（GIF mime 排除、硬失败 URL run 级去重），判官配额消耗进一步降低
+- 环境知识：沙箱重启会回滚本地 git 至早期提交且清空 /tmp（远端 push 是唯一可靠持久层；DB 也会回滚但本次靠备份保住——后续重启需先查 git log 再干活）
+- 用户本地（MiniMax-M3 provider + Commons）与本次沙箱验证链路等价，效果可直接复现
