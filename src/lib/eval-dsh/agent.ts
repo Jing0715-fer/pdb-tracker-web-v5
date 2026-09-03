@@ -27,7 +27,7 @@ import { db, getActiveDbFsPath } from '@/lib/db';
 import { applySchemaCompat } from '@/lib/schema-compat';
 import { collectEvaluationData, collectEvaluationDataForSequence, type CollectOpts, type CollectResult, type LiteratureRow, type SequenceInput } from './collect';
 import { SECTION_LIBRARY, getSection, outlineRules, computeDataScale, type SectionTemplate, type DataHint, type OutlineDataInfo, type DataScalePolicy } from './section-library';
-import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, applyFigureLegends, type ReportFigure } from './figures';
+import { collectRcsbFigures, searchWebFigures, figureImageMarkdown, repairFigureUrls, applyFigureLegends, fallbackFigureQueries, type ReportFigure } from './figures';
 import { proxyFigureUrl } from '@/lib/figure-view'; // R207: URL 对比归一（正文内为代理形，fig.url 为原始外链）
 
 // ─── 类型 ───────────────────────────────────────────────────────────────────
@@ -1009,6 +1009,10 @@ export async function runDshEvaluation(params: {
   let relevance: DshRelevance | null = null;
   let figureQueries: Array<{ sectionId: string; query: string }> = [];
   let relevanceRunParsed = false;
+  // R211: 相关性分析失败形态（'llm' 调用失败 / 'json' 解析失败）—— 外层
+  // 作用域存活到 Phase D，供 web 配图回退公告精确归因（relevanceRun 块级
+  // 作用域不可见）。
+  let relevanceFailureKind: '' | 'llm' | 'json' = '';
   if (!hasQuestion) {
     emit({ stage: 'relevance', level: 'info', message: `未提供科学问题 — 跳过相关性分析，按基础评估口径执行（功能/PDB/质量/成药性等标准章节）`, progress: 58 });
   } else {
@@ -1111,6 +1115,7 @@ export async function runDshEvaluation(params: {
     // relevance 死于限流不计入，会延迟三级降级的触发时机）。
     const relTransient = isTransientLlmError(relevanceRun.error || '');
     if (relTransient) noteTransient(relevanceRun.error || '');
+    relevanceFailureKind = relTransient ? 'llm' : 'json';
     emit({ stage: 'relevance', level: 'warn', message: relTransient ? `⚠ 相关性分析 LLM 调用失败（限流/瞬态，已计入配额压力），用问题本身作为上下文继续` : `⚠ 相关性分析 JSON 解析失败（用问题本身作为 relevance 上下文继续）`, progress: 62 });
     relevance = { questionRestated: question, findings: [], keyInsights: [], dataGaps: [], keyPicks: [], keyLiterature: [] };
   }
@@ -1262,8 +1267,40 @@ ${figureQueries.length > 0 ? `\n配图建议（相关性分析认为这些章节
     // R205: llmCfg 透传 —— 判官双路径（z-ai 内置 → 已配置 provider 的
     // OpenAI 兼容视觉调用，如 MiniMax-M3）；图源双轨（z-ai image-search →
     // Wikimedia Commons 免密钥兜底，本地部署主路径）。
+    // R211: figureQueries 只来自 Phase B 相关性分析 —— 基础评估口径
+    // （无科学问题）跳过该阶段、或相关性 JSON 解析失败/LLM 未产出时，
+    // 原实现静默空转（searchWebFigures 入口空数组即早退，web 图恒 0、
+    // R209 MiniMax web_search 图源从未有机会触发）。修复：按最终大纲
+    // 章节套确定性模板生成回退查询集（见 fallbackFigureQueries），并
+    // 在 SSE 流里明示回退原因 —— web 配图触发与否从此可观测。
+    let effectiveFigureQueries = figureQueries;
+    if (effectiveFigureQueries.length === 0) {
+      effectiveFigureQueries = fallbackFigureQueries(sectionIds, c.uniprotInfo.proteinName);
+      if (effectiveFigureQueries.length > 0) {
+        const reason = !hasQuestion
+          ? '基础评估口径（无相关性分析）'
+          : relevanceFailureKind === 'llm'
+            ? '相关性分析 LLM 调用失败'
+            : relevanceFailureKind === 'json'
+              ? '相关性分析 JSON 解析失败'
+              : '相关性分析未产出配图查询';
+        emit({
+          stage: 'figure-web',
+          level: 'info',
+          message: `web 配图：${reason} —— 使用标准回退查询 ${effectiveFigureQueries.length} 条（${effectiveFigureQueries.map(q => q.sectionId).join(' / ')}），图源链与 VLM 判官照常执行`,
+          progress: 66,
+        });
+      } else {
+        emit({
+          stage: 'figure-web',
+          level: 'info',
+          message: 'web 配图：无配图查询可用（无有效蛋白名且相关性分析未产出）—— 跳过 web 图源搜索',
+          progress: 66,
+        });
+      }
+    }
     let webStep = 0;
-    const webFigs = await searchWebFigures(figureQueries, (e) => {
+    const webFigs = await searchWebFigures(effectiveFigureQueries, (e) => {
       webStep++;
       emit({ ...e, progress: e.progress ?? Math.min(72, 66 + webStep) });
     }, signal, { provider: llmCfg.provider, model: llmCfg.model });

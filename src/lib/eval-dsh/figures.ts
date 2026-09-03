@@ -1284,6 +1284,71 @@ async function verifyFigureWithVlm(
 }
 
 /**
+ * R211: 基础评估模式（无科学问题）/ 相关性分析未产出配图查询时的回退
+ * 图查集 —— 修复「web 图源（含 R209 MiniMax web_search）从未触发」的
+ * 结构性缺口：figureQueries 只来自 Phase B 相关性分析，而该阶段在
+ * 基础评估口径下被整体跳过（R189）→ searchWebFigures 入口空数组静默
+ * 早退 → web 图恒为 0（DB 实证：两条基础评估 run web 0 张 vs 带问题
+ * run web 6/8 张）。
+ *
+ * 策略：按最终大纲实际包含的章节，套用确定性英文查询模板（与相关性
+ * 分析的 LLM 产出同格式：{sectionId, query}）。只映射「web 示意图有
+ * 增量价值」的章节 —— RCSB 结构图已覆盖 pdb_analysis/structure_quality
+ * 等结构章，web 图源的价值在机制/通路/拓扑类示意图；宁缺毋滥口径与
+ * 主路径一致（VLM 判官仍逐张严筛）。上限 4 条（与典型相关性产出 2-6
+ * 条相称，防基础评估模式运行时长失控）。
+ */
+const FALLBACK_FIGURE_QUERY_TEMPLATES: Record<string, string> = {
+  function: '{p} protein function mechanism diagram',
+  pathway: '{p} signaling pathway diagram',
+  topology: '{p} membrane topology diagram',
+  domains: '{p} protein domain architecture diagram',
+  ligand_binding: '{p} ligand binding site diagram',
+  interactions: '{p} protein interaction network diagram',
+  druggability: '{p} drug target binding pocket schematic',
+};
+
+/** R211: 蛋白名清洗 —— 去括注/去 UniProt entry 形后缀、压缩空白、截断
+ * （查询召回用短名更好）；占位名（UniProt 抓取失败/序列未识别）返回
+ * null —— 无真实蛋白名时不产回退查询（宁缺毋滥）。导出仅供测试。 */
+export function sanitizeProteinNameForFigureQuery(name: string): string | null {
+  let p = String(name || '')
+    .replace(/\([^)]*\)/g, ' ') // 括注：物种缩写 / (HBA_HUMAN) / (123aa) 等
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (p.length > 80) p = p.slice(0, 80).trim();
+  if (!p) return null;
+  if (/^(unknown|input sequence|unidentified|n\/?a)/i.test(p)) return null; // collect.ts 占位名
+  return p;
+}
+
+/**
+ * R211: 回退配图查询集（纯函数）。入参 = 最终大纲的章节 id 顺序 + 蛋白名。
+ * 返回按大纲顺序排列的 {sectionId, query}，模板见上表，最多 4 条。
+ * sectionId 不在模板表内（结构章/文献章/固定章等）→ 跳过。
+ * 导出仅供测试与 agent 调用。
+ */
+export function fallbackFigureQueries(
+  sectionIds: string[],
+  proteinName: string,
+): Array<{ sectionId: string; query: string }> {
+  const p = sanitizeProteinNameForFigureQuery(proteinName);
+  if (!p) return [];
+  const out: Array<{ sectionId: string; query: string }> = [];
+  const seenQuery = new Set<string>();
+  for (const id of sectionIds) {
+    const tpl = FALLBACK_FIGURE_QUERY_TEMPLATES[id];
+    if (!tpl) continue;
+    const query = tpl.replace('{p}', p);
+    if (seenQuery.has(query)) continue; // 大纲不会有重复 id，防御性去重
+    seenQuery.add(query);
+    out.push({ sectionId: id, query });
+    if (out.length >= 4) break; // 宁缺毋滥 + 基础模式时长控制
+  }
+  return out;
+}
+
+/**
  * R179 (Task 2-a) / R184 / R205: web 原理图/通路图搜索 + VLM 判官双路径。
  * 图源双轨：z-ai image-search CLI（云沙箱主路径）→ 不可用/零结果时
  * Wikimedia Commons 免密钥兜底（本地主路径）；每 query 的候选图逐张
@@ -1423,14 +1488,20 @@ export async function searchWebFigures(
         } else {
           if (isFirstCliCall) {
             // 首查即失败：CLI 挂死/未安装 —— 本次评估内不再尝试（R205：
-            // 后续 query 直走 Commons，而非整体放弃）。ENOENT（本地部署
+            // 后续 query 直走下一跳图源，而非整体放弃）。ENOENT（本地部署
             // 常态，环境能力差异）与挂起/超时（本环境偶发故障）分开提示。
+            // R211: 提示文案链路感知 —— R209 起 CLI 缺失后的下一跳是
+            // MiniMax web_search（若激活）而非 Commons，旧文案会把本地
+            // 部署用户误导到「图源只有 Commons」。
             cliBrokenThisRun = true;
+            const nextHop = mmCfg
+              ? `${mmCfg.displayName} web_search（联网检索网页）`
+              : 'Wikimedia Commons（免密钥）';
             emit(run.enoent
-              ? { stage: 'figure-web', level: 'info', message: 'z-ai CLI 本机未安装（本地部署常态）—— web 图源改用 Wikimedia Commons（免密钥）' }
-              : { stage: 'figure-web', level: 'warn', message: '⚠ image-search CLI 调用失败 —— web 图源改用 Wikimedia Commons 兜底' });
+              ? { stage: 'figure-web', level: 'info', message: `z-ai CLI 本机未安装（本地部署常态）—— web 图源改用 ${nextHop}` }
+              : { stage: 'figure-web', level: 'warn', message: `⚠ image-search CLI 调用失败 —— web 图源改用 ${nextHop}${mmCfg ? '（失败时回退 Wikimedia Commons）' : ' 兜底'}` });
           } else {
-            emit({ stage: 'figure-web', level: 'warn', message: '⚠ image-search 调用失败（该 query 改用 Wikimedia Commons）' });
+            emit({ stage: 'figure-web', level: 'warn', message: `⚠ image-search 调用失败（该 query 改用 ${mmCfg ? `${mmCfg.displayName} web_search / Wikimedia Commons` : 'Wikimedia Commons'}）` });
           }
         }
       }

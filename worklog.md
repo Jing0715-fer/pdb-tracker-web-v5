@@ -5540,3 +5540,23 @@ Stage Summary:
 - 附带修复 R207 代理形 URL 自愈回归（突变修复/幻觉剔除自 R207 起静默失效，本次 E2E 实证暴露并修复，两形兼容）
 - 评分语义：数据规模如实映射（同靶点 80 PDB/20 文献 → 90 A+ vs 3 PDB/2 文献 → 49 C），公式全注释可解释，provenance 全记录
 - 未实现建议池：LLM 参与的成药性定性评估（当前为纯数据启发式）；导出图片的失败重试（当前失败保持原址显示 alt）
+
+---
+Task ID: R211
+Agent: main (Z.ai Code)
+Task: 用户反馈「好像没有触发搜索网络图片」—— 排查 web 图源（含 R209 MiniMax web_search）从未触发的原因并修复
+
+Work Log:
+- 根因定位（数据实证）：DB 中最近两条基础评估 run（Agent（基础评估），R210 E2E 产物）figures 字段 web 0 张，而 R208 带科学问题的两条 run web 6/8 张 —— 差异不在图源实现而在触发链路：figureQueries 只产生于 Phase B 相关性分析（relevanceRun.parsed.figureQueries），而基础评估口径（R189，无科学问题）整体跳过该阶段；相关性 JSON 解析失败 / LLM 未产出 figureQueries 时同样静默为空 → searchWebFigures 入口 `capped.length === 0` 直接 return，全程零事件零提示 → web 图恒 0、R209 MiniMax web_search 图源（用户本地主路径）从未有机会被调用。用户本地运行基础评估（无问题）正中此缺口
+- 修复①（figures.ts）：新增 fallbackFigureQueries 纯函数 —— 按最终大纲章节套确定性英文查询模板（function/pathway/topology/domains/ligand_binding/interactions/druggability 七章有 web 示意图增量价值；结构章/文献章/固定章不映射，RCSB 结构图已覆盖）+ sanitizeProteinNameForFigureQuery（括注剥离/空白压缩/80 字符截断/Unknown、Input Sequence、unidentified、n/a 占位名返回 null 宁缺毋滥）+ 上限 4 条（与典型相关性产出 2-6 条相称，防基础模式时长失控）
+- 修复②（agent.ts Phase D）：figureQueries 为空时启用回退查询集并 SSE 公告 —— 原因四分流精确归因（基础评估口径（无相关性分析）/ 相关性分析 LLM 调用失败（新增外层 relevanceFailureKind 标志）/ 相关性分析 JSON 解析失败 / 相关性分析未产出配图查询），公告带回退条数与命中章节；回退后仍为空（无有效蛋白名）也发一条 info 明示跳过 —— web 配图触发与否从此全程可观测，不再静默空转
+- 修复③（figures.ts 文案链路感知）：R205 时代「z-ai CLI 本机未安装——改用 Wikimedia Commons」提示在 R209 后失真 —— CLI 缺失后的实际下一跳是 MiniMax web_search（若激活），本地部署用户会被旧文案误导「图源只有 Commons」；改为按 mmCfg 动态生成下一跳名称（MiniMax web_search（联网检索网页）/ Wikimedia Commons（免密钥）），非 ENOENT 失败与后续 query 失败文案同口径更新
+- E2E 验证（真实运行 dsh-P69905-mtkwsjkp-0，基础评估模式 sparse 收上限 3 PDB/2 文献）：SSE 事件流完整命中 —— ①「web 配图：基础评估口径（无相关性分析）—— 使用标准回退查询 2 条（function / druggability），图源链与 VLM 判官照常执行」公告 ② 两条回退 query 逐条搜索事件 ③「✓ 配图就绪：6 张已验证（RCSB 3 + web 3）」（修复前同形态 web 0）④ 落库 figures 6 张含 web 3 张（function×1 + druggability×2，全 verified，图例编号 1-3）⑤ 报告 markdown 6 张图全代理形 + 图例行 ⑥ 173s 完成 8/8 章 dbSaved。VLM 判官严筛实证：SVG 坏图与不相关氨基酸化学结构图均被拒（宁缺毋滥）
+- 浏览器验证（agent-browser）：P69905 评估详情画廊 3 张 VERIFIED · WEB 图带「图 N」徽章 → Report 视图 24 img 全走代理、0 broken、0 console error、0 page error（截图 docs/images/qa-r211-basic-report-web.png）
+- 质量门：eslint figures.ts/agent.ts/验证脚本 0 error 0 warning；bun 直跑 26 断言全过（T1 蛋白名清洗 11 项 / T2 基础大纲映射 5 项 / T3 深挖大纲顺序与上限 / T4 边界形态 / T5 产物结构兼容）；run-dsh 路由实编译；dev server 全程健康
+
+Stage Summary:
+- 「web 图源从未触发」根因 = 触发链路缺口（非图源实现缺陷）：figureQueries 单一来源于相关性分析，基础评估模式（无科学问题，本地用户最常用形态）整段跳过 → web 图恒 0 → R209 MiniMax web_search 虽已实现但从未被调用
+- 修复形态：确定性回退查询集（模板 × 大纲章节 × 清洗后蛋白名）+ 全程可观测 SSE 公告（四类原因精确归因）—— 任何模式下 web 配图触发与否都有明确事件流
+- 用户本地预期行为（MiniMax provider 已配置）：基础评估运行 → SSE 公告回退查询 → z-ai CLI ENOENT 提示改用 MiniMax web_search → 模型联网检索网页 → 服务端 <img> 提取 → VLM 判官（MiniMax-M3）严筛 → 代理显示；沙箱行为等价（z-ai image-search 图源替换 MiniMax 位次，判官链相同）
+- 附带修复：图源跳转提示文案链路感知（旧文案会误导本地用户以为 CLI 缺失后只剩 Commons）
