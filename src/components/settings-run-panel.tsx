@@ -2570,6 +2570,14 @@ export function SettingsRunPanel({
     });
   };
 
+  // R212: runEvaluation 的 ref 直读 —— toast 动作等长寿命闭包捕获的是
+  // 「done 翻转那一帧」的 runEvaluation，其 isRunning 闭包读的是该帧的
+  // running 快照（markDone 的微任务更新对它不可见）→ 重启被误判「运行中」
+  // 静默吞掉（E2E 实测：stop 链全通、重启永不发生、console 无任何错误）。
+  // ref 每帧刷新，动作触发时读到的永远是最新的 runEvaluation。
+  const runEvaluationRef = useRef(runEvaluation);
+  useEffect(() => { runEvaluationRef.current = runEvaluation; });
+
   /** R195: Stop 按钮接线 —— DSH 运行已与 SSE 连接解耦（客户端断开不再
    * 中止运行），必须先调 stop 端点真正中止后台任务，再断开视图连接；
    * 经典管线保持旧的 cancel 语义（请求信号即运行信号）。
@@ -2577,8 +2585,14 @@ export function SettingsRunPanel({
    * （探测链最长 ~15s），旧版 600ms 重试读的还是渲染时闭包里的旧
    * state（结构性失效），窗口内 Stop 会变成「只断视图」的孤儿运行。
    * 改为轮询 hook 的 getRunId()（ref 直读，无闭包失效），最长 ~16s
-   * 覆盖整个启动窗口；期间到达即调 stop 端点真正中止。 */
+   * 覆盖整个启动窗口；期间到达即调 stop 端点真正中止。
+   * R212: 结果可观测 + 兜底停止 —— ①stop 调用成败不再静默（成功 →
+   * toast + 日志；失败 → 明确警告「后台运行将继续」；旧版 .catch(()=>{})
+   * 会把本地网络故障吞成「看似已停止」的错觉，用户下次启动即撞 409）；
+   * ② 16s 窗口耗尽仍未拿到 runId 时，经 status 列表端点按当前靶点名
+   * 找出仍在运行的后台运行并停止（视图断开 + 后台孤儿运行的彻底兜底）。 */
   const stopEvalRun = () => {
+    const zh = locale === 'zh';
     const doCancel = () => evalStream.cancel();
     const callStop = (runId: string) => {
       fetch('/api/evaluations/run-dsh/stop', {
@@ -2586,7 +2600,21 @@ export function SettingsRunPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runId }),
       })
-        .catch(() => { /* stop 端点不可达时仍断开视图 */ })
+        .then(async (r) => {
+          if (r.ok) {
+            toast.success(zh ? '停止信号已发送，后台任务将在数秒内停止' : 'Stop signal sent; the background task stops within seconds');
+            log({ ts: new Date().toISOString(), module: 'eval', status: 'success', summary: zh ? `已请求停止后台运行 ${runId}（数秒内生效）` : `Stop requested for background run ${runId}` });
+          } else {
+            const j = await r.json().catch(() => null);
+            const why = (j && typeof j.error === 'string') ? j.error : `HTTP ${r.status}`;
+            toast.warning(zh ? `停止请求未成功（${why}）—— 后台运行可能仍在进行` : `Stop request failed (${why}) — the background run may continue`);
+            log({ ts: new Date().toISOString(), module: 'eval', status: 'error', summary: zh ? `停止后台运行 ${runId} 未成功：${why}` : `Stop request for ${runId} failed: ${why}` });
+          }
+        })
+        .catch(() => {
+          toast.error(zh ? '停止请求发送失败（网络错误）—— 后台运行将继续，可稍后在运行历史查看结果' : 'Stop request failed (network) — the background run continues; check run history later');
+          log({ ts: new Date().toISOString(), module: 'eval', status: 'error', summary: zh ? `停止后台运行 ${runId} 网络失败（后台继续）` : `Stop request for ${runId} network-failed (background continues)` });
+        })
         .finally(doCancel);
     };
     const pipeline = evalRunPipeline ?? evalPipeline;
@@ -2595,7 +2623,27 @@ export function SettingsRunPanel({
       const poll = () => {
         const rid = evalStream.getRunId();
         if (rid) { callStop(rid); return; }
-        if (Date.now() > deadline) { doCancel(); return; }
+        if (Date.now() > deadline) {
+          // R212: 窗口耗尽仍未拿到 runId —— 除断开视图外，尽力通过运行
+          // 列表按靶点名找到仍在运行的后台运行并停止（否则后端将继续
+          // 跑到结束，用户下次启动撞 409 还不知道原因）。
+          doCancel();
+          const targets = evalTargets.map(t => String(t.uniprot || '').trim().toUpperCase()).filter(Boolean);
+          fetch('/api/evaluations/run-dsh/status')
+            .then(r => r.json())
+            .then((d: { runs?: Array<{ runId?: string; uniprot?: string; status?: string }> }) => {
+              const live = (d?.runs ?? []).find(x =>
+                x?.status === 'running'
+                && targets.includes(String(x.uniprot || '').toUpperCase()));
+              if (live?.runId) {
+                callStop(live.runId); // 复用同一停止链（toast + 日志 + 视图已断）
+              } else {
+                toast.info(zh ? '已断开视图（未发现同靶点的运行中后台任务）' : 'View detached (no running background task for these targets)');
+              }
+            })
+            .catch(() => { /* 列表端点不可达 —— 已尽力，不再追加噪声 */ });
+          return;
+        }
         setTimeout(poll, 300);
       };
       poll();
@@ -2662,6 +2710,56 @@ export function SettingsRunPanel({
       }));
     } else if (s.error) {
       Promise.resolve().then(() => log({ ts: new Date().toISOString(), module: 'eval', status: 'error', summary: s.error || 'Unknown error' }));
+      // R212: 409 重复启动守卫 —— 提供一键「停止旧运行并重启」。旧版只把
+      // 错误文本堆给用户（「请先停止」却没有任何停止入口：视图流已断，
+      // Run Center 历史只显示已完成运行，正在后台跑的运行完全不可见
+      // 不可停 —— 用户被团住只能干等十几分钟）。现在从结构化 errorPayload
+      // 拿到 runId，toast 带动作按钮：POST /stop → 轮询 status 确认非
+      // running（实测 abort 数秒内生效）→ 用当前表单参数自动重发评估。
+      const ep = s.errorPayload as { duplicate?: boolean; runId?: string } | undefined;
+      if (ep?.duplicate && ep.runId && (evalRunPipeline ?? evalPipeline) === 'dsh') {
+        const zh = locale === 'zh';
+        const staleRunId = ep.runId;
+        toast.error(zh ? '已有同靶点评估在后台运行' : 'An evaluation for this target is already running in the background', {
+          description: zh ? `${(s.error || '').slice(0, 160)}` : `${(s.error || '').slice(0, 160)}`,
+          // R212: 决策型 toast —— 默认 4s 窗口太短（用户还没看清就被收走，
+          // 三连 409 重试就是这么来的）；给 30s 决策窗口。
+          duration: 30_000,
+          action: {
+            label: zh ? '停止并重启' : 'Stop & restart',
+          onClick: () => {
+            fetch('/api/evaluations/run-dsh/stop', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ runId: staleRunId }),
+            })
+              .then(async (r) => {
+                if (!r.ok) {
+                    const j = await r.json().catch(() => null);
+                    toast.warning(zh ? `旧运行停止失败（${(j && typeof j.error === 'string' ? j.error : `HTTP ${r.status}`)}）—— 请稍候重试` : `Failed to stop the old run (${(j && typeof j.error === 'string' ? j.error : `HTTP ${r.status}`)}) — retry later`);
+                    return;
+                  }
+                  // 轮询确认后端已停止（abort 信号在下一个 await 边界生效，
+                  // 实测秒级；给 20s 上限防极端长 await 点卡住重启）。
+                  for (let i = 0; i < 20; i++) {
+                    await new Promise(res => setTimeout(res, 1000));
+                    try {
+                      const st = await fetch(`/api/evaluations/run-dsh/status?runId=${encodeURIComponent(staleRunId)}`).then(x => x.json());
+                      if (st && typeof st.status === 'string' && st.status !== 'running') break;
+                    } catch { /* 状态端点不可达 —— 不阻断重启 */ break; }
+                  }
+                  toast.info(zh ? '旧运行已停止，重新启动评估…' : 'Old run stopped; restarting the evaluation…');
+                  // R212: ref 直读 —— 不用闭包里的 runEvaluation（陈旧帧的
+                  // isRunning 快照会把重启误判「运行中」静默吞掉，见上方注释）。
+                  runEvaluationRef.current();
+                })
+                .catch(() => {
+                  toast.error(zh ? '停止请求发送失败（网络错误）—— 请稍候手动重试' : 'Stop request failed (network) — retry manually later');
+                });
+            },
+          },
+        });
+      }
     }
     Promise.resolve().then(() => markDone('eval'));
     // NOTE: we intentionally do NOT call onDbChanged?.() here — same reason

@@ -63,6 +63,10 @@ export interface StreamState {
   done: boolean;
   ok: boolean;
   error?: string;
+  /** R212: 启动响应非 OK 时的解析后 JSON 体（如 409 重复启动守卫的
+   *  { duplicate, runId }）—— 调用方可据此提供结构化恢复动作（如
+   *  「停止该后台运行并重启」），而不必从错误字符串里正则扒 runId。 */
+  errorPayload?: Record<string, unknown>;
   result?: any;
   /** R195: server-side run id (X-Run-Id header; DSH endpoints only). */
   runId?: string;
@@ -294,9 +298,13 @@ export function useRunStream() {
             // R195: JSON 错误体（如配额预检 503）只展示其中的 message 字段，
             // 不把整个 JSON 包络砸给用户。
             let friendly = text;
+            // R212: 结构化错误体整体保留 —— 调方可读取 duplicate/runId 等
+            // 字段提供恢复动作（如 409 重复启动时一键停止旧运行）。
+            let payload: Record<string, unknown> | undefined;
             try {
               const j = JSON.parse(text);
               if (j && typeof j.error === 'string') friendly = j.error;
+              if (j && typeof j === 'object' && !Array.isArray(j)) payload = j;
             } catch { /* not JSON — keep raw */ }
             if (gen !== genRef.current) return; // R196: superseded — stay silent.
             stopFlushTimer();
@@ -306,6 +314,7 @@ export function useRunStream() {
               done: true,
               ok: false,
               error: `HTTP ${res.status} ${res.statusText}${friendly ? ` — ${friendly.slice(0, 300)}` : ''}`,
+              errorPayload: payload,
             }));
             return;
           }

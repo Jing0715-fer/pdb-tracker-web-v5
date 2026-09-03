@@ -702,12 +702,15 @@ export function preLaunchGuard(
     const overlap = params.inputMode === 'uniprot'
       ? (running.meta.targetIds ?? [running.meta.uniprot]).filter(id => params.uniprots.includes(id)).join('、')
       : key;
+    // R212: 附带已运行时长 —— 用户决策「等待 vs 停止」的关键信息（刚起跑
+    // 1 分钟 vs 已跑 12 分钟是两种完全不同的建议倾向）。
+    const runningMin = Math.max(1, Math.round((Date.now() - running.createdAt) / 60_000));
     return {
       ok: false,
       status: 409,
       duplicate: true,
       runId: running.runId,
-      error: `${overlap || key} 已有一场 Agent 模式评估正在后台运行（runId: ${running.runId}）。请等待其完成，或先停止后再启动。`,
+      error: `${overlap || key} 已有一场 Agent 模式评估正在后台运行（runId: ${running.runId}，已运行约 ${runningMin} 分钟）。请等待其完成，或先停止后再启动（界面提示会提供一键停止）。`,
     };
   }
   return { ok: true };

@@ -5560,3 +5560,24 @@ Stage Summary:
 - 修复形态：确定性回退查询集（模板 × 大纲章节 × 清洗后蛋白名）+ 全程可观测 SSE 公告（四类原因精确归因）—— 任何模式下 web 配图触发与否都有明确事件流
 - 用户本地预期行为（MiniMax provider 已配置）：基础评估运行 → SSE 公告回退查询 → z-ai CLI ENOENT 提示改用 MiniMax web_search → 模型联网检索网页 → 服务端 <img> 提取 → VLM 判官（MiniMax-M3）严筛 → 代理显示；沙箱行为等价（z-ai image-search 图源替换 MiniMax 位次，判官链相同）
 - 附带修复：图源跳转提示文案链路感知（旧文案会误导本地用户以为 CLI 缺失后只剩 Commons）
+
+---
+Task ID: R212
+Agent: main (Z.ai Code)
+Task: 用户报告「取消评估后前端停止了，后端依然在运行？」+ 三连 409 Conflict（runId 仍为已取消的运行）—— 取消链路可观测性与恢复闭环
+
+Work Log:
+- 根因定位（回答用户问题）：设计语义本身正确 —— R195 架构下 DSH 运行与 SSE 连接解耦，客户端断开/视图取消 ≠ 中止，唯一中止路径 = Stop 端点（abortDshRun → 注册表级 AbortController）；实证：curl 停止中运行（figures VLM 阶段）→ 状态 2 秒内翻 aborted → 同蛋白新启动零 409。但存在三个真实缺口：① stopEvalRun 的 stop 调用失败被 .catch(()=>{}) 静默吞掉（本地网络故障/路由错误 → 用户以为已停止，实际后台继续跑十几分钟）；② runId 未到达窗口（16s）耗尽时只断视图不断后台；③ 409 提示「请先停止」却没有任何停止入口 —— 视图流已断、Run Center 历史只显示已完成运行（SkillRunRecord 结束时才落库），运行中的后台运行完全不可见不可停，用户被 409 困死只能干等（用户三连 409 即此形态）
+- 修复①（use-run-stream.ts）：StreamState 新增 errorPayload —— 启动响应非 OK 时把解析后的 JSON 体整体存入（409 重复守卫的 {duplicate, runId} 结构化可达，不必从错误字符串正则扒 runId）
+- 修复②（settings-run-panel.tsx completion hook）：409 duplicate → 决策型 toast（30s 窗口，默认 4s 太短用户还没看清就被收走）+ 动作按钮「停止并重启」→ POST /stop → 轮询 status 确认非 running（20s 上限）→ 自动用当前表单参数重发评估 —— 用户从「被困干等」变为一键恢复
+- 修复③（stopEvalRun）：stop 成败全程可观测（成功 → toast+日志；失败 → 明确警告「后台运行将继续」+ 原因；网络错误 → toast.error）—— 本地 stop 调用失败不再伪装成已停止；runId 窗口耗尽 → 经 status 列表端点按当前靶点名找出仍在运行的后台运行并停止（孤儿运行兜底）
+- 修复④（run-service.ts preLaunchGuard）：409 消息附带已运行时长（「已运行约 N 分钟」）—— 刚起跑 1 分钟 vs 已跑 12 分钟对应完全不同的建议倾向
+- **E2E 实测发现并修复第三个 bug（陈旧闭包陷阱）**：动作按钮的重启首轮从不生效 —— console.log 面包屑插桩定位到 `runEvaluation blocked: isRunning`：toast 动作闭包捕获的是「done 翻转那一帧」的 runEvaluation，其 isRunning 闭包读该帧 running 快照（markDone 的微任务更新不可见）→ 重启被误判「运行中」静默吞掉（stop 链全通、重启永不发生、无任何报错）。修复 = runEvaluationRef（useRef 每帧刷新 + toast 动作 ref 直读最新帧）
+- E2E 验证（agent-browser 真实浏览器全链路，三轮一致）：① Stop 按钮 → toast「停止信号已发送」+ 注册表 2s aborted ✓；② 页面刷新（死视图模拟）→ Run → 409 → toast 带「Stop & restart」动作（截图 docs/images/qa-r212-409-stop-restart-toast.png）→ 点击 → network 链完整（POST /stop 200 → GET status?runId 轮询 → POST /run-dsh 200 重启）→ 注册表旧 run aborted + 新 run running ✓（修复前该链断在重启前一步且无任何错误表象）；③ 停止后新启动零 409 ✓
+- 质量门：eslint 三文件 0/0；Bun.Transpiler 解析全文语法 OK（浏览器 console 的 Syntax Error 为编辑中间态陈旧记录——清空后重载 0 error 0 syntax）；页面健康（98 buttons / H1 正常 / HMR connected）
+- 环境备注：沙箱 4GB 下 dev server 两次 OOM 重启（浏览器+评估+webpack 并发峰值）——与本次改动无关，重启后验证链重跑全绿
+
+Stage Summary:
+- 用户问题的直接答案：取消视图 ≠ 停止后台（R195 设计：断线不丢成果），Stop 按钮才会真正停止 —— 但旧版 stop 失败静默 + 409 无停止入口的组合让「正确的设计」表现成「bug」；现在三层兜底（stop 结果可观测 / 列表端点孤儿停止 / 409 一键停止并重启）
+- 陈旧闭包陷阱（React 长寿命闭包捕获 state 快照函数）为本次最深坑：isRunning 守卫在 toast 动作里恒真 → 重启静默丢失 —— ref 直读模式与 R196 getRunId() 同源思想（凡是长寿命闭包要调「依赖当帧 state 的函数」都必须 ref 直读）
+- 409 恢复链现包含完整可观测性：错误消息带运行时长 + 30s 决策窗口 + 动作按钮 + 每步 toast/日志
