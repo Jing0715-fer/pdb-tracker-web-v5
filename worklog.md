@@ -5581,3 +5581,24 @@ Stage Summary:
 - 用户问题的直接答案：取消视图 ≠ 停止后台（R195 设计：断线不丢成果），Stop 按钮才会真正停止 —— 但旧版 stop 失败静默 + 409 无停止入口的组合让「正确的设计」表现成「bug」；现在三层兜底（stop 结果可观测 / 列表端点孤儿停止 / 409 一键停止并重启）
 - 陈旧闭包陷阱（React 长寿命闭包捕获 state 快照函数）为本次最深坑：isRunning 守卫在 toast 动作里恒真 → 重启静默丢失 —— ref 直读模式与 R196 getRunId() 同源思想（凡是长寿命闭包要调「依赖当帧 state 的函数」都必须 ref 直读）
 - 409 恢复链现包含完整可观测性：错误消息带运行时长 + 30s 决策窗口 + 动作按钮 + 每步 toast/日志
+
+---
+Task ID: R213
+Agent: main (Z.ai Code)
+Task: 用户要求「检查远程仓库，看有没有丢失的 commit，包括检查所有分支」—— 仓库完整性审计 + 本地再同步
+
+Work Log:
+- git fetch --all --prune：origin/main cfc45b7..a172545（远程比本地新 4 个 commit：cfc45b7 官方 R210 / 06f64c1 R211 / 2c4636b chore / a172545 R212）
+- 本地状态诊断：本地 HEAD=07c8a35（R210 amend 版），reflog 顶部即 R210 amend 记录 —— 本实例 .git 是 R210 时代快照，R211/R212 由先前会话实例推送，本实例此前从未见过
+- 本地独有 commit 核对：07c8a35 vs 远程 cfc45b7 仅差 .zscripts/dev.pid 一行（1088↔1070）+ 若干文件 mode 位 —— 零内容差异，非丢失工作
+- 分支全量枚举（git ls-remote --heads/--tags）：GitHub 仅 main + feat/tool-calling-agent 两分支、零 tag；feat/tool-calling-agent（485635a，R101 时代）已完全并入 main（merge-base --is-ancestor 确认）—— 无未合并丢失分支
+- 悬空 commit 核对（git fsck --lost-found 20 个）：全部为历史 stash 残留（「WIP on main: …」）与 amend 前旧版本（R173/R180/R187/R197 时代，8/25–9/1）；抽查 R197 悬空前版 6a71d30 vs main 正式版 496a59c —— 同样仅 dev.pid 一行差异，内容全在 main
+- DB 安全核对（重置前）：本地 SkillEvaluationReport 24 条 = 远程 27 条的严格子集（本地独有 ID 集合为空）；Evaluation/PdbStructure/PubMedArticle/AgentSession 四表行数完全一致 —— reset 零数据丢失
+- 同步执行：git reset --hard origin/main（main → a172545，工作树切至 R212 代码）+ dev.pid 写回本实例 supervisor 进程号 1169
+- 验证：dev server 热重载后全 200（无编译错误）；agent-browser 打开首页 title=PDB Structure Tracker、0 page error、0 console error（截图 docs/images/qa-r213-repo-sync-verify.png）
+- 顺带发现：上会话结束时挂起的「取消评估后 409」待办已由 R212（a172545）完成修复并推送 —— 409 stop-and-restart 恢复链 + stopEvalRun 可观测 + 陈旧闭包修复，agent-browser 三轮 E2E 验证，本实例重置后即继承该修复
+
+Stage Summary:
+- 审计结论：**无任何丢失 commit** —— 远程 GitHub 为权威最新（main=a172545，R1–R212 完整 128 段 worklog），本地是滞后的 R210 快照，已重置对齐
+- 本地实例从此运行 R212 代码（含取消/409 恢复修复与 R211 web 图源修复）；DB 同步至远程版（27 条评估报告，含 R212 验证 run）
+- dev.pid 保持本地未提交状态（避免历史上一再出现的跨实例冲突；机器特定状态不入库）
